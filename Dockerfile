@@ -17,6 +17,7 @@ ENV NODE_ENV=production PORT=3000 DATA_DIR=/app/data
 COPY --from=build --chown=node:node /app/server/dist ./server/dist
 COPY --from=build --chown=node:node /app/server/node_modules ./server/node_modules
 COPY --from=build --chown=node:node /app/server/package.json ./server/package.json
+COPY --from=build --chown=node:node /app/server/prisma ./server/prisma
 COPY --from=build --chown=node:node /app/client/dist ./client/dist
 COPY --chown=node:node server.js package.json ./
 RUN mkdir -p /app/data && chown node:node /app/data
