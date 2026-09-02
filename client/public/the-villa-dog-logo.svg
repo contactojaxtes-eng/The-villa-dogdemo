@@ -1,11 +1,44 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 120" role="img" aria-label="The Villa Dog">
-  <rect width="320" height="120" rx="18" fill="#101418"/>
-  <circle cx="62" cy="60" r="36" fill="#90BF50"/>
-  <path d="M44 57c0-17 11-28 18-28s18 11 18 28c0 15-7 25-18 25S44 72 44 57Z" fill="#101418"/>
-  <circle cx="52" cy="56" r="4" fill="#90BF50"/>
-  <circle cx="72" cy="56" r="4" fill="#90BF50"/>
-  <path d="M57 67h10M62 67v8" stroke="#90BF50" stroke-width="5" stroke-linecap="round"/>
-  <path d="M42 34l-12-12c-4 16 2 28 12 32M82 34l12-12c4 16-2 28-12 32" fill="#101418"/>
-  <text x="116" y="52" fill="#FFFFFF" font-family="Arial, Helvetica, sans-serif" font-size="24" font-weight="800">THE VILLA DOG</text>
-  <text x="116" y="82" fill="#90BF50" font-family="Arial, Helvetica, sans-serif" font-size="14" font-weight="700">Sistema de Domicilios</text>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 420 160" role="img" aria-label="The Villa Dog comidas rapidas">
+  <defs>
+    <linearGradient id="villaDogOrange" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#FF8A1C"/>
+      <stop offset="0.55" stop-color="#F97316"/>
+      <stop offset="1" stop-color="#DC2626"/>
+    </linearGradient>
+    <linearGradient id="villaDogBread" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#FFE8A3"/>
+      <stop offset="0.58" stop-color="#FBBF24"/>
+      <stop offset="1" stop-color="#F59E0B"/>
+    </linearGradient>
+    <filter id="inkLift" x="-8%" y="-8%" width="116%" height="116%">
+      <feDropShadow dx="0" dy="3" stdDeviation="1.2" flood-color="#17100D" flood-opacity="0.32"/>
+    </filter>
+  </defs>
+
+  <g fill="none" stroke="#17100D" stroke-width="2.2" stroke-linecap="round" opacity="0.88">
+    <path d="M210 15v22M234 22l-12 20M185 20l11 21M309 32l16-11M323 50h24M80 127l-21 14M71 108l-32 4M344 116l21 12"/>
+    <path d="M244 15l7 12 13 2-10 9 3 13-13-7-12 7 2-14-9-8 13-2z" fill="#F97316" stroke-width="1.5"/>
+    <path d="M365 50l6 10 12 2-9 8 2 12-11-6-11 6 2-12-9-8 12-2z" fill="#FBBF24" stroke-width="1.5"/>
+  </g>
+
+  <g filter="url(#inkLift)">
+    <path d="M108 93c33 31 126 44 216 3 17-8 27 12 12 24-45 36-180 36-245-3-16-10-4-35 17-24z" fill="url(#villaDogBread)" stroke="#17100D" stroke-width="8" stroke-linejoin="round"/>
+    <path d="M102 81c44 24 95 27 148 20 46-6 72-26 91-43 13-12 32 4 22 20-29 45-96 67-171 61-43-3-79-14-106-33-14-10 0-34 16-25z" fill="#9F1D21" stroke="#17100D" stroke-width="8" stroke-linejoin="round"/>
+    <path d="M112 78c37 20 91 24 139 18 40-5 69-25 83-39" stroke="#FF5A1F" stroke-width="9" stroke-linecap="round"/>
+    <path d="M155 108c34 11 91 15 149-3" stroke="#FFE8A3" stroke-width="4" stroke-linecap="round" opacity="0.85"/>
+    <path d="M216 68c8 10 11 22 4 34 16-13 23-29 21-48 11 12 18 27 12 44 18-16 29-37 25-60 15 17 18 38 4 60" fill="url(#villaDogBread)" stroke="#17100D" stroke-width="5" stroke-linejoin="round"/>
+    <g fill="#7A1F2B">
+      <circle cx="205" cy="121" r="3"/>
+      <circle cx="235" cy="125" r="3"/>
+      <circle cx="267" cy="121" r="3"/>
+      <circle cx="297" cy="112" r="3"/>
+    </g>
+  </g>
+
+  <g filter="url(#inkLift)" transform="skewX(-10)">
+    <text x="30" y="66" font-family="Arial Black, Impact, Arial, sans-serif" font-size="54" font-weight="900" fill="url(#villaDogOrange)" stroke="#17100D" stroke-width="5" paint-order="stroke fill">Villa</text>
+    <text x="28" y="116" font-family="Arial Black, Impact, Arial, sans-serif" font-size="52" font-weight="900" fill="url(#villaDogOrange)" stroke="#17100D" stroke-width="5" paint-order="stroke fill">Dog</text>
+  </g>
+
+  <text x="210" y="147" font-family="Arial Black, Arial, sans-serif" font-size="18" font-weight="900" letter-spacing="1.5" fill="#7A1F2B">COMIDAS RAPIDAS</text>
 </svg>

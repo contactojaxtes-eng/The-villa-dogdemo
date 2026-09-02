@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react'
-import { io } from 'socket.io-client'
+import { io } from '@/lib/socket'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -13,9 +13,9 @@ import { api } from '@/lib/api'
 import { useAuth } from '@/hooks/useAuth'
 import {
   Plus, Users, Shield, User as UserIcon, Edit, Trash2, AlertTriangle, Loader2, Crown, Lock, Bike, Phone,
-  Mail, UserCheck, KeyRound, Eye, EyeOff, LogIn, Calculator, BarChart3, FileSpreadsheet, ShieldCheck,
+  Mail, UserCheck, KeyRound, Eye, EyeOff, LogIn, ShieldCheck,
   CheckSquare, Square, Search, RefreshCw, Sparkles, Check, SlidersHorizontal, MessageSquare, ShoppingBag,
-  Wallet, Receipt, Package, MapPin, Settings, CheckCircle2, XCircle, Clock
+  Wallet, MapPin, CheckCircle2, XCircle, Clock, ChefHat, UtensilsCrossed
 } from 'lucide-react'
 import { alerts } from '@/lib/alerts'
 import {
@@ -57,8 +57,10 @@ const defaultRoleColors: Record<string, string> = {
   ADMIN: '#3B82F6',
   CASHIER: '#10B981',
   DELIVERY_MANAGER: '#8B5CF6',
-  ACCOUNTANT: '#0EA5E9',
-  ACCOUNTING_ASSISTANT: '#06B6D4',
+  WAITER: '#F97316',
+  KITCHEN: '#DC2626',
+  ACCOUNTANT: '#2563EB',
+  ACCOUNTING_ASSISTANT: '#14B8A6',
 }
 
 const roleIcons: Record<string, any> = {
@@ -66,15 +68,19 @@ const roleIcons: Record<string, any> = {
   ADMIN: Shield,
   CASHIER: UserCheck,
   DELIVERY_MANAGER: Bike,
-  ACCOUNTANT: BarChart3,
-  ACCOUNTING_ASSISTANT: Calculator,
+  WAITER: UtensilsCrossed,
+  KITCHEN: ChefHat,
+  ACCOUNTANT: ShieldCheck,
+  ACCOUNTING_ASSISTANT: ShieldCheck,
 }
 
 const roleBadgeLabels: Record<string, string> = {
-  SUPERADMIN: 'Super Admin',
-  ADMIN: 'Admin',
-  CASHIER: 'Cajero',
-  DELIVERY_MANAGER: 'Gestor',
+  SUPERADMIN: 'Super Administrador',
+  ADMIN: 'Administrador',
+  CASHIER: 'Cajero / Facturación',
+  DELIVERY_MANAGER: 'Gestor de Domicilios',
+  WAITER: 'Mesero / Salón',
+  KITCHEN: 'Cocinero / Cocina',
   ACCOUNTANT: 'Contador',
   ACCOUNTING_ASSISTANT: 'Auxiliar Contable',
 }
@@ -82,15 +88,15 @@ const roleBadgeLabels: Record<string, string> = {
 const moduleIcons: Record<string, any> = {
   whatsapp: MessageSquare,
   orders: ShoppingBag,
+  tables: UtensilsCrossed,
+  kitchen: ChefHat,
+  payment_validation: CheckCircle2,
   dispatch: Bike,
   customers: Users,
   cash: Wallet,
-  expenses: Receipt,
-  products: Package,
-  inventory: Package,
+  products: Users,
   zones: MapPin,
-  reports: BarChart3,
-  users_settings: Settings,
+  users_management: Users,
 }
 
 export default function UsersPage() {
@@ -154,28 +160,32 @@ export default function UsersPage() {
   } | null>(null)
 
   const parseUserPerms = (perms: any, uRole: string): string[] => {
+    if (uRole === 'SUPERADMIN') {
+      return ALL_PERMISSION_KEYS
+    }
+    let list: string[] = []
     if (perms === null || perms === undefined) {
-      return getDefaultPermissionsForRole(uRole)
-    }
-    if (Array.isArray(perms)) {
-      return perms
-    }
-    if (typeof perms === 'string') {
+      list = getDefaultPermissionsForRole(uRole)
+    } else if (Array.isArray(perms)) {
+      list = perms
+    } else if (typeof perms === 'string') {
       try {
         const parsed = JSON.parse(perms)
-        if (Array.isArray(parsed)) return parsed
+        list = Array.isArray(parsed) ? parsed : getDefaultPermissionsForRole(uRole)
       } catch {
-        return getDefaultPermissionsForRole(uRole)
+        list = getDefaultPermissionsForRole(uRole)
       }
+    } else {
+      list = getDefaultPermissionsForRole(uRole)
     }
-    return getDefaultPermissionsForRole(uRole)
+    return list.filter(k => ALL_PERMISSION_KEYS.includes(k))
   }
 
   const loadUsers = () => {
     api.get<UserData[]>('/users')
       .then(usrs => setUsers(usrs.sort((a, b) => {
         if (a.active !== b.active) return a.active ? -1 : 1
-        const order = ['SUPERADMIN', 'ADMIN', 'CASHIER', 'DELIVERY_MANAGER', 'ACCOUNTANT', 'ACCOUNTING_ASSISTANT']
+        const order = ['SUPERADMIN', 'ADMIN', 'CASHIER', 'WAITER', 'KITCHEN', 'DELIVERY_MANAGER']
         const ai = order.indexOf(a.role)
         const bi = order.indexOf(b.role)
         return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi)
@@ -226,12 +236,12 @@ export default function UsersPage() {
         }))
     }
     return [
-      ...(isSuperAdmin ? [{ value: 'SUPERADMIN', label: 'Super Administrador (Ingeniero)', color: '#F59E0B' }] : []),
-      { value: 'ADMIN', label: 'Administrador (Acceso Total)', color: '#3B82F6' },
-      { value: 'CASHIER', label: 'Cajero (Caja, Pedidos, Domicilios)', color: '#10B981' },
-      { value: 'DELIVERY_MANAGER', label: 'Gestor de Domicilios (WhatsApp, Despachos)', color: '#8B5CF6' },
-      { value: 'ACCOUNTANT', label: 'Contador (Reportes, Caja, Liquidaciones)', color: '#0EA5E9' },
-      { value: 'ACCOUNTING_ASSISTANT', label: 'Auxiliar Contable (Reportes, Gastos)', color: '#06B6D4' },
+      ...(isSuperAdmin ? [{ value: 'SUPERADMIN', label: 'Super Administrador (Control Total)', color: '#F59E0B' }] : []),
+      { value: 'ADMIN', label: 'Administrador (Gestión Completa)', color: '#3B82F6' },
+      { value: 'CASHIER', label: 'Cajero / Facturación (Caja, Pedidos, Cobros)', color: '#10B981' },
+      { value: 'WAITER', label: 'Mesero (Mesas, Salón y Comandas)', color: '#F97316' },
+      { value: 'KITCHEN', label: 'Cocinero (Tablet de Cocina y Preparación)', color: '#DC2626' },
+      { value: 'DELIVERY_MANAGER', label: 'Gestor de Domicilios (Despachos y Rutas)', color: '#8B5CF6' },
     ]
   }, [rolesList, isSuperAdmin])
 
@@ -315,7 +325,7 @@ export default function UsersPage() {
     setEditMode(true)
     setEditId(u.id)
     setName(u.name)
-    setEmail(u.email)
+    setEmail(u.email.endsWith('@thevilladog.local') ? u.email.replace('@thevilladog.local', '') : u.email)
     setPassword('')
     setShowPassword(false)
     setRole(u.role)
@@ -555,8 +565,8 @@ export default function UsersPage() {
   }
 
   const handleChangePassword = async () => {
-    if (!newPassword || newPassword.length < 8) {
-      alerts.warning('Contraseña muy corta', 'La nueva contraseña debe tener al menos 8 caracteres.')
+    if (!newPassword || newPassword.length < 4) {
+      alerts.warning('Contraseña muy corta', 'La nueva contraseña debe tener al menos 4 caracteres.')
       return
     }
     setPwdSubmitting(true)
@@ -621,14 +631,16 @@ export default function UsersPage() {
 
         <div className="flex items-center gap-2.5">
           {/* Botón Gestor de Roles Dinámicos */}
-          <Button
-            variant="outline"
-            onClick={() => setOpenRolesModal(true)}
-            className="h-11 px-4 text-xs font-bold rounded-xl border-[var(--border-subtle)] bg-[var(--bg-panel)] hover:bg-[var(--bg-hover)] text-[var(--text-primary)] shadow-sm flex items-center gap-2 cursor-pointer"
-          >
-            <SlidersHorizontal className="h-4 w-4 text-[var(--accent)]" />
-            <span>Gestionar Roles & Permisos</span>
-          </Button>
+          {(isSuperAdmin || currentUser?.role === 'ADMIN') && (
+            <Button
+              variant="outline"
+              onClick={() => setOpenRolesModal(true)}
+              className="h-11 px-4 text-xs font-bold rounded-xl border-[var(--border-subtle)] bg-[var(--bg-panel)] hover:bg-[var(--bg-hover)] text-[var(--text-primary)] shadow-sm flex items-center gap-2 cursor-pointer"
+            >
+              <SlidersHorizontal className="h-4 w-4 text-[var(--accent)]" />
+              <span>Gestionar Roles & Permisos</span>
+            </Button>
+          )}
 
           {/* Botón Crear Usuario */}
           <Dialog open={open} onOpenChange={(v) => { if (!v) resetForm(); setOpen(v); }}>
@@ -705,23 +717,23 @@ export default function UsersPage() {
                     </div>
                     
                     <div className="space-y-1.5">
-                      <Label className="text-xs font-bold text-[var(--text-secondary)] uppercase tracking-wider">Usuario / Login de Acceso *</Label>
+                      <Label className="text-xs font-bold text-[var(--text-secondary)] uppercase tracking-wider">Nombre de Usuario / Login *</Label>
                       <Input 
                         type="text" 
                         className="h-11 rounded-xl bg-[var(--bg-elevated)] border-[var(--border-default)] focus:border-[var(--accent)]/50 focus:ring-1 focus:ring-[var(--accent)]/50 text-[var(--text-primary)] transition-all font-semibold" 
                         value={email} 
                         onChange={e => setEmail(e.target.value)} 
-                        placeholder="Escribe el usuario o login" 
+                        placeholder="Ej: daniela, karol, pedro, etc." 
                       />
                       <p className="text-[10px] text-[var(--text-muted)]">
-                        Puede ser cualquier nombre de usuario. Al primer ingreso se le solicitará vincular su correo personal.
+                        Usuario con el que iniciará sesión en el sistema.
                       </p>
                     </div>
 
                     {/* Password Input */}
                     <div className="space-y-1.5">
                       <Label className="text-xs font-bold text-[var(--text-secondary)] uppercase tracking-wider">
-                        Contraseña {editMode ? '(Opcional)' : 'Provisional *'}
+                        Contraseña {editMode ? '(Opcional)' : '*'}
                       </Label>
 
                       <div className="relative">
@@ -730,7 +742,7 @@ export default function UsersPage() {
                           className="h-11 rounded-xl bg-[var(--bg-elevated)] border-[var(--border-default)] focus:border-[var(--accent)]/50 focus:ring-1 focus:ring-[var(--accent)]/50 text-[var(--text-primary)] transition-all pr-10 font-mono text-xs" 
                           value={password} 
                           onChange={e => setPassword(e.target.value)} 
-                          placeholder={editMode ? 'Dejar en blanco para mantener la actual' : 'Escribe una clave provisional (ej: 1234)'} 
+                          placeholder={editMode ? 'Dejar en blanco para mantener la actual' : 'Escribe una contraseña (ej: 1234)'} 
                         />
                         <button
                           type="button"
@@ -743,7 +755,7 @@ export default function UsersPage() {
                       <p className="text-[10px] text-[var(--text-muted)]">
                         {editMode 
                           ? 'Si escribes una clave nueva se actualizará directamente.' 
-                          : 'Clave provisional. Al ingresar por primera vez, el usuario deberá vincular su correo personal y crear su contraseña segura definitiva.'
+                          : 'Contraseña de acceso para este usuario.'
                         }
                       </p>
                     </div>
@@ -1055,8 +1067,17 @@ export default function UsersPage() {
                           </span>
                         )}
                       </h3>
-                      <p className="text-xs text-[var(--text-secondary)] truncate flex items-center gap-1 mt-0.5">
-                        <Mail className="h-3 w-3 shrink-0" /> {u.email}
+                      <p className="text-xs text-[var(--text-secondary)] truncate flex items-center gap-1 mt-0.5 font-semibold">
+                        {u.email.endsWith('@thevilladog.local') ? (
+                          <>
+                            <span className="text-[var(--accent)] font-bold text-sm">@</span>
+                            <span>{u.email.replace('@thevilladog.local', '')}</span>
+                          </>
+                        ) : (
+                          <>
+                            <Mail className="h-3 w-3 shrink-0" /> {u.email}
+                          </>
+                        )}
                       </p>
                     </div>
                   </div>
@@ -1194,7 +1215,7 @@ export default function UsersPage() {
                     className="h-11 rounded-xl bg-[var(--bg-elevated)] border-[var(--border-default)] focus:border-purple-500/50 pr-10 text-[var(--text-primary)] font-semibold" 
                     value={newPassword} 
                     onChange={e => setNewPassword(e.target.value)} 
-                    placeholder="Mínimo 8 caracteres" 
+                    placeholder="Minimo 4 caracteres" 
                   />
                   <button
                     type="button"
@@ -1220,7 +1241,7 @@ export default function UsersPage() {
               <Button 
                 className="bg-purple-600 hover:bg-purple-700 text-white rounded-xl h-11 flex-1 font-bold text-xs gap-1.5 cursor-pointer shadow-lg shadow-purple-600/20" 
                 onClick={handleChangePassword} 
-                disabled={pwdSubmitting || newPassword.length < 8}
+                disabled={pwdSubmitting || newPassword.length < 4}
               >
                 {pwdSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <KeyRound className="h-4 w-4" />}
                 {pwdSubmitting ? 'Guardando...' : 'Actualizar'}

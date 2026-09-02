@@ -1,4 +1,5 @@
 import Swal from 'sweetalert2'
+import { toast } from 'sonner'
 
 const isDark = () => document.documentElement.classList.contains('dark') || document.body.classList.contains('dark')
 
@@ -22,6 +23,12 @@ const getSwalOptions = () => {
 }
 
 export const alerts = {
+  toast(title: string) {
+    return toast(title)
+  },
+  async warning(title: string, text?: string) {
+    return Swal.fire({ ...getSwalOptions(), icon: 'warning', title, text, confirmButtonText: 'Aceptar' })
+  },
   async success(title: string, text?: string) {
     return Swal.fire({
       ...getSwalOptions(),

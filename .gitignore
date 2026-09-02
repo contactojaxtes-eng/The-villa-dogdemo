@@ -1,8 +1,11 @@
 node_modules/
 dist/
+logs/
+.local_pgdata/
 .env
 .env.*
 !.env.example
+!.env.production.example
 *.db
 *.db-journal
 .DS_Store
@@ -10,6 +13,7 @@ thumbs.db
 .cache/
 coverage/
 server/backups/
+server/.tmp/
 server/dist/
 client/dist/
 scratch/

@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react'
-import { io } from 'socket.io-client'
+import { io } from '@/lib/socket'
 import { toast } from 'sonner'
 import { useAuth } from './useAuth'
 import { Bike, Bell, CheckCircle2, XCircle, MessageCircle, UserPlus } from 'lucide-react'
@@ -11,6 +11,7 @@ function playNotificationSound(type: 'message' | 'urgent' = 'message') {
     const ctx = new AudioContext()
     const osc = ctx.createOscillator()
     const gain = ctx.createGain()
+    osc.onended = () => { void ctx.close() };
     osc.connect(gain)
     gain.connect(ctx.destination)
     
@@ -55,7 +56,7 @@ function showBrowserNotification(title: string, body: string, url?: string) {
 
       const notification = new Notification(title, {
         body,
-        icon: '/favicon.ico',
+        icon: '/favicon.png',
         requireInteraction: false,
         tag: 'niche-wa-notif',
       })
@@ -96,14 +97,14 @@ export function useNotifications() {
 
     const socketUrl = import.meta.env.VITE_API_URL || window.location.origin
     const socket = io(`${socketUrl}/the-villa-dog`, {
-      query: { userId: user.id, userName: user.name },
+      query: { userId: user.id, userName: user.name, userRole: user.role },
       transports: ['websocket', 'polling'],
     })
 
     socket.on('newOrder', (order: { orderNumber?: number; customerName?: string }) => {
       toast.success('Nuevo pedido', {
         description: `#${order?.orderNumber ?? '—'} · ${order?.customerName ?? 'Cliente'}`,
-        icon: <Bike className="h-4 w-4 text-[#90BF50]" />,
+        icon: <Bike className="h-4 w-4 text-[#F97316]" />,
         duration: 6000,
       })
       playNotificationSound('urgent')
@@ -126,9 +127,36 @@ export function useNotifications() {
         icon: isCancel
           ? <XCircle className="h-4 w-4 text-[#EF4444]" />
           : isDone
-            ? <CheckCircle2 className="h-4 w-4 text-[#90BF50]" />
+            ? <CheckCircle2 className="h-4 w-4 text-[#F97316]" />
             : <Bell className="h-4 w-4 text-[#F59E0B]" />,
         duration: 5000,
+      })
+    })
+
+    socket.on('kitchenTicketReady', (ticket: any) => {
+      toast.success('Pedido listo en cocina', {
+        description: `${ticket?.order?.diningTable?.label || 'Mesa'} - ${ticket?.station?.name || 'Cocina'}`,
+        icon: <CheckCircle2 className="h-4 w-4 text-[#10B981]" />,
+        duration: 6000,
+      })
+      playNotificationSound('urgent')
+      showBrowserNotification('Pedido listo en cocina', `${ticket?.order?.diningTable?.label || 'Mesa'} - ${ticket?.station?.name || 'Cocina'}`, '/tables')
+    })
+
+    socket.on('paymentSubmitted', (payload: any) => {
+      if (!['ADMIN', 'SUPERADMIN', 'CASHIER'].includes(user.role || '')) return
+      toast.warning('Pago pendiente por validar', {
+        description: `${payload?.table?.label || 'Mesa'} - revisa caja`,
+        icon: <Bell className="h-4 w-4 text-[#F59E0B]" />,
+        duration: 6000,
+      })
+    })
+
+    socket.on('paymentRejected', (payload: any) => {
+      toast.error('Pago rechazado', {
+        description: payload?.reason || payload?.table?.label || 'Revisar mesa',
+        icon: <XCircle className="h-4 w-4 text-[#EF4444]" />,
+        duration: 6000,
       })
     })
 
@@ -229,7 +257,7 @@ export function useNotifications() {
 
       toast.info('Actualizando sistema...', {
         description: 'Se aplicará una actualización en unos segundos.',
-        icon: <Bell className="h-4 w-4 text-[#90BF50]" />,
+        icon: <Bell className="h-4 w-4 text-[#F97316]" />,
         duration: 2500,
       })
       setTimeout(() => {

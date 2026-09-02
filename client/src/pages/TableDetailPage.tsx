@@ -1,0 +1,498 @@
+import { ProtectedImage } from '@/components/ProtectedImage'
+import { useEffect, useState } from 'react'
+import { Link, useNavigate, useParams } from 'react-router-dom'
+import { io } from '@/lib/socket'
+import { ArrowLeft, Camera, CheckCircle2, Clock, Eye, Image as ImageIcon, PlusCircle, Trash2, Upload, User, Wallet, X, XCircle } from 'lucide-react'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Dialog, DialogContent } from '@/components/ui/dialog'
+import { api } from '@/lib/api'
+import { alerts } from '@/lib/alerts'
+import { formatCurrency } from '@/lib/utils'
+import { useAuth } from '@/hooks/useAuth'
+
+export default function TableDetailPage() {
+  const navigate = useNavigate()
+  const { id = '' } = useParams()
+  const { user } = useAuth()
+  const [table, setTable] = useState<any>(null)
+  const [method, setMethod] = useState<'CASH' | 'TRANSFER'>('CASH')
+  const [amount, setAmount] = useState('')
+  const [reference, setReference] = useState('')
+  const [proof, setProof] = useState<File | null>(null)
+  const [preview, setPreview] = useState<string | null>(null)
+  const [zoomUrl, setZoomUrl] = useState<string | null>(null)
+  const [sending, setSending] = useState(false)
+  const [actionLoading, setActionLoading] = useState<string | null>(null)
+
+  const load = () => api.get<any>(`/tables/${id}`).then(t => {
+    setTable(t)
+    setAmount(String(Math.max(t.balance ?? t.total ?? 0, 0)))
+  }).catch(console.error)
+
+  useEffect(() => { load() }, [id])
+
+  useEffect(() => {
+    const socketUrl = import.meta.env.VITE_API_URL || window.location.origin
+    const socket = io(`${socketUrl}/the-villa-dog`, {
+      query: { userId: user?.id, userName: user?.name, userRole: user?.role },
+      transports: ['websocket', 'polling'],
+    })
+    socket.on('tableUpdated', (payload: any) => { if (payload?.id === id) load() })
+    socket.on('tableClosed', (payload: any) => {
+      if (payload?.id === id) {
+        alerts.success('Mesa liberada', 'La cuenta ha sido completada y la mesa quedó libre.')
+        navigate('/tables')
+      }
+    })
+    socket.on('kitchenTicketReady', (payload: any) => {
+      if (payload?.order?.tableId === id) {
+        alerts.success('Pedido listo', `${payload.station?.name || 'Cocina'} marcó listo ${payload.order?.diningTable?.label || table?.label || ''}.`)
+        load()
+      }
+    })
+    socket.on('paymentValidated', (payload: any) => {
+      if (payload?.table?.id === id) {
+        alerts.success('Pago confirmado', 'El pago fue aprobado y validado en caja.')
+        load()
+      }
+    })
+    socket.on('paymentRejected', (payload: any) => {
+      if (payload?.table?.id === id) {
+        alerts.warning('Pago rechazado', payload.reason || 'Caja rechazó el pago.')
+        load()
+      }
+    })
+    return () => { socket.disconnect() }
+  }, [id, user?.id, user?.name, user?.role, table?.label])
+
+  useEffect(() => () => { if (preview) URL.revokeObjectURL(preview) }, [preview])
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0] || null
+    if (file) {
+      setProof(file)
+      if (preview) URL.revokeObjectURL(preview)
+      setPreview(URL.createObjectURL(file))
+    }
+  }
+
+  const submitPayment = async () => {
+    if (method !== 'CASH' && !proof) {
+      alerts.warning('Foto obligatoria', 'Para pagos por transferencia es obligatorio tomar o subir la foto del comprobante.')
+      return
+    }
+
+    setSending(true)
+    try {
+      const form = new FormData()
+      form.append('method', method)
+      form.append('amount', amount || String(table.balance || table.total || 0))
+      form.append('reference', reference)
+      if (proof) form.append('proof', proof)
+      await api.post(`/tables/${id}/payments`, form)
+
+      if (method === 'CASH') {
+        alerts.success('Mesa cobrada y liberada', 'El cobro en efectivo fue registrado y la mesa quedó cerrada y libre.')
+        navigate('/tables')
+        return
+      }
+
+      alerts.success('Comprobante enviado', 'Comprobante enviado para validación en caja.')
+      setProof(null)
+      setPreview(null)
+      setReference('')
+      await load()
+    } catch (err: any) {
+      alerts.error('No se pudo enviar pago', err?.response?.data?.message || err.message)
+    } finally {
+      setSending(false)
+    }
+  }
+
+  const validatePayment = async (paymentId: string) => {
+    setActionLoading(paymentId)
+    try {
+      await api.put(`/payment-validation/${paymentId}/validate`, {})
+      alerts.success('Pago aceptado y mesa liberada', 'El comprobante fue validado y la mesa quedó cerrada y libre.')
+      navigate('/tables')
+    } catch (err: any) {
+      alerts.error('Error al validar pago', err?.response?.data?.message || err.message)
+    } finally {
+      setActionLoading(null)
+    }
+  }
+
+  const rejectPayment = async (paymentId: string) => {
+    const reasonText = prompt('Motivo del rechazo de este pago:')
+    if (reasonText === null) return
+    setActionLoading(paymentId)
+    try {
+      await api.put(`/payment-validation/${paymentId}/reject`, { reason: reasonText.trim() || 'Comprobante ilegible o no válido' })
+      alerts.warning('Pago rechazado', 'Se registró el rechazo del pago.')
+      await load()
+    } catch (err: any) {
+      alerts.error('Error al rechazar pago', err.message)
+    } finally {
+      setActionLoading(null)
+    }
+  }
+
+  const closeTable = async () => {
+    try {
+      await api.put(`/tables/${id}/close`, {})
+      alerts.success('Mesa cerrada', 'La cuenta quedó cerrada correctamente.')
+      await load()
+    } catch (err: any) {
+      alerts.error('No se pudo cerrar mesa', err.message)
+    }
+  }
+
+  if (!table) return <div className="p-8 text-center text-sm text-[var(--text-secondary)]">Cargando mesa...</div>
+
+  const isStaff = ['ADMIN', 'SUPERADMIN', 'CASHIER'].includes(user?.role || '')
+
+  return (
+    <div className="space-y-4">
+      {/* Header */}
+      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+        <div className="flex items-center gap-3">
+          <Button asChild variant="ghost" size="icon"><Link to="/tables"><ArrowLeft className="h-5 w-5" /></Link></Button>
+          <div>
+            <div className="flex items-center gap-2">
+              <h1 className="text-2xl font-black text-[var(--text-primary)]">{table.label}</h1>
+              <span className={`rounded-full px-2.5 py-0.5 text-[10px] font-black tracking-wider ${
+                table.status === 'OPEN' ? 'bg-emerald-500/10 text-emerald-600' : 'bg-zinc-500/10 text-zinc-600'
+              }`}>
+                {table.status === 'OPEN' ? 'MESA ABIERTA' : 'CERRADA'}
+              </span>
+            </div>
+            <div className="flex flex-wrap items-center gap-2 mt-1 text-xs text-[var(--text-secondary)]">
+              <span className="flex items-center gap-1 font-bold text-amber-700 bg-amber-500/10 px-2 py-0.5 rounded-md">
+                👤 Tomado por: {table.openedBy?.name || 'Mesero'}
+              </span>
+              <span>•</span>
+              <span className="text-xs text-[var(--text-muted)]">Cualquier mesero o cajero puede cobrarla</span>
+            </div>
+          </div>
+        </div>
+        <div className="flex gap-2">
+          <Button asChild variant="outline" className="gap-2">
+            <Link to={`/tables/new?tableId=${table.id}`}>
+              <PlusCircle className="h-4 w-4 text-[var(--accent)]" />Agregar productos
+            </Link>
+          </Button>
+          {table.status === 'OPEN' && (
+            <Button
+              onClick={closeTable}
+              disabled={table.balance > 0}
+              className={`font-black ${table.balance > 0 ? 'bg-zinc-300 text-zinc-500 cursor-not-allowed' : 'bg-emerald-600 hover:bg-emerald-700 text-white'}`}
+            >
+              Cerrar mesa
+            </Button>
+          )}
+        </div>
+      </div>
+
+      <div className="grid gap-4 items-start lg:grid-cols-[1fr_380px]">
+        {/* Orders Column */}
+        <section className="space-y-3">
+          <h2 className="font-black text-sm uppercase tracking-wider text-[var(--text-muted)]">Envíos y Comida en Mesa</h2>
+          {table.orders?.map((order: any) => (
+            <div key={order.id} className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-4 shadow-sm">
+              <div className="flex items-start justify-between gap-3 border-b border-[var(--border-subtle)] pb-2.5">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <p className="font-black text-[var(--text-primary)]">Pedido #{order.orderNumber}</p>
+                    <span className="text-xs font-bold text-amber-700 bg-amber-500/10 px-2 py-0.5 rounded-md">
+                      👤 {order.waiter?.name || table.openedBy?.name || 'Mesero'}
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-[var(--text-secondary)] mt-0.5">{new Date(order.createdAt).toLocaleTimeString()} - Cocina: <b className="text-[var(--accent)]">{order.kitchenStatus}</b></p>
+                </div>
+                <span className={`rounded-full px-2 py-0.5 text-[10px] font-black ${
+                  order.paymentStatus === 'CONFIRMED' ? 'bg-emerald-500/10 text-emerald-600' : 'bg-amber-500/10 text-amber-600'
+                }`}>
+                  {order.paymentStatus === 'CONFIRMED' ? 'PAGADO' : 'PENDIENTE'}
+                </span>
+              </div>
+
+              {/* Items List */}
+              <div className="mt-3 space-y-1.5">
+                {order.items?.map((item: any) => (
+                  <div key={item.id} className="flex items-start justify-between rounded-xl bg-[var(--bg-elevated)] p-2.5 text-sm">
+                    <div>
+                      <b className="text-[var(--text-primary)]">{item.quantity} x {item.menuItem?.name || item.nameSnapshot}</b>
+                      {item.notes && <p className="text-xs text-[var(--text-muted)] mt-0.5">Nota: {item.notes}</p>}
+                    </div>
+                    <b className="text-[var(--accent)]">{formatCurrency(item.totalPrice || (item.unitPrice * item.quantity) || 0)}</b>
+                  </div>
+                ))}
+              </div>
+
+              {/* Change log if edited */}
+              {order.changeLogs?.length > 0 && (
+                <div className="mt-2.5 rounded-xl border border-amber-500/30 bg-amber-500/10 p-2.5 text-xs text-amber-800">
+                  <b className="block font-black">Historial de edición:</b>
+                  {order.changeLogs[0].summary}
+                </div>
+              )}
+
+              {/* Kitchen Tickets Badges */}
+              <div className="mt-3 flex flex-wrap gap-1.5">
+                {order.kitchenTickets?.map((ticket: any) => (
+                  <span key={ticket.id} className="rounded-lg bg-[var(--accent)]/10 border border-[var(--accent)]/30 px-2 py-0.5 text-[10px] font-black text-[var(--accent)]">
+                    {ticket.station?.name}: {ticket.status === 'READY' ? 'LISTO' : ticket.status === 'PREPARING' ? 'EN PREPARACIÓN' : 'NUEVO'}
+                  </span>
+                ))}
+              </div>
+
+              {!['DELIVERED', 'CANCELLED'].includes(order.status) && table.status === 'OPEN' && (
+                <Button asChild variant="outline" size="sm" className="mt-3 w-full border-[var(--border-subtle)] hover:border-[var(--accent)] text-xs font-bold">
+                  <Link to={`/tables/new?tableId=${table.id}&editOrderId=${order.id}`}>
+                    ✏️ Modificar o agregar a este pedido
+                  </Link>
+                </Button>
+              )}
+            </div>
+          ))}
+          {(!table.orders || table.orders.length === 0) && (
+            <div className="p-8 text-center text-sm text-[var(--text-muted)] border border-dashed rounded-2xl">
+              No hay pedidos enviados en esta mesa aún.
+            </div>
+          )}
+        </section>
+
+        {/* Payment and Billing Column */}
+        <aside className="space-y-4">
+          {/* Balance card */}
+          <div className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-4 shadow-sm">
+            <div className="flex justify-between items-center text-sm text-[var(--text-secondary)]">
+              <span>Total de la Cuenta</span>
+              <span className="font-bold text-[var(--text-primary)]">{formatCurrency(table.total || 0)}</span>
+            </div>
+            <div className="mt-2 pt-2 border-t border-[var(--border-subtle)] flex justify-between items-end">
+              <div>
+                <p className="text-xs text-[var(--text-muted)] uppercase tracking-wider font-black">Saldo Pendiente</p>
+                <p className={`text-3xl font-black ${table.balance > 0 ? 'text-rose-600' : 'text-emerald-600'}`}>
+                  {formatCurrency(table.balance || 0)}
+                </p>
+              </div>
+              <span className={`rounded-full px-2.5 py-1 text-xs font-black ${table.balance === 0 ? 'bg-emerald-500/10 text-emerald-600' : 'bg-amber-500/10 text-amber-600'}`}>
+                {table.balance === 0 ? 'PAGADO COMPLETO' : 'POR COBRAR'}
+              </span>
+            </div>
+          </div>
+
+          {/* Payment Box */}
+          {table.status === 'OPEN' && table.balance > 0 && (
+            <div className="space-y-3 rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-4 shadow-sm">
+              <div className="flex items-center justify-between">
+                <h2 className="font-black text-sm uppercase tracking-wider text-[var(--text-primary)]">Registrar Cobro</h2>
+                <span className="text-xs text-[var(--text-muted)]">Cualquier mesero/cajero</span>
+              </div>
+
+              {/* Method Tabs - EXACTAMENTE 2 MÉTODOS */}
+              <div className="grid grid-cols-2 gap-2 rounded-xl bg-[var(--bg-elevated)] p-1.5">
+                {[
+                  { id: 'CASH', label: '💵 Efectivo' },
+                  { id: 'TRANSFER', label: '📲 Transferencia' },
+                ].map(m => (
+                  <button
+                    key={m.id}
+                    type="button"
+                    onClick={() => setMethod(m.id as 'CASH' | 'TRANSFER')}
+                    className={`rounded-lg py-2.5 text-xs font-black transition-all ${
+                      method === m.id
+                        ? 'bg-[var(--accent)] text-white shadow-sm scale-[1.02]'
+                        : 'text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]'
+                    }`}
+                  >
+                    {m.label}
+                  </button>
+                ))}
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-xs font-bold text-[var(--text-secondary)]">Monto a cobrar</label>
+                <Input
+                  value={amount}
+                  onChange={e => setAmount(e.target.value)}
+                  placeholder="Valor recibido"
+                  className="font-bold text-base h-11"
+                />
+              </div>
+
+              <Input
+                value={reference}
+                onChange={e => setReference(e.target.value)}
+                placeholder="Referencia o nota opcional"
+                className="text-xs"
+              />
+
+              {/* Transfer Proof Photo Upload Section */}
+              {method !== 'CASH' && (
+                <div className="space-y-2.5 rounded-xl border border-amber-500/30 bg-amber-500/5 p-3.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-black text-amber-800">📸 Foto de comprobante (Obligatoria)</span>
+                    {proof && <span className="text-[11px] text-emerald-600 font-black">✓ Adjuntada</span>}
+                  </div>
+
+                  {/* 2 Opciones en comprobante: Tomar foto o Subir comprobante */}
+                  <div className="grid grid-cols-2 gap-2">
+                    <label className="flex cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-[var(--accent)] bg-[var(--accent)]/10 p-3.5 text-center transition hover:bg-[var(--accent)]/20 active:scale-95 shadow-sm">
+                      <Camera className="h-6 w-6 text-[var(--accent)]" />
+                      <span className="text-xs font-black text-[var(--accent)] leading-tight">Tomar foto de comprobante</span>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        capture="environment"
+                        className="hidden"
+                        onChange={handleFileChange}
+                      />
+                    </label>
+
+                    <label className="flex cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-[var(--border-default)] bg-[var(--bg-elevated)] p-3.5 text-center transition hover:bg-[var(--bg-hover)] active:scale-95 shadow-sm">
+                      <Upload className="h-6 w-6 text-[var(--text-secondary)]" />
+                      <span className="text-xs font-black text-[var(--text-secondary)] leading-tight">Subir comprobante</span>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        className="hidden"
+                        onChange={handleFileChange}
+                      />
+                    </label>
+                  </div>
+
+                  {/* Preview of selected photo */}
+                  {preview && (
+                    <div className="flex items-center justify-between gap-2 rounded-xl bg-[var(--bg-panel)] p-2 border border-[var(--border-subtle)]">
+                      <div className="flex items-center gap-2 overflow-hidden">
+                        <img src={preview} alt="Vista previa" className="h-10 w-10 rounded-lg object-cover border" />
+                        <div className="truncate text-xs">
+                          <p className="font-bold truncate text-[var(--text-primary)]">{proof?.name}</p>
+                          <button
+                            type="button"
+                            onClick={() => setZoomUrl(preview)}
+                            className="text-[var(--accent)] font-black hover:underline flex items-center gap-1"
+                          >
+                            <Eye className="h-3 w-3" /> Ver en grande
+                          </button>
+                        </div>
+                      </div>
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        className="h-7 w-7 text-rose-500 hover:bg-rose-50"
+                        onClick={() => { setProof(null); setPreview(null); }}
+                      >
+                        <X className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Submit Button */}
+              <Button
+                disabled={sending}
+                onClick={submitPayment}
+                className="w-full h-11 font-black text-sm gap-2 bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-white shadow-md transition-all"
+              >
+                {sending ? 'Procesando...' : method === 'CASH' ? `💵 Cobrar en Efectivo (${formatCurrency(Number(amount) || table.balance)})` : `📤 Enviar Comprobante a Caja (${formatCurrency(Number(amount) || table.balance)})`}
+              </Button>
+            </div>
+          )}
+
+          {/* Transfer Proofs & Payments List */}
+          <div className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-4 shadow-sm">
+            <h2 className="mb-3 font-black text-sm uppercase tracking-wider text-[var(--text-primary)]">Comprobantes y Pagos</h2>
+            <div className="space-y-2.5">
+              {table.transferProofs?.map((p: any) => {
+                const proofImageUrl = `/payment-validation/proofs/${p.id}/image`
+                const isPending = p.status === 'PENDING' || p.status === 'PENDING_REVIEW'
+                return (
+                  <div key={p.id} className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-3 text-xs space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <div>
+                        <span className="font-black text-sm text-[var(--text-primary)]">{p.method} - {formatCurrency(p.amount)}</span>
+                        <p className="text-[11px] text-[var(--text-muted)]">Subido por: <b className="text-[var(--text-secondary)]">{p.submittedBy?.name || 'Mesero'}</b></p>
+                      </div>
+                      <span className={`rounded-full px-2 py-0.5 text-[10px] font-black ${
+                        p.status === 'CONFIRMED' ? 'bg-emerald-500/10 text-emerald-600' :
+                        p.status === 'REJECTED' ? 'bg-rose-500/10 text-rose-600' : 'bg-amber-500/10 text-amber-600'
+                      }`}>
+                        {p.status === 'CONFIRMED' ? 'APROBADO' : p.status === 'REJECTED' ? 'RECHAZADO' : 'POR VALIDAR'}
+                      </span>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setZoomUrl(proofImageUrl)}
+                        className="flex items-center gap-1.5 rounded-lg bg-[var(--bg-panel)] px-2.5 py-1 text-xs font-black text-[var(--accent)] border border-[var(--border-subtle)] hover:bg-[var(--bg-hover)] transition"
+                      >
+                        <Eye className="h-3.5 w-3.5" /> Ver foto en grande
+                      </button>
+                    </div>
+
+                    {p.rejectionReason && (
+                      <p className="text-rose-600 bg-rose-500/10 p-2 rounded-lg font-medium">Motivo rechazo: {p.rejectionReason}</p>
+                    )}
+
+                    {/* Admin / Cashier Action Buttons directly from Table view */}
+                    {isStaff && isPending && (
+                      <div className="flex gap-2 pt-1 border-t border-[var(--border-subtle)]">
+                        <Button
+                          size="sm"
+                          disabled={actionLoading === p.paymentId}
+                          onClick={() => validatePayment(p.paymentId)}
+                          className="h-8 flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs gap-1"
+                        >
+                          <CheckCircle2 className="h-3.5 w-3.5" /> Aceptar Pago
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={actionLoading === p.paymentId}
+                          onClick={() => rejectPayment(p.paymentId)}
+                          className="h-8 flex-1 border-rose-300 text-rose-600 hover:bg-rose-50 font-black text-xs gap-1"
+                        >
+                          <XCircle className="h-3.5 w-3.5" /> Rechazar
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+              {(!table.transferProofs || table.transferProofs.length === 0) && (
+                <p className="text-xs text-[var(--text-muted)] text-center py-3">No hay comprobantes de transferencia registrados.</p>
+              )}
+            </div>
+          </div>
+        </aside>
+      </div>
+
+      {/* Full Resolution Zoom Modal for Image */}
+      <Dialog open={!!zoomUrl} onOpenChange={v => !v && setZoomUrl(null)}>
+        <DialogContent className="max-w-4xl bg-black/95 p-3 border-none flex flex-col items-center">
+          <div className="flex w-full justify-between items-center text-white pb-2 px-1">
+            <span className="text-sm font-black flex items-center gap-1.5"><ImageIcon className="h-4 w-4 text-[var(--accent)]" /> Comprobante de Transferencia</span>
+            <Button size="sm" variant="ghost" className="text-white hover:bg-white/20 h-8 text-xs font-bold" onClick={() => setZoomUrl(null)}>
+              ✕ Cerrar
+            </Button>
+          </div>
+          {zoomUrl && (
+            <div className="max-h-[82vh] w-full flex items-center justify-center overflow-auto rounded-xl bg-black/50 p-1">
+              <ProtectedImage
+                endpoint={zoomUrl}
+                alt="Comprobante completo"
+                className="max-h-[80vh] max-w-full object-contain rounded-lg shadow-2xl"
+              />
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+    </div>
+  )
+}

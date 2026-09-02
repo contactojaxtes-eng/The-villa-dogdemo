@@ -12,7 +12,7 @@ import { useAuth } from '@/hooks/useAuth'
 import { formatCurrency, formatThousandsInput, parseThousandsInput } from '@/lib/utils'
 import { Wallet, Plus, User, ArrowUpRight, DollarSign, LockOpen, Lock, Loader2, CheckCircle2, Banknote, CreditCard, Smartphone, TrendingUp, Receipt, AlertTriangle, X, Trash2, Printer, Edit } from 'lucide-react'
 import { PageHeader } from '@/components/ui/PageHeader'
-import { io } from 'socket.io-client'
+import { io } from '@/lib/socket'
 import { printClosingSmart, printOpeningSmart } from '@/lib/printer'
 import { alerts } from '@/lib/alerts'
 
@@ -485,7 +485,7 @@ export default function CashRegistersPage() {
       {/* ── Open Cash Dialog ── */}
       <Dialog open={openCashDialog} onOpenChange={setOpenCashDialog}>
         <DialogContent className="border-[var(--border-subtle)] bg-[var(--bg-panel)] rounded-3xl max-w-sm p-0 overflow-hidden shadow-2xl">
-          <div className="h-1.5 w-full" style={{ background: 'linear-gradient(90deg, var(--accent), #7AAF40)' }} />
+          <div className="h-1.5 w-full" style={{ background: 'linear-gradient(90deg, var(--accent), #EA580C)' }} />
           <div className="p-6">
             <DialogHeader className="pb-4">
               <DialogTitle className="text-xl font-bold text-[var(--text-primary)] flex items-center gap-2">

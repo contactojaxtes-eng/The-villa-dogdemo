@@ -44,24 +44,15 @@ export class ErrorBoundary extends Component<Props, State> {
   }
 
   public handleReload = () => {
-    try {
-      localStorage.removeItem('niche-new-order-draft')
-    } catch {}
     window.location.reload()
   }
 
   public handleCleanRetry = () => {
-    try {
-      localStorage.removeItem('niche-new-order-draft')
-    } catch {}
     this.setState({ hasError: false, error: null })
   }
 
   public handleGoHome = () => {
-    try {
-      localStorage.removeItem('niche-new-order-draft')
-    } catch {}
-    window.location.href = '/orders'
+    window.location.href = '/'
   }
 
   public render() {
@@ -78,11 +69,11 @@ export class ErrorBoundary extends Component<Props, State> {
                 Hubo un detalle al cargar esta vista
               </h2>
               <p className="text-xs text-[var(--text-secondary)] leading-relaxed">
-                El sistema se ha sincronizado. Haz clic en <b>Recargar Sistema</b> o <b>Reintentar</b> para continuar trabajando normalmente.
+                No pudimos mostrar esta página. Reintenta o recarga. Tu borrador de pedido se conserva.
               </p>
             </div>
 
-            {this.state.error && (
+            {import.meta.env.DEV && this.state.error && (
               <div className="text-left bg-black/40 rounded-xl p-3 border border-red-500/20 text-[11px] text-red-400 font-mono overflow-auto max-h-28">
                 <p className="font-bold">{this.state.error.name}: {this.state.error.message}</p>
               </div>

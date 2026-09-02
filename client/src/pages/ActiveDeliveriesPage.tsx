@@ -39,7 +39,8 @@ import {
   Key,
   AlertTriangle
 } from 'lucide-react'
-import { io, Socket } from 'socket.io-client'
+import { type Socket } from 'socket.io-client'
+import { io } from '@/lib/socket'
 import { printComandaSmart, openCashDrawer } from '@/lib/printer'
 import { alerts } from '@/lib/alerts'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -87,7 +88,7 @@ const statusIcons: Record<string, any> = {
 }
 
 const operatorColors = [
-  '#90BF50', '#3B82F6', '#F59E0B', '#EF4444', '#8B5CF6', '#EC4899', '#14B8A6', '#F97316',
+  '#F97316', '#3B82F6', '#F59E0B', '#EF4444', '#8B5CF6', '#EC4899', '#14B8A6', '#F97316',
 ]
 
 function getOperatorColor(index: number): string {

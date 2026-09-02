@@ -39,6 +39,38 @@ export const SYSTEM_MODULES_PERMISSIONS: PermissionModule[] = [
     ],
   },
   {
+    id: 'tables',
+    name: 'Mesas & Salon',
+    actions: [
+      { key: 'tables.view', label: 'Ver mesas abiertas' },
+      { key: 'tables.create', label: 'Crear pedidos de mesa' },
+      { key: 'tables.edit', label: 'Editar pedidos de mesa' },
+      { key: 'tables.close', label: 'Cerrar mesas pagadas' },
+      { key: 'tables.cancel', label: 'Cancelar mesas o productos' },
+    ],
+  },
+  {
+    id: 'kitchen',
+    name: 'Cocina por Estaciones',
+    actions: [
+      { key: 'kitchen.view', label: 'Ver tablet de cocina' },
+      { key: 'kitchen.prepare', label: 'Marcar pedidos en preparacion' },
+      { key: 'kitchen.ready', label: 'Marcar pedidos listos' },
+      { key: 'kitchen.history', label: 'Ver historial de cocina' },
+      { key: 'kitchen_stations.manage', label: 'Configurar estaciones y cocineros' },
+    ],
+  },
+  {
+    id: 'payment_validation',
+    name: 'Validacion de Pagos',
+    actions: [
+      { key: 'payment_validation.view', label: 'Ver pagos pendientes' },
+      { key: 'payment_validation.cash', label: 'Validar pagos en efectivo' },
+      { key: 'payment_validation.transfer', label: 'Validar transferencias' },
+      { key: 'payment_validation.reject', label: 'Rechazar pagos con motivo' },
+    ],
+  },
+  {
     id: 'dispatch',
     name: 'Despachos & Domiciliarios',
     actions: [
@@ -70,30 +102,12 @@ export const SYSTEM_MODULES_PERMISSIONS: PermissionModule[] = [
     ],
   },
   {
-    id: 'expenses',
-    name: 'Gastos Menores',
-    actions: [
-      { key: 'expenses.view', label: 'Ver lista de gastos' },
-      { key: 'expenses.create', label: 'Crear y editar gastos' },
-      { key: 'expenses.delete', label: 'Eliminar gastos' },
-    ],
-  },
-  {
     id: 'products',
     name: 'Productos & Menú Digital',
     actions: [
       { key: 'products.view', label: 'Ver catálogo de productos y precios' },
       { key: 'products.manage', label: 'Crear y editar productos / precios' },
       { key: 'products.delete', label: 'Eliminar productos' },
-    ],
-  },
-  {
-    id: 'inventory',
-    name: 'Inventario & Compras',
-    actions: [
-      { key: 'inventory.view', label: 'Ver existencias e insumos' },
-      { key: 'inventory.manage', label: 'Registrar compras y ajustes de stock' },
-      { key: 'inventory.transfers', label: 'Mover mermas y traslados' },
     ],
   },
   {
@@ -105,23 +119,13 @@ export const SYSTEM_MODULES_PERMISSIONS: PermissionModule[] = [
     ],
   },
   {
-    id: 'reports',
-    name: 'Reportes & Estadísticas',
-    actions: [
-      { key: 'reports.view', label: 'Ver estadísticas de ventas y KPIs' },
-      { key: 'reports.export_excel', label: 'Exportar informes a Excel' },
-      { key: 'reports.export_pdf', label: 'Exportar informes a PDF' },
-    ],
-  },
-  {
-    id: 'users_settings',
-    name: 'Usuarios & Configuración',
+    id: 'users_management',
+    name: 'Usuarios & Gestión',
     actions: [
       { key: 'users.view', label: 'Ver directorio de usuarios' },
       { key: 'users.manage', label: 'Crear, editar y gestionar permisos' },
       { key: 'users.delete', label: 'Eliminar / desactivar usuarios' },
-      { key: 'settings.view', label: 'Ver configuración del restaurante' },
-      { key: 'settings.manage', label: 'Modificar impresoras y WhatsApp API' },
+      { key: 'settings.modules', label: 'Activar y ocultar modulos del menu' },
     ],
   },
 ];
@@ -144,8 +148,17 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
     'customers.manage',
     'cash.view',
     'cash.open_close',
-    'expenses.view',
-    'expenses.create',
+    'tables.view',
+    'tables.create',
+    'tables.edit',
+    'tables.close',
+    'kitchen.view',
+    'kitchen.prepare',
+    'kitchen.ready',
+    'payment_validation.view',
+    'payment_validation.cash',
+    'payment_validation.transfer',
+    'payment_validation.reject',
     'whatsapp.view',
     'whatsapp.reply',
     'whatsapp.media',
@@ -170,28 +183,19 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
     'customers.view',
     'customers.manage',
   ],
-  ACCOUNTANT: [
+  WAITER: [
+    'tables.view',
+    'tables.create',
+    'tables.edit',
     'orders.view',
-    'orders.reprint',
-    'cash.view',
-    'cash.control',
-    'expenses.view',
-    'reports.view',
-    'reports.export_excel',
-    'reports.export_pdf',
-    'drivers.view',
-    'drivers.export',
+    'orders.create',
+    'products.view',
   ],
-  ACCOUNTING_ASSISTANT: [
-    'orders.view',
-    'cash.view',
-    'cash.control',
-    'expenses.view',
-    'reports.view',
-    'reports.export_excel',
-    'reports.export_pdf',
-    'drivers.view',
-    'drivers.export',
+  KITCHEN: [
+    'kitchen.view',
+    'kitchen.prepare',
+    'kitchen.ready',
+    'kitchen.history',
   ],
 };
 
@@ -201,7 +205,7 @@ export function getDefaultPermissionsForRole(role: string): string[] {
 
 export function hasUserPermission(user: { role?: string; permissions?: any } | null | undefined, permKey: string): boolean {
   if (!user) return false;
-  if (user.role === 'SUPERADMIN' || user.role === 'ADMIN') return true;
+  if (user.role === 'SUPERADMIN') return true;
 
   let perms = user.permissions;
   if (typeof perms === 'string') {
@@ -214,10 +218,27 @@ export function hasUserPermission(user: { role?: string; permissions?: any } | n
 
   // Si tiene permisos explícitos configurados como arreglo
   if (perms && Array.isArray(perms)) {
+    if (perms.includes('*')) return true;
     return perms.includes(permKey);
   }
 
   // Fallback a los permisos por defecto del rol
   const defaults = getDefaultPermissionsForRole(user.role || 'CASHIER');
   return defaults.includes(permKey);
+}
+
+export const SYSTEM_ROLE_LABELS: Record<string, string> = {
+  SUPERADMIN: 'Super Administrador',
+  ADMIN: 'Administrador',
+  CASHIER: 'Cajero / Facturación',
+  DELIVERY_MANAGER: 'Gestor de Domicilios',
+  WAITER: 'Mesero',
+  KITCHEN: 'Cocinero',
+  ACCOUNTANT: 'Contador',
+  ACCOUNTING_ASSISTANT: 'Auxiliar Contable',
+};
+
+export function getRoleLabel(role?: string | null): string {
+  if (!role) return '';
+  return SYSTEM_ROLE_LABELS[role] || role;
 }

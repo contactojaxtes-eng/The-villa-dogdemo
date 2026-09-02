@@ -11,12 +11,14 @@ import { alerts } from '@/lib/alerts'
 import { User as UserIcon, Mail, Phone, Lock, CheckCircle2, Loader2, KeyRound, Eye, EyeOff, ShieldCheck, X } from 'lucide-react'
 
 const roleLabels: Record<string, string> = {
-  SUPERADMIN: 'Super Admin',
-  ADMIN: 'Admin',
-  CASHIER: 'Cajero',
-  DELIVERY_MANAGER: 'Gestor domicilios',
+  SUPERADMIN: 'Super Administrador',
+  ADMIN: 'Administrador',
+  CASHIER: 'Cajero / Facturación',
+  DELIVERY_MANAGER: 'Gestor de Domicilios',
+  WAITER: 'Mesero',
+  KITCHEN: 'Cocinero',
   ACCOUNTANT: 'Contador',
-  ACCOUNTING_ASSISTANT: 'Auxiliar contable',
+  ACCOUNTING_ASSISTANT: 'Auxiliar Contable',
 }
 
 export default function ProfilePage() {
@@ -299,7 +301,7 @@ export default function ProfilePage() {
                 )}
 
                 <div className="pt-2">
-                  <Button type="submit" disabled={savingProfile} className="w-full h-11 bg-gradient-to-r from-[#90BF50] to-[#7AAF40] hover:opacity-95 text-[#0D0D0D] font-bold rounded-xl text-xs uppercase tracking-wider cursor-pointer shadow-lg shadow-[#90BF50]/20">
+                  <Button type="submit" disabled={savingProfile} className="w-full h-11 bg-gradient-to-r from-[#F97316] to-[#EA580C] hover:opacity-95 text-[#0D0D0D] font-bold rounded-xl text-xs uppercase tracking-wider cursor-pointer shadow-lg shadow-[#F97316]/20">
                     {savingProfile ? (
                       <span className="flex items-center gap-2"><Loader2 className="h-4 w-4 animate-spin" /> Guardando...</span>
                     ) : profileSaved ? (
@@ -411,7 +413,7 @@ export default function ProfilePage() {
                 )}
 
                 <div className="pt-2">
-                  <Button type="submit" disabled={changingPassword || !currentPassword || !newPassword} className="w-full h-11 bg-gradient-to-r from-[#90BF50] to-[#7AAF40] hover:opacity-95 text-[#0D0D0D] font-bold rounded-xl text-xs uppercase tracking-wider cursor-pointer shadow-lg shadow-[#90BF50]/20 disabled:opacity-50">
+                  <Button type="submit" disabled={changingPassword || !currentPassword || !newPassword} className="w-full h-11 bg-gradient-to-r from-[#F97316] to-[#EA580C] hover:opacity-95 text-[#0D0D0D] font-bold rounded-xl text-xs uppercase tracking-wider cursor-pointer shadow-lg shadow-[#F97316]/20 disabled:opacity-50">
                     {changingPassword ? (
                       <span className="flex items-center gap-2"><Loader2 className="h-4 w-4 animate-spin" /> Actualizando...</span>
                     ) : passwordSaved ? (
@@ -525,7 +527,7 @@ export default function ProfilePage() {
                   <Button
                     type="submit"
                     disabled={emailOtpLoading || emailOtpCode.length < 6}
-                    className="flex-1 h-11 bg-gradient-to-r from-[#90BF50] to-[#7AAF40] hover:opacity-95 text-[#0D0D0D] font-bold rounded-xl text-xs uppercase tracking-wider cursor-pointer shadow-lg shadow-[#90BF50]/20 disabled:opacity-50"
+                    className="flex-1 h-11 bg-gradient-to-r from-[#F97316] to-[#EA580C] hover:opacity-95 text-[#0D0D0D] font-bold rounded-xl text-xs uppercase tracking-wider cursor-pointer shadow-lg shadow-[#F97316]/20 disabled:opacity-50"
                   >
                     {emailOtpLoading ? (
                       <span className="flex items-center gap-2">

@@ -44,11 +44,17 @@ export class OrdersController {
   }
 
   @Get('stats/today')
-  @Roles('ADMIN', 'SUPERADMIN', 'CASHIER', 'ACCOUNTANT', 'ACCOUNTING_ASSISTANT')
+  @Roles('ADMIN', 'SUPERADMIN', 'CASHIER')
   @UseGuards(RolesGuard)
   @ApiOperation({ summary: 'Estadísticas del día' })
   getTodayStats() {
     return this.ordersService.getTodayStats();
+  }
+
+  @Get('dashboard-stats')
+  @ApiOperation({ summary: 'Estadísticas para el dashboard' })
+  getDashboardStats(@Query('startDate') startDate?: string, @Query('endDate') endDate?: string) {
+    return this.ordersService.getDashboardStats(startDate, endDate);
   }
 
   @Get('can-create')

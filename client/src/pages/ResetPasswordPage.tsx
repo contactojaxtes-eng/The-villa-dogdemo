@@ -142,7 +142,7 @@ export default function ResetPasswordPage() {
                 <Button
                   type="submit"
                   disabled={loading}
-                  className="w-full h-11.5 rounded-xl bg-gradient-to-r from-[#90BF50] to-[#7AAF40] font-bold text-[#0D0D0D] uppercase text-xs tracking-wide"
+                  className="w-full h-11.5 rounded-xl bg-gradient-to-r from-[#F97316] to-[#EA580C] font-bold text-[#0D0D0D] uppercase text-xs tracking-wide"
                 >
                   {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Restablecer Contraseña'}
                 </Button>

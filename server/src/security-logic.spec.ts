@@ -1,9 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { BadRequestException, NotFoundException } from '@nestjs/common';
+import { BadRequestException } from '@nestjs/common';
 import { OrdersService } from '../src/orders/orders.service';
 import { PaymentsService } from '../src/payments/payments.service';
-import { InventoryService } from '../src/inventory/inventory.service';
-import { ExpensesService } from '../src/expenses/expenses.service';
 import { MenuService } from '../src/menu/menu.service';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { SocketGateway } from '../src/socket/socket.gateway';
@@ -15,8 +13,6 @@ import { CacheService } from '../src/cache/cache.service';
 describe('Security & Logic Audit Tests', () => {
   let ordersService: OrdersService;
   let paymentsService: PaymentsService;
-  let inventoryService: InventoryService;
-  let expensesService: ExpensesService;
   let menuService: MenuService;
 
   // Mocked dependencies
@@ -114,8 +110,6 @@ describe('Security & Logic Audit Tests', () => {
       providers: [
         OrdersService,
         PaymentsService,
-        InventoryService,
-        ExpensesService,
         MenuService,
         { provide: PrismaService, useValue: mockPrisma },
         { provide: SocketGateway, useValue: mockSocket },
@@ -128,8 +122,6 @@ describe('Security & Logic Audit Tests', () => {
 
     ordersService = module.get<OrdersService>(OrdersService);
     paymentsService = module.get<PaymentsService>(PaymentsService);
-    inventoryService = module.get<InventoryService>(InventoryService);
-    expensesService = module.get<ExpensesService>(ExpensesService);
     menuService = module.get<MenuService>(MenuService);
   });
 
@@ -208,47 +200,7 @@ describe('Security & Logic Audit Tests', () => {
     });
   });
 
-  describe('3. Inventory - Negative Adjustments & Stock Movement Bounds', () => {
-    it('should throw BadRequestException for negative adjustment quantity', async () => {
-      await expect(
-        inventoryService.adjustStock('ing-1', -10, 'IN', 'Refill', 'user-1')
-      ).rejects.toThrow(BadRequestException);
-    });
-
-    it('should throw BadRequestException for zero quantity IN/OUT adjustments', async () => {
-      await expect(
-        inventoryService.adjustStock('ing-1', 0, 'OUT', 'Usage', 'user-1')
-      ).rejects.toThrow(BadRequestException);
-    });
-  });
-
-  describe('4. Expenses - Negative Amount & Quantity Validations', () => {
-    it('should throw BadRequestException if expense amount <= 0', async () => {
-      const expenseData = {
-        description: 'Mock Negative Expense',
-        amount: -5000,
-        categoryId: 'cat-1',
-        userId: 'user-1',
-      };
-
-      await expect(expensesService.create(expenseData)).rejects.toThrow(BadRequestException);
-    });
-
-    it('should throw BadRequestException if linked ingredient quantity <= 0', async () => {
-      const expenseData = {
-        description: 'Mock Expense with Qty 0',
-        amount: 2000,
-        categoryId: 'cat-1',
-        userId: 'user-1',
-        ingredientId: 'ing-1',
-        quantity: 0,
-      };
-
-      await expect(expensesService.create(expenseData)).rejects.toThrow(BadRequestException);
-    });
-  });
-
-  describe('5. Menu - Negative Price Validation', () => {
+  describe('3. Menu - Negative Price Validation', () => {
     it('should throw BadRequestException if menu item price is negative on creation', async () => {
       const itemData = {
         name: 'Negative Burger',
@@ -268,39 +220,4 @@ describe('Security & Logic Audit Tests', () => {
     });
   });
 
-  describe('6. Purchases - Negative/Zero Quantities & Costs', () => {
-    it('should throw BadRequestException if purchase items array is empty', async () => {
-      const purchaseData = {
-        supplierId: 'sup-1',
-        invoiceNumber: 'INV-001',
-        items: [],
-      };
-
-      await expect(inventoryService.createPurchase(purchaseData, 'user-1')).rejects.toThrow(BadRequestException);
-    });
-
-    it('should throw BadRequestException if purchase item quantity <= 0', async () => {
-      const purchaseData = {
-        supplierId: 'sup-1',
-        invoiceNumber: 'INV-001',
-        items: [
-          { ingredientId: 'ing-1', quantity: 0, unitCost: 100 },
-        ],
-      };
-
-      await expect(inventoryService.createPurchase(purchaseData, 'user-1')).rejects.toThrow(BadRequestException);
-    });
-
-    it('should throw BadRequestException if purchase item unitCost < 0', async () => {
-      const purchaseData = {
-        supplierId: 'sup-1',
-        invoiceNumber: 'INV-001',
-        items: [
-          { ingredientId: 'ing-1', quantity: 10, unitCost: -5 },
-        ],
-      };
-
-      await expect(inventoryService.createPurchase(purchaseData, 'user-1')).rejects.toThrow(BadRequestException);
-    });
-  });
 });

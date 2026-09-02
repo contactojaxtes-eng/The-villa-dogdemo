@@ -22,7 +22,9 @@
     "prisma:generate": "npx prisma generate",
     "prisma:studio": "npx prisma studio",
     "seed": "npx ts-node src/seed.ts",
-    "clean": "npx ts-node src/clean.ts"
+    "clean": "npx ts-node src/clean.ts",
+    "reset:catalog": "npx ts-node src/scripts/reset_catalog_to_zero.ts",
+    "reset:zero": "npx ts-node src/scripts/reset_system_to_zero.ts"
   },
   "dependencies": {
     "@nestjs/common": "^11.0.1",
@@ -36,7 +38,6 @@
     "@nestjs/swagger": "^11.4.4",
     "@nestjs/websockets": "^11.1.24",
     "@prisma/client": "^5.22.0",
-    "@types/localtunnel": "^2.0.4",
     "@types/nodemailer": "^8.0.1",
     "bcryptjs": "^3.0.3",
     "class-transformer": "^0.5.1",
@@ -44,15 +45,13 @@
     "dotenv": "^17.4.2",
     "express-rate-limit": "^8.5.2",
     "helmet": "^8.3.0",
-    "localtunnel": "^2.0.2",
     "nodemailer": "^9.0.1",
     "passport": "^0.7.0",
     "passport-jwt": "^4.0.1",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
     "socket.io": "^4.8.3",
-    "uuid": "^14.0.0",
-    "xlsx": "^0.18.5"
+    "uuid": "^14.0.0"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3.2.0",

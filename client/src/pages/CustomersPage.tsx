@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
-import { io } from 'socket.io-client'
+import { io } from '@/lib/socket'
 import { useAuth } from '@/hooks/useAuth'
 import { api } from '@/lib/api'
 import { Button } from '@/components/ui/button'

@@ -34,6 +34,8 @@ const roleLabels: Record<string, string> = {
   ADMIN: 'Administrador General',
   CASHIER: 'Cajero / Punto de Venta',
   DELIVERY_MANAGER: 'Gestor de Domicilios',
+  WAITER: 'Mesero',
+  KITCHEN: 'Cocinero',
   ACCOUNTANT: 'Contador',
   ACCOUNTING_ASSISTANT: 'Auxiliar Contable',
 }
@@ -111,7 +113,7 @@ export function ProfileModal({ open, onClose }: ProfileModalProps) {
     const hasNumber = /[0-9]/.test(pwd)
     const hasSpecial = /[!@#$%^&*()_+\-=[\]{};':"\\|,.<>/?]/.test(pwd)
     const score = [hasMinLen, hasUpper, hasNumber, hasSpecial].filter(Boolean).length
-    const isStrong = hasMinLen && hasUpper && hasNumber && hasSpecial
+    const isStrong = pwd.length >= 4
     return { hasMinLen, hasUpper, hasNumber, hasSpecial, score, isStrong }
   }, [newPassword])
 
@@ -146,6 +148,7 @@ export function ProfileModal({ open, onClose }: ProfileModalProps) {
           setSavingProfile(false)
           return
         }
+        setEmail(res.newEmail || email.trim().toLowerCase())
       }
 
       alerts.success('Perfil actualizado correctamente')
@@ -205,7 +208,7 @@ export function ProfileModal({ open, onClose }: ProfileModalProps) {
       return
     }
     if (!passwordCriteria.isStrong) {
-      setPasswordError('La nueva contraseña debe cumplir con todos los 4 requisitos de seguridad.')
+      setPasswordError('La nueva contrasena debe tener al menos 4 caracteres.')
       return
     }
     if (newPassword !== confirmPassword) {
@@ -421,7 +424,7 @@ export function ProfileModal({ open, onClose }: ProfileModalProps) {
                   <Button
                     type="submit"
                     disabled={savingProfile}
-                    className="w-full h-11 bg-gradient-to-r from-[#90BF50] to-[#7AAF40] hover:opacity-95 text-[#0D0D0D] font-bold text-xs rounded-xl shadow-lg shadow-[#90BF50]/20 cursor-pointer"
+                    className="w-full h-11 bg-gradient-to-r from-[#F97316] to-[#EA580C] hover:opacity-95 text-[#0D0D0D] font-bold text-xs rounded-xl shadow-lg shadow-[#F97316]/20 cursor-pointer"
                   >
                     {savingProfile ? (
                       <span className="flex items-center gap-2">
@@ -496,7 +499,7 @@ export function ProfileModal({ open, onClose }: ProfileModalProps) {
                       value={newPassword}
                       onChange={e => setNewPassword(e.target.value)}
                       className="pl-10.5 pr-10.5 bg-[var(--bg-input)] border-[var(--border-default)] text-[var(--text-primary)] text-xs h-10.5 rounded-xl font-mono"
-                      placeholder="Mínimo 8 caracteres"
+                      placeholder="Minimo 4 caracteres"
                       required
                     />
                     <button
@@ -529,7 +532,7 @@ export function ProfileModal({ open, onClose }: ProfileModalProps) {
                       <div className="grid grid-cols-2 gap-2 text-[11px] pt-1">
                         <div className={`flex items-center gap-1.5 ${passwordCriteria.hasMinLen ? 'text-emerald-600 dark:text-emerald-400 font-bold' : 'text-[var(--text-muted)]'}`}>
                           {passwordCriteria.hasMinLen ? <CheckCircle2 className="w-3.5 h-3.5 shrink-0 text-emerald-500" /> : <XCircle className="w-3.5 h-3.5 shrink-0 opacity-40" />}
-                          <span>Mínimo 8 caracteres</span>
+                      <span>Minimo 4 caracteres</span>
                         </div>
 
                         <div className={`flex items-center gap-1.5 ${passwordCriteria.hasUpper ? 'text-emerald-600 dark:text-emerald-400 font-bold' : 'text-[var(--text-muted)]'}`}>
@@ -579,7 +582,7 @@ export function ProfileModal({ open, onClose }: ProfileModalProps) {
                   <Button
                     type="submit"
                     disabled={savingPassword || !currentPassword || !newPassword || !confirmPassword || !passwordCriteria.isStrong}
-                    className="w-full h-11 bg-gradient-to-r from-[#90BF50] to-[#7AAF40] hover:opacity-95 text-[#0D0D0D] font-bold text-xs rounded-xl shadow-lg shadow-[#90BF50]/20 cursor-pointer disabled:opacity-50"
+                    className="w-full h-11 bg-gradient-to-r from-[#F97316] to-[#EA580C] hover:opacity-95 text-[#0D0D0D] font-bold text-xs rounded-xl shadow-lg shadow-[#F97316]/20 cursor-pointer disabled:opacity-50"
                   >
                     {savingPassword ? (
                       <span className="flex items-center gap-2">
@@ -696,7 +699,7 @@ export function ProfileModal({ open, onClose }: ProfileModalProps) {
                   <Button
                     type="submit"
                     disabled={emailOtpLoading || emailOtpCode.length < 6}
-                    className="flex-1 h-11 bg-gradient-to-r from-[#90BF50] to-[#7AAF40] hover:opacity-95 text-[#0D0D0D] font-bold rounded-xl text-xs uppercase tracking-wider cursor-pointer shadow-lg shadow-[#90BF50]/20 disabled:opacity-50"
+                    className="flex-1 h-11 bg-gradient-to-r from-[#F97316] to-[#EA580C] hover:opacity-95 text-[#0D0D0D] font-bold rounded-xl text-xs uppercase tracking-wider cursor-pointer shadow-lg shadow-[#F97316]/20 disabled:opacity-50"
                   >
                     {emailOtpLoading ? (
                       <span className="flex items-center gap-2">

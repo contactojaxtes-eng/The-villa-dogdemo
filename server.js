@@ -1,10 +1,6 @@
 const fs = require('fs');
 const path = require('path');
 
-try {
-  require('v8').setFlagsFromString('--max_old_space_size=4096');
-} catch (e) {}
-
 const candidates = [
   path.join(__dirname, 'dist', 'main.js'),
   path.join(__dirname, 'server', 'dist', 'main.js'),

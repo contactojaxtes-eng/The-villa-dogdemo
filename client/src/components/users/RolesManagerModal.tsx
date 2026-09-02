@@ -107,7 +107,7 @@ export function RolesManagerModal({ open, onClose, onRolesUpdated }: RolesManage
       if (typeof perms === 'string') {
         try { perms = JSON.parse(perms) } catch (e) { perms = [] }
       }
-      setRolePermissions(Array.isArray(perms) ? perms : [])
+      setRolePermissions(Array.isArray(perms) ? perms.filter((k: string) => ALL_PERMISSION_KEYS.includes(k)) : [])
     }
   }, [selectedRole, isCreatingNew])
 
@@ -276,43 +276,52 @@ export function RolesManagerModal({ open, onClose, onRolesUpdated }: RolesManage
                   <span className="text-xs text-[var(--text-muted)]">Cargando roles...</span>
                 </div>
               ) : (
-                roles.map(r => {
-                  const isSelected = selectedRole?.id === r.id && !isCreatingNew
-                  return (
-                    <div
-                      key={r.id}
-                      onClick={() => { setSelectedRole(r); setIsCreatingNew(false); setIsEditing(false); }}
-                      className={`p-3 rounded-2xl border transition-all cursor-pointer text-left flex items-center justify-between group ${
-                        isSelected
-                          ? 'bg-[var(--bg-panel)] border-[var(--accent)] shadow-md'
-                          : 'bg-[var(--bg-elevated)] border-[var(--border-subtle)] hover:border-[var(--text-muted)]/40'
-                      }`}
-                    >
-                      <div className="flex items-center gap-2.5 min-w-0">
-                        <span 
-                          className="w-3 h-3 rounded-full shrink-0 shadow-xs" 
-                          style={{ backgroundColor: r.color || '#10B981' }} 
-                        />
-                        <div className="truncate">
-                          <p className="text-xs font-black text-[var(--text-primary)] truncate">{r.name}</p>
-                          <p className="text-[10px] font-mono text-[var(--text-muted)] uppercase truncate">{r.code}</p>
+                  roles.map(r => {
+                    const isSelected = selectedRole?.id === r.id && !isCreatingNew
+                    const roleDescriptions: Record<string, string> = {
+                      ADMIN: 'Control y gestión total',
+                      CASHIER: 'Caja, cobros y facturación',
+                      DELIVERY_MANAGER: 'Despachos y domicilios',
+                      WAITER: 'Atención a mesas y pedidos',
+                      KITCHEN: 'Preparación de pedidos',
+                    }
+                    const subtitle = r.description || roleDescriptions[r.code] || (r.isSystem ? 'Rol base del restaurante' : 'Rol personalizado')
+
+                    return (
+                      <div
+                        key={r.id}
+                        onClick={() => { setSelectedRole(r); setIsCreatingNew(false); setIsEditing(false); }}
+                        className={`p-3 rounded-2xl border transition-all cursor-pointer text-left flex items-center justify-between group ${
+                          isSelected
+                            ? 'bg-[var(--bg-panel)] border-[var(--accent)] shadow-md'
+                            : 'bg-[var(--bg-elevated)] border-[var(--border-subtle)] hover:border-[var(--text-muted)]/40'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <span 
+                            className="w-3 h-3 rounded-full shrink-0 shadow-xs" 
+                            style={{ backgroundColor: r.color || '#10B981' }} 
+                          />
+                          <div className="truncate">
+                            <p className="text-xs font-black text-[var(--text-primary)] truncate">{r.name}</p>
+                            <p className="text-[11px] text-[var(--text-secondary)] truncate">{subtitle}</p>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-1 shrink-0">
+                          {r.isSystem ? (
+                            <Badge variant="outline" className="text-[9px] px-1.5 py-0 border-amber-500/30 text-amber-600 dark:text-amber-400 font-extrabold bg-amber-500/10">
+                              Sistema
+                            </Badge>
+                          ) : (
+                            <Badge variant="outline" className="text-[9px] px-1.5 py-0 border-indigo-500/30 text-indigo-600 dark:text-indigo-400 font-extrabold bg-indigo-500/10">
+                              Personalizado
+                            </Badge>
+                          )}
                         </div>
                       </div>
-
-                      <div className="flex items-center gap-1 shrink-0">
-                        {r.isSystem ? (
-                          <Badge variant="outline" className="text-[9px] px-1.5 py-0 border-amber-500/30 text-amber-600 dark:text-amber-400 font-extrabold bg-amber-500/10">
-                            Sistema
-                          </Badge>
-                        ) : (
-                          <Badge variant="outline" className="text-[9px] px-1.5 py-0 border-indigo-500/30 text-indigo-600 dark:text-indigo-400 font-extrabold bg-indigo-500/10">
-                            Custom
-                          </Badge>
-                        )}
-                      </div>
-                    </div>
-                  )
-                })
+                    )
+                  })
               )}
             </div>
 

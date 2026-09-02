@@ -2,6 +2,7 @@
 export interface CachedSession {
   id: string
   phone: string
+  customerPhone?: string | null
   customerName: string | null
   lastMessageAt?: string
   assignedToId?: string | null

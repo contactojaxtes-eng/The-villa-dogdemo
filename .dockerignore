@@ -1,0 +1,16 @@
+**/node_modules
+**/dist
+**/.env
+**/.env.*
+**/.tmp
+**/coverage
+**/*.log
+**/*.tsbuildinfo
+.git
+.codex
+.claude
+.vscode
+audit-*.json
+server/backups
+server/uploads
+server/whatsapp-*.json

@@ -219,7 +219,7 @@ export class MailService implements OnModuleInit {
       to,
       '✅ Correo de prueba - The Villa Dog Domicilios',
       'Si recibiste este correo, la configuración del sistema funciona correctamente.',
-      `<div style="font-family: Arial, sans-serif; padding: 20px;"><h2 style="color:#90BF50;">✅ Correo de prueba</h2><p>Si recibiste este correo, la configuración del sistema The Villa Dog Domicilios funciona correctamente.</p></div>`
+      `<div style="font-family: Arial, sans-serif; padding: 20px;"><h2 style="color:#F97316;">✅ Correo de prueba</h2><p>Si recibiste este correo, la configuración del sistema The Villa Dog Domicilios funciona correctamente.</p></div>`
     );
     return { message: `Correo de prueba enviado a ${to}` };
   }
@@ -229,9 +229,9 @@ export class MailService implements OnModuleInit {
       const subject = '🔑 Recupera tu contraseña - The Villa Dog';
       const text = `Hola ${name},\n\nRecibimos una solicitud para restablecer tu contraseña en el Sistema The Villa Dog.\n${code ? `Código de seguridad: ${code}\n\n` : ''}Enlace directo (válido por 1 hora):\n${resetLink}\n\nSi no solicitaste este cambio, ignora este mensaje.\n\nThe Villa Dog`;
       const html = `
-        <div style="font-family: Arial, Helvetica, sans-serif; background-color: #0E0E10; color: #FFFFFF; padding: 30px; border-radius: 16px; max-width: 550px; margin: auto; border: 1px solid rgba(144, 191, 80, 0.2);">
+        <div style="font-family: Arial, Helvetica, sans-serif; background-color: #0E0E10; color: #FFFFFF; padding: 30px; border-radius: 16px; max-width: 550px; margin: auto; border: 1px solid rgba(249, 115, 22, 0.2);">
           <div style="text-align: center; margin-bottom: 24px;">
-            <h1 style="color: #90BF50; font-size: 26px; margin: 0; font-weight: 800; letter-spacing: 1px;">THE VILLA DOG</h1>
+            <h1 style="color: #F97316; font-size: 26px; margin: 0; font-weight: 800; letter-spacing: 1px;">THE VILLA DOG</h1>
             <p style="color: #888; font-size: 11px; margin: 4px 0 0 0; text-transform: uppercase; letter-spacing: 2px;">Sabor Auténtico • Sistema de Gestión</p>
           </div>
           
@@ -241,14 +241,14 @@ export class MailService implements OnModuleInit {
             <p style="color: #A1A1AA; font-size: 13px; line-height: 1.5;">Recibimos una solicitud para cambiar tu contraseña de acceso a THE VILLA DOG. Este enlace y código son válidos por <strong>1 hora</strong>.</p>
             
             ${code ? `
-              <div style="background-color: #27272A; border: 1px dashed #90BF50; border-radius: 10px; padding: 16px; text-align: center; margin: 20px 0;">
+              <div style="background-color: #27272A; border: 1px dashed #F97316; border-radius: 10px; padding: 16px; text-align: center; margin: 20px 0;">
                 <span style="color: #A1A1AA; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; display: block; margin-bottom: 6px;">Tu código de seguridad</span>
-                <span style="color: #90BF50; font-size: 28px; font-weight: 800; letter-spacing: 6px; font-family: monospace;">${code}</span>
+                <span style="color: #F97316; font-size: 28px; font-weight: 800; letter-spacing: 6px; font-family: monospace;">${code}</span>
               </div>
             ` : ''}
 
             <div style="text-align: center; margin: 24px 0 16px 0;">
-              <a href="${resetLink}" style="background: linear-gradient(135deg, #90BF50, #7AAF40); color: #0D0D0D; padding: 13px 32px; border-radius: 10px; text-decoration: none; font-weight: 800; font-size: 14px; display: inline-block; box-shadow: 0 4px 14px rgba(144, 191, 80, 0.4);">Restablecer Contraseña</a>
+              <a href="${resetLink}" style="background: linear-gradient(135deg, #F97316, #EA580C); color: #0D0D0D; padding: 13px 32px; border-radius: 10px; text-decoration: none; font-weight: 800; font-size: 14px; display: inline-block; box-shadow: 0 4px 14px rgba(249, 115, 22, 0.4);">Restablecer Contraseña</a>
             </div>
             
             <p style="color: #71717A; font-size: 11px; text-align: center; margin: 0;">Si no solicitaste este cambio, puedes ignorar este correo con tranquilidad.</p>
@@ -280,7 +280,7 @@ export class MailService implements OnModuleInit {
       const html = `
         <div style="font-family: Arial, Helvetica, sans-serif; background-color: #0E0E10; color: #FFFFFF; padding: 30px; border-radius: 16px; max-width: 550px; margin: auto; border: 1px solid rgba(239, 68, 68, 0.3);">
           <div style="text-align: center; margin-bottom: 24px;">
-            <h1 style="color: #90BF50; font-size: 26px; margin: 0; font-weight: 800; letter-spacing: 1px;">THE VILLA DOG</h1>
+            <h1 style="color: #F97316; font-size: 26px; margin: 0; font-weight: 800; letter-spacing: 1px;">THE VILLA DOG</h1>
             <p style="color: #888; font-size: 11px; margin: 4px 0 0 0; text-transform: uppercase; letter-spacing: 2px;">Sabor Auténtico • Seguridad de Cuenta</p>
           </div>
           
@@ -289,7 +289,7 @@ export class MailService implements OnModuleInit {
             <h2 style="color: #FFFFFF; font-size: 18px; margin-top: 10px; font-weight: 700;">Autorizar Cambio de Correo</h2>
             <p style="color: #D4D4D8; font-size: 14px; line-height: 1.6;">Hola <strong>${name}</strong>,</p>
             <p style="color: #A1A1AA; font-size: 13px; line-height: 1.5;">
-              Recibimos una solicitud para <strong>desvincular este correo actual</strong> y cambiarlo por: <strong style="color: #90BF50;">${newEmail}</strong>.
+              Recibimos una solicitud para <strong>desvincular este correo actual</strong> y cambiarlo por: <strong style="color: #F97316;">${newEmail}</strong>.
             </p>
             
             <div style="background-color: #27272A; border: 1px dashed #EF4444; border-radius: 10px; padding: 16px; text-align: center; margin: 20px 0;">
@@ -324,23 +324,23 @@ export class MailService implements OnModuleInit {
       const subject = '✅ Paso 2: Código para activar tu NUEVO correo - THE VILLA DOG';
       const text = `Hola ${name},\n\nTu código para activar este NUEVO correo en tu cuenta de THE VILLA DOG es: ${otpCode}\n(Válido por 5 minutos).\n\nIngrésalo en pantalla para completar la activación.\n\nThe Villa Dog`;
       const html = `
-        <div style="font-family: Arial, Helvetica, sans-serif; background-color: #0E0E10; color: #FFFFFF; padding: 30px; border-radius: 16px; max-width: 550px; margin: auto; border: 1px solid rgba(144, 191, 80, 0.3);">
+        <div style="font-family: Arial, Helvetica, sans-serif; background-color: #0E0E10; color: #FFFFFF; padding: 30px; border-radius: 16px; max-width: 550px; margin: auto; border: 1px solid rgba(249, 115, 22, 0.3);">
           <div style="text-align: center; margin-bottom: 24px;">
-            <h1 style="color: #90BF50; font-size: 26px; margin: 0; font-weight: 800; letter-spacing: 1px;">THE VILLA DOG</h1>
+            <h1 style="color: #F97316; font-size: 26px; margin: 0; font-weight: 800; letter-spacing: 1px;">THE VILLA DOG</h1>
             <p style="color: #888; font-size: 11px; margin: 4px 0 0 0; text-transform: uppercase; letter-spacing: 2px;">Sabor Auténtico • Seguridad de Cuenta</p>
           </div>
           
           <div style="background-color: #18181B; padding: 24px; border-radius: 12px; border: 1px solid #27272A;">
-            <span style="background-color: rgba(144, 191, 80, 0.15); color: #90BF50; border: 1px solid rgba(144, 191, 80, 0.3); font-size: 10px; font-weight: bold; text-transform: uppercase; padding: 3px 8px; rounded: 6px; letter-spacing: 1px;">Paso 2 de 2 • Activación</span>
+            <span style="background-color: rgba(249, 115, 22, 0.15); color: #F97316; border: 1px solid rgba(249, 115, 22, 0.3); font-size: 10px; font-weight: bold; text-transform: uppercase; padding: 3px 8px; rounded: 6px; letter-spacing: 1px;">Paso 2 de 2 • Activación</span>
             <h2 style="color: #FFFFFF; font-size: 18px; margin-top: 10px; font-weight: 700;">Activar Nuevo Correo</h2>
             <p style="color: #D4D4D8; font-size: 14px; line-height: 1.6;">Hola <strong>${name}</strong>,</p>
             <p style="color: #A1A1AA; font-size: 13px; line-height: 1.5;">
               Recibimos tu solicitud para activar este correo como la dirección oficial de tu cuenta en THE VILLA DOG.
             </p>
             
-            <div style="background-color: #27272A; border: 1px dashed #90BF50; border-radius: 10px; padding: 16px; text-align: center; margin: 20px 0;">
+            <div style="background-color: #27272A; border: 1px dashed #F97316; border-radius: 10px; padding: 16px; text-align: center; margin: 20px 0;">
               <span style="color: #A1A1AA; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; display: block; margin-bottom: 6px;">Código de Activación (5 min)</span>
-              <span style="color: #90BF50; font-size: 32px; font-weight: 800; letter-spacing: 6px; font-family: monospace;">${otpCode}</span>
+              <span style="color: #F97316; font-size: 32px; font-weight: 800; letter-spacing: 6px; font-family: monospace;">${otpCode}</span>
             </div>
 
             <p style="color: #A1A1AA; font-size: 12px; line-height: 1.5; margin: 0;">
@@ -469,7 +469,7 @@ export class MailService implements OnModuleInit {
       const text = `Hola ${name},\n\nUn administrador restableció la contraseña de tu cuenta en el sistema The Villa Dog Domicilios. Si no esperabas este cambio, contacta a tu Super Admin.\n\nSistema The Villa Dog Domicilios`;
       const html = `
         <div style="font-family: Arial, sans-serif; padding: 20px; border: 1px solid #e0e0e0; border-radius: 8px; max-width: 600px;">
-          <h2 style="color: #90BF50; margin-top: 0;">🔐 Contraseña actualizada</h2>
+          <h2 style="color: #F97316; margin-top: 0;">🔐 Contraseña actualizada</h2>
           <p>Hola ${name},</p>
           <p>Un administrador restableció la contraseña de tu cuenta en el sistema The Villa Dog Domicilios.</p>
           <p>Si no esperabas este cambio, contacta a tu Super Admin de inmediato.</p>

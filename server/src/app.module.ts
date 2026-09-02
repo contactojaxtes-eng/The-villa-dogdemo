@@ -7,12 +7,9 @@ import { MenuModule } from './menu/menu.module';
 import { OrdersModule } from './orders/orders.module';
 import { ZonesModule } from './zones/zones.module';
 import { PaymentsModule } from './payments/payments.module';
-import { ExpensesModule } from './expenses/expenses.module';
 import { RankingModule } from './ranking/ranking.module';
-import { ReportsModule } from './reports/reports.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { SocketModule } from './socket/socket.module';
-import { InventoryModule } from './inventory/inventory.module';
 import { CashRegistersModule } from './cash-registers/cash-registers.module';
 import { WhatsappModule } from './whatsapp/whatsapp.module';
 import { GeocodingModule } from './geocoding/geocoding.module';
@@ -26,6 +23,7 @@ import { ServeStaticModule } from '@nestjs/serve-static';
 import { join } from 'path';
 import { SuperadminModule } from './superadmin/superadmin.module';
 import { RolesModule } from './roles/roles.module';
+import { TablesModule } from './tables/tables.module';
 import { AppController } from './app.controller';
 
 @Module({
@@ -33,7 +31,7 @@ import { AppController } from './app.controller';
     ConfigModule.forRoot({ isGlobal: true }),
     ServeStaticModule.forRoot({
       rootPath: join(__dirname, '..', '..', 'client', 'dist'),
-      exclude: ['/api*', '/docs*', '/socket.io*', '/imprimir*', '/cola-impresion*'],
+      exclude: ['/api/{*path}', '/docs/{*path}', '/socket.io/{*path}', '/imprimir/{*path}', '/cola-impresion/{*path}'],
     }),
     PrismaModule,
     CacheModule,
@@ -46,18 +44,16 @@ import { AppController } from './app.controller';
     OrdersModule,
     ZonesModule,
     PaymentsModule,
-    ExpensesModule,
     RankingModule,
-    ReportsModule,
     NotificationsModule,
     SocketModule,
-    InventoryModule,
     CashRegistersModule,
     WhatsappModule,
     GeocodingModule,
     PrintModule,
     CustomersModule,
     DeliveryDriversModule,
+    TablesModule,
     SuperadminModule,
   ],
   controllers: [AppController],

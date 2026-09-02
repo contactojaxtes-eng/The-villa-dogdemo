@@ -69,7 +69,7 @@ export class PrintService {
     return {
       restaurant: {
         name: map.restaurant_name || 'THE VILLA DOG',
-        nit: map.restaurant_nit || '901928696',
+        nit: map.restaurant_nit || '',
         address: map.restaurant_address || 'Monteria, Cordoba',
         phone: map.restaurant_phone || '310 000 0000',
         hours: map.restaurant_hours || '12:00 PM - 11:00 PM',
@@ -84,7 +84,7 @@ export class PrintService {
       cocina: legacyCocina,
       bar: legacyBar,
       printers,
-      autoPrint: map.printer_auto_print !== 'false',
+      autoPrint: map.printer_auto_print === 'true',
       // Fallback values for backward compatibility
       mode: legacyCocina.mode || 'network',
       ip: legacyCocina.ip || '',

@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState, useRef, Fragment } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { io } from 'socket.io-client'
+import { io } from '@/lib/socket'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -130,15 +130,14 @@ export default function ProductsPage() {
 
   const loadData = (silent = false) => {
     if (!silent) setLoading(true)
-    Promise.all([
-      api.get<MenuCategory[]>('/menu/categories?includeInactive=true'),
-      api.get<any[]>('/inventory/ingredients').catch(() => [])
-    ]).then(([cats, ings]) => {
-      setCategories(cats)
-      setIngredients(ings)
-    }).catch(console.error).finally(() => {
-      if (!silent) setLoading(false)
-    })
+    api.get<MenuCategory[]>('/menu/categories?includeInactive=true')
+      .then(cats => {
+        setCategories(cats)
+      })
+      .catch(console.error)
+      .finally(() => {
+        if (!silent) setLoading(false)
+      })
   }
 
   useEffect(() => { loadData() }, [])
@@ -150,10 +149,6 @@ export default function ProductsPage() {
     })
 
     socket.on('menuUpdated', () => {
-      loadData(true)
-    })
-
-    socket.on('inventoryChanged', () => {
       loadData(true)
     })
 
@@ -518,20 +513,7 @@ export default function ProductsPage() {
       } else {
         saved = await api.post('/menu/items', payload)
       }
-
-      const itemId = editProductId || saved.id
-
-      // Upsert Recipe
-      const validRecipeItems = recipeItems.filter(r => r.ingredientId)
-      await api.post(`/inventory/recipes/${itemId}`, {
-        items: validRecipeItems.map(r => ({
-          ingredientId: r.ingredientId,
-          quantity: parseFloat(r.quantity) || 0,
-          wastePercentage: parseFloat(r.wastePercentage) || 0,
-          unit: r.unit || 'unidad'
-        }))
-      })
-
+ 
       setProductDialogOpen(false)
       resetProductForm()
       loadData()
@@ -636,7 +618,7 @@ export default function ProductsPage() {
       {/* ── Header ── */}
       <motion.div className="flex flex-wrap items-center justify-between gap-4" variants={fadeUp}>
         <div className="flex items-center gap-3.5">
-          <div className="flex h-12 w-12 items-center justify-center rounded-2xl shadow-lg shadow-[var(--accent)]/20" style={{ background: 'linear-gradient(135deg, var(--accent), #6aaa32)' }}>
+          <div className="flex h-12 w-12 items-center justify-center rounded-2xl shadow-lg shadow-[var(--accent)]/20" style={{ background: 'linear-gradient(135deg, var(--accent), #FBBF24)' }}>
             <PackagePlus className="h-6 w-6 text-[var(--accent-fg)]" />
           </div>
           <div>

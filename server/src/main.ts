@@ -1,3 +1,5 @@
+import 'dotenv/config';
+import { isAllowedOrigin, validateProductionEnvironment } from './common/environment';
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe, RequestMethod } from '@nestjs/common';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
@@ -8,7 +10,9 @@ import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 
 async function bootstrap() {
+  validateProductionEnvironment();
   const app = await NestFactory.create(AppModule);
+  app.enableShutdownHooks();
 
   app.setGlobalPrefix('api', {
     exclude: [
@@ -43,27 +47,8 @@ async function bootstrap() {
     }),
   );
 
-  const allowedOrigins = [
-    'http://localhost:5173',
-    'http://localhost:3000',
-    ...(process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',') : ['*']),
-  ];
-
   app.enableCors({
-    origin: (origin, callback) => {
-      if (!origin) return callback(null, true);
-      
-      const isAllowed = allowedOrigins.some((allowed) => {
-        if (allowed === '*') return true;
-        return origin === allowed || origin.endsWith(allowed.replace('*.', ''));
-      });
-
-      if (isAllowed || process.env.NODE_ENV !== 'production') {
-        callback(null, true);
-      } else {
-        callback(new Error('No permitido por CORS'));
-      }
-    },
+    origin: (origin, callback) => callback(null, isAllowedOrigin(origin)),
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
   });
@@ -74,6 +59,7 @@ async function bootstrap() {
     forbidNonWhitelisted: true,
   }));
 
+  if (process.env.NODE_ENV !== 'production') {
   const config = new DocumentBuilder()
     .setTitle('The Villa Dog Domicilios API')
     .setDescription('Sistema de Gestión de Domicilios - The Villa Dog')
@@ -95,8 +81,10 @@ async function bootstrap() {
   const document = SwaggerModule.createDocument(app, config);
   SwaggerModule.setup('docs', app, document, {
     customSiteTitle: 'The Villa Dog API Docs',
-    customCss: '.swagger-ui .topbar { background-color: #90BF50 }',
+    customCss: '.swagger-ui .topbar { background-color: #F97316 }',
   });
+
+  }
 
   const port = Number(process.env.PORT) || 3000;
   await app.listen(port, '0.0.0.0');

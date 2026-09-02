@@ -58,8 +58,8 @@ export default function AuditLogsPage() {
 
   return (
     <div className="min-h-[85vh] bg-[#F6F7F9] rounded-[2rem] border border-[#E5E7EB] p-4 md:p-8 text-[#334155] relative overflow-hidden shadow-2xl flex flex-col">
-      <div className="absolute top-0 left-0 w-full h-[500px] bg-gradient-to-b from-[#1E40AF]/5 to-transparent pointer-events-none" />
-      <div className="absolute top-0 right-0 w-[500px] h-[500px] bg-[radial-gradient(circle_at_top_right,rgba(30,64,175,0.04),transparent_50%)] pointer-events-none" />
+      <div className="absolute top-0 left-0 w-full h-[500px] bg-gradient-to-b from-[#7A1F2B]/5 to-transparent pointer-events-none" />
+      <div className="absolute top-0 right-0 w-[500px] h-[500px] bg-[radial-gradient(circle_at_top_right,rgba(249,115,22,0.05),transparent_50%)] pointer-events-none" />
       
       <div className="relative z-10 space-y-6 flex-1 flex flex-col">
         
@@ -84,7 +84,7 @@ export default function AuditLogsPage() {
           <div className="flex bg-[#FFFFFF] border border-[#E2E8F0] rounded-xl p-1">
             <button
               onClick={() => { setTab('audit'); setPage(1) }}
-              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-[10px] font-mono font-bold uppercase tracking-wider transition-colors cursor-pointer ${tab === 'audit' ? 'bg-[#1E40AF]/10 text-[#1E40AF]' : 'text-[#64748B] hover:text-[#334155] hover:bg-[#F1F5F9]'}`}
+              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-[10px] font-mono font-bold uppercase tracking-wider transition-colors cursor-pointer ${tab === 'audit' ? 'bg-[#7A1F2B]/10 text-[#7A1F2B]' : 'text-[#64748B] hover:text-[#334155] hover:bg-[#F1F5F9]'}`}
             >
               <ScrollText className="h-3.5 w-3.5" />
               Action Logs
@@ -103,7 +103,7 @@ export default function AuditLogsPage() {
         <div className="flex-1 bg-[#FFFFFF] border border-[#E5E7EB] rounded-2xl shadow-sm overflow-hidden flex flex-col">
           {loading ? (
             <div className="flex-1 flex flex-col items-center justify-center p-12">
-              <Loader2 className={`h-8 w-8 animate-spin ${tab === 'audit' ? 'text-[#1E40AF]' : 'text-red-600'} mb-4`} />
+              <Loader2 className={`h-8 w-8 animate-spin ${tab === 'audit' ? 'text-[#7A1F2B]' : 'text-red-600'} mb-4`} />
               <p className="text-[10px] font-mono uppercase tracking-widest text-[#64748B]">Querying Telemetry Database...</p>
             </div>
           ) : (
@@ -111,14 +111,14 @@ export default function AuditLogsPage() {
               <motion.div variants={containerVariants} initial="hidden" animate="visible" className="space-y-3">
                 
                 {tab === 'audit' && audit?.items.map(log => (
-                  <motion.div variants={itemVariants} key={log.id} className="group flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 bg-[#F6F7F9] border border-[#E5E7EB] hover:border-[#1E40AF]/30 rounded-xl transition-colors">
+                  <motion.div variants={itemVariants} key={log.id} className="group flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 bg-[#F6F7F9] border border-[#E5E7EB] hover:border-[#7A1F2B]/30 rounded-xl transition-colors">
                     <div className="flex items-start gap-4">
                       <div className="mt-0.5 opacity-50 group-hover:opacity-100 transition-opacity">
-                        <Terminal className="h-4 w-4 text-[#1E40AF]" />
+                        <Terminal className="h-4 w-4 text-[#7A1F2B]" />
                       </div>
                       <div>
                         <div className="flex items-center gap-2 flex-wrap mb-1">
-                          <span className="px-1.5 py-0.5 bg-[#1E40AF]/10 border border-[#1E40AF]/20 text-[#1E40AF] rounded text-[9px] font-mono font-bold uppercase">
+                          <span className="px-1.5 py-0.5 bg-[#7A1F2B]/10 border border-[#7A1F2B]/20 text-[#7A1F2B] rounded text-[9px] font-mono font-bold uppercase">
                             {log.action}
                           </span>
                           <span className="text-xs font-bold text-[#0F172A]">{log.actorName}</span>

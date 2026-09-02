@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { useAuth } from '@/hooks/useAuth'
@@ -10,32 +10,29 @@ import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { BrandLogo } from '@/components/brand/BrandLogo'
 import { InstallPWAButton } from '@/components/InstallPWAButton'
 import { ProfileModal } from '@/components/auth/ProfileModal'
-import { Sun, Moon, LogOut, Bell, BellOff, User as UserIcon, KeyRound } from 'lucide-react'
+import { Sun, Moon, LogOut, Bell, BellOff } from 'lucide-react'
 import { toast } from 'sonner'
 
 const navItems = [
   { href: '/chat', label: 'WhatsApp', roles: ['ADMIN', 'SUPERADMIN', 'DELIVERY_MANAGER', 'CASHIER'] },
   { href: '/dashboard', label: 'Dashboard', roles: ['ADMIN', 'CASHIER', 'DELIVERY_MANAGER'] },
-  { href: '/orders', label: 'Domicilios', roles: ['ADMIN', 'CASHIER', 'DELIVERY_MANAGER', 'ACCOUNTANT', 'ACCOUNTING_ASSISTANT'] },
+  { href: '/orders', label: 'Domicilios', roles: ['ADMIN', 'CASHIER', 'DELIVERY_MANAGER'] },
   { href: '/orders/new', label: 'Nuevo', roles: ['ADMIN', 'CASHIER', 'DELIVERY_MANAGER'] },
   { href: '/products', label: 'Productos', roles: ['ADMIN'] },
-  { href: '/menu', label: 'Menú', roles: ['ADMIN'] },
   { href: '/zones', label: 'Barrios', roles: ['ADMIN', 'SUPERADMIN', 'CASHIER', 'DELIVERY_MANAGER'] },
-  { href: '/inventory', label: 'Inventario', roles: ['ADMIN'] },
   { href: '/cash-registers', label: 'Caja', roles: ['ADMIN', 'CASHIER'] },
-  { href: '/drivers', label: 'Repartidores', roles: ['ADMIN', 'CASHIER', 'ACCOUNTANT', 'ACCOUNTING_ASSISTANT'] },
-  { href: '/cash-control', label: 'Control de Caja', roles: ['ADMIN', 'ACCOUNTANT', 'ACCOUNTING_ASSISTANT'] },
-  { href: '/expenses', label: 'Gastos', roles: ['ADMIN', 'CASHIER', 'ACCOUNTANT', 'ACCOUNTING_ASSISTANT'] },
-  { href: '/reports', label: 'Reportes', roles: ['ADMIN', 'ACCOUNTANT', 'ACCOUNTING_ASSISTANT'] },
+  { href: '/drivers', label: 'Repartidores', roles: ['ADMIN', 'CASHIER'] },
+  { href: '/cash-control', label: 'Control de Caja', roles: ['ADMIN'] },
   { href: '/users', label: 'Usuarios', roles: ['ADMIN'] },
-  { href: '/settings', label: 'Config', roles: ['ADMIN'] },
 ]
 
 const roleLabels: Record<string, string> = {
-  SUPERADMIN: 'Super Admin',
-  ADMIN: 'Admin',
-  CASHIER: 'Caja',
-  DELIVERY_MANAGER: 'Gestor',
+  SUPERADMIN: 'Super Administrador',
+  ADMIN: 'Administrador',
+  CASHIER: 'Cajero',
+  DELIVERY_MANAGER: 'Gestor Domicilios',
+  WAITER: 'Mesero',
+  KITCHEN: 'Cocinero',
   ACCOUNTANT: 'Contador',
   ACCOUNTING_ASSISTANT: 'Auxiliar Contable',
 }

@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { io, Socket } from 'socket.io-client'
+import { type Socket } from 'socket.io-client'
+import { io } from '@/lib/socket'
 import { useAuth } from '@/hooks/useAuth'
 import { api } from '@/lib/api'
 import { alerts } from '@/lib/alerts'
@@ -656,7 +657,7 @@ function ChatPage() {
   const { user } = useAuth()
   const navigate = useNavigate()
   
-  const [sessions, setSessions] = useState<Session[]>(() => globalSessionsCache || [])
+  const [sessions, setSessions] = useState<Session[]>(() => (globalSessionsCache || []).map(session => ({ ...session, lastMessageAt: session.lastMessageAt || '', assignedToId: session.assignedToId || null, assignedTo: session.assignedTo || null, messages: session.messages || [] })))
   // Iniciar siempre en modo vacío (sin chat seleccionado) estilo WhatsApp Web
   const [activeSession, setActiveSession] = useState<Session | null>(null)
   const [messages, setMessages] = useState<Message[]>([])
@@ -670,14 +671,14 @@ function ChatPage() {
   const [audioUrl, setAudioUrl] = useState<string | null>(null)
   
   const [chatSearch, setChatSearch] = useState('')
-  const [chatFilter, setChatFilter] = useState<'TODAY' | 'ALL' | 'UNREAD' | 'WAITING' | 'MINE'>('TODAY')
+  const [chatFilter, setChatFilter] = useState<'TODAY' | 'ALL' | 'UNREAD' | 'WAITING' | 'MINE' | 'UNASSIGNED'>('TODAY')
   const [displayLimit, setDisplayLimit] = useState(100)
   const [isChatbotEnabled, setIsChatbotEnabled] = useState<boolean>(false)
   const [togglingBot, setTogglingBot] = useState<boolean>(false)
   const [showBroadcastModal, setShowBroadcastModal] = useState(false)
   const [isMutedWa, setIsMutedWa] = useState(() => localStorage.getItem('niche_mute_wa_toasts') === 'true')
   const tabsRef = useRef<HTMLDivElement>(null)
-  const statusReloadTimer = useRef<NodeJS.Timeout | null>(null)
+  const statusReloadTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const toggleMuteWa = () => {
     const next = !isMutedWa
@@ -2252,11 +2253,11 @@ function ChatPage() {
         {/* Fila 1: Título, Estado y Botones Principales */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div className="flex items-center gap-3">
-            <div className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-tr from-[#7AAF40] to-[#90BF50] text-[#0D0D0D] shadow-lg shadow-[#90BF50]/25 border border-[#90BF50]/40 font-black">
+            <div className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-tr from-[#EA580C] to-[#F97316] text-[#0D0D0D] shadow-lg shadow-[#F97316]/25 border border-[#F97316]/40 font-black">
               <MessageSquareText className="h-5 w-5" />
               <span className="absolute -top-1 -right-1 flex h-3 w-3">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#90BF50] opacity-75"></span>
-                <span className="relative inline-flex rounded-full h-3 w-3 bg-[#90BF50] border-2 border-white dark:border-black"></span>
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#F97316] opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-3 w-3 bg-[#F97316] border-2 border-white dark:border-black"></span>
               </span>
             </div>
             <div>
@@ -2288,7 +2289,7 @@ function ChatPage() {
               className={cn(
                 "h-9.5 px-4 rounded-xl font-black text-xs flex items-center justify-center gap-2 transition-all shadow-md cursor-pointer shrink-0 border uppercase tracking-wider active:scale-95",
                 isChatbotEnabled
-                  ? "bg-gradient-to-r from-[#7AAF40] to-[#90BF50] hover:from-[#6c9c38] hover:to-[#7aaf40] text-[#0D0D0D] border-[#90BF50]/60 shadow-[#90BF50]/25"
+                  ? "bg-gradient-to-r from-[#EA580C] to-[#F97316] hover:from-[#6c9c38] hover:to-[#EA580C] text-[#0D0D0D] border-[#F97316]/60 shadow-[#F97316]/25"
                   : "bg-gradient-to-r from-rose-600 to-red-600 hover:from-rose-500 hover:to-red-500 text-white border-rose-300/40 shadow-rose-950/20"
               )}
             >
@@ -2317,7 +2318,7 @@ function ChatPage() {
 
             <button
               onClick={() => setShowBroadcastModal(true)}
-              className="h-9.5 px-4 rounded-xl font-black text-xs bg-gradient-to-r from-[#7AAF40] to-[#90BF50] hover:from-[#6c9c38] hover:to-[#7aaf40] text-[#0D0D0D] shadow-md shadow-[#90BF50]/25 flex items-center gap-2 border border-[#90BF50]/60 transition-all hover:scale-[1.02] active:scale-[0.98] cursor-pointer tracking-wider uppercase"
+              className="h-9.5 px-4 rounded-xl font-black text-xs bg-gradient-to-r from-[#EA580C] to-[#F97316] hover:from-[#6c9c38] hover:to-[#EA580C] text-[#0D0D0D] shadow-md shadow-[#F97316]/25 flex items-center gap-2 border border-[#F97316]/60 transition-all hover:scale-[1.02] active:scale-[0.98] cursor-pointer tracking-wider uppercase"
             >
               <Send className="w-3.5 h-3.5" />
               <span>Envío Masivo</span>

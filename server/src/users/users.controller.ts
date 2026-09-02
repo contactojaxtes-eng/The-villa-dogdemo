@@ -63,7 +63,7 @@ export class UsersController {
     if (body.role === 'SUPERADMIN' && req.user.role !== 'SUPERADMIN') {
       throw new ForbiddenException('No se pueden crear más Super Admins');
     }
-    if (!['ADMIN', 'CASHIER', 'DELIVERY_MANAGER', 'ACCOUNTANT', 'ACCOUNTING_ASSISTANT'].includes(body.role)) {
+    if (!['ADMIN', 'CASHIER', 'DELIVERY_MANAGER', 'WAITER', 'KITCHEN'].includes(body.role)) {
       body.role = 'CASHIER';
     }
     const created = await this.usersService.create(body);
@@ -92,7 +92,7 @@ export class UsersController {
     }
     if (existing.role === 'SUPERADMIN') {
       delete body.role;
-    } else if (body.role && !['ADMIN', 'CASHIER', 'DELIVERY_MANAGER', 'ACCOUNTANT', 'ACCOUNTING_ASSISTANT'].includes(body.role)) {
+    } else if (body.role && !['ADMIN', 'CASHIER', 'DELIVERY_MANAGER', 'WAITER', 'KITCHEN'].includes(body.role)) {
       body.role = 'CASHIER';
     }
     const updated = await this.usersService.update(id, body);
@@ -137,11 +137,14 @@ export class UsersController {
 
   @Delete(':id')
   @Roles('SUPERADMIN', 'ADMIN')
-  @ApiOperation({ summary: 'Desactivar usuario' })
+  @ApiOperation({ summary: 'Eliminar usuario permanentemente' })
   async remove(@Param('id') id: string, @Request() req: any) {
+    if (id === req.user.id) {
+      throw new ForbiddenException('No puedes eliminar tu propia cuenta.');
+    }
     const existing = await this.usersService.findOne(id);
     if (existing.role === 'SUPERADMIN' && req.user.role !== 'SUPERADMIN') {
-      throw new ForbiddenException('No tienes permiso para desactivar a un Super Admin');
+      throw new ForbiddenException('No tienes permiso para eliminar a un Super Admin');
     }
     const result = await this.usersService.remove(id);
     this.auditService.log({

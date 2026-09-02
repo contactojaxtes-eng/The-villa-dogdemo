@@ -40,7 +40,8 @@ import {
   Key,
   AlertTriangle
 } from 'lucide-react'
-import { io, Socket } from 'socket.io-client'
+import { type Socket } from 'socket.io-client'
+import { io } from '@/lib/socket'
 import { printComandaSmart, openCashDrawer } from '@/lib/printer'
 import { alerts } from '@/lib/alerts'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -89,7 +90,7 @@ const statusIcons: Record<string, any> = {
 }
 
 const operatorColors = [
-  '#90BF50', '#3B82F6', '#F59E0B', '#EF4444', '#8B5CF6', '#EC4899', '#14B8A6', '#F97316',
+  '#F97316', '#3B82F6', '#F59E0B', '#EF4444', '#8B5CF6', '#EC4899', '#14B8A6', '#F97316',
 ]
 
 function getOperatorColor(index: number): string {
@@ -357,7 +358,7 @@ export default function OrdersPage() {
       } : o))
     })
 
-    let refreshTimer: NodeJS.Timeout | null = null
+    let refreshTimer: ReturnType<typeof setTimeout> | null = null
     const debouncedRefresh = () => {
       if (refreshTimer) clearTimeout(refreshTimer)
       refreshTimer = setTimeout(() => {
@@ -654,13 +655,13 @@ export default function OrdersPage() {
           ? [
               { label: 'Pedidos Listados', value: orders.length, color: '#10B981', icon: Package, sub: 'En esta consulta' },
               { label: 'Pedidos Activos', value: summary.active, color: '#F59E0B', icon: Timer, sub: 'Pendientes de despacho' },
-              { label: 'Entregados Hoy', value: summary.delivered, color: '#90BF50', icon: Bike, sub: 'Domicilios despachados' },
+              { label: 'Entregados Hoy', value: summary.delivered, color: '#F97316', icon: Bike, sub: 'Domicilios despachados' },
               { label: 'Cancelados', value: summary.cancelled, color: '#EF4444', icon: XCircle, sub: 'Pedidos cancelados' },
             ]
           : [
               { label: 'Pedidos Listados', value: orders.length, color: '#10B981', icon: Package, sub: 'En esta consulta' },
               { label: 'Pedidos Activos', value: summary.active, color: '#F59E0B', icon: Timer, sub: 'Pendientes de despacho' },
-              { label: 'Entregados Hoy', value: summary.delivered, color: '#90BF50', icon: Bike, sub: 'Domicilios despachados' },
+              { label: 'Entregados Hoy', value: summary.delivered, color: '#F97316', icon: Bike, sub: 'Domicilios despachados' },
               { label: 'Facturación Total', value: formatCurrency(summary.total), color: '#3B82F6', icon: DollarSign, sub: 'Monto total' },
             ]
         ).map(stat => {
@@ -806,7 +807,7 @@ export default function OrdersPage() {
               </Button>
               <Button 
                 variant="ghost" 
-                onClick={loadOrders}
+                onClick={() => loadOrders()}
                 disabled={isRefreshing}
                 className="h-10.5 text-sm hover:bg-[var(--bg-hover)] rounded-xl text-[var(--text-secondary)] gap-1.5 cursor-pointer"
               >

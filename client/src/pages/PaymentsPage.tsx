@@ -15,7 +15,7 @@ import { formatCurrency, formatDate, getStatusColor, getStatusLabel, formatThous
 import { Banknote, CheckCircle2, XCircle, RefreshCw, ReceiptText, LockKeyhole, CalendarDays, Loader2, Lock, User, TrendingUp, TrendingDown, Clock, ChevronRight, Users, DollarSign, Printer, Search, LockOpen, Wallet, AlertTriangle } from 'lucide-react'
 import { printClosingSmart, printOpeningSmart } from '@/lib/printer'
 import Swal from 'sweetalert2'
-import { io } from 'socket.io-client'
+import { io } from '@/lib/socket'
 import { alerts } from '@/lib/alerts'
 
 interface Payment {
@@ -349,7 +349,7 @@ export default function PaymentsPage() {
       
       // Imprimir comprobante de apertura de turno de caja
       if (openingResult) {
-        const regObj = registers.find(r => r.id === regId)
+        const regObj = registersList.find(r => r.id === regId)
         try {
           await printOpeningSmart({
             ...openingResult,

@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 
 /**
  * Servicio de caché en memoria ultraliviano.
@@ -10,7 +10,25 @@ import { Injectable, Logger } from '@nestjs/common';
  * - Sin dependencias externas (no necesita Redis)
  */
 @Injectable()
-export class CacheService {
+export class CacheService implements OnModuleInit, OnModuleDestroy {
+  private cleanupTimer?: ReturnType<typeof setInterval>;
+  private readonly maxEntries = 500;
+
+  onModuleInit() {
+    this.cleanupTimer = setInterval(() => this.prune(), 60_000);
+    this.cleanupTimer.unref();
+  }
+
+  onModuleDestroy() {
+    clearInterval(this.cleanupTimer);
+    this.store.clear();
+  }
+
+  private prune() {
+    const now = Date.now();
+    for (const [key, entry] of this.store) if (entry.expiresAt <= now) this.store.delete(key);
+    while (this.store.size >= this.maxEntries) this.store.delete(this.store.keys().next().value!);
+  }
   private readonly logger = new Logger(CacheService.name);
   private store = new Map<string, { data: any; expiresAt: number }>();
 
@@ -30,6 +48,7 @@ export class CacheService {
     }
 
     const data = await factory();
+    this.prune();
     this.store.set(key, {
       data,
       expiresAt: Date.now() + (ttlMs ?? this.DEFAULT_TTL_MS),
@@ -51,6 +70,7 @@ export class CacheService {
 
   /** Set a value in cache */
   set(key: string, data: any, ttlMs?: number): void {
+    this.prune();
     this.store.set(key, {
       data,
       expiresAt: Date.now() + (ttlMs ?? this.DEFAULT_TTL_MS),

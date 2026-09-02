@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
-import { Outlet, useLocation } from 'react-router-dom'
+import { Link, Outlet, useLocation } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Sidebar } from './Sidebar'
-import { Menu, Eye, LogOut } from 'lucide-react'
+import { Menu, Eye, LogOut, PlusCircle, ScrollText, UtensilsCrossed } from 'lucide-react'
 import { BrandLogo } from '@/components/brand/BrandLogo'
 import { useAuth } from '@/hooks/useAuth'
 import { cn } from '@/lib/utils'
@@ -27,7 +27,7 @@ export function AppLayout() {
   }, [location.pathname])
 
   return (
-    <div className={cn("flex h-screen overflow-hidden bg-[var(--bg-base)]", user?.role === 'SUPERADMIN' && "superadmin-shell")}>
+    <div className="flex h-screen overflow-hidden bg-[var(--bg-base)]">
       {/* Desktop Sidebar */}
       <div className="hidden md:flex shrink-0 overflow-visible">
         <Sidebar 
@@ -96,13 +96,59 @@ export function AppLayout() {
           <div className="w-10" /> {/* Spacer to center the logo */}
         </header>
 
-        <main className="flex-1 overflow-y-auto p-3 md:p-6">
+        <main className={cn("flex-1 overflow-y-auto p-3 md:p-6", user?.role === 'WAITER' && "pb-24 md:pb-6")}>
           <div className="mx-auto max-w-7xl h-full">
-            <ErrorBoundary>
+            <ErrorBoundary key={location.pathname}>
               <Outlet />
             </ErrorBoundary>
           </div>
         </main>
+
+        {/* Waiter Native Mobile Bottom Navigation Bar */}
+        {user?.role === 'WAITER' && (
+          <nav className="fixed bottom-0 left-0 right-0 z-30 flex h-16 items-center justify-around border-t border-[var(--border-subtle)] bg-[var(--bg-panel)] px-2 shadow-lg md:hidden">
+            <Link
+              to="/tables"
+              className={cn(
+                "flex flex-1 flex-col items-center justify-center gap-1 py-1 text-xs font-black transition-all",
+                location.pathname === '/tables'
+                  ? "text-[var(--accent)]"
+                  : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+              )}
+            >
+              <UtensilsCrossed className="h-5 w-5" />
+              <span>Mesas</span>
+            </Link>
+
+            <Link
+              to="/tables/new"
+              className={cn(
+                "flex flex-1 flex-col items-center justify-center gap-1 py-1 text-xs font-black transition-all",
+                location.pathname === '/tables/new'
+                  ? "text-[var(--accent)]"
+                  : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+              )}
+            >
+              <div className="flex h-9 w-9 items-center justify-center rounded-full bg-[var(--accent)] text-white shadow-md -mt-3">
+                <PlusCircle className="h-6 w-6" />
+              </div>
+              <span className="-mt-0.5">Nuevo Pedido</span>
+            </Link>
+
+            <Link
+              to="/tables/history"
+              className={cn(
+                "flex flex-1 flex-col items-center justify-center gap-1 py-1 text-xs font-black transition-all",
+                location.pathname === '/tables/history'
+                  ? "text-[var(--accent)]"
+                  : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+              )}
+            >
+              <ScrollText className="h-5 w-5" />
+              <span>Historial</span>
+            </Link>
+          </nav>
+        )}
       </div>
 
       <ForceEmailVerificationModal />

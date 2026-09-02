@@ -1,17 +1,15 @@
-import { useState, useEffect, FormEvent } from 'react'
-import { useNavigate, Link } from 'react-router-dom'
+import { useState, useEffect, type FormEvent } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useAuth } from '@/hooks/useAuth'
 import { useTheme } from '@/hooks/useTheme'
-import { brand } from '@/lib/brand'
-import { api } from '@/lib/api'
+import { getFirstAllowedPath } from '@/lib/navigation'
 import { BrandLogo } from '@/components/brand/BrandLogo'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Button } from '@/components/ui/button'
-import { cn } from '@/lib/utils'
-import { Sun, Moon, Loader2, Eye, EyeOff, UtensilsCrossed, MapPin, Bike, Clock, TrendingUp, Lock, Mail, ArrowRight, CheckCircle2, X, Key, ShieldCheck, ShieldAlert } from 'lucide-react'
+import { Sun, Moon, Loader2, Eye, EyeOff, UtensilsCrossed, ChefHat, ReceiptText, Lock, Mail, ArrowRight, CheckCircle2, X, Key, ShieldCheck, ShieldAlert, Send } from 'lucide-react'
 
 
 
@@ -39,123 +37,6 @@ const scaleIn = {
   hidden: { opacity: 0, scale: 0.8 },
   visible: { opacity: 1, scale: 1, transition: { duration: 0.6, ease: [0.25, 0.46, 0.45, 0.94] as const } },
 }
-
-function DeliverySimulator({ activeRoute }: { activeRoute: any }) {
-  const riderName = activeRoute?.riderName || 'Moto #3 (Carlos)'
-  const address = activeRoute?.address || 'Montería, Calle 32 #12'
-  const status = activeRoute?.status || 'En ruta'
-  const remainingTime = activeRoute?.remainingTime || '2 min rest.'
-  const isActive = activeRoute ? activeRoute.isActive : true
-
-  // Determine positions of rider icon when not animating
-  let riderX = 80
-  let riderY = 100
-  if (status === 'Entregado') {
-    riderX = 320
-    riderY = 160
-  }
-
-  return (
-    <div className="relative w-full h-[220px] bg-black/55 border border-[#90BF50]/15 rounded-2xl overflow-hidden p-4 flex flex-col justify-between shadow-[inset_0_1px_1px_rgba(255,255,255,0.05),0_10px_30px_rgba(0,0,0,0.5)]">
-      {/* Grid overlay */}
-      <div className="absolute inset-0 bg-[linear-gradient(to_right,#333_1px,transparent_1px),linear-gradient(to_bottom,#333_1px,transparent_1px)] bg-[size:16px_16px] opacity-10" />
-      
-      {/* Simulator title & live status */}
-      <div className="flex justify-between items-center z-10">
-        <span className="text-[10px] font-mono text-[#90BF50]/75 tracking-wider uppercase font-semibold">SIMULADOR THE VILLA DOG RADAR</span>
-        <span className={cn(
-          "flex items-center gap-1.5 text-[10px] px-2 py-0.5 rounded-full font-medium border",
-          isActive 
-            ? "text-[#90BF50] bg-[#90BF50]/10 border-[#90BF50]/20" 
-            : "text-white/60 bg-white/5 border-white/10"
-        )}>
-          {isActive && <span className="h-1.5 w-1.5 rounded-full bg-[#90BF50] animate-pulse" />}
-          {status}
-        </span>
-      </div>
-
-      {/* SVG Map Path */}
-      <div className="absolute inset-0 flex items-center justify-center p-4">
-        <svg viewBox="0 0 400 200" className="w-full h-full text-white/5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          {/* Conceptual streets */}
-          <path d="M 20,40 L 380,40" strokeDasharray="4 4" className="opacity-30" />
-          <path d="M 20,100 L 380,100" className="opacity-30" />
-          <path d="M 20,160 L 380,160" strokeDasharray="4 4" className="opacity-30" />
-          
-          <path d="M 80,10 L 80,190" className="opacity-30" />
-          <path d="M 200,10 L 200,190" strokeDasharray="4 4" className="opacity-30" />
-          <path d="M 320,10 L 320,190" className="opacity-30" />
-
-          {/* Delivery Route Path */}
-          <motion.path 
-            d="M 80,100 L 200,100 L 200,40 L 320,40 L 320,160" 
-            stroke="#90BF50" 
-            strokeWidth="3"
-            strokeDasharray="400"
-            strokeDashoffset="400"
-            animate={isActive ? { strokeDashoffset: [400, 0] } : { strokeDashoffset: status === 'Entregado' ? 0 : 400 }}
-            transition={isActive ? { duration: 12, repeat: Infinity, ease: 'linear' } : { duration: 0.5 }}
-          />
-
-          {/* Local / Starting Point */}
-          <g transform="translate(80, 100)">
-            <circle r="6" fill="#90BF50" className="opacity-50" />
-            <circle r="3" fill="#0D0D0D" />
-            <text x="10" y="3" fill="#90BF50" className="text-[10px] font-bold font-comfortaa" stroke="none">LOCAL</text>
-          </g>
-
-          {/* Client / Destination Point */}
-          <g transform="translate(320, 160)">
-            <circle r="6" fill="#EF4444" className="opacity-50" />
-            <circle r="3" fill="#FFF" />
-            <text x="-48" y="3" fill="#FFF" className="text-[9px] font-medium" stroke="none">Domicilio</text>
-          </g>
-
-          {/* Moving delivery rider dot/icon */}
-          {isActive ? (
-            <motion.g
-              animate={{
-                x: [80, 200, 200, 320, 320],
-                y: [100, 100, 40, 40, 160]
-              }}
-              transition={{
-                duration: 12,
-                repeat: Infinity,
-                ease: 'linear'
-              }}
-            >
-              <circle r="10" fill="#90BF50" className="opacity-25 animate-ping" />
-              <circle r="5" fill="#90BF50" />
-            </motion.g>
-          ) : (
-            <g transform={`translate(${riderX}, ${riderY})`}>
-              <circle r="8" fill="#90BF50" className="opacity-40" />
-              <circle r="4" fill="#90BF50" />
-            </g>
-          )}
-        </svg>
-      </div>
-
-      {/* Rider Info Card inside simulator */}
-      <div className="z-10 bg-[#141414]/90 border border-white/5 backdrop-blur-md rounded-xl p-2 flex items-center justify-between text-[11px] shadow-lg">
-        <div className="flex items-center gap-2">
-          <div className="bg-[#90BF50]/15 p-1 rounded-lg text-[#90BF50]">
-            <Bike className="h-3.5 w-3.5" />
-          </div>
-          <div>
-            <p className="font-bold text-white leading-none">{riderName}</p>
-            <p className="text-[9px] text-white/55 mt-0.5">{address}</p>
-          </div>
-        </div>
-        <div className="text-right">
-          <p className={cn("font-mono font-bold leading-none", isActive ? "text-[#90BF50]" : "text-white/70")}>{status}</p>
-          <p className="text-[9px] text-white/55 mt-0.5">{remainingTime}</p>
-        </div>
-      </div>
-    </div>
-  )
-}
-
 
 export default function LoginPage() {
   const [email, setEmail] = useState('')
@@ -249,7 +130,7 @@ export default function LoginPage() {
       setTimeout(async () => {
         try {
           await login(forgotEmail, newOtpPassword)
-          navigate('/dashboard', { replace: true })
+          navigate('/', { replace: true })
         } catch (e) {
           setShowForgotModal(false)
         }
@@ -276,9 +157,9 @@ export default function LoginPage() {
         setShowLockoutModal(false)
         if (res.user) {
           if (res.user.role === 'SUPERADMIN') {
-            navigate('/superadmin', { replace: true })
+            navigate(getFirstAllowedPath(user) || '/profile', { replace: true })
           } else {
-            navigate('/dashboard', { replace: true })
+            navigate('/', { replace: true })
           }
         }
       }, 1000)
@@ -289,45 +170,12 @@ export default function LoginPage() {
     }
   }
 
-  const [stats, setStats] = useState<{
-    pedidosHoy: number;
-    entregaPromedio: number;
-    operadores: { name: string; role: string; initials: string; color: string }[];
-    activeRoute: {
-      riderName: string;
-      address: string;
-      status: string;
-      remainingTime: string;
-      isActive: boolean;
-    } | null;
-  } | null>(null)
-
-  useEffect(() => {
-    let active = true
-    const fetchStats = async () => {
-      try {
-        const data = await api.get<any>('/public/login-stats')
-        if (active) {
-          setStats(data)
-        }
-      } catch (err) {
-        console.error('Error fetching login stats:', err)
-      }
-    }
-    fetchStats()
-    const interval = setInterval(fetchStats, 10000)
-    return () => {
-      active = false
-      clearInterval(interval)
-    }
-  }, [])
-
   useEffect(() => {
     if (isAuthenticated) {
       if (user?.role === 'SUPERADMIN') {
-        navigate('/superadmin', { replace: true })
+        navigate(getFirstAllowedPath(user) || '/profile', { replace: true })
       } else {
-        navigate('/dashboard', { replace: true })
+        navigate('/', { replace: true })
       }
     }
   }, [isAuthenticated, navigate, user])
@@ -337,7 +185,7 @@ export default function LoginPage() {
     setError('')
     setLoading(true)
     try {
-      await login(email, password)
+      await login(email.trim(), password)
     } catch (err: any) {
       const errorMsg = err instanceof Error ? err.message : (err?.message || 'Error al iniciar sesión')
       setError(errorMsg)
@@ -362,56 +210,8 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-[var(--bg-base)] p-4 md:p-8 selection:bg-[var(--accent)]/30 selection:text-[var(--text-primary)]">
-      {/* Cyber Grid Background */}
-      <div className="absolute inset-0 bg-[linear-gradient(to_right,#1f29370f_1px,transparent_1px),linear-gradient(to_bottom,#1f29370f_1px,transparent_1px)] bg-[size:24px_24px] [mask-image:radial-gradient(ellipse_60%_50%_at_50%_50%,#000_70%,transparent_100%)] opacity-30 pointer-events-none" />
-
-      {/* Tech Laser Scanline */}
-      <motion.div 
-        className="pointer-events-none absolute left-0 right-0 h-[2px] bg-gradient-to-r from-transparent via-[var(--accent)]/30 to-transparent z-0"
-        animate={{ top: ['0%', '100%'] }}
-        transition={{ duration: 10, repeat: Infinity, ease: 'linear' }}
-      />
-
-      {/* Ambient Glowing Light Orbs */}
-      <motion.div
-        className="pointer-events-none absolute -left-32 -top-32 h-[450px] w-[450px] rounded-full opacity-[0.18] blur-[120px]"
-        style={{ backgroundColor: brand.colors.limaMoss }}
-        animate={{ scale: [1, 1.25, 1], opacity: [0.15, 0.22, 0.15], x: [0, 40, 0] }}
-        transition={{ duration: 7, repeat: Infinity, ease: 'easeInOut' }}
-      />
-      <motion.div
-        className="pointer-events-none absolute -bottom-40 -right-32 h-[550px] w-[550px] rounded-full opacity-[0.15] blur-[140px]"
-        style={{ backgroundColor: '#7AAF40' }}
-        animate={{ scale: [1.15, 1, 1.15], opacity: [0.12, 0.2, 0.12], x: [0, -40, 0] }}
-        transition={{ duration: 9, repeat: Infinity, ease: 'easeInOut' }}
-      />
-      <motion.div
-        className="pointer-events-none absolute left-1/2 top-1/3 h-80 w-80 -translate-x-1/2 rounded-full opacity-[0.06] blur-[90px]"
-        style={{ backgroundColor: brand.colors.limaMoss }}
-        animate={{ y: [0, -40, 0], scale: [0.9, 1.15, 0.9] }}
-        transition={{ duration: 12, repeat: Infinity, ease: 'easeInOut' }}
-      />
-
-      {/* Floaty Cyber Particles */}
-      {[...Array(8)].map((_, i) => (
-        <motion.div
-          key={i}
-          className="pointer-events-none absolute h-1 w-1 rounded-full bg-[var(--accent)]/60 z-0"
-          style={{ left: `${10 + i * 12}%`, top: `${15 + (i % 3) * 25}%` }}
-          animate={{
-            y: [0, -60, 0],
-            opacity: [0, 0.7, 0],
-            scale: [0.6, 1.8, 0.6],
-          }}
-          transition={{
-            duration: 4 + i * 0.6,
-            repeat: Infinity,
-            delay: i * 0.7,
-            ease: 'easeInOut',
-          }}
-        />
-      ))}
+    <div className="login-shell relative flex min-h-screen items-center justify-center bg-[var(--bg-base)] px-5 py-16 sm:px-10">
+      <div className="pointer-events-none absolute top-0 left-0 h-1 w-full bg-[#F97316]" />
 
       {/* Theme Toggle Button */}
       <motion.div
@@ -438,149 +238,38 @@ export default function LoginPage() {
         initial="hidden"
         animate="visible"
       >
-        {/* Left Side: Brand presentation and route map */}
-        <motion.section
-          className="flex flex-col justify-center min-h-[500px] lg:pr-6"
-          variants={slideInLeft}
-        >
-          <motion.div
-            className="w-fit rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-panel)]/60 backdrop-blur-md px-5 py-3"
-            whileHover={{ scale: 1.02 }}
-            transition={{ type: 'spring', stiffness: 300 }}
-          >
-            <BrandLogo imageClassName="w-48 sm:w-56" />
-          </motion.div>
-
-          <motion.div className="mt-8 max-w-xl" variants={itemVariants}>
-            <motion.p
-              className="mb-2 text-xs font-bold tracking-[0.4em] text-[var(--accent)] uppercase"
-              initial={{ opacity: 0, letterSpacing: '0.1em' }}
-              animate={{ opacity: 1, letterSpacing: '0.4em' }}
-              transition={{ delay: 0.8, duration: 0.8 }}
-            >
-              {brand.slogan}
-            </motion.p>
-            <motion.h1
-              className="antifont text-5xl leading-none text-[var(--text-primary)] md:text-7xl tracking-wide"
-              initial={{ opacity: 0, y: 30 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.6, duration: 0.6 }}
-            >
-              THE VILLA DOG
-            </motion.h1>
-          </motion.div>
-
-          {/* Real-time Domicilio Simulator Grid (hidden on mobile, gorgeous on md+) */}
-          <motion.div 
-            className="relative mt-8 hidden md:block w-full max-w-md lg:max-w-lg z-10"
-            variants={itemVariants}
-          >
-            {/* Delivery Map Simulator component */}
-            <DeliverySimulator activeRoute={stats?.activeRoute} />
-
-            {/* Floating Widget 1: Total Orders */}
-            <motion.div
-              className="absolute -top-5 -right-5 bg-[var(--bg-panel)]/90 border border-[var(--accent)]/20 rounded-2xl p-3 shadow-xl backdrop-blur-md flex items-center gap-3 z-20"
-              animate={{ y: [0, -6, 0] }}
-              transition={{ duration: 4, repeat: Infinity, ease: 'easeInOut' }}
-            >
-              <div className="bg-[var(--accent)]/10 p-2 rounded-xl text-[var(--accent)]">
-                <TrendingUp className="h-4.5 w-4.5" />
+        <motion.section className="flex flex-col justify-center lg:pr-12" variants={slideInLeft}>
+          <div className="mb-8 flex items-center gap-4">
+            <BrandLogo imageClassName="w-28 sm:w-36" />
+            <span className="border-l border-[var(--border-default)] pl-4 text-xs font-semibold tracking-[0.16em] text-[var(--text-secondary)]">COMIDAS<br />RÁPIDAS</span>
+          </div>
+          <p className="mb-4 text-xs font-bold uppercase tracking-[0.22em] text-[var(--accent)]">Tu operación, en un solo lugar</p>
+          <h1 className="max-w-lg text-4xl font-bold leading-[1.08] tracking-tight text-[var(--text-primary)] sm:text-6xl">Buen sabor.<br /><span className="text-[var(--accent)]">Todo en orden.</span></h1>
+          <p className="mt-6 max-w-md text-base leading-relaxed text-[var(--text-secondary)]">Del primer pedido al cierre de caja. Menos vueltas para tu equipo, una mejor experiencia para tus clientes.</p>
+          <div className="mt-9 hidden gap-3 sm:grid sm:grid-cols-3">
+            {[{ icon: UtensilsCrossed, label: 'Mesas', text: 'Toma el pedido' }, { icon: ChefHat, label: 'Cocina', text: 'Prepara y entrega' }, { icon: ReceiptText, label: 'Caja', text: 'Cobra y cierra' }].map(({ icon: Icon, label, text }) => (
+              <div key={label} className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-4">
+                <Icon className="mb-4 h-5 w-5 text-[var(--accent)]" />
+                <p className="text-sm font-semibold">{label}</p>
+                <p className="mt-1 text-xs text-[var(--text-muted)]">{text}</p>
               </div>
-              <div className="pr-1.5">
-                <span className="text-[9px] uppercase tracking-wider text-[var(--text-muted)] block font-semibold">Pedidos Hoy</span>
-                <span className="text-base font-bold text-[var(--text-primary)] font-mono leading-none">
-                  {stats ? stats.pedidosHoy : '---'}
-                </span>
-              </div>
-            </motion.div>
-
-            {/* Floating Widget 2: Average Delivery Time */}
-            <motion.div
-              className="absolute -bottom-5 -left-5 bg-[var(--bg-panel)]/90 border border-purple-500/20 rounded-2xl p-3 shadow-xl backdrop-blur-md flex items-center gap-3 z-20"
-              animate={{ y: [0, 6, 0] }}
-              transition={{ duration: 4.5, repeat: Infinity, ease: 'easeInOut', delay: 0.3 }}
-            >
-              <div className="bg-purple-500/10 p-2 rounded-xl text-purple-400">
-                <Clock className="h-4.5 w-4.5" />
-              </div>
-              <div className="pr-1.5">
-                <span className="text-[9px] uppercase tracking-wider text-[var(--text-muted)] block font-semibold">Entrega Promedio</span>
-                <span className="text-base font-bold text-[var(--text-primary)] font-mono leading-none">
-                  {stats ? `${stats.entregaPromedio} min` : '---'}
-                </span>
-              </div>
-            </motion.div>
-
-            {/* Floating Widget 3: Connected staff */}
-            <motion.div
-              className="absolute bottom-1/2 -right-6 bg-[var(--bg-panel)]/90 border border-blue-500/20 rounded-2xl p-2.5 shadow-xl backdrop-blur-md flex items-center gap-2 z-20"
-              animate={{ x: [0, 4, 0] }}
-              transition={{ duration: 5, repeat: Infinity, ease: 'easeInOut', delay: 0.6 }}
-            >
-              <div className="flex -space-x-1.5">
-                {stats && stats.operadores.length > 0 ? (
-                  stats.operadores.slice(0, 3).map((op, index) => (
-                    <div 
-                      key={index}
-                      className="h-5 w-5 rounded-full border border-[var(--border-subtle)] flex items-center justify-center text-[8px] font-bold text-white font-mono shadow-sm"
-                      style={{ backgroundColor: op.color }}
-                      title={`${op.name} (${op.role})`}
-                    >
-                      {op.initials.slice(0, 1)}
-                    </div>
-                  ))
-                ) : (
-                  <>
-                    <div className="h-5 w-5 rounded-full border border-[var(--border-subtle)] bg-emerald-500 flex items-center justify-center text-[8px] font-bold text-white font-mono">J</div>
-                    <div className="h-5 w-5 rounded-full border border-[var(--border-subtle)] bg-blue-500 flex items-center justify-center text-[8px] font-bold text-white font-mono">A</div>
-                    <div className="h-5 w-5 rounded-full border border-[var(--border-subtle)] bg-amber-500 flex items-center justify-center text-[8px] font-bold text-white font-mono">C</div>
-                  </>
-                )}
-              </div>
-              <div className="pr-1">
-                <span className="text-[8px] uppercase tracking-wider text-[var(--text-muted)] block font-semibold leading-none mb-0.5">Operadores</span>
-                <span className="text-[10px] font-bold text-[var(--text-primary)] flex items-center gap-1 leading-none">
-                  <span className="h-1.5 w-1.5 rounded-full bg-[#10B981] animate-pulse" />
-                  {stats ? `${stats.operadores.length} en línea` : '3 en línea'}
-                </span>
-              </div>
-            </motion.div>
-          </motion.div>
-
-          <motion.div
-            className="mt-6 flex items-center gap-3"
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 1.2, duration: 0.5 }}
-          >
-            <div className="flex items-center gap-2 rounded-full border border-[var(--accent)]/15 bg-[var(--accent)]/8 px-3.5 py-1.5">
-              <UtensilsCrossed className="h-3.5 w-3.5 text-[var(--accent)]" />
-              <span className="text-[11px] font-medium text-[var(--accent)]/90">Montería, Col</span>
-            </div>
-            <div className="flex items-center gap-2 rounded-full border border-[var(--border-subtle)] bg-[var(--bg-panel)]/50 px-3.5 py-1.5">
-              <span className="h-1.5 w-1.5 rounded-full bg-[var(--accent)] animate-pulse" />
-              <span className="text-[11px] font-medium text-[var(--text-secondary)]">Sistema Activo</span>
-            </div>
-          </motion.div>
+            ))}
+          </div>
+          <p className="mt-8 hidden text-xs text-[var(--text-muted)] lg:block">THE VILLA DOG · Montería, Colombia</p>
         </motion.section>
 
         {/* Right Side: Login Card and Forms */}
         <motion.div className="flex items-center w-full" variants={slideInRight}>
-          <Card className="w-full border-[var(--border-subtle)] bg-[var(--bg-panel)]/80 backdrop-blur-xl shadow-2xl relative overflow-hidden rounded-3xl">
-            {/* Neon Corner Accents */}
-            <div className="absolute top-0 left-0 w-8 h-[2px] bg-[var(--accent)]" />
-            <div className="absolute top-0 left-0 w-[2px] h-8 bg-[var(--accent)]" />
-            <div className="absolute bottom-0 right-0 w-8 h-[2px] bg-[var(--accent)]" />
-            <div className="absolute bottom-0 right-0 w-[2px] h-8 bg-[var(--accent)]" />
+          <Card className="w-full border-[var(--border-subtle)] bg-[var(--bg-panel)] shadow-[0_20px_70px_-30px_var(--shadow-color)] relative overflow-hidden rounded-3xl sm:p-4">
+            
 
             <CardHeader className="pb-4 pt-6 text-center lg:text-left">
               <motion.div variants={itemVariants}>
                 <CardTitle className="text-2xl font-bold tracking-tight text-[var(--text-primary)] font-comfortaa">
-                  Iniciar Sesión
+                  Bienvenido de nuevo
                 </CardTitle>
                 <p className="mt-1.5 text-xs text-[var(--text-secondary)]">
-                  Ingresa tus credenciales autorizadas para operar THE VILLA DOG.
+                  Ingresa a tu cuenta para comenzar el turno.
                 </p>
               </motion.div>
             </CardHeader>
@@ -595,7 +284,7 @@ export default function LoginPage() {
                       <Mail className="h-4 w-4" />
                     </div>
                     <Input 
-                      id="email" 
+                      id="email" autoComplete="username" autoCapitalize="none" spellCheck={false} 
                       type="text" 
                       placeholder="Usuario / Correo" 
                       value={email} 
@@ -614,7 +303,7 @@ export default function LoginPage() {
                       <Lock className="h-4 w-4" />
                     </div>
                     <Input
-                      id="password"
+                      id="password" autoComplete="current-password"
                       type={showPassword ? 'text' : 'password'}
                       placeholder="••••••"
                       value={password}
@@ -624,7 +313,7 @@ export default function LoginPage() {
                     />
                     <motion.button
                       type="button"
-                      className="absolute top-1/2 right-3 -translate-y-1/2 text-white/40 hover:text-white"
+                      className="absolute top-1/2 right-3 -translate-y-1/2 text-[var(--text-muted)] hover:text-[var(--text-primary)]"
                       onClick={() => setShowPassword(value => !value)}
                       aria-label={showPassword ? 'Ocultar contraseña' : 'Mostrar contraseña'}
                       whileTap={{ scale: 0.85 }}
@@ -638,7 +327,7 @@ export default function LoginPage() {
                 <AnimatePresence mode="wait">
                   {error && (
                     <motion.div
-                      className="rounded-2xl border border-red-500/30 bg-red-500/10 p-3.5 text-xs text-red-300 space-y-2.5 shadow-lg"
+                      role="alert" className="rounded-2xl border border-red-500/30 bg-red-500/10 p-3.5 text-xs text-[var(--destructive)] space-y-2.5 shadow-lg"
                       initial={{ opacity: 0, y: -10, height: 0 }}
                       animate={{ opacity: 1, y: 0, height: 'auto' }}
                       exit={{ opacity: 0, y: -10, height: 0 }}
@@ -646,14 +335,14 @@ export default function LoginPage() {
                     >
                       <div className="flex items-start gap-2.5">
                         <ShieldAlert className="h-4 w-4 text-red-400 mt-0.5 shrink-0" />
-                        <p className="leading-relaxed text-red-200">{error}</p>
+                        <p className="leading-relaxed text-[var(--destructive)]">{error}</p>
                       </div>
 
                       {(error.includes('bloqueada') || error.includes('intentos') || error.includes('código') || error.includes('ACCOUNT_LOCKED')) && (
                         <Button
                           type="button"
                           onClick={() => {
-                            setLockoutEmail(email.trim() || 'softwaresjja@gmail.com')
+                            setLockoutEmail(email.trim())
                             setLockoutPassword(password)
                             setLockoutOtpCode('')
                             setLockoutError('')
@@ -673,7 +362,7 @@ export default function LoginPage() {
                 <motion.div variants={itemVariants} className="pt-2">
                   <motion.button
                     type="submit"
-                    className="w-full h-11.5 relative overflow-hidden rounded-xl bg-gradient-to-r from-[#90BF50] to-[#7AAF40] font-semibold text-[#0D0D0D] transition-all duration-300 shadow-[0_4px_20px_-4px_rgba(144,191,80,0.4)] hover:shadow-[0_8px_24px_-2px_rgba(144,191,80,0.6)] disabled:opacity-50 disabled:cursor-not-allowed group cursor-pointer"
+                    className="w-full h-11.5 relative overflow-hidden rounded-xl bg-gradient-to-r from-[#F97316] to-[#EA580C] font-semibold text-[#0D0D0D] transition-all duration-300 shadow-[0_4px_20px_-4px_rgba(249,115,22,0.4)] hover:shadow-[0_8px_24px_-2px_rgba(249,115,22,0.6)] disabled:opacity-50 disabled:cursor-not-allowed group cursor-pointer"
                     disabled={loading}
                     whileHover={{ scale: loading ? 1 : 1.015 }}
                     whileTap={{ scale: loading ? 1 : 0.98 }}
@@ -700,7 +389,7 @@ export default function LoginPage() {
                           animate={{ opacity: 1 }} 
                           exit={{ opacity: 0 }}
                         >
-                          Ingresar al Sistema
+                          Entrar a mi turno
                           <ArrowRight className="h-4 w-4 text-[#0D0D0D]" />
                         </motion.span>
                       )}
@@ -717,7 +406,7 @@ export default function LoginPage() {
                       setForgotError('')
                       setShowForgotModal(true)
                     }}
-                    className="text-xs text-[var(--accent)] hover:text-[#a8d962] hover:underline transition-colors font-medium cursor-pointer"
+                    className="text-xs text-[var(--accent)] hover:text-[var(--accent-hover)] hover:underline transition-colors font-medium cursor-pointer"
                   >
                     ¿Olvidaste tu contraseña?
                   </button>
@@ -913,7 +602,7 @@ export default function LoginPage() {
                     <Button
                       type="submit"
                       disabled={otpLoading || otpCode.length < 6 || !newOtpPassword}
-                      className="flex-1 h-11 bg-gradient-to-r from-[#90BF50] to-[#7AAF40] hover:opacity-95 text-[#0D0D0D] font-bold text-xs rounded-xl shadow-lg shadow-[#90BF50]/20 disabled:opacity-50 cursor-pointer"
+                      className="flex-1 h-11 bg-gradient-to-r from-[#F97316] to-[#EA580C] hover:opacity-95 text-[#0D0D0D] font-bold text-xs rounded-xl shadow-lg shadow-[#F97316]/20 disabled:opacity-50 cursor-pointer"
                     >
                       {otpLoading ? (
                         <span className="flex items-center gap-2">
@@ -970,7 +659,7 @@ export default function LoginPage() {
                     <Button
                       type="submit"
                       disabled={forgotLoading || !forgotEmail.trim()}
-                      className="flex-1 h-11 bg-gradient-to-r from-[#90BF50] to-[#7AAF40] hover:opacity-95 text-[#0D0D0D] font-bold text-xs rounded-xl shadow-lg shadow-[#90BF50]/20 disabled:opacity-50 cursor-pointer"
+                      className="flex-1 h-11 bg-gradient-to-r from-[#F97316] to-[#EA580C] hover:opacity-95 text-[#0D0D0D] font-bold text-xs rounded-xl shadow-lg shadow-[#F97316]/20 disabled:opacity-50 cursor-pointer"
                     >
                       {forgotLoading ? (
                         <span className="flex items-center gap-2">
@@ -1034,9 +723,9 @@ export default function LoginPage() {
                 </div>
               ) : (
                 <>
-                  <div className="rounded-xl border border-red-500/20 bg-red-500/10 p-3.5 text-xs text-red-300 space-y-1.5">
-                    <p className="font-semibold text-red-200 text-sm">🚨 Cuenta Bloqueada Preventivamente</p>
-                    <p className="text-xs text-red-300/90">
+                  <div className="rounded-xl border border-red-500/20 bg-red-500/10 p-3.5 text-xs text-[var(--destructive)] space-y-1.5">
+                    <p className="font-semibold text-[var(--destructive)] text-sm">🚨 Cuenta Bloqueada Preventivamente</p>
+                    <p className="text-xs text-[var(--destructive)]/90">
                       Detectamos 3 intentos fallidos de contraseña. Enviamos un <strong>código de 6 dígitos</strong> a tu correo para que puedas entrar de inmediato:
                     </p>
                     <p className="font-mono font-bold text-white text-xs bg-black/40 py-1.5 px-3 rounded-lg border border-red-500/20 text-center">{lockoutEmail}</p>

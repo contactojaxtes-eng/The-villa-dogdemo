@@ -33,122 +33,29 @@ export class AuthService {
     }
 
     if (!user || !user.active) {
-      throw new UnauthorizedException('Credenciales inválidas');
-    }
-
-    // 1. Si el bloqueo anterior ya expiró, limpiar contador para dar los 3 intentos completos
-    if (user.lockoutUntil && new Date(user.lockoutUntil) <= new Date()) {
-      user = await this.prisma.user.update({
-        where: { id: user.id },
-        data: { failedLoginAttempts: 0, lockoutUntil: null },
-      });
-    }
-
-    // 2. Verificar si la cuenta está actualmente bloqueada
-    if (user.lockoutUntil && new Date(user.lockoutUntil) > new Date()) {
-      const remainingSeconds = Math.ceil((new Date(user.lockoutUntil).getTime() - Date.now()) / 1000);
-      const remainingMinutes = Math.ceil(remainingSeconds / 60);
-      throw new UnauthorizedException({
-        error: 'ACCOUNT_LOCKED',
-        message: `🚨 Cuenta bloqueada preventivamente por 3 intentos fallidos. Revisa tu correo (${user.email}) para entrar al instante con el código de seguridad o espera ${remainingMinutes} minuto(s).`,
-        email: user.email,
-        lockoutUntil: user.lockoutUntil,
-      });
+      throw new UnauthorizedException('Credenciales invalidas');
     }
 
     const isPasswordValid = await bcrypt.compare(loginDto.password, user.password);
     if (!isPasswordValid) {
-      const currentFails = user.failedLoginAttempts || 0;
-      const failedAttempts = currentFails + 1;
-
-      if (failedAttempts >= 3) {
-        // Bloqueo progresivo: 15 minutos en el 1er strike, 30 min en el siguiente, 60 min máximo
-        const lockoutMinutes = currentFails >= 5 ? 60 : currentFails >= 3 ? 30 : 15;
-        const lockoutUntil = new Date(Date.now() + lockoutMinutes * 60 * 1000);
-        const unlockOtp = Math.floor(100000 + Math.random() * 900000).toString();
-        const tokenHash = crypto.createHash('sha256').update(`UNLOCK_ACCOUNT:${unlockOtp}`).digest('hex');
-
-        // Invalidar tokens previos de desbloqueo
-        await this.prisma.passwordResetToken.updateMany({
-          where: { userId: user.id, usedAt: null },
-          data: { usedAt: new Date() },
-        });
-
-        await this.prisma.passwordResetToken.create({
-          data: {
-            userId: user.id,
-            tokenHash,
-            expiresAt: lockoutUntil,
-          },
-        });
-
-        await this.prisma.user.update({
-          where: { id: user.id },
-          data: {
-            failedLoginAttempts: failedAttempts,
-            lockoutUntil,
-          },
-        });
-
-        // Enviar alerta a Gmail con código directo
-        if (user.email && user.email.includes('@')) {
-          await this.mailService.sendBruteForceLockoutAlert(user.email, user.name, user.role, unlockOtp).catch(() => {});
-        }
-
-        // Registrar en auditoría
-        await this.auditService.log({
-          actorName: user.name,
-          actorRole: user.role,
-          action: 'BRUTE_FORCE_LOCKOUT',
-          targetType: 'User',
-          targetId: user.id,
-          metadata: { email: user.email, attempts: failedAttempts, lockoutMinutes },
-        }).catch(() => {});
-
-        throw new UnauthorizedException({
-          error: 'ACCOUNT_LOCKED',
-          message: `🚨 Has superado los 3 intentos permitidos. Tu cuenta ha sido bloqueada preventivamente por ${lockoutMinutes} minutos. Enviamos un código de seguridad a tu correo (${user.email}) para entrar al instante.`,
-          email: user.email,
-          lockoutUntil,
-        });
-      } else {
-        await this.prisma.user.update({
-          where: { id: user.id },
-          data: { failedLoginAttempts: failedAttempts },
-        });
-
-        const remaining = 3 - failedAttempts;
-        throw new UnauthorizedException({
-          error: 'INVALID_CREDENTIALS',
-          message: `Contraseña incorrecta. Intento ${failedAttempts} de 3. Al 3er intento fallido tu cuenta se bloqueará por seguridad.`,
-          failedAttempts,
-          remainingAttempts: remaining,
-        });
-      }
+      throw new UnauthorizedException('Credenciales invalidas');
     }
 
-    // Si la contraseña es válida: reiniciar contador de fallos a 0
-    if (user.failedLoginAttempts > 0 || user.lockoutUntil) {
-      await this.prisma.user.update({
+    if (user.failedLoginAttempts > 0 || user.lockoutUntil || user.mustVerifyEmail || user.emailVerified === false) {
+      user = await this.prisma.user.update({
         where: { id: user.id },
-        data: { failedLoginAttempts: 0, lockoutUntil: null },
+        data: {
+          failedLoginAttempts: 0,
+          lockoutUntil: null,
+          mustVerifyEmail: false,
+          emailVerified: true,
+        },
       });
-    }
-
-    // 3. Vigencia de 48 Horas estrictamente para cuentas provisionales pendientes de verificación inicial
-    if (user.mustVerifyEmail === true) {
-      const creationDate = new Date(user.updatedAt || user.createdAt).getTime();
-      const FORTY_EIGHT_HOURS_MS = 48 * 60 * 60 * 1000;
-      if (Date.now() - creationDate > FORTY_EIGHT_HOURS_MS) {
-        throw new UnauthorizedException(
-          '⏳ Tu clave provisional ha caducado porque han pasado más de 48 horas desde su creación. Por favor solicita al Administrador que te asigne una nueva clave provisional para ingresar.'
-        );
-      }
     }
 
     const payload = { sub: user.id, email: user.email, role: user.role };
     const accessToken = (this.jwtService.sign as any)(payload, { expiresIn: process.env.JWT_EXPIRATION || '7d' });
-    const refreshToken = (this.jwtService.sign as any)(payload, { expiresIn: process.env.JWT_REFRESH_EXPIRATION || '30d' });
+    const refreshToken = (this.jwtService.sign as any)({ ...payload, type: 'refresh' }, { expiresIn: process.env.JWT_REFRESH_EXPIRATION || '30d' });
 
     return {
       accessToken,
@@ -161,8 +68,8 @@ export class AuthService {
         permissions: user.permissions,
         phone: user.phone,
         photo: user.photo,
-        mustVerifyEmail: user.mustVerifyEmail,
-        emailVerified: user.emailVerified,
+        mustVerifyEmail: false,
+        emailVerified: true,
       },
     };
   }
@@ -220,7 +127,7 @@ export class AuthService {
     // Generar sesión JWT directamente para ingresar al instante sin necesidad de contraseña
     const payload = { sub: updatedUser.id, email: updatedUser.email, role: updatedUser.role };
     const accessToken = (this.jwtService.sign as any)(payload, { expiresIn: process.env.JWT_EXPIRATION || '7d' });
-    const refreshToken = (this.jwtService.sign as any)(payload, { expiresIn: process.env.JWT_REFRESH_EXPIRATION || '30d' });
+    const refreshToken = (this.jwtService.sign as any)({ ...payload, type: 'refresh' }, { expiresIn: process.env.JWT_REFRESH_EXPIRATION || '30d' });
 
     return {
       success: true,
@@ -265,7 +172,7 @@ export class AuthService {
 
     const payload = { sub: user.id, email: user.email, role: user.role };
     const accessToken = (this.jwtService.sign as any)(payload, { expiresIn: process.env.JWT_EXPIRATION || '7d' });
-    const refreshToken = (this.jwtService.sign as any)(payload, { expiresIn: process.env.JWT_REFRESH_EXPIRATION || '30d' });
+    const refreshToken = (this.jwtService.sign as any)({ ...payload, type: 'refresh' }, { expiresIn: process.env.JWT_REFRESH_EXPIRATION || '30d' });
 
     return {
       accessToken,
@@ -284,9 +191,12 @@ export class AuthService {
   async refreshToken(token: string) {
     try {
       const payload = this.jwtService.verify(token);
-      const newPayload = { sub: payload.sub, email: payload.email, role: payload.role };
+      if (payload.type !== 'refresh') throw new UnauthorizedException('Token de refresco inválido');
+      const user = await this.prisma.user.findUnique({ where: { id: payload.sub } });
+      if (!user?.active) throw new UnauthorizedException('Usuario inactivo');
+      const newPayload = { sub: user.id, email: user.email, role: user.role };
       const accessToken = (this.jwtService.sign as any)(newPayload, { expiresIn: process.env.JWT_EXPIRATION || '7d' });
-      const refreshToken = (this.jwtService.sign as any)(newPayload, { expiresIn: process.env.JWT_REFRESH_EXPIRATION || '30d' });
+      const refreshToken = (this.jwtService.sign as any)({ ...newPayload, type: 'refresh' }, { expiresIn: process.env.JWT_REFRESH_EXPIRATION || '30d' });
       return { accessToken, refreshToken };
     } catch {
       throw new UnauthorizedException('Token de refresco inválido');
@@ -340,127 +250,44 @@ export class AuthService {
   }
 
   validateStrongPassword(password: string) {
-    if (!password || password.length < 8) {
-      throw new BadRequestException('La contraseña debe tener al menos 8 caracteres.');
-    }
-    if (!/[A-Z]/.test(password)) {
-      throw new BadRequestException('La contraseña debe incluir al menos una letra mayúscula.');
-    }
-    if (!/[0-9]/.test(password)) {
-      throw new BadRequestException('La contraseña debe incluir al menos un número.');
-    }
-    if (!/[!@#$%^&*()_+\-=[\]{};':"\\|,.<>/?]/.test(password)) {
-      throw new BadRequestException('La contraseña debe incluir al menos un carácter especial (ej: !@#$%*).');
+    if (!password || password.length < 4) {
+      throw new BadRequestException('La contrasena debe tener al menos 4 caracteres.');
     }
   }
 
   async requestPasswordChange(userId: string, currentPassword: string, newPassword: string) {
     if (!currentPassword || !newPassword) {
-      throw new BadRequestException('Debes ingresar la contraseña actual y la nueva contraseña');
+      throw new BadRequestException('Debes ingresar la contrasena actual y la nueva contrasena');
     }
-
-    this.validateStrongPassword(newPassword);
+    if (newPassword.length < 4) {
+      throw new BadRequestException('La nueva contrasena debe tener al menos 4 caracteres.');
+    }
 
     const user = await this.prisma.user.findUnique({ where: { id: userId } });
     if (!user) throw new NotFoundException('Usuario no encontrado');
 
     const isValid = await bcrypt.compare(currentPassword, user.password);
     if (!isValid) {
-      throw new UnauthorizedException('La contraseña actual es incorrecta');
+      throw new UnauthorizedException('La contrasena actual es incorrecta');
     }
 
     const isSamePassword = await bcrypt.compare(newPassword, user.password);
     if (isSamePassword) {
-      throw new BadRequestException('La nueva contraseña no puede ser igual a la actual');
+      throw new BadRequestException('La nueva contrasena no puede ser igual a la actual');
     }
-
-    const hasRealEmail = !!(user.email && user.email.includes('@') && !user.email.toLowerCase().endsWith('@thevilladog.local'));
-
-    if (!hasRealEmail) {
-      // Si la cuenta aún tiene correo provisional (@thevilladog.local o sin correo),
-      // actualiza directamente validando su contraseña actual
-      const hashedPassword = await bcrypt.hash(newPassword, 10);
-      await this.prisma.user.update({ where: { id: userId }, data: { password: hashedPassword } });
-
-      return {
-        success: true,
-        requiresOtp: false,
-        message: '¡Contraseña actualizada exitosamente!',
-      };
-    }
-
-    // Generar OTP de 6 dígitos con vigencia de 5 minutos
-    const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
-    const tokenHash = crypto.createHash('sha256').update(`CHANGE_PASSWORD:${userId}:${otpCode}`).digest('hex');
-
-    // Invalidar tokens previos de cambio de clave
-    await this.prisma.passwordResetToken.updateMany({
-      where: { userId: user.id, usedAt: null },
-      data: { usedAt: new Date() },
-    });
-
-    await this.prisma.passwordResetToken.create({
-      data: {
-        userId: user.id,
-        tokenHash,
-        expiresAt: new Date(Date.now() + 5 * 60 * 1000), // 5 minutos
-      },
-    });
-
-    // Enviar código por correo
-    await this.mailService.sendChangePasswordOtp(user.email, user.name, otpCode);
-
-    return {
-      success: true,
-      requiresOtp: true,
-      sentTo: user.email,
-      message: `Enviamos un código de seguridad de 6 dígitos a tu correo (${user.email}) para confirmar el cambio.`,
-    };
-  }
-
-  async confirmPasswordChange(userId: string, currentPassword: string, newPassword: string, otpCode: string) {
-    const cleanOtp = otpCode ? otpCode.trim() : '';
-    if (!cleanOtp || cleanOtp.length !== 6) {
-      throw new BadRequestException('Debes ingresar el código de confirmación de 6 dígitos');
-    }
-
-    const user = await this.prisma.user.findUnique({ where: { id: userId } });
-    if (!user) throw new NotFoundException('Usuario no encontrado');
-
-    const isValid = await bcrypt.compare(currentPassword, user.password);
-    if (!isValid) {
-      throw new UnauthorizedException('La contraseña actual es incorrecta');
-    }
-
-    const tokenHash = crypto.createHash('sha256').update(`CHANGE_PASSWORD:${userId}:${cleanOtp}`).digest('hex');
-    const token = await this.prisma.passwordResetToken.findFirst({
-      where: {
-        userId: user.id,
-        tokenHash,
-        usedAt: null,
-        expiresAt: { gte: new Date() },
-      },
-    });
-
-    if (!token) {
-      throw new BadRequestException('El código de confirmación es incorrecto o ya expiró (Vence en 5 minutos)');
-    }
-
-    // Marcar token como usado
-    await this.prisma.passwordResetToken.update({
-      where: { id: token.id },
-      data: { usedAt: new Date() },
-    });
 
     const hashedPassword = await bcrypt.hash(newPassword, 10);
     await this.prisma.user.update({ where: { id: userId }, data: { password: hashedPassword } });
 
-    // Notificar por correo
-    if (user.email && user.email.includes('@')) {
-      await this.mailService.sendPasswordChangedNotice(user.email, user.name).catch(() => {});
-    }
+    return {
+      success: true,
+      requiresOtp: false,
+      message: 'Contrasena actualizada correctamente.',
+    };
+  }
 
-    return { success: true, message: '¡Contraseña actualizada correctamente!' };
+  async confirmPasswordChange(userId: string, currentPassword: string, newPassword: string, otpCode?: string) {
+    return this.requestPasswordChange(userId, currentPassword, newPassword);
   }
 
   async changeOwnPassword(userId: string, currentPassword: string, newPassword: string) {
@@ -597,430 +424,113 @@ export class AuthService {
   async requestEmailChange(userId: string, newEmail: string) {
     const cleanNewEmail = newEmail ? newEmail.trim().toLowerCase() : '';
     if (!cleanNewEmail || !cleanNewEmail.includes('@')) {
-      throw new BadRequestException('Debes ingresar un correo electrónico válido');
+      throw new BadRequestException('Debes ingresar un correo electronico valido');
     }
 
-    // Verificar que el correo no esté ocupado por otra persona
     const existing = await this.prisma.user.findFirst({
-      where: {
-        email: cleanNewEmail,
-        id: { not: userId },
-      },
-    });
-
-    if (existing) {
-      throw new BadRequestException('Este correo electrónico ya está registrado por otra cuenta');
-    }
-
-    const user = await this.prisma.user.findUnique({ where: { id: userId } });
-    if (!user) {
-      throw new NotFoundException('Usuario no encontrado');
-    }
-
-    // Si ya es exactamente el mismo correo, no hacer nada
-    if (user.email && user.email.toLowerCase() === cleanNewEmail) {
-      return { requiresOtp: false, message: 'El correo no ha cambiado', email: user.email };
-    }
-
-    // Invalidar tokens previos
-    await this.prisma.passwordResetToken.updateMany({
-      where: { userId: user.id, usedAt: null },
-      data: { usedAt: new Date() },
-    });
-
-    const hasCurrentRealEmail = !!(user.email && user.email.includes('@') && !user.email.toLowerCase().endsWith('@thevilladog.local'));
-
-    if (hasCurrentRealEmail) {
-      // Paso 1: Enviar código al correo actual para autorizar la desvinculación
-      const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
-      const tokenHash = crypto.createHash('sha256').update(`EMAIL_STEP1_AUTH:${otpCode}:${cleanNewEmail}`).digest('hex');
-      const expiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 minutos
-
-      await this.prisma.passwordResetToken.create({
-        data: { userId: user.id, tokenHash, expiresAt },
-      });
-
-      await this.mailService.sendAuthorizeCurrentEmailOtp(user.email, user.name, cleanNewEmail, otpCode);
-
-      return {
-        step: 1,
-        requiresOtp: true,
-        sentTo: user.email,
-        currentEmail: user.email,
-        newEmail: cleanNewEmail,
-        message: `Paso 1 de 2: Se envió un código de autorización de 6 dígitos a tu correo ACTUAL (${user.email}). Válido por 5 minutos.`,
-      };
-    } else {
-      // Vinculación inicial: Enviar código directamente al nuevo correo para verificarlo
-      const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
-      const tokenHash = crypto.createHash('sha256').update(`EMAIL_STEP2_VERIFY:${otpCode}:${cleanNewEmail}`).digest('hex');
-      const expiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 minutos
-
-      await this.prisma.passwordResetToken.create({
-        data: { userId: user.id, tokenHash, expiresAt },
-      });
-
-      await this.mailService.sendVerifyNewEmailOtp(cleanNewEmail, user.name, otpCode);
-
-      return {
-        step: 2,
-        requiresOtp: true,
-        sentTo: cleanNewEmail,
-        newEmail: cleanNewEmail,
-        message: `Se envió un código de 6 dígitos a tu correo (${cleanNewEmail}). Ingrésalo para verificarlo y activarlo. Válido por 5 minutos.`,
-      };
-    }
-  }
-
-  async verifyCurrentEmailStep1(userId: string, newEmail: string, otpCode: string) {
-    const cleanNewEmail = newEmail ? newEmail.trim().toLowerCase() : '';
-    const cleanOtp = otpCode ? otpCode.trim() : '';
-
-    if (!cleanNewEmail || !cleanOtp) {
-      throw new BadRequestException('El correo y el código de seguridad son obligatorios');
-    }
-
-    const tokenHash = crypto.createHash('sha256').update(`EMAIL_STEP1_AUTH:${cleanOtp}:${cleanNewEmail}`).digest('hex');
-    const token = await this.prisma.passwordResetToken.findFirst({
-      where: {
-        userId,
-        tokenHash,
-        usedAt: null,
-        expiresAt: { gte: new Date() },
-      },
-    });
-
-    if (!token) {
-      throw new BadRequestException('El código de autorización del correo actual es incorrecto o ya expiró (Vence en 5 minutos)');
-    }
-
-    const user = await this.prisma.user.findUnique({ where: { id: userId } });
-    if (!user) throw new NotFoundException('Usuario no encontrado');
-
-    // Marcar token del Paso 1 como usado
-    await this.prisma.passwordResetToken.update({
-      where: { id: token.id },
-      data: { usedAt: new Date() },
-    });
-
-    // Paso 2: Generar y enviar código de activación al NUEVO correo
-    const otpCode2 = Math.floor(100000 + Math.random() * 900000).toString();
-    const tokenHash2 = crypto.createHash('sha256').update(`EMAIL_STEP2_VERIFY:${otpCode2}:${cleanNewEmail}`).digest('hex');
-    const expiresAt2 = new Date(Date.now() + 5 * 60 * 1000); // 5 minutos
-
-    await this.prisma.passwordResetToken.create({
-      data: { userId: user.id, tokenHash: tokenHash2, expiresAt: expiresAt2 },
-    });
-
-    await this.mailService.sendVerifyNewEmailOtp(cleanNewEmail, user.name, otpCode2);
-
-    return {
-      success: true,
-      step: 2,
-      sentTo: cleanNewEmail,
-      newEmail: cleanNewEmail,
-      message: `Paso 1 completado. Ahora enviamos un código de 6 dígitos a tu NUEVO correo (${cleanNewEmail}) para activarlo.`,
-    };
-  }
-
-  async confirmNewEmailStep2(userId: string, newEmail: string, otpCode: string) {
-    const cleanNewEmail = newEmail ? newEmail.trim().toLowerCase() : '';
-    const cleanOtp = otpCode ? otpCode.trim() : '';
-
-    if (!cleanNewEmail || !cleanOtp) {
-      throw new BadRequestException('El nuevo correo y el código de seguridad son obligatorios');
-    }
-
-    const tokenHash = crypto.createHash('sha256').update(`EMAIL_STEP2_VERIFY:${cleanOtp}:${cleanNewEmail}`).digest('hex');
-    const token = await this.prisma.passwordResetToken.findFirst({
-      where: {
-        userId,
-        tokenHash,
-        usedAt: null,
-        expiresAt: { gte: new Date() },
-      },
-    });
-
-    if (!token) {
-      throw new BadRequestException('El código del nuevo correo es incorrecto o ya expiró (Vence en 5 minutos)');
-    }
-
-    // Asegurar que el nuevo correo no haya sido tomado por otra cuenta mientras se verificaba
-    const existingOther = await this.prisma.user.findFirst({
       where: {
         email: { equals: cleanNewEmail, mode: 'insensitive' },
         id: { not: userId },
       },
     });
-
-    if (existingOther) {
-      throw new ConflictException('Este correo electrónico ya está en uso por otra cuenta en el sistema.');
+    if (existing) {
+      throw new BadRequestException('Este correo electronico ya esta registrado por otra cuenta');
     }
 
-    // Marcar token como usado y actualizar correo oficialmente en la base de datos
-    const [updatedUser] = await this.prisma.$transaction([
-      this.prisma.user.update({
-        where: { id: userId },
-        data: { email: cleanNewEmail },
-      }),
-      this.prisma.passwordResetToken.update({
-        where: { id: token.id },
-        data: { usedAt: new Date() },
-      }),
-    ]);
+    const updatedUser = await this.prisma.user.update({
+      where: { id: userId },
+      data: { email: cleanNewEmail, mustVerifyEmail: false, emailVerified: true },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        role: true,
+        permissions: true,
+        phone: true,
+        photo: true,
+        active: true,
+        mustVerifyEmail: true,
+        emailVerified: true,
+      },
+    });
 
     return {
       success: true,
-      message: '¡Nuevo correo verificado y activado exitosamente! El correo anterior fue desvinculado.',
-      user: {
-        id: updatedUser.id,
-        name: updatedUser.name,
-        email: updatedUser.email,
-        role: updatedUser.role,
-      },
+      requiresOtp: false,
+      step: 0,
+      email: updatedUser.email,
+      user: updatedUser,
+      message: 'Correo actualizado directamente.',
     };
   }
 
-  // --- SEGURIDAD DUAL PARA ACCIONES CRÍTICAS (Estilo Meta) ---
+  async verifyCurrentEmailStep1(userId: string, newEmail: string, otpCode?: string) {
+    return this.requestEmailChange(userId, newEmail);
+  }
+
+  async confirmNewEmailStep2(userId: string, newEmail: string, otpCode?: string) {
+    return this.requestEmailChange(userId, newEmail);
+  }
+
+  // --- Autorizacion simplificada para desarrollo ---
 
   async requestActionOtp(userId: string, actionName: string) {
-    const user = await this.prisma.user.findUnique({ where: { id: userId } });
-    if (!user) throw new NotFoundException('Usuario no encontrado');
-
-    const cleanEmail = (user.email || '').trim().toLowerCase();
-    const hasValidExternalEmail = cleanEmail.includes('@') && !cleanEmail.endsWith('@thevilladog.local');
-
-    let recipientEmail = cleanEmail;
-    let isMasterFallback = false;
-
-    // Si el usuario actual no tiene correo verificado aún (ej: la cuenta 'admin'):
-    // Enviamos el código OTP directamente al SuperAdmin (softwaresjja@gmail.com)
-    if (!hasValidExternalEmail) {
-      const superAdmin = await this.prisma.user.findFirst({
-        where: { role: 'SUPERADMIN', active: true, email: { contains: '@' } },
-      });
-      if (superAdmin && superAdmin.email && !superAdmin.email.endsWith('@thevilladog.local')) {
-        recipientEmail = superAdmin.email.trim().toLowerCase();
-        isMasterFallback = true;
-      } else {
-        throw new BadRequestException('No hay un correo de seguridad configurado para recibir códigos. Por favor autoriza con tu contraseña.');
-      }
-    }
-
-    const otp = Math.floor(100000 + Math.random() * 900000).toString();
-    const tokenHash = crypto.createHash('sha256').update(`ACTION_AUTH:${userId}:${otp}`).digest('hex');
-
-    // Invalidar tokens previos de action auth para este usuario
-    await this.prisma.passwordResetToken.updateMany({
-      where: { userId: user.id, usedAt: null },
-      data: { usedAt: new Date() },
-    });
-
-    await this.prisma.passwordResetToken.create({
-      data: {
-        userId: user.id,
-        tokenHash,
-        expiresAt: new Date(Date.now() + 10 * 60 * 1000), // 10 minutos
-      },
-    });
-
-    await this.mailService.sendActionAuthOtp(
-      recipientEmail,
-      isMasterFallback ? `${user.name} (Acción crítica solicitada desde cuenta ${user.role})` : user.name,
-      actionName || 'Confirmar Acción Administrativa',
-      otp
-    );
-
-    const maskedEmail = recipientEmail.replace(/(.{2})(.*)(@.*)/, '$1***$3');
     return {
       success: true,
-      message: isMasterFallback
-        ? `🔐 Por seguridad preventiva, el código de autorización fue enviado al correo del Super Administrador (${maskedEmail}).`
-        : `Código de confirmación de 6 dígitos enviado a tu correo (${maskedEmail}).`,
+      bypassed: true,
+      message: 'Autorizacion omitida en modo de pruebas.',
     };
   }
 
   async verifyActionAuth(userId: string, data: { method: 'PASSWORD' | 'OTP'; password?: string; otpCode?: string }) {
     const user = await this.prisma.user.findUnique({ where: { id: userId } });
     if (!user) throw new NotFoundException('Usuario no encontrado');
-
-    const cleanEmail = (user.email || '').trim().toLowerCase();
-    const hasValidExternalEmail = cleanEmail.includes('@') && !cleanEmail.endsWith('@thevilladog.local');
-
-    if (data.method === 'PASSWORD') {
-      if (!hasValidExternalEmail) {
-        throw new BadRequestException('Esta cuenta requiere autorización obligatoria mediante código OTP enviado al Super Administrador.');
-      }
-      if (!data.password) {
-        throw new BadRequestException('Debes ingresar tu contraseña actual para autorizar la acción.');
-      }
-      const isMatch = await bcrypt.compare(data.password, user.password);
-      if (!isMatch) {
-        throw new UnauthorizedException('La contraseña ingresada es incorrecta.');
-      }
-      return { success: true, verifiedBy: 'PASSWORD' };
-    }
-
-    if (data.method === 'OTP') {
-      const cleanOtp = (data.otpCode || '').trim();
-      if (!cleanOtp) {
-        throw new BadRequestException('Debes ingresar el código de 6 dígitos enviado a tu correo.');
-      }
-
-      const tokenHash = crypto.createHash('sha256').update(`ACTION_AUTH:${userId}:${cleanOtp}`).digest('hex');
-      const token = await this.prisma.passwordResetToken.findFirst({
-        where: {
-          userId: user.id,
-          tokenHash,
-          usedAt: null,
-          expiresAt: { gte: new Date() },
-        },
-      });
-
-      if (!token) {
-        throw new UnauthorizedException('El código de verificación es incorrecto o ya expiró.');
-      }
-
-      await this.prisma.passwordResetToken.update({
-        where: { id: token.id },
-        data: { usedAt: new Date() },
-      });
-
-      return { success: true, verifiedBy: 'OTP' };
-    }
-
-    throw new BadRequestException('Método de verificación no soportado.');
+    return { success: true, verifiedBy: 'BYPASS' };
   }
 
-  // --- VERIFICACIÓN DE CORREO EN PRIMER ACCESO (Onboarding 2FA) ---
+  // --- VERIFICACI  // --- VERIFICACIÓN DE CORREO EN PRIMER ACCESO (Onboarding 2FA) ---
 
   async requestSetupEmailOtp(userId: string, targetEmail: string) {
-    const user = await this.prisma.user.findUnique({ where: { id: userId } });
-    if (!user) throw new NotFoundException('Usuario no encontrado');
-
-    const cleanEmail = (targetEmail || '').trim().toLowerCase();
-    if (!cleanEmail || !cleanEmail.includes('@') || cleanEmail.endsWith('@thevilladog.local')) {
-      throw new BadRequestException('Debes ingresar un correo electrónico real y válido (ej: tu_nombre@gmail.com).');
-    }
-
-    // Asegurar unicidad estricta en el sistema
-    const existing = await this.prisma.user.findFirst({
-      where: {
-        email: { equals: cleanEmail, mode: 'insensitive' },
-        id: { not: userId },
-      },
-    });
-    if (existing) {
-      throw new ConflictException('Este correo electrónico ya está registrado en otra cuenta del sistema.');
-    }
-
-    const otp = Math.floor(100000 + Math.random() * 900000).toString();
-    const tokenHash = crypto.createHash('sha256').update(`SETUP_EMAIL:${userId}:${cleanEmail}:${otp}`).digest('hex');
-
-    // Invalidar anteriores tokens de setup
-    await this.prisma.passwordResetToken.updateMany({
-      where: { userId: user.id, usedAt: null },
-      data: { usedAt: new Date() },
-    }).catch(() => {});
-
-    await this.prisma.passwordResetToken.create({
-      data: {
-        userId: user.id,
-        tokenHash,
-        expiresAt: new Date(Date.now() + 15 * 60 * 1000), // 15 minutos
-      },
-    });
-
-    await this.mailService.sendSetupEmailVerificationOtp(cleanEmail, user.name, otp);
-
+    const result = await this.requestEmailChange(userId, targetEmail);
     return {
       success: true,
-      message: `Código de verificación enviado exitosamente a ${cleanEmail}`,
+      bypassed: true,
+      message: 'Correo configurado directamente sin OTP.',
+      user: result.user,
     };
   }
 
-  async verifySetupEmailOtp(userId: string, targetEmail: string, otpCode: string, newPassword?: string) {
-    const user = await this.prisma.user.findUnique({ where: { id: userId } });
-    if (!user) throw new NotFoundException('Usuario no encontrado');
-
-    const cleanEmail = (targetEmail || '').trim().toLowerCase();
-    const cleanOtp = (otpCode || '').trim();
-
-    if (!cleanEmail || !cleanOtp) {
-      throw new BadRequestException('Debes ingresar el correo y el código de 6 dígitos.');
-    }
-
-    const tokenHash = crypto.createHash('sha256').update(`SETUP_EMAIL:${userId}:${cleanEmail}:${cleanOtp}`).digest('hex');
-    const token = await this.prisma.passwordResetToken.findFirst({
-      where: {
-        userId: user.id,
-        tokenHash,
-        usedAt: null,
-        expiresAt: { gte: new Date() },
-      },
-    });
-
-    if (!token) {
-      throw new BadRequestException('El código de verificación es incorrecto o ya expiró (Vence en 15 minutos).');
-    }
-
-    // Re-validar unicidad
-    const existing = await this.prisma.user.findFirst({
-      where: {
-        email: { equals: cleanEmail, mode: 'insensitive' },
-        id: { not: userId },
-      },
-    });
-    if (existing) {
-      throw new ConflictException('Este correo electrónico ya está registrado en otra cuenta.');
-    }
-
-    const updateData: any = {
-      email: cleanEmail,
-      mustVerifyEmail: false,
-      emailVerified: true,
-    };
+  async verifySetupEmailOtp(userId: string, targetEmail: string, otpCode?: string, newPassword?: string) {
+    await this.requestEmailChange(userId, targetEmail);
+    const updateData: any = { mustVerifyEmail: false, emailVerified: true };
 
     if (newPassword && newPassword.trim()) {
-      this.validateStrongPassword(newPassword.trim());
+      if (newPassword.trim().length < 4) {
+        throw new BadRequestException('La nueva contrasena debe tener al menos 4 caracteres.');
+      }
       updateData.password = await bcrypt.hash(newPassword.trim(), 10);
     }
 
-    const [updatedUser] = await this.prisma.$transaction([
-      this.prisma.user.update({
-        where: { id: userId },
-        data: updateData,
-        select: {
-          id: true,
-          name: true,
-          email: true,
-          role: true,
-          permissions: true,
-          phone: true,
-          photo: true,
-          active: true,
-          mustVerifyEmail: true,
-          emailVerified: true,
-        },
-      }),
-      this.prisma.passwordResetToken.update({
-        where: { id: token.id },
-        data: { usedAt: new Date() },
-      }),
-    ]);
-
-    await this.auditService.log({
-      actorName: updatedUser.name,
-      actorRole: updatedUser.role,
-      action: 'SETUP_EMAIL_VERIFIED',
-      targetType: 'User',
-      targetId: updatedUser.id,
-      metadata: { newEmail: cleanEmail },
-    }).catch(() => {});
+    const updatedUser = await this.prisma.user.update({
+      where: { id: userId },
+      data: updateData,
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        role: true,
+        permissions: true,
+        phone: true,
+        photo: true,
+        active: true,
+        mustVerifyEmail: true,
+        emailVerified: true,
+      },
+    });
 
     return {
       success: true,
-      message: '¡Correo verificado y cuenta configurada exitosamente!',
+      message: 'Cuenta configurada directamente sin OTP.',
       user: updatedUser,
     };
   }

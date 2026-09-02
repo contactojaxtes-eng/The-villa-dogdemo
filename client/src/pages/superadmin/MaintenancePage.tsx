@@ -58,8 +58,8 @@ export default function MaintenancePage() {
 
   return (
     <div className="min-h-[85vh] bg-[#F6F7F9] rounded-[2rem] border border-[#E5E7EB] p-4 md:p-8 text-[#334155] relative overflow-hidden shadow-2xl">
-      <div className="absolute top-0 left-0 w-full h-[500px] bg-gradient-to-b from-[#1E40AF]/5 to-transparent pointer-events-none" />
-      <div className="absolute top-0 right-0 w-[500px] h-[500px] bg-[radial-gradient(circle_at_top_right,rgba(30,64,175,0.04),transparent_50%)] pointer-events-none" />
+      <div className="absolute top-0 left-0 w-full h-[500px] bg-gradient-to-b from-[#7A1F2B]/5 to-transparent pointer-events-none" />
+      <div className="absolute top-0 right-0 w-[500px] h-[500px] bg-[radial-gradient(circle_at_top_right,rgba(249,115,22,0.05),transparent_50%)] pointer-events-none" />
       
       <motion.div variants={containerVariants} initial="hidden" animate="visible" className="relative z-10 space-y-8">
         
@@ -82,7 +82,7 @@ export default function MaintenancePage() {
           </div>
           <div className="flex items-center gap-2">
             <button onClick={loadDbSize} disabled={loading} className="flex items-center gap-2 px-3 py-1.5 bg-[#F1F5F9] hover:bg-[#E2E8F0] border border-[#E2E8F0] rounded-lg text-[10px] font-mono text-[#0F172A] transition-colors cursor-pointer">
-              <Loader2 className={`h-3.5 w-3.5 ${loading ? 'animate-spin text-[#1E40AF]' : ''}`} /> REFRESH DB STATUS
+              <Loader2 className={`h-3.5 w-3.5 ${loading ? 'animate-spin text-[#7A1F2B]' : ''}`} /> REFRESH DB STATUS
             </button>
           </div>
         </motion.div>
@@ -94,7 +94,7 @@ export default function MaintenancePage() {
             <div className="bg-[#FFFFFF] rounded-2xl border border-[#E2E8F0] shadow-sm overflow-hidden flex flex-col h-full">
               <div className="p-4 border-b border-[#E5E7EB] bg-[#F6F7F9]/50 flex items-center justify-between">
                 <div className="flex items-center gap-3">
-                  <div className="p-2 bg-[#1E40AF]/10 rounded-lg text-[#1E40AF]">
+                  <div className="p-2 bg-[#7A1F2B]/10 rounded-lg text-[#7A1F2B]">
                     <Database className="h-5 w-5" />
                   </div>
                   <div>
@@ -111,7 +111,7 @@ export default function MaintenancePage() {
               <div className="p-6 bg-[#F6F7F9]">
                 {loading ? (
                   <div className="flex flex-col items-center justify-center py-12 text-[#64748B]">
-                    <Loader2 className="h-6 w-6 animate-spin text-[#1E40AF] mb-2" />
+                    <Loader2 className="h-6 w-6 animate-spin text-[#7A1F2B] mb-2" />
                     <p className="text-[10px] font-mono uppercase tracking-widest">Calculating Storage...</p>
                   </div>
                 ) : (
@@ -119,7 +119,7 @@ export default function MaintenancePage() {
                     {dbSize?.tables.map(t => (
                       <div key={t.table} className="group flex items-center justify-between p-3 bg-[#FFFFFF] border border-[#E5E7EB] hover:border-[#CBD5E1] rounded-xl transition-colors">
                         <div className="flex items-center gap-2">
-                          <HardDrive className="h-3.5 w-3.5 text-[#94A3B8] group-hover:text-[#1E40AF] transition-colors" />
+                          <HardDrive className="h-3.5 w-3.5 text-[#94A3B8] group-hover:text-[#7A1F2B] transition-colors" />
                           <span className="text-xs font-mono text-[#334155]">{t.table}</span>
                         </div>
                         <span className="text-xs font-mono font-bold text-[#0F172A]">{t.size}</span>

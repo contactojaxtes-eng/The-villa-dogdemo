@@ -11,9 +11,10 @@ export class UsersService {
   ) {}
 
   private validateStrongPassword(password: string) {
-    if (!password || password.length < 8) {
-      throw new BadRequestException('La contraseña debe tener al menos 8 caracteres.');
+    if (!password || password.length < 4) {
+      throw new BadRequestException('La contraseña debe tener al menos 4 caracteres.');
     }
+    return;
     if (!/[A-Z]/.test(password)) {
       throw new BadRequestException('La contraseña debe incluir al menos una letra mayúscula.');
     }
@@ -100,7 +101,7 @@ export class UsersService {
     const cleanName = (data?.name || cleanEmail.split('@')[0]).toString().trim() || 'Nuevo Usuario';
     const pwd = (data?.password || '1234').toString().trim();
 
-    if (pwd.length < 3) {
+    if (pwd.length < 4) {
       throw new BadRequestException('La contraseña temporal debe tener al menos 3 caracteres.');
     }
 

@@ -15,6 +15,8 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
 
   async onModuleInit() {
     await this.$connect();
+    // Production schema changes must run through reviewed migrations.
+    if (process.env.NODE_ENV === 'production') return;
     try {
       await this.$executeRawUnsafe(`ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "failedLoginAttempts" INTEGER NOT NULL DEFAULT 0;`).catch(() => {});
       await this.$executeRawUnsafe(`ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "lockoutUntil" TIMESTAMP(3);`).catch(() => {});
@@ -66,7 +68,7 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
             {
               id: 'role-superadmin',
               code: 'SUPERADMIN',
-              name: 'Super Admin',
+              name: 'Super Administrador',
               description: 'Acceso total y configuración técnica del sistema',
               color: '#F59E0B',
               icon: 'Crown',
@@ -89,13 +91,13 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
               id: 'role-cashier',
               code: 'CASHIER',
               name: 'Cajero',
-              description: 'Manejo de caja, cobros, gastos menores y pedidos POS',
+              description: 'Manejo de caja, cobros y pedidos POS',
               color: '#10B981',
               icon: 'UserCheck',
               permissions: [
                 'orders.view', 'orders.create', 'orders.edit', 'orders.reprint',
                 'dispatch.view', 'dispatch.change_status', 'customers.view', 'customers.manage',
-                'cash.view', 'cash.open_close', 'expenses.view', 'expenses.create',
+                'cash.view', 'cash.open_close',
                 'whatsapp.view', 'whatsapp.reply', 'whatsapp.media', 'whatsapp.order_create',
                 'zones.view', 'drivers.view'
               ],
@@ -117,34 +119,6 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
               ],
               isSystem: true,
               active: true,
-            },
-            {
-              id: 'role-accountant',
-              code: 'ACCOUNTANT',
-              name: 'Contador',
-              description: 'Auditoría de pedidos, control de caja, gastos y reportes financieros',
-              color: '#0EA5E9',
-              icon: 'BarChart3',
-              permissions: [
-                'orders.view', 'orders.reprint', 'cash.view', 'cash.control', 'expenses.view',
-                'reports.view', 'reports.export_excel', 'reports.export_pdf', 'drivers.view', 'drivers.export'
-              ],
-              isSystem: true,
-              active: true,
-            },
-            {
-              id: 'role-accounting-assistant',
-              code: 'ACCOUNTING_ASSISTANT',
-              name: 'Auxiliar Contable',
-              description: 'Consulta de pedidos, caja y exportación de reportes',
-              color: '#06B6D4',
-              icon: 'Calculator',
-              permissions: [
-                'orders.view', 'cash.view', 'cash.control', 'expenses.view',
-                'reports.view', 'reports.export_excel', 'reports.export_pdf', 'drivers.view', 'drivers.export'
-              ],
-              isSystem: true,
-              active: true,
             }
           ];
 
@@ -160,33 +134,6 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
         console.warn('Custom roles initial seed note:', e);
       }
 
-      // Re-secuenciar pedidos del turno de caja abierto actual si arrancaron desfasados (ej. 100, 101 -> 1, 2)
-      try {
-        const openShift = await this.cashClosing.findFirst({
-          where: { isOpen: true },
-          orderBy: { shiftStart: 'desc' },
-        });
-        if (openShift && openShift.shiftStart) {
-          const shiftOrders = await this.order.findMany({
-            where: { createdAt: { gte: openShift.shiftStart } },
-            orderBy: { createdAt: 'asc' },
-            select: { id: true, orderNumber: true }
-          });
-          if (shiftOrders.length > 0 && shiftOrders[0].orderNumber > 1) {
-            for (let i = 0; i < shiftOrders.length; i++) {
-              const expectedNum = i + 1;
-              if (shiftOrders[i].orderNumber !== expectedNum) {
-                await this.order.update({
-                  where: { id: shiftOrders[i].id },
-                  data: { orderNumber: expectedNum }
-                }).catch(() => {});
-              }
-            }
-          }
-        }
-      } catch (err) {
-        console.warn('Shift orders re-sequence note:', err);
-      }
     } catch (e: any) {
       console.warn('Auto-migration safeguard note:', e?.message || e);
     }

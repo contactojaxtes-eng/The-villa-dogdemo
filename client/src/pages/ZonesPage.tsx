@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { io } from 'socket.io-client'
+import { io } from '@/lib/socket'
 import { PageHeader } from '@/components/ui/PageHeader'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'

@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { io } from 'socket.io-client'
+import { io } from '@/lib/socket'
 import { useAuth } from '@/hooks/useAuth'
 import { api } from '@/lib/api'
 import { Button } from '@/components/ui/button'
@@ -279,8 +279,8 @@ export default function DriversPage() {
   const handleExportExcel = async () => {
     setExporting('excel')
     try {
-      const XLSX = await import('xlsx')
-      const wb = XLSX.utils.book_new()
+      const ExcelJS = await import('exceljs')
+      const wb = new ExcelJS.Workbook()
       const filterLabel = getFilterDescription()
 
       // 1. Resumen por Domiciliario
@@ -301,9 +301,9 @@ export default function DriversPage() {
           formatCurrency(d.totalDeliveredSales || 0),
         ])
       ]
-      const ws1 = XLSX.utils.aoa_to_sheet(summaryData)
-      ws1['!cols'] = [{ wch: 25 }, { wch: 18 }, { wch: 14 }, { wch: 24 }, { wch: 20 }, { wch: 24 }]
-      XLSX.utils.book_append_sheet(wb, ws1, 'Resumen Domiciliarios')
+      const ws1 = wb.addWorksheet('Resumen Domiciliarios')
+      ws1.addRows(summaryData)
+      ws1.columns = [25, 18, 14, 24, 20, 24].map(width => ({ width }))
 
       // 2. Detalle de Entregas por Fecha
       const allDeliveries: any[] = []
@@ -337,13 +337,19 @@ export default function DriversPage() {
             o.status === 'DELIVERED' ? 'Entregado' : o.status === 'IN_ROUTE' ? 'En Ruta' : o.status,
           ])
         ]
-        const ws2 = XLSX.utils.aoa_to_sheet(deliveriesData)
-        ws2['!cols'] = [{ wch: 20 }, { wch: 14 }, { wch: 14 }, { wch: 22 }, { wch: 18 }, { wch: 22 }, { wch: 28 }, { wch: 18 }, { wch: 18 }, { wch: 18 }, { wch: 16 }]
-        XLSX.utils.book_append_sheet(wb, ws2, 'Detalle de Entregas')
+        const ws2 = wb.addWorksheet('Detalle de Entregas')
+        ws2.addRows(deliveriesData)
+        ws2.columns = [20, 14, 14, 22, 18, 22, 28, 18, 18, 18, 16].map(width => ({ width }))
       }
 
       const safeFilterName = filterType.toLowerCase()
-      XLSX.writeFile(wb, `Reporte_Domiciliarios_${safeFilterName}_${new Date().toISOString().split('T')[0]}.xlsx`)
+      const buffer = await wb.xlsx.writeBuffer()
+      const url = URL.createObjectURL(new Blob([buffer as ArrayBuffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }))
+      const link = document.createElement('a')
+      link.href = url
+      link.download = `Reporte_Domiciliarios_${safeFilterName}_${new Date().toISOString().split('T')[0]}.xlsx`
+      link.click()
+      setTimeout(() => URL.revokeObjectURL(url), 1000)
     } catch (err) {
       console.error('Error exportando Excel de domiciliarios:', err)
     } finally {
@@ -363,8 +369,8 @@ export default function DriversPage() {
       const pageW = doc.internal.pageSize.getWidth()
       const filterLabel = getFilterDescription()
 
-      // Banner superior verde The Villa Dog
-      doc.setFillColor(144, 191, 80) // #90BF50
+      // Banner superior Villa Dog
+      doc.setFillColor(144, 191, 80) // #F97316
       doc.rect(0, 0, pageW, 28, 'F')
       doc.setFont('helvetica', 'bold')
       doc.setFontSize(20)

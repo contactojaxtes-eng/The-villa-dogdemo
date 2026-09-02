@@ -7,7 +7,7 @@ import { RolesGuard, Roles } from '../auth/guards/roles.guard';
 @ApiTags('Payments')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles('ADMIN', 'SUPERADMIN', 'CASHIER', 'ACCOUNTANT', 'ACCOUNTING_ASSISTANT')
+@Roles('ADMIN', 'SUPERADMIN', 'CASHIER')
 @Controller('payments')
 export class PaymentsController {
   constructor(private paymentsService: PaymentsService) {}

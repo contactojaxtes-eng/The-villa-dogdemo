@@ -3,21 +3,21 @@
   "name": "The Villa Dog - WhatsApp Chat",
   "icons": [
     {
-      "src": "/the-villa-dog-logo.svg",
+      "src": "/the-villa-dog-icon-192.png",
       "sizes": "192x192",
-      "type": "image/svg+xml",
+      "type": "image/png",
       "purpose": "any maskable"
     },
     {
-      "src": "/the-villa-dog-logo.svg",
+      "src": "/the-villa-dog-icon-512.png",
       "sizes": "512x512",
-      "type": "image/svg+xml",
+      "type": "image/png",
       "purpose": "any maskable"
     }
   ],
   "start_url": "/chat",
   "display": "standalone",
-  "theme_color": "#1C2B33",
-  "background_color": "#0E171B",
+  "theme_color": "#F97316",
+  "background_color": "#17100D",
   "orientation": "any"
 }

@@ -36,6 +36,12 @@ model User {
   notifications    Notification[]
   whatsappSessions WhatsAppSession[]
   passwordResetTokens PasswordResetToken[]
+  diningTables    DiningTable[]
+  kitchenTickets  KitchenTicket[] @relation("KitchenTicketAssignee")
+  kitchenStations KitchenStation[] @relation("KitchenStationUsers")
+  orderChangeLogs OrderChangeLog[]
+  transferProofs  TransferProof[] @relation("TransferProofSubmittedBy")
+  reviewedProofs  TransferProof[] @relation("TransferProofReviewedBy")
 
   @@map("users")
 }
@@ -93,6 +99,7 @@ model MenuCategory {
   createdAt   DateTime   @default(now())
 
   items       MenuItem[]
+  kitchenStations KitchenStation[]
 
   @@map("menu_categories")
 }
@@ -116,6 +123,7 @@ model MenuItem {
   category    MenuCategory @relation(fields: [categoryId], references: [id])
   orderItems  OrderItem[]
   recipe      Recipe?
+  kitchenTicketItems KitchenTicketItem[]
 
   @@map("menu_items")
 }
@@ -147,6 +155,7 @@ model CashRegister {
   manager     User?         @relation("RegisterManager", fields: [managerId], references: [id])
   closings    CashClosing[]
   orders      Order[]
+  diningTables DiningTable[]
 
   @@map("cash_registers")
 }
@@ -191,6 +200,11 @@ model Order {
   customerId        String?
   deliveryDriverId  String?
   chatSessionId     String?
+  tableId           String?
+  kitchenStatus     String   @default("NOT_SENT")
+  sentToKitchenAt   DateTime?
+  servedAt          DateTime?
+  clientMutationId  String?  @unique
 
   waiter            User            @relation(fields: [waiterId], references: [id])
   zone              DeliveryZone?   @relation(fields: [zoneId], references: [id])
@@ -202,6 +216,10 @@ model Order {
   items             OrderItem[]
   payment           Payment?
   stockMovements    StockMovement[]
+  diningTable       DiningTable? @relation(fields: [tableId], references: [id])
+  kitchenTickets    KitchenTicket[]
+  changeLogs        OrderChangeLog[]
+  transferProofs    TransferProof[]
 
   @@index([createdAt])
   @@index([status])
@@ -211,6 +229,8 @@ model Order {
   @@index([cashRegisterId])
   @@index([deliveryDriverId])
   @@index([chatSessionId])
+  @@index([tableId])
+  @@index([kitchenStatus])
   @@map("orders")
 }
 
@@ -226,6 +246,7 @@ model OrderItem {
 
   order      Order    @relation(fields: [orderId], references: [id])
   menuItem   MenuItem @relation(fields: [menuItemId], references: [id])
+  kitchenTicketItems KitchenTicketItem[]
 
   @@index([orderId])
   @@index([menuItemId])
@@ -240,6 +261,7 @@ model Payment {
   transferAmount Float? @default(0)
   reference   String?
   proofImage  String?
+  settlementId String?
   status      String   @default("PENDING")
   confirmedAt DateTime?
   confirmedBy String?
@@ -247,7 +269,9 @@ model Payment {
 
   orderId     String   @unique
   order       Order    @relation(fields: [orderId], references: [id])
+  transferProofs TransferProof[]
 
+  @@index([settlementId])
   @@map("payments")
 }
 
@@ -371,6 +395,8 @@ model CashClosing {
 
   user           User          @relation(fields: [userId], references: [id])
   cashRegister   CashRegister? @relation(fields: [cashRegisterId], references: [id])
+  diningTables   DiningTable[]
+  transferProofs TransferProof[]
 
   @@index([userId, isOpen])
   @@map("cash_closings")
@@ -611,5 +637,157 @@ model CustomRole {
   updatedAt   DateTime @updatedAt
 
   @@map("custom_roles")
+}
+
+model DiningTable {
+  id             String    @id @default(uuid())
+  label          String
+  status         String    @default("OPEN")
+  notes          String?
+  openedAt       DateTime  @default(now())
+  closedAt       DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  openedById     String
+  cashRegisterId String?
+  cashClosingId  String?
+
+  openedBy       User          @relation(fields: [openedById], references: [id])
+  cashRegister   CashRegister? @relation(fields: [cashRegisterId], references: [id])
+  cashClosing    CashClosing?  @relation(fields: [cashClosingId], references: [id])
+  orders         Order[]
+  kitchenTickets KitchenTicket[]
+  transferProofs TransferProof[]
+
+  @@index([status])
+  @@index([openedById])
+  @@index([cashRegisterId])
+  @@index([cashClosingId])
+  @@map("dining_tables")
+}
+
+model KitchenStation {
+  id          String   @id @default(uuid())
+  name        String
+  active      Boolean  @default(true)
+  priority    Int      @default(0)
+  color       String?  @default("#F97316")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  categories  MenuCategory[]
+  users       User[] @relation("KitchenStationUsers")
+  tickets     KitchenTicket[]
+
+  @@index([active])
+  @@map("kitchen_stations")
+}
+
+model KitchenTicket {
+  id            String    @id @default(uuid())
+  status        String    @default("NEW")
+  changeSummary String?
+  isEdited      Boolean   @default(false)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  startedAt     DateTime?
+  readyAt       DateTime?
+  servedAt      DateTime?
+
+  orderId       String
+  tableId       String?
+  stationId     String
+  assignedToId  String?
+
+  order         Order          @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  table         DiningTable?   @relation(fields: [tableId], references: [id])
+  station       KitchenStation @relation(fields: [stationId], references: [id])
+  assignedTo    User?          @relation("KitchenTicketAssignee", fields: [assignedToId], references: [id])
+  items         KitchenTicketItem[]
+
+  @@index([status])
+  @@index([orderId])
+  @@index([tableId])
+  @@index([stationId])
+  @@index([assignedToId])
+  @@map("kitchen_tickets")
+}
+
+model KitchenTicketItem {
+  id             String   @id @default(uuid())
+  quantity       Int      @default(1)
+  nameSnapshot   String
+  notes          String?
+  changeType     String   @default("UNCHANGED")
+  previousQty    Int?
+  previousNotes  String?
+
+  ticketId       String
+  orderItemId    String?
+  menuItemId     String
+
+  ticket         KitchenTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  orderItem      OrderItem?     @relation(fields: [orderItemId], references: [id])
+  menuItem       MenuItem       @relation(fields: [menuItemId], references: [id])
+
+  @@index([ticketId])
+  @@index([orderItemId])
+  @@index([menuItemId])
+  @@map("kitchen_ticket_items")
+}
+
+model OrderChangeLog {
+  id         String   @id @default(uuid())
+  summary    String
+  changes    Json
+  createdAt  DateTime @default(now())
+
+  orderId    String
+  userId     String
+
+  order      Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  user       User  @relation(fields: [userId], references: [id])
+
+  @@index([orderId])
+  @@index([userId])
+  @@map("order_change_logs")
+}
+
+model TransferProof {
+  id             String    @id @default(uuid())
+  status         String    @default("PENDING")
+  method         String    @default("TRANSFER")
+  amount         Float     @default(0)
+  filePath       String?
+  originalName   String?
+  mimeType       String?
+  fileSize       Int?
+  rejectionReason String?
+  purgedAt       DateTime?
+  reviewedAt     DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  paymentId      String
+  orderId        String
+  tableId        String?
+  cashClosingId  String?
+  submittedById  String
+  reviewedById   String?
+
+  payment        Payment      @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  order          Order        @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  table          DiningTable? @relation(fields: [tableId], references: [id])
+  cashClosing    CashClosing? @relation(fields: [cashClosingId], references: [id])
+  submittedBy    User        @relation("TransferProofSubmittedBy", fields: [submittedById], references: [id])
+  reviewedBy     User?       @relation("TransferProofReviewedBy", fields: [reviewedById], references: [id])
+
+  @@index([status])
+  @@index([paymentId])
+  @@index([orderId])
+  @@index([tableId])
+  @@index([cashClosingId])
+  @@map("transfer_proofs")
 }
 

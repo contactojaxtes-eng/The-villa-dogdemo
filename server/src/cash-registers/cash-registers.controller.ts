@@ -7,7 +7,7 @@ import { RolesGuard, Roles } from '../auth/guards/roles.guard';
 @ApiTags('Cash Registers')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles('ADMIN', 'SUPERADMIN', 'CASHIER', 'ACCOUNTANT', 'ACCOUNTING_ASSISTANT')
+@Roles('ADMIN', 'SUPERADMIN', 'CASHIER')
 @Controller('cash-registers')
 export class CashRegistersController {
   constructor(private cashRegistersService: CashRegistersService) {}

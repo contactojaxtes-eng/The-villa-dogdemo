@@ -1,6 +1,6 @@
 import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { io } from 'socket.io-client'
+import { io } from '@/lib/socket'
 import { api } from '../lib/api'
 import { hasUserPermission } from '../lib/permissions'
 
@@ -81,8 +81,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [])
 
-  // Escuchar cambios de usuarios / permisos en tiempo real vía WebSocket
+  // Escuchar cambios solo con una sesión autenticada.
   useEffect(() => {
+    if (!user?.id) return
     const socketUrl = import.meta.env.VITE_API_URL || window.location.origin
     const socket = io(`${socketUrl}/the-villa-dog`, {
       transports: ['websocket', 'polling'],
@@ -95,7 +96,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => {
       socket.disconnect()
     }
-  }, [refreshProfile])
+  }, [refreshProfile, user?.id])
 
   const login = async (email: string, password: string) => {
     const data = await api.post<{ accessToken: string; refreshToken: string; user: User }>('/auth/login', { email, password })
@@ -142,8 +143,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(updated)
   }
 
-  const requestEmailChange = (newEmail: string) => {
-    return api.post<{ step: number; requiresOtp: boolean; sentTo: string; currentEmail?: string; newEmail: string; message: string }>('/auth/profile/request-email-change', { newEmail })
+  const requestEmailChange = async (newEmail: string) => {
+    const res = await api.post<{ step: number; requiresOtp: boolean; sentTo: string; currentEmail?: string; newEmail: string; email?: string; message: string; user?: User }>('/auth/profile/request-email-change', { newEmail })
+    if (res.user) setUser(res.user)
+    return res
   }
 
   const verifyCurrentEmailStep1 = (newEmail: string, otpCode: string) => {

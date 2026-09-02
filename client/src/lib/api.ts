@@ -49,6 +49,10 @@ class ApiClient {
     return this.refreshToken
   }
 
+  refreshSession() {
+    return this.performRefreshToken()
+  }
+
   private async performRefreshToken(): Promise<boolean> {
     if (this.refreshPromise) {
       return this.refreshPromise
@@ -82,7 +86,7 @@ class ApiClient {
     return this.refreshPromise
   }
 
-  private async request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
+  private async request<T>(endpoint: string, options: RequestInit = {}, responseType: 'json' | 'blob' = 'json'): Promise<T> {
     const headers: Record<string, string> = {}
     if (!(options.body instanceof FormData)) {
       headers['Content-Type'] = 'application/json'
@@ -131,11 +135,17 @@ class ApiClient {
       throw new Error(error.message || 'Error del servidor')
     }
 
+    if (responseType === 'blob') return response.blob() as Promise<T>
+    if (response.status === 204) return undefined as T
     return response.json()
   }
 
   get<T>(endpoint: string) {
     return this.request<T>(endpoint)
+  }
+
+  getBlob(endpoint: string) {
+    return this.request<Blob>(endpoint, {}, 'blob')
   }
 
   post<T>(endpoint: string, data?: any, options: RequestInit = {}) {

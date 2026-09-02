@@ -1,48 +1,72 @@
-import { WebSocketGateway, WebSocketServer, SubscribeMessage, OnGatewayConnection, OnGatewayDisconnect } from '@nestjs/websockets';
+import { WebSocketGateway, WebSocketServer, SubscribeMessage, OnGatewayConnection, OnGatewayDisconnect, OnGatewayInit } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
+import { JwtService } from '@nestjs/jwt';
+import { PrismaService } from '../prisma/prisma.service';
+import { isAllowedOrigin } from '../common/environment';
 
-@WebSocketGateway({ cors: { origin: '*', credentials: true }, namespace: 'the-villa-dog' })
-export class SocketGateway implements OnGatewayConnection, OnGatewayDisconnect {
+@WebSocketGateway({ cors: { origin: (origin, callback) => callback(null, isAllowedOrigin(origin)), credentials: true }, namespace: 'the-villa-dog' })
+export class SocketGateway implements OnGatewayConnection, OnGatewayDisconnect, OnGatewayInit {
   @WebSocketServer()
   server: Server;
 
-  private connectedUsers: Map<string, string> = new Map();
+  private connectedUsers = new Map<string, Set<string>>();
   private activeOperators: Map<string, { userId: string; userName: string; orderId: string }> = new Map();
 
+  constructor(private jwt: JwtService, private prisma: PrismaService) {}
+
+  afterInit(server: Server) {
+    server.use(async (client, next) => {
+      try {
+        const token = client.handshake.auth?.token;
+        if (typeof token !== 'string') return next(new Error('UNAUTHORIZED'));
+        const payload = await this.jwt.verifyAsync(token, { secret: process.env.JWT_SECRET || 'change-me-the-villa-dog-dev-secret' });
+        if (!payload.sub || payload.type === 'refresh' || !payload.exp) return next(new Error('UNAUTHORIZED'));
+        const user = await this.prisma.user.findUnique({ where: { id: payload.sub }, select: { id: true, name: true, role: true, active: true } });
+        if (!user?.active) return next(new Error('UNAUTHORIZED'));
+        client.data.user = user;
+        client.data.expiresAt = payload.exp * 1000;
+        next();
+      } catch (error) {
+        next(new Error(error?.name === 'TokenExpiredError' ? 'SESSION_EXPIRED' : 'UNAUTHORIZED'));
+      }
+    });
+  }
+
   handleConnection(client: Socket) {
-    const userId = client.handshake.query.userId as string;
-    const userName = client.handshake.query.userName as string;
-    if (userId) {
-      this.connectedUsers.set(userId, client.id);
-      this.server.emit('userConnected', { userId, userName, connected: true });
-    }
+    const user = client.data.user;
+    if (!user) { client.disconnect(true); return; }
+    const sockets = this.connectedUsers.get(user.id) || new Set<string>();
+    sockets.add(client.id);
+    this.connectedUsers.set(user.id, sockets);
+    client.join(`user:${user.id}`);
+    if (['ADMIN', 'SUPERADMIN'].includes(user.role)) client.join('admins');
+    if (user.role === 'CASHIER') client.join('cashiers');
+    client.data.expiryTimer = setTimeout(() => client.disconnect(true), Math.max(0, Math.min(client.data.expiresAt - Date.now(), 2_147_483_647)));
+    if (sockets.size === 1) this.server.emit('userConnected', { userId: user.id, userName: user.name, connected: true });
   }
 
   handleDisconnect(client: Socket) {
-    let disconnectedUserId: string | null = null;
-    for (const [userId, socketId] of this.connectedUsers.entries()) {
-      if (socketId === client.id) {
-        this.connectedUsers.delete(userId);
-        disconnectedUserId = userId;
-        break;
-      }
-    }
-
-    if (disconnectedUserId) {
-      this.server.emit('userDisconnected', { userId: disconnectedUserId });
-      
-      for (const [orderId, operator] of this.activeOperators.entries()) {
-        if (operator.userId === disconnectedUserId) {
-          this.activeOperators.delete(orderId);
-          this.server.emit('orderUnassigned', { orderId });
-        }
+    clearTimeout(client.data.expiryTimer);
+    const userId = client.data.user?.id;
+    if (!userId) return;
+    const sockets = this.connectedUsers.get(userId);
+    sockets?.delete(client.id);
+    if (sockets?.size) return;
+    this.connectedUsers.delete(userId);
+    this.server.emit('userDisconnected', { userId });
+    for (const [orderId, operator] of this.activeOperators.entries()) {
+      if (operator.userId === userId) {
+        this.activeOperators.delete(orderId);
+        this.server.emit('orderUnassigned', { orderId });
       }
     }
   }
 
   @SubscribeMessage('joinRoom')
   handleJoinRoom(client: Socket, room: string) {
-    client.join(room);
+    const user = client.data.user;
+    if (!user || typeof room !== 'string') return;
+    if (room === `user:${user.id}` || (room === 'admins' && ['ADMIN', 'SUPERADMIN'].includes(user.role)) || (room === 'cashiers' && user.role === 'CASHIER')) client.join(room);
   }
 
   @SubscribeMessage('leaveRoom')
@@ -52,6 +76,9 @@ export class SocketGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
   @SubscribeMessage('claimOrder')
   handleClaimOrder(client: Socket, data: { orderId: string; userId: string; userName: string }) {
+    const user = client.data.user;
+    if (!user || !['ADMIN', 'SUPERADMIN', 'CASHIER', 'DELIVERY_MANAGER'].includes(user.role) || typeof data?.orderId !== 'string') return;
+    data = { ...data, userId: user.id, userName: user.name };
     const existing = this.activeOperators.get(data.orderId);
     if (existing && existing.userId !== data.userId) {
       client.emit('orderAlreadyClaimed', { orderId: data.orderId, operator: existing });
@@ -73,6 +100,8 @@ export class SocketGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
   @SubscribeMessage('releaseOrder')
   handleReleaseOrder(client: Socket, data: { orderId: string; userId: string }) {
+    if (!client.data.user || typeof data?.orderId !== 'string') return;
+    data = { ...data, userId: client.data.user.id };
     const existing = this.activeOperators.get(data.orderId);
     if (existing && existing.userId === data.userId) {
       this.activeOperators.delete(data.orderId);
@@ -118,10 +147,7 @@ export class SocketGateway implements OnGatewayConnection, OnGatewayDisconnect {
   }
 
   emitNewNotification(userId: string, notification: any) {
-    const socketId = this.connectedUsers.get(userId);
-    if (socketId) {
-      this.server.to(socketId).emit('newNotification', notification);
-    }
+    this.server.to(`user:${userId}`).emit('newNotification', notification);
   }
 
   emitRankingUpdate(ranking: any) {
@@ -130,6 +156,50 @@ export class SocketGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
   emitDashboardUpdate(stats: any) {
     this.server.emit('dashboardUpdated', stats);
+  }
+
+  emitTableCreated(table: any) {
+    this.server.emit('tableCreated', table);
+    this.server.emit('tableUpdated', table);
+  }
+
+  emitTableUpdated(table: any) {
+    this.server.emit('tableUpdated', table);
+  }
+
+  emitTableClosed(table: any) {
+    this.server.emit('tableClosed', table);
+    this.server.emit('tableUpdated', table);
+  }
+
+  emitKitchenTicketCreated(ticket: any) {
+    this.server.to(`kitchen:${ticket.stationId}`).emit('kitchenTicketCreated', ticket);
+    if (ticket.assignedToId) this.server.to(`user:${ticket.assignedToId}`).emit('kitchenTicketCreated', ticket);
+    this.server.emit('kitchenTicketUpdated', ticket);
+  }
+
+  emitKitchenTicketUpdated(ticket: any) {
+    this.server.to(`kitchen:${ticket.stationId}`).emit('kitchenTicketUpdated', ticket);
+    if (ticket.assignedToId) this.server.to(`user:${ticket.assignedToId}`).emit('kitchenTicketUpdated', ticket);
+    this.server.emit('kitchenTicketUpdated', ticket);
+  }
+
+  emitKitchenTicketReady(waiterId: string, ticket: any) {
+    this.server.to(`user:${waiterId}`).emit('kitchenTicketReady', ticket);
+
+  }
+
+  emitPaymentSubmitted(payload: any) {
+    this.server.to('admins').to('cashiers').emit('paymentSubmitted', payload);
+  }
+
+  emitPaymentValidated(payload: any) {
+    this.server.emit('paymentValidated', payload);
+
+  }
+
+  emitPaymentRejected(waiterId: string, payload: any) {
+    this.server.to('admins').to('cashiers').to(`user:${waiterId}`).emit('paymentRejected', payload);
   }
 
   emitForceRefresh(payload: { triggeredBy: string; triggeredByName: string }) {

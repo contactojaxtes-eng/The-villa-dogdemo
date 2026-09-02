@@ -1,7 +1,8 @@
-import { Injectable, NotFoundException, BadRequestException, Inject, forwardRef } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, Inject, forwardRef, Optional } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { SocketGateway } from '../socket/socket.gateway';
 import { WhatsappService } from '../whatsapp/whatsapp.service';
+import { TablesService } from '../tables/tables.service';
 
 @Injectable()
 export class PaymentsService {
@@ -9,6 +10,7 @@ export class PaymentsService {
     private prisma: PrismaService,
     private socketGateway: SocketGateway,
     @Inject(forwardRef(() => WhatsappService)) private whatsappService: WhatsappService,
+    @Optional() @Inject(forwardRef(() => TablesService)) private tablesService?: TablesService,
   ) {}
 
   async findAll(params: { status?: string; method?: string; date?: string }, cashierId?: string) {
@@ -264,6 +266,10 @@ export class PaymentsService {
       throw new BadRequestException(`No se puede cerrar la caja. Hay ${pendingCount} pedido(s) activo(s) pendiente(s) de entrega o cobro. Por favor finalízalos o cancélalos antes de cerrar el turno.`);
     }
 
+    if (this.tablesService) {
+      await this.tablesService.assertNoOpenTableWork(targetRegisterId);
+    }
+
     const targetUserIdForStats = openClosing ? openClosing.userId : userId;
     const stats = await this.getCashClosingToday(targetUserIdForStats, data.cashRegisterId);
 
@@ -323,6 +329,9 @@ export class PaymentsService {
     this.socketGateway.server.emit('cashStatusChanged', { isOpen: !!anyOpen });
     this.socketGateway.server.emit('cashRegistersChanged');
     this.socketGateway.server.emit('whatsappSessionUpdated', { cashClosed: true, unassignedAll: true });
+    if (this.tablesService) {
+      await this.tablesService.purgeProofsForClosing(closing.id);
+    }
     return closing;
   }
 

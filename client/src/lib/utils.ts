@@ -46,7 +46,7 @@ export function getStatusColor(status: string): string {
     PREPARING: '#3b82f6',
     READY: '#10b981',
     IN_ROUTE: '#8b5cf6',
-    DELIVERED: '#90BF50',
+    DELIVERED: '#F97316',
     CANCELLED: '#ef4444',
     CONFIRMED: '#10b981',
     REJECTED: '#ef4444',

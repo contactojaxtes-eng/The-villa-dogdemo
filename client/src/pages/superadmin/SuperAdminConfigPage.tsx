@@ -207,16 +207,16 @@ export default function SuperAdminConfigPage() {
   if (loading) {
     return (
       <div className="flex flex-col items-center justify-center py-32 text-[#64748B] min-h-[80vh] bg-[#F6F7F9] rounded-[2rem] border border-[#E5E7EB]">
-        <Loader2 className="h-8 w-8 animate-spin text-[#1E40AF]" />
-        <p className="mt-4 text-xs font-mono uppercase tracking-widest text-[#1E40AF]/50 animate-pulse">Loading Configurations...</p>
+        <Loader2 className="h-8 w-8 animate-spin text-[#7A1F2B]" />
+        <p className="mt-4 text-xs font-mono uppercase tracking-widest text-[#7A1F2B]/50 animate-pulse">Loading Configurations...</p>
       </div>
     )
   }
 
   return (
     <div className="min-h-[85vh] bg-[#F6F7F9] rounded-[2rem] border border-[#E5E7EB] p-4 md:p-8 text-[#334155] relative overflow-hidden shadow-2xl">
-      <div className="absolute top-0 left-0 w-full h-[500px] bg-gradient-to-b from-[#1E40AF]/5 to-transparent pointer-events-none" />
-      <div className="absolute top-0 right-0 w-[500px] h-[500px] bg-[radial-gradient(circle_at_top_right,rgba(30,64,175,0.04),transparent_50%)] pointer-events-none" />
+      <div className="absolute top-0 left-0 w-full h-[500px] bg-gradient-to-b from-[#7A1F2B]/5 to-transparent pointer-events-none" />
+      <div className="absolute top-0 right-0 w-[500px] h-[500px] bg-[radial-gradient(circle_at_top_right,rgba(249,115,22,0.05),transparent_50%)] pointer-events-none" />
       
       <motion.div variants={containerVariants} initial="hidden" animate="visible" className="relative z-10 space-y-8">
         
@@ -244,7 +244,7 @@ export default function SuperAdminConfigPage() {
           {/* SMTP Config */}
           <motion.div variants={itemVariants} className="bg-[#FFFFFF] rounded-2xl border border-[#E2E8F0] shadow-sm overflow-hidden flex flex-col">
             <div className="p-4 border-b border-[#E5E7EB] bg-[#F6F7F9]/50 flex items-center gap-3">
-              <div className="p-2 bg-[#1E40AF]/10 rounded-lg text-[#1E40AF]">
+              <div className="p-2 bg-[#7A1F2B]/10 rounded-lg text-[#7A1F2B]">
                 <Mail className="h-5 w-5" />
               </div>
               <div>
@@ -256,33 +256,33 @@ export default function SuperAdminConfigPage() {
             <div className="p-6 space-y-4 flex-1">
               <div className="space-y-1.5">
                 <label className="text-[10px] font-mono text-[#64748B] uppercase tracking-wider">Host SMTP</label>
-                <input type="text" className="w-full h-10 px-3 bg-[#F6F7F9] border border-[#E2E8F0] rounded-xl text-sm font-mono text-[#0F172A] focus:outline-none focus:border-[#1E40AF]/50 transition-colors" value={smtp.host} onChange={e => setSmtp(p => ({ ...p, host: e.target.value }))} placeholder="smtp.gmail.com" />
+                <input type="text" className="w-full h-10 px-3 bg-[#F6F7F9] border border-[#E2E8F0] rounded-xl text-sm font-mono text-[#0F172A] focus:outline-none focus:border-[#7A1F2B]/50 transition-colors" value={smtp.host} onChange={e => setSmtp(p => ({ ...p, host: e.target.value }))} placeholder="smtp.gmail.com" />
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-1.5">
                   <label className="text-[10px] font-mono text-[#64748B] uppercase tracking-wider">Port</label>
-                  <input type="number" className="w-full h-10 px-3 bg-[#F6F7F9] border border-[#E2E8F0] rounded-xl text-sm font-mono text-[#0F172A] focus:outline-none focus:border-[#1E40AF]/50 transition-colors" value={smtp.port} onChange={e => setSmtp(p => ({ ...p, port: Number(e.target.value) }))} />
+                  <input type="number" className="w-full h-10 px-3 bg-[#F6F7F9] border border-[#E2E8F0] rounded-xl text-sm font-mono text-[#0F172A] focus:outline-none focus:border-[#7A1F2B]/50 transition-colors" value={smtp.port} onChange={e => setSmtp(p => ({ ...p, port: Number(e.target.value) }))} />
                 </div>
                 <div className="space-y-1.5">
                   <label className="text-[10px] font-mono text-[#64748B] uppercase tracking-wider">Usuario (Email)</label>
-                  <input type="text" className="w-full h-10 px-3 bg-[#F6F7F9] border border-[#E2E8F0] rounded-xl text-sm font-mono text-[#0F172A] focus:outline-none focus:border-[#1E40AF]/50 transition-colors" value={smtp.user} onChange={e => setSmtp(p => ({ ...p, user: e.target.value }))} placeholder="correo@gmail.com" />
+                  <input type="text" className="w-full h-10 px-3 bg-[#F6F7F9] border border-[#E2E8F0] rounded-xl text-sm font-mono text-[#0F172A] focus:outline-none focus:border-[#7A1F2B]/50 transition-colors" value={smtp.user} onChange={e => setSmtp(p => ({ ...p, user: e.target.value }))} placeholder="correo@gmail.com" />
                 </div>
               </div>
               <div className="space-y-1.5">
                 <label className="text-[10px] font-mono text-[#64748B] uppercase tracking-wider flex justify-between">
                   <span>Contraseña / App Password</span>
-                  {smtp.passConfigured && <span className="text-[#1E40AF] flex items-center gap-1"><Lock className="h-3 w-3" /> SECURE</span>}
+                  {smtp.passConfigured && <span className="text-[#7A1F2B] flex items-center gap-1"><Lock className="h-3 w-3" /> SECURE</span>}
                 </label>
-                <input type="password" className="w-full h-10 px-3 bg-[#F6F7F9] border border-[#E2E8F0] rounded-xl text-sm font-mono text-[#0F172A] focus:outline-none focus:border-[#1E40AF]/50 transition-colors" value={smtpPass} onChange={e => setSmtpPass(e.target.value)} placeholder={smtp.passConfigured ? '[REDACTED] - Escribir para cambiar' : '••••••••'} />
+                <input type="password" className="w-full h-10 px-3 bg-[#F6F7F9] border border-[#E2E8F0] rounded-xl text-sm font-mono text-[#0F172A] focus:outline-none focus:border-[#7A1F2B]/50 transition-colors" value={smtpPass} onChange={e => setSmtpPass(e.target.value)} placeholder={smtp.passConfigured ? '[REDACTED] - Escribir para cambiar' : '••••••••'} />
               </div>
               <div className="space-y-1.5">
                 <label className="text-[10px] font-mono text-[#64748B] uppercase tracking-wider">Correo Remitente (FROM)</label>
-                <input type="text" className="w-full h-10 px-3 bg-[#F6F7F9] border border-[#E2E8F0] rounded-xl text-sm font-mono text-[#0F172A] focus:outline-none focus:border-[#1E40AF]/50 transition-colors" value={smtp.from} onChange={e => setSmtp(p => ({ ...p, from: e.target.value }))} placeholder="notificaciones@thevilladog.local" />
+                <input type="text" className="w-full h-10 px-3 bg-[#F6F7F9] border border-[#E2E8F0] rounded-xl text-sm font-mono text-[#0F172A] focus:outline-none focus:border-[#7A1F2B]/50 transition-colors" value={smtp.from} onChange={e => setSmtp(p => ({ ...p, from: e.target.value }))} placeholder="notificaciones@thevilladog.local" />
               </div>
             </div>
             
             <div className="p-4 bg-[#F6F7F9]/30 border-t border-[#E5E7EB] space-y-4">
-              <button onClick={saveSmtp} disabled={savingSmtp} className="w-full h-10 flex items-center justify-center gap-2 bg-[#1E40AF]/10 hover:bg-[#1E40AF]/20 text-[#1E40AF] border border-[#1E40AF]/30 font-mono font-bold rounded-xl text-xs uppercase tracking-wider transition-colors cursor-pointer">
+              <button onClick={saveSmtp} disabled={savingSmtp} className="w-full h-10 flex items-center justify-center gap-2 bg-[#7A1F2B]/10 hover:bg-[#7A1F2B]/20 text-[#7A1F2B] border border-[#7A1F2B]/30 font-mono font-bold rounded-xl text-xs uppercase tracking-wider transition-colors cursor-pointer">
                 {savingSmtp ? <Loader2 className="h-4 w-4 animate-spin" /> : <><Save className="h-4 w-4" /> COMMIT SMTP CHANGES</>}
               </button>
               
@@ -298,7 +298,7 @@ export default function SuperAdminConfigPage() {
           {/* WhatsApp Config */}
           <motion.div variants={itemVariants} className="bg-[#FFFFFF] rounded-2xl border border-[#E2E8F0] shadow-sm overflow-hidden flex flex-col">
             <div className="p-4 border-b border-[#E5E7EB] bg-[#F6F7F9]/50 flex items-center gap-3">
-              <div className="p-2 bg-[#1E40AF]/10 rounded-lg text-[#1E40AF]">
+              <div className="p-2 bg-[#7A1F2B]/10 rounded-lg text-[#7A1F2B]">
                 <MessageCircle className="h-5 w-5" />
               </div>
               <div className="flex-1">
@@ -306,7 +306,7 @@ export default function SuperAdminConfigPage() {
                 <p className="text-[10px] font-mono text-[#64748B]">Conexión con Meta / Graph API</p>
               </div>
               {wa.configured && (
-                <div className="flex items-center gap-1.5 text-[9px] font-mono font-bold text-[#1E40AF] border border-[#1E40AF]/30 bg-[#1E40AF]/10 px-2 py-1 rounded">
+                <div className="flex items-center gap-1.5 text-[9px] font-mono font-bold text-[#7A1F2B] border border-[#7A1F2B]/30 bg-[#7A1F2B]/10 px-2 py-1 rounded">
                   <CheckCircle2 className="h-3 w-3" /> CONNECTED
                 </div>
               )}
@@ -323,50 +323,50 @@ export default function SuperAdminConfigPage() {
                   type="checkbox"
                   checked={wa.chatbotEnabled !== false}
                   onChange={e => setWa(p => ({ ...p, chatbotEnabled: e.target.checked }))}
-                  className="h-5 w-5 accent-[#1E40AF] rounded cursor-pointer shrink-0 ml-4"
+                  className="h-5 w-5 accent-[#7A1F2B] rounded cursor-pointer shrink-0 ml-4"
                 />
               </label>
 
               <div className="space-y-1.5">
                 <label className="text-[10px] font-mono text-[#64748B] uppercase tracking-wider flex items-center gap-1">
-                  <Key className="h-3 w-3 text-[#1E40AF]" /> Phone Number ID
+                  <Key className="h-3 w-3 text-[#7A1F2B]" /> Phone Number ID
                 </label>
                 <div className="relative">
                   <Terminal className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-[#94A3B8]" />
-                  <input type="text" className="w-full h-10 pl-9 pr-3 bg-[#F6F7F9] border border-[#E2E8F0] rounded-xl text-sm font-mono text-[#0F172A] focus:outline-none focus:border-[#1E40AF]/50 transition-colors" value={wa.phoneId} onChange={e => setWa(p => ({ ...p, phoneId: e.target.value }))} />
+                  <input type="text" className="w-full h-10 pl-9 pr-3 bg-[#F6F7F9] border border-[#E2E8F0] rounded-xl text-sm font-mono text-[#0F172A] focus:outline-none focus:border-[#7A1F2B]/50 transition-colors" value={wa.phoneId} onChange={e => setWa(p => ({ ...p, phoneId: e.target.value }))} />
                 </div>
               </div>
               <div className="space-y-1.5">
                 <label className="text-[10px] font-mono text-[#64748B] uppercase tracking-wider flex items-center gap-1">
-                  <Headphones className="h-3 w-3 text-[#1E40AF]" /> Teléfono Comercial
+                  <Headphones className="h-3 w-3 text-[#7A1F2B]" /> Teléfono Comercial
                 </label>
-                <input type="text" className="w-full h-10 px-3 bg-[#F6F7F9] border border-[#E2E8F0] rounded-xl text-sm font-mono text-[#0F172A] focus:outline-none focus:border-[#1E40AF]/50 transition-colors" value={wa.businessPhone} onChange={e => setWa(p => ({ ...p, businessPhone: e.target.value }))} />
+                <input type="text" className="w-full h-10 px-3 bg-[#F6F7F9] border border-[#E2E8F0] rounded-xl text-sm font-mono text-[#0F172A] focus:outline-none focus:border-[#7A1F2B]/50 transition-colors" value={wa.businessPhone} onChange={e => setWa(p => ({ ...p, businessPhone: e.target.value }))} />
               </div>
               <div className="space-y-1.5">
                 <label className="text-[10px] font-mono text-[#64748B] uppercase tracking-wider flex justify-between">
                   <span>Graph API Access Token</span>
                   <span className="text-[#94A3B8]">BEARER</span>
                 </label>
-                <input type="password" className="w-full h-10 px-3 bg-[#F6F7F9] border border-[#E2E8F0] rounded-xl text-sm font-mono text-[#1E40AF] focus:outline-none focus:border-[#1E40AF]/50 transition-colors" value={waToken} onChange={e => setWaToken(e.target.value)} placeholder="[REDACTED] - Escribir nuevo token" />
+                <input type="password" className="w-full h-10 px-3 bg-[#F6F7F9] border border-[#E2E8F0] rounded-xl text-sm font-mono text-[#7A1F2B] focus:outline-none focus:border-[#7A1F2B]/50 transition-colors" value={waToken} onChange={e => setWaToken(e.target.value)} placeholder="[REDACTED] - Escribir nuevo token" />
               </div>
               <div className="space-y-1.5">
                 <label className="text-[10px] font-mono text-[#64748B] uppercase tracking-wider flex justify-between">
                   <span>Webhook Verify Token</span>
-                  {wa.verifyTokenConfigured && <span className="text-[#1E40AF] flex items-center gap-1"><Lock className="h-3 w-3" /> SECURE</span>}
+                  {wa.verifyTokenConfigured && <span className="text-[#7A1F2B] flex items-center gap-1"><Lock className="h-3 w-3" /> SECURE</span>}
                 </label>
-                <input type="password" className="w-full h-10 px-3 bg-[#F6F7F9] border border-[#E2E8F0] rounded-xl text-sm font-mono text-[#1E40AF] focus:outline-none focus:border-[#1E40AF]/50 transition-colors" value={waVerifyToken} onChange={e => setWaVerifyToken(e.target.value)} placeholder="[REDACTED] - Escribir para cambiar" />
+                <input type="password" className="w-full h-10 px-3 bg-[#F6F7F9] border border-[#E2E8F0] rounded-xl text-sm font-mono text-[#7A1F2B] focus:outline-none focus:border-[#7A1F2B]/50 transition-colors" value={waVerifyToken} onChange={e => setWaVerifyToken(e.target.value)} placeholder="[REDACTED] - Escribir para cambiar" />
               </div>
 
               <div className="space-y-3 pt-3 border-t border-[#E2E8F0]">
                 <div className="flex items-center justify-between">
-                  <label className="text-[10px] font-mono text-[#64748B] uppercase tracking-wider flex items-center gap-1.5 text-[#1E40AF] font-bold">
+                  <label className="text-[10px] font-mono text-[#64748B] uppercase tracking-wider flex items-center gap-1.5 text-[#7A1F2B] font-bold">
                     <Key className="h-3.5 w-3.5" /> GEMINI API KEYS (Soporte Multi-Cuenta)
                   </label>
                   <button
                     type="button"
                     onClick={handleTestGemini}
                     disabled={testingGemini}
-                    className="h-8 px-3 rounded-lg border border-[#1E40AF]/30 hover:bg-[#1E40AF]/20 text-[#1E40AF] text-[10px] uppercase font-bold transition-colors cursor-pointer flex items-center gap-1 shrink-0"
+                    className="h-8 px-3 rounded-lg border border-[#7A1F2B]/30 hover:bg-[#7A1F2B]/20 text-[#7A1F2B] text-[10px] uppercase font-bold transition-colors cursor-pointer flex items-center gap-1 shrink-0"
                   >
                     {testingGemini ? <Loader2 className="h-3 w-3 animate-spin" /> : 'Probar Llaves'}
                   </button>
@@ -393,7 +393,7 @@ export default function SuperAdminConfigPage() {
                                 ? "border-emerald-500/40 text-emerald-700 dark:text-emerald-400 font-bold focus:border-emerald-500"
                                 : isNewValid
                                 ? "border-blue-500/40 text-blue-700 dark:text-blue-400 focus:border-blue-500"
-                                : "border-[#E2E8F0] text-[#0F172A] focus:border-[#1E40AF]/50"
+                                : "border-[#E2E8F0] text-[#0F172A] focus:border-[#7A1F2B]/50"
                             )} 
                             type="text" 
                             value={keyVal} 
@@ -434,9 +434,9 @@ export default function SuperAdminConfigPage() {
                 <button
                   type="button"
                   onClick={handleAddKey}
-                  className="w-full h-9 rounded-xl border border-dashed border-[#1E40AF]/40 hover:bg-[#1E40AF]/10 text-[#1E40AF] text-xs font-bold font-mono flex items-center justify-center gap-1.5 transition-colors cursor-pointer mt-1"
+                  className="w-full h-9 rounded-xl border border-dashed border-[#7A1F2B]/40 hover:bg-[#7A1F2B]/10 text-[#7A1F2B] text-xs font-bold font-mono flex items-center justify-center gap-1.5 transition-colors cursor-pointer mt-1"
                 >
-                  <PlusCircle className="h-4 w-4 text-[#1E40AF]" /> + AGREGAR OTRA API KEY (OTRO CORREO)
+                  <PlusCircle className="h-4 w-4 text-[#7A1F2B]" /> + AGREGAR OTRA API KEY (OTRO CORREO)
                 </button>
 
                 <p className="text-[10px] text-[#64748B] leading-tight pt-1">
@@ -456,10 +456,10 @@ export default function SuperAdminConfigPage() {
                     <div className="p-3 rounded-xl bg-[#F6F7F9]/80 border border-[#E2E8F0] space-y-2 mt-2">
                       <div className="flex items-center justify-between text-xs font-mono">
                         <span className="text-[#334155] font-bold flex items-center gap-1.5">
-                          <Activity className="h-3.5 w-3.5 text-[#1E40AF] animate-pulse" />
+                          <Activity className="h-3.5 w-3.5 text-[#7A1F2B] animate-pulse" />
                           Uso de IA Hoy:
                         </span>
-                        <span className="text-[#1E40AF] font-extrabold">
+                        <span className="text-[#7A1F2B] font-extrabold">
                           {usedToday.toLocaleString('de-DE')} / {totalCapacity.toLocaleString('de-DE')} sol.
                         </span>
                       </div>
@@ -468,7 +468,7 @@ export default function SuperAdminConfigPage() {
                       <div className="w-full h-2 rounded-full bg-[#E2E8F0] overflow-hidden">
                         <div 
                           className={`h-full transition-all duration-500 ${
-                            percentageUsed > 85 ? 'bg-red-500' : percentageUsed > 60 ? 'bg-amber-500' : 'bg-[#1E40AF]'
+                            percentageUsed > 85 ? 'bg-red-500' : percentageUsed > 60 ? 'bg-amber-500' : 'bg-[#7A1F2B]'
                           }`}
                           style={{ width: `${Math.max(3, percentageUsed)}%` }}
                         />
@@ -476,7 +476,7 @@ export default function SuperAdminConfigPage() {
 
                       <div className="flex items-center justify-between text-[10px] text-[#64748B] font-mono">
                         <span>{keysCount || 1} Llave(s) activa(s)</span>
-                        <span className="text-[#1E40AF] font-bold">{remainingToday.toLocaleString('de-DE')} disponibles hoy</span>
+                        <span className="text-[#7A1F2B] font-bold">{remainingToday.toLocaleString('de-DE')} disponibles hoy</span>
                       </div>
                     </div>
                   );
@@ -487,7 +487,7 @@ export default function SuperAdminConfigPage() {
             </div>
             
             <div className="p-4 bg-[#F6F7F9]/30 border-t border-[#E5E7EB]">
-              <button onClick={saveWhatsapp} disabled={savingWa} className="w-full h-10 flex items-center justify-center gap-2 bg-[#1E40AF]/10 hover:bg-[#1E40AF]/20 text-[#1E40AF] border border-[#1E40AF]/30 font-mono font-bold rounded-xl text-xs uppercase tracking-wider transition-colors cursor-pointer">
+              <button onClick={saveWhatsapp} disabled={savingWa} className="w-full h-10 flex items-center justify-center gap-2 bg-[#7A1F2B]/10 hover:bg-[#7A1F2B]/20 text-[#7A1F2B] border border-[#7A1F2B]/30 font-mono font-bold rounded-xl text-xs uppercase tracking-wider transition-colors cursor-pointer">
                 {savingWa ? <Loader2 className="h-4 w-4 animate-spin" /> : <><Save className="h-4 w-4" /> COMMIT META CONFIG</>}
               </button>
             </div>

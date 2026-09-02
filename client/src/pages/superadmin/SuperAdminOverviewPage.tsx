@@ -27,10 +27,12 @@ interface UserData {
 }
 
 const roleLabels: Record<string, string> = {
-  SUPERADMIN: 'Super Admin',
+  SUPERADMIN: 'Super Administrador',
   ADMIN: 'Administrador',
-  CASHIER: 'Cajero',
-  DELIVERY_MANAGER: 'Gestor Domicilios',
+  CASHIER: 'Cajero / Facturación',
+  DELIVERY_MANAGER: 'Gestor de Domicilios',
+  WAITER: 'Mesero',
+  KITCHEN: 'Cocinero',
   ACCOUNTANT: 'Contador',
   ACCOUNTING_ASSISTANT: 'Auxiliar Contable',
 }
@@ -106,7 +108,7 @@ export default function SuperAdminOverviewPage() {
   if (loading) {
     return (
       <div className="flex flex-col items-center justify-center py-32 text-[#64748B] min-h-[80vh] bg-[#FFFFFF] rounded-3xl border border-[#E5E7EB]">
-        <Loader2 className="h-8 w-8 animate-spin text-[#1E40AF]" />
+        <Loader2 className="h-8 w-8 animate-spin text-[#7A1F2B]" />
         <p className="mt-4 text-sm font-medium text-[#64748B]">Cargando Panel de Control...</p>
       </div>
     )
@@ -114,17 +116,17 @@ export default function SuperAdminOverviewPage() {
 
   const hasErrors = (data?.errorLogsLast24h ?? 0) > 0
   const stats = [
-    { label: 'Pedidos Hoy', value: data?.ordersToday ?? 0, icon: ShoppingBag, color: 'from-[#1E40AF]/15 to-transparent', text: 'text-[#1E40AF]', border: 'border-[#1E40AF]/20' },
-    { label: 'Pedidos Totales', value: data?.ordersTotal ?? 0, icon: Activity, color: 'from-[#1E40AF]/15 to-transparent', text: 'text-[#0F172A]', border: 'border-[#E2E8F0]' },
-    { label: 'Sesiones WhatsApp', value: data?.whatsappSessionsActive ?? 0, icon: MessageCircle, color: 'from-[#1E40AF]/15 to-transparent', text: 'text-[#0F172A]', border: 'border-[#E2E8F0]' },
-    { label: 'Errores (24h)', value: data?.errorLogsLast24h ?? 0, icon: AlertTriangle, color: hasErrors ? 'from-red-500/15 to-transparent' : 'from-[#1E40AF]/15 to-transparent', text: hasErrors ? 'text-red-600' : 'text-[#0F172A]', border: hasErrors ? 'border-red-200' : 'border-[#E2E8F0]' },
+    { label: 'Pedidos Hoy', value: data?.ordersToday ?? 0, icon: ShoppingBag, color: 'from-[#7A1F2B]/15 to-transparent', text: 'text-[#7A1F2B]', border: 'border-[#7A1F2B]/20' },
+    { label: 'Pedidos Totales', value: data?.ordersTotal ?? 0, icon: Activity, color: 'from-[#7A1F2B]/15 to-transparent', text: 'text-[#0F172A]', border: 'border-[#E2E8F0]' },
+    { label: 'Sesiones WhatsApp', value: data?.whatsappSessionsActive ?? 0, icon: MessageCircle, color: 'from-[#7A1F2B]/15 to-transparent', text: 'text-[#0F172A]', border: 'border-[#E2E8F0]' },
+    { label: 'Errores (24h)', value: data?.errorLogsLast24h ?? 0, icon: AlertTriangle, color: hasErrors ? 'from-red-500/15 to-transparent' : 'from-[#7A1F2B]/15 to-transparent', text: hasErrors ? 'text-red-600' : 'text-[#0F172A]', border: hasErrors ? 'border-red-200' : 'border-[#E2E8F0]' },
   ]
 
   return (
     <div className="min-h-[85vh] bg-[#F6F7F9] rounded-[2rem] border border-[#E5E7EB] p-4 md:p-8 text-[#334155] relative overflow-hidden shadow-2xl">
       {/* Background Soft Gradients */}
-      <div className="absolute top-0 left-0 w-full h-[500px] bg-gradient-to-b from-[#1E40AF]/5 to-transparent pointer-events-none" />
-      <div className="absolute top-0 right-0 w-[500px] h-[500px] bg-[radial-gradient(circle_at_top_right,rgba(30,64,175,0.03),transparent_50%)] pointer-events-none" />
+      <div className="absolute top-0 left-0 w-full h-[500px] bg-gradient-to-b from-[#7A1F2B]/5 to-transparent pointer-events-none" />
+      <div className="absolute top-0 right-0 w-[500px] h-[500px] bg-[radial-gradient(circle_at_top_right,rgba(249,115,22,0.05),transparent_50%)] pointer-events-none" />
       
       <motion.div variants={containerVariants} initial="hidden" animate="visible" className="relative z-10 space-y-8">
         
@@ -144,7 +146,7 @@ export default function SuperAdminOverviewPage() {
             <button
               onClick={handleBroadcastRefresh}
               disabled={refreshing}
-              className="flex items-center gap-2 px-4 py-2 bg-[#1E40AF]/10 hover:bg-[#1E40AF]/20 border border-[#1E40AF]/30 rounded-xl text-sm font-medium text-[#1E40AF] transition-colors cursor-pointer disabled:opacity-50"
+              className="flex items-center gap-2 px-4 py-2 bg-[#7A1F2B]/10 hover:bg-[#7A1F2B]/20 border border-[#7A1F2B]/30 rounded-xl text-sm font-medium text-[#7A1F2B] transition-colors cursor-pointer disabled:opacity-50"
               title="Recargar la página de todos los usuarios conectados"
             >
               <RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} /> Refrescar Sistema
@@ -181,7 +183,7 @@ export default function SuperAdminOverviewPage() {
             <div className="bg-[#FFFFFF] rounded-2xl border border-[#E5E7EB] p-6 h-full shadow-lg">
               <div className="flex items-center justify-between mb-6">
                 <h3 className="text-base font-bold text-[#0F172A] flex items-center gap-2">
-                  <Users className="h-5 w-5 text-[#1E40AF]" /> Acceso Rápido a Usuarios
+                  <Users className="h-5 w-5 text-[#7A1F2B]" /> Acceso Rápido a Usuarios
                 </h3>
               </div>
               
@@ -198,7 +200,7 @@ export default function SuperAdminOverviewPage() {
                       <button
                         onClick={() => handleImpersonate(u)}
                         disabled={impersonatingId === u.id}
-                        className="flex items-center justify-center h-8 w-8 rounded-lg bg-[#1E40AF]/10 text-[#1E40AF] hover:bg-[#1E40AF] hover:text-white transition-colors shrink-0 ml-3"
+                        className="flex items-center justify-center h-8 w-8 rounded-lg bg-[#7A1F2B]/10 text-[#7A1F2B] hover:bg-[#7A1F2B] hover:text-white transition-colors shrink-0 ml-3"
                         title={`Entrar como ${u.name}`}
                       >
                         {impersonatingId === u.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <LogIn className="h-4 w-4" />}
@@ -214,7 +216,7 @@ export default function SuperAdminOverviewPage() {
           <motion.div variants={itemVariants} className="lg:col-span-1">
             <div className="bg-[#FFFFFF] rounded-2xl border border-[#E5E7EB] p-6 h-full shadow-lg flex flex-col">
               <h3 className="text-base font-bold text-[#0F172A] flex items-center gap-2 mb-6">
-                <Database className="h-5 w-5 text-[#1E40AF]" /> Estado del Sistema
+                <Database className="h-5 w-5 text-[#7A1F2B]" /> Estado del Sistema
               </h3>
               
               <div className="space-y-4 flex-1">
@@ -227,14 +229,14 @@ export default function SuperAdminOverviewPage() {
                 
                 <div className="bg-[#F6F7F9] p-4 rounded-xl border border-[#E5E7EB] flex justify-between items-center">
                   <p className="text-sm text-[#334155]">Servicio de Correo</p>
-                  <span className={`px-2 py-1 rounded text-xs font-medium ${data?.smtpConfigured ? 'bg-[#1E40AF]/10 text-[#1E40AF]' : 'bg-red-50 text-red-600'}`}>
+                  <span className={`px-2 py-1 rounded text-xs font-medium ${data?.smtpConfigured ? 'bg-[#7A1F2B]/10 text-[#7A1F2B]' : 'bg-red-50 text-red-600'}`}>
                     {data?.smtpConfigured ? 'Activo' : 'Inactivo'}
                   </span>
                 </div>
 
                 <div className="bg-[#F6F7F9] p-4 rounded-xl border border-[#E5E7EB] flex justify-between items-center">
                   <p className="text-sm text-[#334155]">API WhatsApp</p>
-                  <span className={`px-2 py-1 rounded text-xs font-medium ${data?.whatsappConfigured ? 'bg-[#1E40AF]/10 text-[#1E40AF]' : 'bg-red-50 text-red-600'}`}>
+                  <span className={`px-2 py-1 rounded text-xs font-medium ${data?.whatsappConfigured ? 'bg-[#7A1F2B]/10 text-[#7A1F2B]' : 'bg-red-50 text-red-600'}`}>
                     {data?.whatsappConfigured ? 'Conectado' : 'Sin Conexión'}
                   </span>
                 </div>
@@ -242,7 +244,7 @@ export default function SuperAdminOverviewPage() {
                 <div className="pt-2">
                   <button
                     onClick={() => setShowBroadcastModal(true)}
-                    className="w-full py-3 px-4 rounded-xl font-bold text-xs bg-emerald-600 hover:bg-emerald-700 text-white shadow-md flex items-center justify-center gap-2 transition-all hover:scale-[1.01]"
+                    className="w-full py-3 px-4 rounded-xl font-bold text-xs bg-[#F97316] hover:bg-[#EA580C] text-[#17100D] shadow-md shadow-[#F97316]/20 flex items-center justify-center gap-2 transition-all hover:scale-[1.01]"
                   >
                     <Send className="h-4 w-4" />
                     🚀 Lanzar Envío Masivo de WhatsApp

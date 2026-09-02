@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, useRef } from 'react'
 import { useNavigate, Link, useSearchParams } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
-import { io } from 'socket.io-client'
+import { io } from '@/lib/socket'
 import { useAuth } from '@/hooks/useAuth'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -1132,7 +1132,8 @@ export default function NewOrderPage() {
       customerAddress: null,
       customerAddressReference: null,
       customerNeighborhood: null,
-      paymentMethod: null
+      paymentMethod: null,
+      zoneId: undefined
     }
   }
 
@@ -2682,7 +2683,7 @@ export default function NewOrderPage() {
               const normalized = catName.toLowerCase().trim()
               
               let CatIcon = UtensilsCrossed
-              let catColor = '#90BF50'
+              let catColor = '#F97316'
               let catDesc = 'Platos del menú preparados con ingredientes frescos'
               
               if (normalized.includes('pizza')) { CatIcon = Pizza; catColor = '#EF4444'; catDesc = 'Pizzas artesanales con salsa de la casa' }

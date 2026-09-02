@@ -13,7 +13,7 @@ export class DeliveryDriversController {
   constructor(private readonly deliveryDriversService: DeliveryDriversService) {}
 
   @Post()
-  @Roles('ADMIN', 'SUPERADMIN', 'CASHIER', 'ACCOUNTANT', 'ACCOUNTING_ASSISTANT')
+  @Roles('ADMIN', 'SUPERADMIN', 'CASHIER')
   @UseGuards(RolesGuard)
   @ApiOperation({ summary: 'Crear un nuevo domiciliario' })
   create(@Body() body: CreateDriverDto) {
@@ -44,7 +44,7 @@ export class DeliveryDriversController {
   }
 
   @Put(':id')
-  @Roles('ADMIN', 'SUPERADMIN', 'CASHIER', 'ACCOUNTANT', 'ACCOUNTING_ASSISTANT')
+  @Roles('ADMIN', 'SUPERADMIN', 'CASHIER')
   @UseGuards(RolesGuard)
   @ApiOperation({ summary: 'Actualizar un domiciliario' })
   update(@Param('id') id: string, @Body() body: UpdateDriverDto) {

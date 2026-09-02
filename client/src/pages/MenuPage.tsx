@@ -36,7 +36,7 @@ interface MenuCategory {
 const fadeUp = { hidden: { opacity: 0, y: 20 }, visible: { opacity: 1, y: 0, transition: { duration: 0.35, ease: [0.25, 0.46, 0.45, 0.94] as const } } }
 const stagger = { hidden: {}, visible: { transition: { staggerChildren: 0.05 } } }
 
-const categoryColors = ['#90BF50', '#3B82F6', '#F59E0B', '#8B5CF6', '#EC4899', '#14B8A6', '#F97316', '#6366F1']
+const categoryColors = ['#F97316', '#3B82F6', '#F59E0B', '#8B5CF6', '#EC4899', '#14B8A6', '#F97316', '#6366F1']
 
 function getCategoryColor(name: string, index: number) {
   const normalized = name.toLowerCase().trim()
@@ -173,7 +173,7 @@ export default function MenuPage() {
       {/* ── Top Bar ── */}
       <motion.div className="flex flex-wrap items-center justify-between gap-4" variants={fadeUp}>
         <div className="flex items-center gap-3.5">
-          <div className="flex h-12 w-12 items-center justify-center rounded-2xl shadow-lg shadow-[var(--accent)]/20" style={{ background: 'linear-gradient(135deg, var(--accent), #6aaa32)' }}>
+          <div className="flex h-12 w-12 items-center justify-center rounded-2xl shadow-lg shadow-[var(--accent)]/20" style={{ background: 'linear-gradient(135deg, var(--accent), #FBBF24)' }}>
             <UtensilsCrossed className="h-6 w-6 text-[var(--accent-fg)]" />
           </div>
           <div>

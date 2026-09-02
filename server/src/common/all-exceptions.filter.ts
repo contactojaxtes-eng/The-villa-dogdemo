@@ -3,6 +3,7 @@ import { PrismaService } from '../prisma/prisma.service';
 
 @Catch()
 export class AllExceptionsFilter implements ExceptionFilter {
+  private readonly recentErrors = new Map<string, number>();
   private readonly logger = new Logger(AllExceptionsFilter.name);
 
   constructor(private prisma: PrismaService) {}
@@ -30,11 +31,18 @@ export class AllExceptionsFilter implements ExceptionFilter {
       if (status < 500) return;
       const message = exception instanceof Error ? exception.message : String(exception);
       const stack = exception instanceof Error ? exception.stack : undefined;
+      const path = String(request?.path || request?.url || '').split('?')[0];
+      const key = `${request?.method}:${path}:${message?.slice(0, 200)}`;
+      const now = Date.now();
+      if (now - (this.recentErrors.get(key) || 0) < 60_000) return;
+      for (const [id, time] of this.recentErrors) if (now - time >= 60_000) this.recentErrors.delete(id);
+      if (this.recentErrors.size >= 100) this.recentErrors.delete(this.recentErrors.keys().next().value!);
+      this.recentErrors.set(key, now);
       await this.prisma.errorLog.create({
         data: {
           message: message?.slice(0, 2000) || 'Error desconocido',
           stack: stack?.slice(0, 5000),
-          path: request?.url,
+          path,
           method: request?.method,
           statusCode: status,
           userId: request?.user?.id,
