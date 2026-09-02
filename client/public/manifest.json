@@ -1,0 +1,23 @@
+{
+  "short_name": "The Villa Dog Chat",
+  "name": "The Villa Dog - WhatsApp Chat",
+  "icons": [
+    {
+      "src": "/the-villa-dog-logo.svg",
+      "sizes": "192x192",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/the-villa-dog-logo.svg",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ],
+  "start_url": "/chat",
+  "display": "standalone",
+  "theme_color": "#1C2B33",
+  "background_color": "#0E171B",
+  "orientation": "any"
+}

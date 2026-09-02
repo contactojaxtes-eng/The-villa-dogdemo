@@ -1,0 +1,270 @@
+@import url('https://fonts.googleapis.com/css2?family=Anton&family=Comfortaa:wght@300;400;500;600;700&family=Inter:wght@300;400;500;600;700;800&display=swap');
+@import "tailwindcss";
+
+/* ============ DESIGN TOKENS ============ */
+:root {
+  --radius: 0.75rem;
+
+  /* Backgrounds */
+  --bg-base: #0D0D0D;
+  --bg-panel: #1A1A1A;
+  --bg-elevated: #2A2A2A;
+  --bg-subtle: #111111;
+  --bg-input: #2A2A2A;
+  --bg-hover: #1A1A1A;
+
+  /* Text */
+  --text-primary: #FFFFFF;
+  --text-secondary: #999999;
+  --text-muted: #666666;
+  --text-placeholder: #666666;
+  --text-link: #AAAAAA;
+
+  /* Borders */
+  --border-default: #333333;
+  --border-subtle: #2A2A2A;
+
+  /* Brand / Accent */
+  --accent: #90BF50;
+  --accent-hover: #7AAF40;
+  --accent-fg: #0D0D0D;
+  --accent-muted: rgba(144, 191, 80, 0.15);
+  --accent-glow-a: rgba(144, 191, 80, 0.12);
+  --accent-glow-b: rgba(144, 191, 80, 0.08);
+  --accent-checker: rgba(144, 191, 80, 0.08);
+  --accent-card: rgba(144, 191, 80, 0.12);
+  --accent-border: rgba(144, 191, 80, 0.2);
+
+  /* Semantic */
+  --destructive: #EF4444;
+  --warning: #F59E0B;
+  --info: #3B82F6;
+  --success: #10B981;
+  --purple: #8B5CF6;
+
+  /* Overlay */
+  --overlay: rgba(0, 0, 0, 0.80);
+  --shadow-color: rgba(0, 0, 0, 0.5);
+}
+
+/* ============ MODO CLARO ============ */
+:root.light, html.light, .light {
+  --bg-base: #F4F5F7;
+  --bg-panel: #FFFFFF;
+  --bg-elevated: #F9FAFB;
+  --bg-subtle: #FFFFFF;
+  --bg-input: #FFFFFF;
+  --bg-hover: #F3F4F6;
+
+  --text-primary: #111827;
+  --text-secondary: #4B5563;
+  --text-muted: #9CA3AF;
+  --text-placeholder: #9CA3AF;
+  --text-link: #4B5563;
+
+  --border-default: #E5E7EB;
+  --border-subtle: #F3F4F6;
+
+  --accent: #90BF50;
+  --accent-hover: #7AAF40;
+  --accent-fg: #0D0D0D;
+  --accent-muted: rgba(144, 191, 80, 0.15);
+  --accent-glow-a: rgba(144, 191, 80, 0.12);
+  --accent-glow-b: rgba(144, 191, 80, 0.08);
+  --accent-checker: rgba(144, 191, 80, 0.08);
+  --accent-card: rgba(144, 191, 80, 0.12);
+  --accent-border: rgba(144, 191, 80, 0.2);
+
+  --destructive: #DC2626;
+  --warning: #D97706;
+  --info: #2563EB;
+  --success: #059669;
+  --purple: #7C3AED;
+
+  --overlay: rgba(0, 0, 0, 0.40);
+  --shadow-color: rgba(17, 24, 39, 0.08);
+}
+
+/* ============ BASE STYLES ============ */
+* {
+  font-family: 'Comfortaa', 'Inter', system-ui, -apple-system, sans-serif;
+}
+
+h1, h2, h3 {
+  font-family: 'Comfortaa', 'Inter', sans-serif;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+body {
+  min-height: 100vh;
+  background-color: var(--bg-base);
+  color: var(--text-primary);
+  background-image:
+    radial-gradient(circle at 0% 0%, var(--accent-glow-a) 0%, transparent 45%),
+    radial-gradient(circle at 100% 100%, var(--accent-glow-b) 0%, transparent 45%),
+    radial-gradient(circle at 50% 10%, rgba(144, 191, 80, 0.02) 0%, transparent 60%);
+  background-attachment: fixed;
+}
+
+.antifont {
+  font-family: 'Anton', sans-serif;
+  font-weight: 400;
+  letter-spacing: 0.03em;
+}
+
+.font-comfortaa {
+  font-family: 'Comfortaa', sans-serif;
+}
+
+/* ============ UTILITY CLASSES ============ */
+.niche-checker {
+  background-color: var(--bg-base);
+  background-image:
+    linear-gradient(45deg, var(--accent-checker) 25%, transparent 25%),
+    linear-gradient(-45deg, var(--accent-checker) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, var(--accent-checker) 75%),
+    linear-gradient(-45deg, transparent 75%, var(--accent-checker) 75%);
+  background-position: 0 0, 0 12px, 12px -12px, -12px 0;
+  background-size: 24px 24px;
+}
+
+.brand-card {
+  border: 1px solid var(--accent-border);
+  background:
+    linear-gradient(135deg, var(--accent-card), transparent 45%),
+    var(--bg-panel);
+  backdrop-filter: blur(12px);
+  box-shadow: 0 12px 40px -10px var(--shadow-color);
+}
+
+.brand-safe-area {
+  padding: clamp(0.75rem, 2vw, 1.5rem);
+}
+
+.no-scrollbar {
+  scrollbar-width: none;
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: var(--bg-base); }
+::-webkit-scrollbar-thumb { background: var(--border-default); border-radius: 9999px; }
+::-webkit-scrollbar-thumb:hover { background: var(--accent); }
+
+.niche-panel {
+  background: var(--bg-subtle);
+  border-radius: 16px;
+  border: 1px solid var(--border-subtle);
+}
+
+.niche-sidebar {
+  --bg-subtle: #90BF50;
+  --bg-base: #73A138;
+  --bg-panel: rgba(255, 255, 255, 0.15);
+  --bg-hover: rgba(255, 255, 255, 0.1);
+  --border-subtle: rgba(255, 255, 255, 0.15);
+  --text-primary: #FFFFFF;
+  --text-secondary: rgba(255, 255, 255, 0.9);
+  --text-muted: rgba(255, 255, 255, 0.6);
+  --text-link: rgba(255, 255, 255, 0.85);
+  --accent: #FFFFFF;
+  --accent-muted: rgba(255, 255, 255, 0.2);
+  --border-default: rgba(255, 255, 255, 0.25);
+
+  background: linear-gradient(180deg, var(--bg-subtle) 0%, var(--bg-base) 100%) !important;
+  border-right: 1px solid var(--border-subtle) !important;
+  backdrop-filter: blur(8px);
+}
+
+/* Overrides for logo container to keep it integrated with the green sidebar */
+.niche-sidebar .border-b a[href="/dashboard"] {
+  background-color: rgba(255, 255, 255, 0.1) !important;
+  border-color: rgba(255, 255, 255, 0.2) !important;
+}
+
+/* SuperAdmin: entorno claro corporativo (azul marino + dorado), sin importar el tema */
+.superadmin-shell {
+  --bg-base: #EEF1F5;
+  --bg-panel: #FFFFFF;
+  --bg-subtle: #FFFFFF;
+  --bg-hover: #F1F5F9;
+  --text-primary: #0F172A;
+  --text-secondary: #475569;
+  --text-muted: #94A3B8;
+  --text-link: #475569;
+  --border-default: #D8DEE6;
+  --border-subtle: #E5E9EF;
+  --accent: #1E40AF;
+  --accent-muted: rgba(30, 64, 175, 0.10);
+}
+
+.niche-sidebar.superadmin-sidebar {
+  --bg-subtle: #FFFFFF;
+  --bg-base: #F8FAFC;
+  --bg-panel: #FFFFFF;
+  --bg-hover: #F1F5F9;
+  --border-subtle: #E5E9EF;
+  --text-primary: #0F172A;
+  --text-secondary: #475569;
+  --text-muted: #94A3B8;
+  --text-link: #475569;
+  --accent: #1E40AF;
+  --accent-muted: rgba(30, 64, 175, 0.10);
+  --border-default: #D8DEE6;
+  border-right: 1px solid #E2E8F0 !important;
+}
+
+.niche-sidebar.superadmin-sidebar .border-b a[href="/dashboard"] {
+  background-color: #F8FAFC !important;
+  border-color: #E2E8F0 !important;
+}
+
+.niche-table th,
+.niche-table td {
+  vertical-align: middle;
+}
+
+/* Premium micro-interactions & Glassmorphism */
+.niche-card-premium {
+  border: 1px solid var(--border-subtle);
+  background-color: var(--bg-panel);
+  box-shadow: 0 4px 24px -6px var(--shadow-color);
+  transition: all 0.3s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+}
+
+.niche-card-premium:hover {
+  transform: translateY(-2px);
+  border-color: var(--accent-border);
+  box-shadow: 0 16px 36px -8px var(--shadow-color), 0 0 20px -4px var(--accent-muted);
+}
+
+.niche-glass-header {
+  backdrop-filter: blur(16px);
+  background-color: rgba(13, 13, 13, 0.75);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.light .niche-glass-header {
+  background-color: rgba(255, 255, 255, 0.75);
+}
+
+.niche-transition {
+  transition: all 0.2s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+}
+
+@utility animate-shimmer {
+  animation: shimmer 2.2s infinite;
+}
+
+@keyframes shimmer {
+  0% {
+    transform: skewX(-12deg) translateX(-100%);
+  }
+  100% {
+    transform: skewX(-12deg) translateX(300%);
+  }
+}

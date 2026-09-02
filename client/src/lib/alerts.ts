@@ -1,0 +1,64 @@
+import Swal from 'sweetalert2'
+
+const isDark = () => document.documentElement.classList.contains('dark') || document.body.classList.contains('dark')
+
+const getSwalOptions = () => {
+  return {
+    target: document.body,
+    heightAuto: false,
+    returnFocus: false,
+    background: isDark() ? '#1C1C1E' : '#FFFFFF',
+    color: isDark() ? '#FFFFFF' : '#1C1C1E',
+    customClass: {
+      container: '!z-[999999] pointer-events-auto',
+      popup: 'rounded-3xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] shadow-2xl p-6 font-sans',
+      title: 'antifont text-xl font-bold tracking-wider text-[var(--text-primary)]',
+      htmlContainer: 'text-sm text-[var(--text-secondary)]',
+      confirmButton: 'bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-fg)] font-bold px-6 py-2.5 rounded-xl shadow-md transition-all cursor-pointer mx-2 border-0 outline-none',
+      cancelButton: 'bg-neutral-600 hover:bg-neutral-700 text-white rounded-xl font-bold px-6 py-2.5 text-sm cursor-pointer mx-2 border-0 outline-none',
+    },
+    buttonsStyling: false,
+  }
+}
+
+export const alerts = {
+  async success(title: string, text?: string) {
+    return Swal.fire({
+      ...getSwalOptions(),
+      icon: 'success',
+      title,
+      text,
+      confirmButtonText: 'Aceptar',
+    })
+  },
+  async error(title: string, text?: string) {
+    return Swal.fire({
+      ...getSwalOptions(),
+      icon: 'error',
+      title,
+      text,
+      confirmButtonText: 'Aceptar',
+    })
+  },
+  async info(title: string, text?: string) {
+    return Swal.fire({
+      ...getSwalOptions(),
+      icon: 'info',
+      title,
+      text,
+      confirmButtonText: 'Aceptar',
+    })
+  },
+  async confirm(title: string, text?: string, confirmText = 'Confirmar', cancelText = 'Cancelar') {
+    const result = await Swal.fire({
+      ...getSwalOptions(),
+      icon: 'warning',
+      title,
+      text,
+      showCancelButton: true,
+      confirmButtonText: confirmText,
+      cancelButtonText: cancelText,
+    })
+    return result.isConfirmed
+  }
+}

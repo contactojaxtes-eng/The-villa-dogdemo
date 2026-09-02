@@ -1,0 +1,615 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String          @id @default(uuid())
+  name          String
+  email         String          @unique
+  password      String
+  phone         String?
+  photo         String?
+  role          String          @default("CASHIER")
+  permissions   Json?
+  active        Boolean         @default(true)
+  failedLoginAttempts Int       @default(0)
+  lockoutUntil  DateTime?
+  mustVerifyEmail Boolean       @default(false)
+  emailVerified Boolean         @default(true)
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+
+  orders           Order[]
+  assignedOrders   Order[]         @relation("OrderAssignment")
+  cancelledOrders  Order[]         @relation("OrderCancellation")
+  expenses         Expense[]
+  cashClosings     CashClosing[]
+  managedRegisters CashRegister[]  @relation("RegisterManager")
+  waiterMetrics    WaiterMetric[]
+  waiterBadges     WaiterBadge[]
+  shifts           Shift[]
+  notifications    Notification[]
+  whatsappSessions WhatsAppSession[]
+  passwordResetTokens PasswordResetToken[]
+
+  @@map("users")
+}
+
+model PasswordResetToken {
+  id        String    @id @default(uuid())
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  userId    String
+  user      User      @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@map("password_reset_tokens")
+}
+
+model AuditLog {
+  id         String   @id @default(uuid())
+  actorId    String?
+  actorName  String
+  actorRole  String
+  action     String
+  targetType String?
+  targetId   String?
+  metadata   Json?
+  createdAt  DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([actorId])
+  @@map("audit_logs")
+}
+
+model ErrorLog {
+  id         String   @id @default(uuid())
+  message    String
+  stack      String?  @db.Text
+  path       String?
+  method     String?
+  statusCode Int?
+  userId     String?
+  createdAt  DateTime @default(now())
+
+  @@index([createdAt])
+  @@map("error_logs")
+}
+
+model MenuCategory {
+  id          String     @id @default(uuid())
+  name        String
+  description String?
+  active      Boolean    @default(true)
+  sortOrder   Int        @default(0)
+  createdAt   DateTime   @default(now())
+
+  items       MenuItem[]
+
+  @@map("menu_categories")
+}
+
+model MenuItem {
+  id          String       @id @default(uuid())
+  name        String
+  code        String?      @unique
+  description String?
+  price       Float        @default(0)
+  image       String?
+  active      Boolean      @default(true)
+  sortOrder   Int          @default(0)
+  categoryId  String
+  type        String       @default("NORMAL")
+  comboItems  Json?
+  prepTime    Int          @default(10)
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  category    MenuCategory @relation(fields: [categoryId], references: [id])
+  orderItems  OrderItem[]
+  recipe      Recipe?
+
+  @@map("menu_items")
+}
+
+model DeliveryZone {
+  id          String   @id @default(uuid())
+  name        String
+  zoneGroup   String   @default("General")
+  rate        Float    @default(0)
+  km          Float?
+  latitude    Float?
+  longitude   Float?
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+
+  orders      Order[]
+
+  @@map("delivery_zones")
+}
+
+model CashRegister {
+  id          String        @id @default(uuid())
+  name        String
+  description String?
+  active      Boolean       @default(true)
+  createdAt   DateTime      @default(now())
+
+  managerId   String?
+  manager     User?         @relation("RegisterManager", fields: [managerId], references: [id])
+  closings    CashClosing[]
+  orders      Order[]
+
+  @@map("cash_registers")
+}
+
+model Order {
+  id                String   @id @default(uuid())
+  orderNumber       Int
+  invoiceNumber     Int?
+  customerName      String
+  customerPhone     String
+  customerAddress   String
+  addressReference  String?
+  latitude          Float?
+  longitude         Float?
+  notes             String?
+  subtotal          Float    @default(0)
+  tax               Float    @default(0)
+  deliveryFee       Float    @default(0)
+  total             Float    @default(0)
+  tip               Float    @default(0)
+  status            String   @default("PENDING")
+  orderType         String   @default("DELIVERY")
+  source            String   @default("MANUAL")
+  paymentMethod     String   @default("CASH")
+  cashAmount        Float?   @default(0)
+  transferAmount    Float?   @default(0)
+  paymentStatus     String   @default("PENDING")
+  paymentReference  String?
+  rated             Boolean  @default(false)
+  rating            Int?
+  cancellationReason String?
+  cancelledAt       DateTime?
+  whatsappMessageId String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  waiterId          String
+  zoneId            String?
+  assignedTo        String?
+  cancelledById     String?
+  cashRegisterId    String?
+  customerId        String?
+  deliveryDriverId  String?
+  chatSessionId     String?
+
+  waiter            User            @relation(fields: [waiterId], references: [id])
+  zone              DeliveryZone?   @relation(fields: [zoneId], references: [id])
+  assignee          User?           @relation("OrderAssignment", fields: [assignedTo], references: [id])
+  cancelledBy       User?           @relation("OrderCancellation", fields: [cancelledById], references: [id])
+  cashRegister      CashRegister?   @relation(fields: [cashRegisterId], references: [id])
+  customer          Customer?       @relation(fields: [customerId], references: [id])
+  deliveryDriver    DeliveryDriver? @relation(fields: [deliveryDriverId], references: [id])
+  items             OrderItem[]
+  payment           Payment?
+  stockMovements    StockMovement[]
+
+  @@index([createdAt])
+  @@index([status])
+  @@index([customerPhone])
+  @@index([waiterId])
+  @@index([assignedTo])
+  @@index([cashRegisterId])
+  @@index([deliveryDriverId])
+  @@index([chatSessionId])
+  @@map("orders")
+}
+
+model OrderItem {
+  id         String   @id @default(uuid())
+  quantity   Int      @default(1)
+  unitPrice  Float    @default(0)
+  totalPrice Float    @default(0)
+  notes      String?
+
+  orderId    String
+  menuItemId String
+
+  order      Order    @relation(fields: [orderId], references: [id])
+  menuItem   MenuItem @relation(fields: [menuItemId], references: [id])
+
+  @@index([orderId])
+  @@index([menuItemId])
+  @@map("order_items")
+}
+
+model Payment {
+  id          String   @id @default(uuid())
+  amount      Float    @default(0)
+  method      String   @default("CASH")
+  cashAmount  Float?   @default(0)
+  transferAmount Float? @default(0)
+  reference   String?
+  proofImage  String?
+  status      String   @default("PENDING")
+  confirmedAt DateTime?
+  confirmedBy String?
+  createdAt   DateTime @default(now())
+
+  orderId     String   @unique
+  order       Order    @relation(fields: [orderId], references: [id])
+
+  @@map("payments")
+}
+
+model Ingredient {
+  id               String   @id @default(uuid())
+  name             String
+  code             String?  @unique
+  unit             String   @default("unidad")
+  purchaseUnit     String?
+  conversionFactor Float    @default(1)
+  stock            Float    @default(0)
+  minStock         Float    @default(0)
+  costPerUnit      Float    @default(0)
+  active           Boolean  @default(true)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  recipeItems      RecipeIngredient[]
+  movements        StockMovement[]
+  purchaseItems    PurchaseItem[]
+
+  @@map("ingredients")
+}
+
+model Recipe {
+  id         String   @id @default(uuid())
+  menuItemId String   @unique
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  menuItem   MenuItem           @relation(fields: [menuItemId], references: [id])
+  items      RecipeIngredient[]
+
+  @@map("recipes")
+}
+
+model RecipeIngredient {
+  id              String @id @default(uuid())
+  quantity        Float  @default(1)
+  wastePercentage Float  @default(0)
+  unit            String?
+  recipeId        String
+  ingredientId    String
+
+  recipe          Recipe     @relation(fields: [recipeId], references: [id], onDelete: Cascade)
+  ingredient      Ingredient @relation(fields: [ingredientId], references: [id])
+
+  @@unique([recipeId, ingredientId])
+  @@map("recipe_ingredients")
+}
+
+model StockMovement {
+  id           String   @id @default(uuid())
+  type         String
+  quantity     Float
+  stockBefore  Float
+  stockAfter   Float
+  notes        String?
+  createdAt    DateTime @default(now())
+
+  ingredientId String
+  orderId      String?
+  userId       String?
+
+  ingredient   Ingredient @relation(fields: [ingredientId], references: [id])
+  order        Order?     @relation(fields: [orderId], references: [id])
+
+  @@index([ingredientId])
+  @@index([orderId])
+  @@map("stock_movements")
+}
+
+model ExpenseCategory {
+  id          String    @id @default(uuid())
+  name        String
+  description String?
+  active      Boolean   @default(true)
+
+  expenses    Expense[]
+
+  @@map("expense_categories")
+}
+
+model Expense {
+  id           String          @id @default(uuid())
+  description  String
+  amount       Float           @default(0)
+  date         DateTime        @default(now())
+  receiptImage String?
+  createdAt    DateTime        @default(now())
+
+  categoryId   String
+  userId       String
+
+  category     ExpenseCategory @relation(fields: [categoryId], references: [id])
+  user         User            @relation(fields: [userId], references: [id])
+
+  @@map("expenses")
+}
+
+model CashClosing {
+  id             String   @id @default(uuid())
+  shiftStart     DateTime
+  shiftEnd       DateTime @default(now())
+  initialCash    Float    @default(0)
+  totalCash      Float    @default(0)
+  totalTransfers Float    @default(0)
+  totalNequi     Float    @default(0)
+  totalBancolombia Float  @default(0)
+  totalDaviplata Float    @default(0)
+  totalSales     Float    @default(0)
+  totalTips      Float    @default(0)
+  totalExpenses  Float    @default(0)
+  discrepancy    Float    @default(0)
+  notes          String?
+  isOpen         Boolean  @default(false)
+  createdAt      DateTime @default(now())
+
+  userId         String
+  cashRegisterId String?
+
+  user           User          @relation(fields: [userId], references: [id])
+  cashRegister   CashRegister? @relation(fields: [cashRegisterId], references: [id])
+
+  @@index([userId, isOpen])
+  @@map("cash_closings")
+}
+
+model WaiterMetric {
+  id              String   @id @default(uuid())
+  date            DateTime
+  totalOrders     Int      @default(0)
+  ordersDelivered Int      @default(0)
+  totalSales      Float    @default(0)
+  totalTips       Float    @default(0)
+  avgDeliveryTime Int      @default(0)
+  avgRating       Float    @default(0)
+  ratingCount     Int      @default(0)
+  createdAt       DateTime @default(now())
+
+  userId          String
+  user            User     @relation(fields: [userId], references: [id])
+
+  @@unique([userId, date])
+  @@map("waiter_metrics")
+}
+
+model Badge {
+  id             String        @id @default(uuid())
+  name           String
+  description    String
+  icon           String
+  condition      String
+  pointsRequired Int           @default(0)
+  active         Boolean       @default(true)
+  createdAt      DateTime      @default(now())
+
+  waiterBadges   WaiterBadge[]
+
+  @@map("badges")
+}
+
+model WaiterBadge {
+  id        String   @id @default(uuid())
+  earnedAt  DateTime @default(now())
+  week      String
+
+  userId    String
+  badgeId   String
+
+  user      User     @relation(fields: [userId], references: [id])
+  badge     Badge    @relation(fields: [badgeId], references: [id])
+
+  @@unique([userId, badgeId, week])
+  @@map("waiter_badges")
+}
+
+model Shift {
+  id        String   @id @default(uuid())
+  startTime DateTime
+  endTime   DateTime?
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+
+  @@map("shifts")
+}
+
+model Notification {
+  id        String   @id @default(uuid())
+  title     String
+  message   String
+  type      String
+  read      Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+
+  @@map("notifications")
+}
+
+model WhatsAppSession {
+  id                String   @id @default(uuid())
+  phone             String   @unique
+  customerPhone     String?
+  customerName      String?
+  lastMessageAt     DateTime @default(now())
+  active            Boolean  @default(true)
+  waitingForAdvisor Boolean  @default(false)
+  createdAt         DateTime @default(now())
+
+  assignedToId      String?
+  assignedTo        User?    @relation(fields: [assignedToId], references: [id])
+  messages          WhatsAppMessage[]
+
+  @@index([lastMessageAt])
+  @@index([active])
+  @@index([waitingForAdvisor])
+  @@index([customerPhone])
+  @@map("whatsapp_sessions")
+}
+
+model WhatsAppMessage {
+  id               String   @id @default(uuid())
+  waMessageId      String?  @unique
+  direction        String
+  content          String
+  messageType      String   @default("text")
+  status           String   @default("received")
+  reaction         String?
+  isEdited         Boolean  @default(false)
+  replyToContent   String?
+  replyToDirection String?
+  createdAt        DateTime @default(now())
+
+  sessionId   String
+  session     WhatsAppSession @relation(fields: [sessionId], references: [id])
+
+  @@index([sessionId])
+  @@index([createdAt])
+  @@map("whatsapp_messages")
+}
+
+model AppSetting {
+  id        String   @id @default(uuid())
+  key       String   @unique
+  value     String
+  updatedAt DateTime @updatedAt
+
+  @@map("app_settings")
+}
+
+model PrintJob {
+  id          Int      @id @default(autoincrement())
+  impresoraIp String?  @map("impresora_ip")
+  payload     String   @db.Text
+  tipo        String   @default("caja")
+  impreso     Boolean  @default(false)
+  createdAt   DateTime @default(now()) @map("fecha_creacion")
+
+  @@map("cola_impresion")
+}
+
+model Supplier {
+  id          String      @id @default(uuid())
+  name        String
+  nit         String?
+  phone       String?
+  address     String?
+  active      Boolean     @default(true)
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+  purchases   Purchase[]
+
+  @@map("suppliers")
+}
+
+model Purchase {
+  id            String          @id @default(uuid())
+  invoiceNumber String
+  purchaseDate  DateTime        @default(now())
+  total         Float           @default(0)
+  notes         String?
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+
+  supplierId    String
+  supplier      Supplier        @relation(fields: [supplierId], references: [id])
+  items         PurchaseItem[]
+
+  @@map("purchases")
+}
+
+model PurchaseItem {
+  id            String      @id @default(uuid())
+  quantity      Float       @default(1)
+  unitCost      Float       @default(0)
+  totalCost     Float       @default(0)
+
+  purchaseId    String
+  ingredientId  String
+  purchase      Purchase    @relation(fields: [purchaseId], references: [id], onDelete: Cascade)
+  ingredient    Ingredient  @relation(fields: [ingredientId], references: [id])
+
+  @@map("purchase_items")
+}
+
+model Customer {
+  id          String            @id @default(uuid())
+  name        String
+  phone       String            @unique
+  address     String?
+  active      Boolean           @default(true)
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+  orders      Order[]
+  payments    CustomerPayment[]
+
+  @@map("customers")
+}
+
+model CustomerPayment {
+  id             String        @id @default(uuid())
+  amount         Float
+  method         String        @default("CASH")
+  reference      String?
+  notes          String?
+  createdAt      DateTime      @default(now())
+  customerId     String
+  customer       Customer      @relation(fields: [customerId], references: [id])
+  cashRegisterId String?
+  confirmedById  String?
+}
+
+model DeliveryDriver {
+  id        String   @id @default(uuid())
+  name      String
+  phone     String
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  orders    Order[]
+
+  @@map("delivery_drivers")
+}
+
+model CustomRole {
+  id          String   @id @default(uuid())
+  code        String   @unique
+  name        String
+  description String?
+  color       String?  @default("#10B981")
+  icon        String?  @default("Shield")
+  permissions Json     @default("[]")
+  isSystem    Boolean  @default(false)
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("custom_roles")
+}
+

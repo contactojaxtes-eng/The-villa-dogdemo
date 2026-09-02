@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 120" role="img" aria-label="The Villa Dog">
+  <rect width="320" height="120" rx="18" fill="#101418"/>
+  <circle cx="62" cy="60" r="36" fill="#90BF50"/>
+  <path d="M44 57c0-17 11-28 18-28s18 11 18 28c0 15-7 25-18 25S44 72 44 57Z" fill="#101418"/>
+  <circle cx="52" cy="56" r="4" fill="#90BF50"/>
+  <circle cx="72" cy="56" r="4" fill="#90BF50"/>
+  <path d="M57 67h10M62 67v8" stroke="#90BF50" stroke-width="5" stroke-linecap="round"/>
+  <path d="M42 34l-12-12c-4 16 2 28 12 32M82 34l12-12c4 16-2 28-12 32" fill="#101418"/>
+  <text x="116" y="52" fill="#FFFFFF" font-family="Arial, Helvetica, sans-serif" font-size="24" font-weight="800">THE VILLA DOG</text>
+  <text x="116" y="82" fill="#90BF50" font-family="Arial, Helvetica, sans-serif" font-size="14" font-weight="700">Sistema de Domicilios</text>
+</svg>

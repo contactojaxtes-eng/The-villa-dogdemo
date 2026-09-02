@@ -1,0 +1,13 @@
+name: Deploy disabled until The Villa Dog is configured
+
+on:
+  workflow_dispatch:
+
+jobs:
+  deploy-disabled:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deployment guard
+        run: |
+          echo "Deployment is intentionally disabled."
+          echo "Configure a new host, new secrets, and a new deploy path before enabling this workflow."

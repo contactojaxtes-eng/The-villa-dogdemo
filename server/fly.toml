@@ -1,0 +1,21 @@
+# fly.toml app configuration file generated for niche-domicilios-api
+#
+# See https://fly.io/docs/reference/configuration/ for information about all config options
+
+app = "niche-domicilios-api"
+primary_region = "mia"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[http_service]
+  internal_port = 3000
+  force_https = true
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ["app"]
+
+[env]
+  PORT = "3000"
+  NODE_ENV = "production"
