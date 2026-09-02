@@ -8,6 +8,7 @@ import { api } from '@/lib/api'
 import { alerts } from '@/lib/alerts'
 import { formatCurrency } from '@/lib/utils'
 import { useAuth } from '@/hooks/useAuth'
+import { ProtectedImage } from '@/components/ProtectedImage'
 
 const statusFilters = [
   { value: 'PENDING_REVIEW', label: 'Pendientes' },
@@ -74,10 +75,14 @@ export default function PaymentValidationPage() {
     })
   }, [payments, search])
 
-  const openProof = async (proofId: string) => {
+  const openProof = async (proofId: string, directBase64?: string) => {
+    if (directBase64) {
+      setImageUrl(directBase64)
+      return
+    }
     try {
       const next = URL.createObjectURL(await api.getBlob(`/payment-validation/proofs/${proofId}/image`))
-      if (imageUrl) URL.revokeObjectURL(imageUrl)
+      if (imageUrl && !imageUrl.startsWith('data:')) URL.revokeObjectURL(imageUrl)
       setImageUrl(next)
     } catch (err: any) {
       alerts.error('Comprobante no disponible', err.message)
@@ -112,7 +117,7 @@ export default function PaymentValidationPage() {
       <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div>
           <h1 className="flex items-center gap-2 text-2xl font-black"><Wallet className="h-7 w-7 text-[var(--accent)]" />Validacion de pagos</h1>
-          <p className="text-sm text-[var(--text-secondary)]">Efectivo y transferencias de mesas con comprobante.</p>
+          <p className="text-sm text-[var(--text-secondary)]">Efectivo y transferencias de mesas con vista previa de comprobante.</p>
         </div>
         <Button variant="outline" onClick={load} className="gap-2"><RefreshCw className="h-4 w-4" />Actualizar</Button>
       </div>
@@ -154,14 +159,39 @@ export default function PaymentValidationPage() {
                 {!isCash && <span className={proof ? 'rounded-full bg-emerald-500/10 px-2 py-1 text-emerald-700' : 'rounded-full bg-rose-500/10 px-2 py-1 text-rose-700'}>{proof ? 'Foto recibida' : 'Sin foto'}</span>}
               </div>
 
-              {proof && <Button variant="outline" className="mt-3 gap-2" onClick={() => openProof(proof.id)}><Eye className="h-4 w-4" />Ver comprobante</Button>}
+              {/* Vista previa del comprobante en la tarjeta */}
+              {proof && (
+                <div className="mt-3 space-y-2">
+                  <div 
+                    className="group relative aspect-[16/9] w-full cursor-pointer overflow-hidden rounded-xl border border-[var(--border-subtle)] bg-slate-950 flex items-center justify-center transition-all hover:border-[var(--accent)] hover:shadow-md"
+                    onClick={() => openProof(proof.id, proof.fileBase64)}
+                  >
+                    {proof.fileBase64 ? (
+                      <img src={proof.fileBase64} alt="Comprobante" className="max-h-48 w-full object-contain transition-transform duration-200 group-hover:scale-105" />
+                    ) : (
+                      <ProtectedImage endpoint={`/payment-validation/proofs/${proof.id}/image`} alt="Comprobante" className="max-h-48 w-full object-contain" />
+                    )}
+                    <div className="absolute inset-0 bg-black/30 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                      <span className="rounded-xl bg-black/80 px-3 py-1.5 text-xs font-bold text-white flex items-center gap-1.5 backdrop-blur-sm shadow-md">
+                        <Eye className="h-4 w-4 text-[var(--accent)]" /> Click para ver comprobante en grande
+                      </span>
+                    </div>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <Button variant="outline" size="sm" className="gap-1.5 text-xs font-bold" onClick={() => openProof(proof.id, proof.fileBase64)}>
+                      <Eye className="h-3.5 w-3.5" /> Ver en grande
+                    </Button>
+                    {proof.createdAt && <span className="text-[11px] text-[var(--text-muted)]">Subido: {new Date(proof.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>}
+                  </div>
+                </div>
+              )}
 
               {payment.status === 'PENDING_REVIEW' && (
                 <div className="mt-4 space-y-2">
                   <Input value={reason} onChange={e => setReason(e.target.value)} placeholder="Motivo si se rechaza..." />
                   <div className="flex gap-2">
-                    <Button onClick={() => review(payment, 'validate')} className="flex-1 gap-2 bg-emerald-600 text-white hover:bg-emerald-700"><CheckCircle2 className="h-4 w-4" />Validar</Button>
-                    <Button onClick={() => review(payment, 'reject')} variant="outline" className="flex-1 gap-2 text-rose-600"><XCircle className="h-4 w-4" />Rechazar</Button>
+                    <Button onClick={() => review(payment, 'validate')} className="flex-1 gap-2 bg-emerald-600 text-white hover:bg-emerald-700 font-bold"><CheckCircle2 className="h-4 w-4" />Validar</Button>
+                    <Button onClick={() => review(payment, 'reject')} variant="outline" className="flex-1 gap-2 text-rose-600 font-bold"><XCircle className="h-4 w-4" />Rechazar</Button>
                   </div>
                 </div>
               )}
@@ -172,8 +202,18 @@ export default function PaymentValidationPage() {
       </div>
 
       <Dialog open={!!imageUrl} onOpenChange={v => !v && setImageUrl(null)}>
-        <DialogContent className="max-w-4xl bg-black p-2">
-          {imageUrl && <img src={imageUrl} alt="Comprobante" className="max-h-[82vh] w-full object-contain" />}
+        <DialogContent className="max-w-4xl bg-slate-950 p-4 border border-slate-800 text-white flex flex-col items-center">
+          <div className="flex w-full justify-between items-center pb-2 border-b border-slate-800">
+            <span className="text-sm font-black flex items-center gap-2">
+              <Image className="h-4 w-4 text-[var(--accent)]" /> Comprobante de Transferencia
+            </span>
+            <Button size="sm" variant="ghost" className="text-white hover:bg-white/20 h-8 text-xs font-bold" onClick={() => setImageUrl(null)}>
+              ✕ Cerrar
+            </Button>
+          </div>
+          <div className="max-h-[80vh] w-full flex items-center justify-center overflow-auto rounded-xl bg-black/60 p-2 mt-2">
+            {imageUrl && <img src={imageUrl} alt="Comprobante completo" className="max-h-[76vh] max-w-full object-contain rounded-lg shadow-2xl" />}
+          </div>
         </DialogContent>
       </Dialog>
     </div>

@@ -760,6 +760,7 @@ model TransferProof {
   method         String    @default("TRANSFER")
   amount         Float     @default(0)
   filePath       String?
+  fileBase64     String?   @db.Text
   originalName   String?
   mimeType       String?
   fileSize       Int?

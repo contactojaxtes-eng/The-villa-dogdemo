@@ -241,50 +241,11 @@ export class TablesService {
       orderType: 'LOCAL',
     });
 
-    await this.createKitchenTickets(orderId, user.id, true, data.changeSummary || summary, changeMap);
-    await this.createRemovedItemTickets(existing, changeMap, data.changeSummary || summary);
+    // Actualizar los tickets existentes de cocina sin duplicar tarjetas
+    await this.createKitchenTickets(orderId, user.id, true, data.changeSummary || summary, changeMap, existing.items);
     const table = await this.findTable(existing.tableId);
     this.socketGateway.emitTableUpdated(table);
     return { table, order: updated, changeSummary: data.changeSummary || summary };
-  }
-
-  private async createRemovedItemTickets(existingOrder: any, changeMap: Map<string, any>, changeSummary: string) {
-    const removed = (existingOrder.items || []).filter((item: any) => changeMap.get(item.menuItemId)?.changeType === 'REMOVED');
-    if (removed.length === 0) return;
-    const stations = await this.getStations();
-    const general = stations.find(s => s.categories.length === 0) || stations[stations.length - 1];
-    const stationGroups = new Map<string, any[]>();
-    for (const item of removed) {
-      const target = stations.find(s => s.categories.some(c => c.id === item.menuItem.categoryId)) || general;
-      if (!stationGroups.has(target.id)) stationGroups.set(target.id, []);
-      stationGroups.get(target.id)!.push(item);
-    }
-    for (const [stationId, items] of stationGroups.entries()) {
-      const assignedToId = await this.pickCook(stationId);
-      const ticket = await this.prisma.kitchenTicket.create({
-        data: {
-          orderId: existingOrder.id,
-          tableId: existingOrder.tableId,
-          stationId,
-          assignedToId,
-          isEdited: true,
-          changeSummary,
-          items: {
-            create: items.map((item: any) => ({
-              menuItemId: item.menuItemId,
-              quantity: item.quantity,
-              nameSnapshot: item.menuItem?.name || 'Producto',
-              notes: item.notes,
-              changeType: 'REMOVED',
-              previousQty: item.quantity,
-              previousNotes: item.notes,
-            })),
-          },
-        },
-        include: { station: true, assignedTo: { select: { id: true, name: true } }, items: true, order: { include: { waiter: true, diningTable: true } } },
-      });
-      this.socketGateway.emitKitchenTicketCreated(ticket);
-    }
   }
 
   private async getStations() {
@@ -368,12 +329,12 @@ export class TablesService {
     return { success: true };
   }
 
-  async createKitchenTickets(orderId: string, actorId: string, isEdited = false, changeSummary?: string, changeMap?: Map<string, any>) {
+  async createKitchenTickets(orderId: string, actorId: string, isEdited = false, changeSummary?: string, changeMap?: Map<string, any>, removedCandidateItems?: any[]) {
     const order = await this.prisma.order.findUnique({
       where: { id: orderId },
       include: { items: { include: { menuItem: { include: { category: true } } } }, diningTable: true, waiter: true },
     });
-    if (!order) throw new NotFoundException('Pedido no encontrado');
+    if (!order) throw new NotFoundException('Pedido de mesa no encontrado');
 
     const isSalon = !!(order.tableId || order.orderType === 'DINE_IN');
     const allActiveStations = await this.getStations();
@@ -446,49 +407,118 @@ export class TablesService {
       }
     }
 
-    // Al editar un pedido: sólo enviamos a cocina las estaciones que tienen productos nuevos o modificados (evita duplicar platos ya cocinados)
-    if (isEdited && changeMap) {
-      for (const [stationId, items] of Array.from(stationGroups.entries())) {
-        const changedItems = items.filter(item => {
-          const type = changeMap.get(item.menuItemId)?.changeType;
-          return type === 'ADDED' || type === 'MODIFIED';
-        });
-        if (changedItems.length === 0) {
-          stationGroups.delete(stationId);
-        } else {
-          stationGroups.set(stationId, changedItems);
+    // 5. Al editar: incorporar items cancelados/eliminados a su estación correspondiente para alertar a cocina
+    if (isEdited && removedCandidateItems && changeMap) {
+      for (const oldItem of removedCandidateItems) {
+        if (changeMap.get(oldItem.menuItemId)?.changeType === 'REMOVED') {
+          const catName = oldItem.menuItem?.category?.name || '';
+          let targetStation = generalStation;
+          if (this.isDrinkOrSideCategory(catName)) {
+            const perroStation = eligibleStations.find(s => /perro/i.test(s.name));
+            targetStation = perroStation || generalStation;
+          } else {
+            targetStation = eligibleStations.find(s => s.categories.some(c => c.id === oldItem.menuItem?.categoryId)) || generalStation;
+          }
+          if (!stationGroups.has(targetStation.id)) stationGroups.set(targetStation.id, []);
+          stationGroups.get(targetStation.id)!.push({
+            ...oldItem,
+            isRemovedItem: true,
+          });
         }
       }
     }
 
     const tickets: any[] = [];
     for (const [stationId, items] of stationGroups.entries()) {
-      const assignedToId = await this.pickCook(stationId);
-      const ticket = await this.prisma.kitchenTicket.create({
-        data: {
-          orderId,
-          tableId: order.tableId,
-          stationId,
-          assignedToId,
-          isEdited,
-          changeSummary,
-          items: {
-            create: items.map(item => ({
-              orderItemId: item.id,
-              menuItemId: item.menuItemId,
-              quantity: item.quantity,
-              nameSnapshot: item.menuItem.name,
-              notes: item.notes,
-              changeType: changeMap?.get(item.menuItemId)?.changeType || (isEdited ? 'ADDED' : 'UNCHANGED'),
-              previousQty: changeMap?.get(item.menuItemId)?.previousQty,
-              previousNotes: changeMap?.get(item.menuItemId)?.previousNotes,
-            })),
+      // Buscar si YA EXISTE un ticket activo para este pedido y estación (UNA SOLA TARJETA)
+      let existingTicket: any = null;
+      if (isEdited) {
+        existingTicket = await this.prisma.kitchenTicket.findFirst({
+          where: {
+            orderId,
+            stationId,
+            status: { in: ['NEW', 'PREPARING', 'READY'] },
           },
-        },
-        include: { station: true, assignedTo: { select: { id: true, name: true } }, items: true, order: { include: { waiter: true, diningTable: true } } },
+          include: { items: true },
+        });
+      }
+
+      // Preparar los items actuales con su tipo de cambio exacto
+      const ticketItemsData = items.map(item => {
+        const changeInfo = changeMap?.get(item.menuItemId);
+        let changeType = 'UNCHANGED';
+        if (item.isRemovedItem || changeInfo?.changeType === 'REMOVED') {
+          changeType = 'REMOVED';
+        } else if (changeInfo?.changeType === 'ADDED') {
+          changeType = 'ADDED';
+        } else if (changeInfo?.changeType === 'MODIFIED') {
+          changeType = 'MODIFIED';
+        } else if (isEdited) {
+          // Si el pedido es editado pero este producto no cambió, se conserva UNCHANGED
+          changeType = 'UNCHANGED';
+        }
+
+        return {
+          orderItemId: item.isRemovedItem ? null : (item.id || null),
+          menuItemId: item.menuItemId,
+          quantity: item.quantity,
+          nameSnapshot: item.menuItem?.name || item.nameSnapshot || 'Producto',
+          notes: item.notes || null,
+          changeType,
+          previousQty: changeInfo?.previousQty || null,
+          previousNotes: changeInfo?.previousNotes || null,
+        };
       });
-      tickets.push(ticket);
-      this.socketGateway.emitKitchenTicketCreated(ticket);
+
+      const hasActiveItems = ticketItemsData.some(i => i.changeType !== 'REMOVED');
+
+      if (existingTicket) {
+        // ACTUALIZAR LA TARJETA EXISTENTE (no crear duplicados)
+        await this.prisma.kitchenTicketItem.deleteMany({ where: { ticketId: existingTicket.id } });
+
+        let newStatus = existingTicket.status;
+        if (!hasActiveItems) {
+          newStatus = 'CANCELLED';
+        } else if (existingTicket.status === 'READY') {
+          newStatus = 'PREPARING';
+        }
+
+        const updatedTicket = await this.prisma.kitchenTicket.update({
+          where: { id: existingTicket.id },
+          data: {
+            isEdited: true,
+            changeSummary: changeSummary || 'Pedido editado',
+            status: newStatus,
+            items: {
+              create: ticketItemsData,
+            },
+          },
+          include: { station: true, assignedTo: { select: { id: true, name: true } }, items: true, order: { include: { waiter: true, diningTable: true } } },
+        });
+        tickets.push(updatedTicket);
+        this.socketGateway.emitKitchenTicketUpdated(updatedTicket);
+      } else {
+        // CREAR TICKET NUEVO (primera vez para esta estación)
+        const assignedToId = await this.pickCook(stationId);
+        const newStatus = hasActiveItems ? 'NEW' : 'CANCELLED';
+        const newTicket = await this.prisma.kitchenTicket.create({
+          data: {
+            orderId,
+            tableId: order.tableId,
+            stationId,
+            assignedToId,
+            isEdited,
+            changeSummary: changeSummary || (isEdited ? 'Pedido editado' : null),
+            status: newStatus,
+            items: {
+              create: ticketItemsData,
+            },
+          },
+          include: { station: true, assignedTo: { select: { id: true, name: true } }, items: true, order: { include: { waiter: true, diningTable: true } } },
+        });
+        tickets.push(newTicket);
+        this.socketGateway.emitKitchenTicketCreated(newTicket);
+      }
     }
 
     await this.prisma.order.update({
@@ -547,17 +577,33 @@ export class TablesService {
 
   async listKitchenTickets(user: any, params: { status?: string; stationId?: string }) {
     const where: any = {};
-    if (params.status) where.status = params.status;
+    if (params.status) {
+      where.status = params.status;
+    } else {
+      where.status = { in: ['NEW', 'PREPARING', 'READY'] };
+    }
     if (params.stationId) where.stationId = params.stationId;
     if (!['ADMIN', 'SUPERADMIN', 'CASHIER'].includes(user.role)) {
       where.OR = [{ assignedToId: user.id }, { station: { users: { some: { id: user.id } } } }];
     }
-    return this.prisma.kitchenTicket.findMany({
+    const tickets = await this.prisma.kitchenTicket.findMany({
       where,
       include: { station: true, assignedTo: { select: { id: true, name: true } }, items: true, order: { include: { waiter: true, diningTable: true } } },
-      orderBy: [{ status: 'asc' }, { createdAt: 'asc' }],
+      orderBy: [{ status: 'asc' }, { updatedAt: 'desc' }, { createdAt: 'desc' }],
       take: 250,
     });
+
+    // Garantizar que cada orden y estación tenga una sola tarjeta activa visible
+    const seen = new Set<string>();
+    const deduped: typeof tickets = [];
+    for (const t of tickets) {
+      const key = `${t.orderId}_${t.stationId}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        deduped.push(t);
+      }
+    }
+    return deduped;
   }
 
   async listStations() {
@@ -657,8 +703,16 @@ export class TablesService {
 
     const ext = input.file.mimetype === 'image/png' ? 'png' : input.file.mimetype === 'image/webp' ? 'webp' : 'jpg';
     const filePath = join(process.env.DATA_DIR || join(process.cwd(), '.tmp'), 'transfer-proofs', closingId, `${randomUUID()}.${ext}`);
-    await mkdir(dirname(filePath), { recursive: true });
-    await writeFile(filePath, input.file.buffer);
+    try {
+      await mkdir(dirname(filePath), { recursive: true });
+      await writeFile(filePath, input.file.buffer);
+    } catch (e) {
+      console.warn('[storeProof] Error al escribir en disco:', e);
+    }
+
+    const fileBase64 = input.file.buffer
+      ? `data:${input.file.mimetype || 'image/jpeg'};base64,${input.file.buffer.toString('base64')}`
+      : null;
 
     return this.prisma.transferProof.create({
       data: {
@@ -670,6 +724,7 @@ export class TablesService {
         amount: input.amount,
         method: input.method,
         filePath,
+        fileBase64,
         originalName: input.file.originalname || 'comprobante.jpg',
         mimeType: input.file.mimetype || 'image/jpeg',
         fileSize: input.file.size,
@@ -698,7 +753,7 @@ export class TablesService {
 
   async proofImage(proofId: string) {
     const proof = await this.prisma.transferProof.findUnique({ where: { id: proofId } });
-    if (!proof?.filePath || !existsSync(proof.filePath)) throw new NotFoundException('Comprobante no encontrado');
+    if (!proof) throw new NotFoundException('Comprobante no encontrado');
     return proof;
   }
 
