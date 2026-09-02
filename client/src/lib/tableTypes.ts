@@ -42,6 +42,7 @@ export interface KitchenTicketItemSummary {
   quantity: number
   nameSnapshot: string
   notes?: string
+  previousQty?: number
   changeType?: 'UNCHANGED' | 'ADDED' | 'MODIFIED' | 'REMOVED' | string
 }
 
@@ -65,6 +66,8 @@ export interface DiningOrderSummary {
 
 export interface KitchenTicketSummary {
   id: string
+  orderId?: string
+  stationId?: string
   status: 'NEW' | 'PREPARING' | 'READY' | 'SERVED' | string
   changeSummary?: string
   isEdited?: boolean

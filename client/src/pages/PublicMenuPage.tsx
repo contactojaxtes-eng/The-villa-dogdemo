@@ -69,6 +69,7 @@ export default function PublicMenuPage() {
   })
 
   const [submitting, setSubmitting] = useState(false)
+  const publicAttempt = useRef({ signature: '', id: '' })
   const [orderSuccess, setOrderSuccess] = useState(false)
   const [placedOrderInfo, setPlacedOrderInfo] = useState<{ id?: string; number?: number; total: number } | null>(null)
   const [lastMessageText, setLastMessageText] = useState('')
@@ -283,6 +284,7 @@ export default function PublicMenuPage() {
   }
 
   const handleWhatsAppOrder = async () => {
+    if (submitting) return
     setFormError('')
     const cleanPhone = customerInfo.phone.replace(/\D/g, '')
 
@@ -333,7 +335,7 @@ export default function PublicMenuPage() {
 
     const msg = generateWhatsAppMessage()
     setLastMessageText(msg)
-    const targetPhone = restaurantPhone.replace(/\D/g, '') || '573003229261'
+    const targetPhone = restaurantPhone.replace(/\D/g, '')
     // Usar wa.me (formato oficial) para evitar que WhatsApp muestre "Invitar"
     const waUrl = `https://wa.me/${targetPhone}?text=${msg}`
 
@@ -344,8 +346,11 @@ export default function PublicMenuPage() {
       orderNotes = orderNotes ? `${orderNotes} | [PASAR A RECOGER EN RESTAURANTE]` : `[PASAR A RECOGER EN RESTAURANTE]`
     }
 
-    // 1. Guardar orden en segundo plano sin esperar
-    api.post<any>('/public-orders', {
+    const signature = JSON.stringify({ customerInfo, orderMode, orderItemsPayload })
+    if (publicAttempt.current.signature !== signature) publicAttempt.current = { signature, id: crypto.randomUUID() }
+    try {
+    const res = await api.post<any>('/public-orders', {
+      clientMutationId: publicAttempt.current.id,
       customerName: customerInfo.name,
       customerPhone: cleanPhone,
       customerAddress: orderMode === 'PICKUP' ? 'Recoger en restaurante' : customerInfo.address,
@@ -358,11 +363,9 @@ export default function PublicMenuPage() {
       deliveryFee: orderMode === 'PICKUP' ? 0 : deliveryFee,
       paymentMethod: customerInfo.paymentMethod,
       notes: orderNotes
-    }).then(res => {
-      if (res && res.order) {
-        setPlacedOrderInfo({ id: res.order.id, number: res.order.orderNumber, total })
-      }
-    }).catch(err => console.warn('Error en segundo plano guardando orden pública:', err))
+    })
+    if (!res?.order?.id) throw new Error('No se pudo confirmar el pedido. Intenta de nuevo.')
+    setPlacedOrderInfo({ id: res.order.id, number: res.order.orderNumber, total: res.order.total })
 
     setOrderSuccess(true)
     try {
@@ -372,7 +375,10 @@ export default function PublicMenuPage() {
     localStorage.removeItem('niche_cart')
 
     // 2. Abrir WhatsApp de inmediato usando wa.me
-    window.location.href = waUrl
+    if (targetPhone) window.location.href = waUrl
+    } catch (error: any) {
+      setFormErrorAndScroll(error.message || 'No se pudo guardar el pedido. Tu carrito sigue disponible.')
+    } finally { setSubmitting(false) }
   }
 
   if (loading) {
@@ -620,7 +626,7 @@ export default function PublicMenuPage() {
 
                   <div className="w-full space-y-3 pt-4">
                     <a 
-                      href={`https://wa.me/${restaurantPhone.replace(/\D/g, '') || '573003229261'}?text=${lastMessageText}`}
+                      href={`https://wa.me/${restaurantPhone.replace(/\D/g, '')}?text=${lastMessageText}`}
                       target="_top"
                       className="w-full py-3.5 bg-[#25D366] text-white font-extrabold rounded-xl flex items-center justify-center gap-2 hover:bg-[#128C7E] transition shadow-lg shadow-[#25D366]/20 text-sm"
                     >

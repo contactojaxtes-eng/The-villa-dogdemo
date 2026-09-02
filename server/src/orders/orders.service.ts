@@ -493,7 +493,7 @@ export class OrdersService implements OnModuleInit {
     for (const item of data.items) {
       if (!Number.isSafeInteger(item.quantity) || item.quantity <= 0 || item.quantity > 100) throw new BadRequestException('La cantidad de cada producto debe ser mayor a cero');
       const menuItem = menuItemMap.get(item.menuItemId);
-      if (!menuItem) throw new BadRequestException(`Item ${item.menuItemId} no encontrado`);
+      if (!menuItem || !menuItem.active) throw new BadRequestException(`Item ${item.menuItemId} no encontrado`);
       const itemIsCourtesy = isCourtesy || item.isCourtesy;
       const unitPrice = itemIsCourtesy ? 0 : menuItem.price;
       const totalPrice = unitPrice * item.quantity;
@@ -741,7 +741,18 @@ export class OrdersService implements OnModuleInit {
     return order;
   }
 
-  async update(id: string, data: {
+  async update(id: string, data: any) {
+    const result = await this.prisma.$transaction(async tx => {
+      await lockOperation(tx);
+      const order = await tx.order.findUnique({ where: { id } });
+      if (order?.tableId) throw new BadRequestException('Edita este pedido desde su cuenta en Mesas');
+      return this.updateWithinTransaction(id, data, tx);
+    }, operationTransaction);
+    await this.notifyUpdated(id, result.updated, result.existing, data);
+    return result.updated;
+  }
+
+  async updateWithinTransaction(id: string, data: {
     customerName: string;
     customerPhone: string;
     customerAddress: string;
@@ -758,12 +769,13 @@ export class OrdersService implements OnModuleInit {
     deliveryFee?: number;
     tax?: number;
     customerId?: string;
-  }) {
-    const existing = await this.prisma.order.findUnique({
+  }, tx: Prisma.TransactionClient) {
+    const existing = await tx.order.findUnique({
       where: { id },
       include: { items: true },
     });
     if (!existing) throw new NotFoundException('Pedido no encontrado');
+    if (['CONFIRMED', 'PENDING_REVIEW'].includes(existing.paymentStatus)) throw new BadRequestException('No se puede editar un pedido pagado o con comprobante en revisión');
     if (existing.status === 'CANCELLED') throw new BadRequestException('No se puede editar un pedido cancelado');
     if (existing.status === 'DELIVERED') throw new BadRequestException('No se puede editar un pedido entregado');
 
@@ -771,7 +783,7 @@ export class OrdersService implements OnModuleInit {
       throw new BadRequestException('El pedido debe incluir al menos un producto');
     }
     for (const item of data.items) {
-      if (item.quantity <= 0) {
+      if (!Number.isSafeInteger(item.quantity) || item.quantity <= 0 || item.quantity > 100) {
         throw new BadRequestException('La cantidad de cada producto debe ser mayor a cero');
       }
     }
@@ -791,19 +803,19 @@ export class OrdersService implements OnModuleInit {
     // Auto-recuperación de teléfono real si llega 3000000000 o vacío en pedidos que no son de mostrador
     if (data.orderType !== 'LOCAL' && (!data.customerPhone || data.customerPhone === '3000000000' || data.customerPhone === '0000000000')) {
       if (data.customerId) {
-        const cust = await this.prisma.customer.findUnique({ where: { id: data.customerId } });
+        const cust = await tx.customer.findUnique({ where: { id: data.customerId } });
         if (cust?.phone && cust.phone !== '3000000000' && cust.phone !== '0000000000') {
           data.customerPhone = cust.phone;
         }
       }
       if ((!data.customerPhone || data.customerPhone === '3000000000') && data.customerName && data.customerName !== 'Cliente Mostrador' && data.customerName !== 'Cliente Recoger') {
-        const custByName = await this.prisma.customer.findFirst({
+        const custByName = await tx.customer.findFirst({
           where: { name: { equals: data.customerName.trim(), mode: 'insensitive' }, phone: { notIn: ['3000000000', '0000000000'] } }
         });
         if (custByName?.phone) {
           data.customerPhone = custByName.phone;
         } else {
-          const session = await this.prisma.whatsAppSession.findFirst({
+          const session = await tx.whatsAppSession.findFirst({
             where: { customerName: { equals: data.customerName.trim(), mode: 'insensitive' }, customerPhone: { not: null } }
           });
           if (session?.customerPhone && session.customerPhone !== '3000000000') {
@@ -820,13 +832,13 @@ export class OrdersService implements OnModuleInit {
     let subtotal = 0;
     const orderItems: any[] = [];
     const menuItemIds = data.items.map(i => i.menuItemId);
-    const menuItems = await this.prisma.menuItem.findMany({ where: { id: { in: menuItemIds } } });
+    const menuItems = await tx.menuItem.findMany({ where: { id: { in: menuItemIds } } });
     const menuItemMap = new Map(menuItems.map(m => [m.id, m]));
 
     for (const item of data.items) {
-      if (item.quantity <= 0) throw new BadRequestException('La cantidad de cada producto debe ser mayor a cero');
+      if (!Number.isSafeInteger(item.quantity) || item.quantity <= 0 || item.quantity > 100) throw new BadRequestException('La cantidad de cada producto debe ser mayor a cero');
       const menuItem = menuItemMap.get(item.menuItemId);
-      if (!menuItem) throw new BadRequestException(`Item ${item.menuItemId} no encontrado`);
+      if (!menuItem || !menuItem.active) throw new BadRequestException(`Item ${item.menuItemId} no encontrado`);
       const itemIsCourtesy = isCourtesy || item.isCourtesy;
       const unitPrice = itemIsCourtesy ? 0 : menuItem.price;
       const totalPrice = unitPrice * item.quantity;
@@ -846,7 +858,7 @@ export class OrdersService implements OnModuleInit {
       if (typeof data.deliveryFee === 'number') {
         deliveryFee = data.deliveryFee;
       } else if (resolvedZoneId) {
-        const zone = await this.prisma.deliveryZone.findUnique({ where: { id: resolvedZoneId } });
+        const zone = await tx.deliveryZone.findUnique({ where: { id: resolvedZoneId } });
         if (zone) deliveryFee = zone.rate;
       }
     }
@@ -860,9 +872,9 @@ export class OrdersService implements OnModuleInit {
       const p10 = (cleanP.length === 12 && cleanP.startsWith('57')) ? cleanP.slice(2) : cleanP;
       if (p10.length === 10 && p10.startsWith('3')) {
         try {
-          let cust = await this.prisma.customer.findUnique({ where: { phone: p10 } });
+          let cust = await tx.customer.findUnique({ where: { phone: p10 } });
           if (!cust && data.customerName && data.customerName !== 'Cliente Mostrador' && data.customerName !== 'Cliente Recoger') {
-            cust = await this.prisma.customer.create({
+            cust = await tx.customer.create({
               data: {
                 name: data.customerName.trim(),
                 phone: p10,
@@ -870,7 +882,7 @@ export class OrdersService implements OnModuleInit {
               }
             });
           } else if (cust && data.customerName && data.customerName !== 'Cliente Mostrador' && data.customerName !== 'Cliente Recoger' && (!cust.name || cust.name.startsWith('Cliente '))) {
-            cust = await this.prisma.customer.update({
+            cust = await tx.customer.update({
               where: { id: cust.id },
               data: {
                 name: data.customerName.trim(),
@@ -883,7 +895,7 @@ export class OrdersService implements OnModuleInit {
       }
     }
 
-    const updated = await this.prisma.$transaction(async (tx) => {
+    const updated = await (async () => {
       // Eliminar items viejos
       await tx.orderItem.deleteMany({ where: { orderId: id } });
 
@@ -934,8 +946,12 @@ export class OrdersService implements OnModuleInit {
       });
 
       return order;
-    });
+    })();
 
+    return { updated, existing };
+  }
+
+  async notifyUpdated(id: string, updated: any, existing: any, data: any) {
     this.socketGateway.emitOrderStatusChange(id, updated.status, updated);
 
     try {
@@ -1447,7 +1463,7 @@ export class OrdersService implements OnModuleInit {
     const [groups, sales, openTables, kitchenPending, pendingPayments, activeDeliveries, openRegisters] = await Promise.all([
       this.prisma.order.groupBy({ by: ['status'], where: { createdAt }, _count: { _all: true } }),
       this.prisma.order.aggregate({ where: { createdAt, status: 'DELIVERED', paymentStatus: 'CONFIRMED' }, _sum: { total: true } }),
-      this.prisma.diningTable.count({ where: { status: 'OPEN' } }),
+      this.prisma.diningTable.count({ where: { status: 'OPEN', orders: { some: {} } } }),
       this.prisma.kitchenTicket.count({ where: { status: { in: ['NEW', 'PREPARING'] } } }),
       this.prisma.payment.count({ where: { status: { in: ['PENDING', 'PENDING_REVIEW'] }, order: { orderType: 'LOCAL', status: { not: 'CANCELLED' } } } }),
       this.prisma.order.count({ where: { orderType: 'DELIVERY', status: { notIn: ['DELIVERED', 'CANCELLED'] } } }),

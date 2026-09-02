@@ -1,7 +1,8 @@
+import { receiptSummary, validateReceipt } from './receipt';
+import { Prisma } from '@prisma/client';
+import { lockOperation, operationTransaction } from '../common/operation-lock';
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { existsSync } from 'fs';
-import { mkdir, unlink, writeFile } from 'fs/promises';
-import { dirname, join } from 'path';
 import { randomUUID } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { SocketGateway } from '../socket/socket.gateway';
@@ -19,16 +20,16 @@ export class TablesService {
     private ordersService: OrdersService,
   ) {}
 
-  private async getActiveClosing(userId: string, cashRegisterId?: string) {
+  private async getActiveClosing(userId: string, cashRegisterId?: string, db: Prisma.TransactionClient = this.prisma) {
     const where: any = cashRegisterId ? { cashRegisterId, isOpen: true } : { isOpen: true };
     if (!cashRegisterId) {
-      const own = await this.prisma.cashClosing.findFirst({
+      const own = await db.cashClosing.findFirst({
         where: { userId, isOpen: true },
         orderBy: { shiftStart: 'desc' },
       });
       if (own) return own;
     }
-    return this.prisma.cashClosing.findFirst({ where, orderBy: { shiftStart: 'desc' } });
+    return db.cashClosing.findFirst({ where, orderBy: { shiftStart: 'desc' } });
   }
 
   private buildOrderInclude() {
@@ -51,7 +52,8 @@ export class TablesService {
         orderBy: { createdAt: 'asc' as const },
       },
       transferProofs: {
-        include: {
+        select: {
+          ...receiptSummary,
           submittedBy: { select: { id: true, name: true } },
           reviewedBy: { select: { id: true, name: true } },
           payment: true,
@@ -86,7 +88,7 @@ export class TablesService {
   }
 
   async listTables(params: { status?: string; search?: string; waiterId?: string }) {
-    const where: any = {};
+    const where: any = { orders: { some: {} } };
     if (params.status === 'ALL') {
       // no status filter, return both active and closed
     } else if (params.status) {
@@ -105,8 +107,8 @@ export class TablesService {
     return tables.map(t => this.summarizeTable(t));
   }
 
-  async findTable(id: string) {
-    const table = await this.prisma.diningTable.findUnique({ where: { id }, include: this.buildTableInclude() });
+  async findTable(id: string, db: Prisma.TransactionClient = this.prisma) {
+    const table = await db.diningTable.findUnique({ where: { id }, include: this.buildTableInclude() });
     if (!table) throw new NotFoundException('Mesa no encontrada');
     return this.summarizeTable(table);
   }
@@ -130,63 +132,48 @@ export class TablesService {
   }
 
   async createTableOrder(data: any, user: any) {
-    try {
-      const clientMutationId = data.clientMutationId || randomUUID();
-      const existing = await this.prisma.order.findUnique({
-        where: { clientMutationId },
-        include: this.buildOrderInclude(),
-      }).catch(() => null);
+    const clientMutationId = data.clientMutationId || randomUUID();
+    const tickets: any[] = [];
+    const result = await this.prisma.$transaction(async tx => {
+      await lockOperation(tx);
+      const existing = await tx.order.findUnique({ where: { clientMutationId }, include: this.buildOrderInclude() });
       if (existing) {
-        this.socketGateway.server.to(`user:${user.id}`).emit('offlineOrderSynced', existing);
-        return existing;
+        if (existing.waiterId !== user.id || !existing.tableId) throw new BadRequestException('El identificador del pedido ya está en uso');
+        return { table: await this.findTable(existing.tableId, tx), order: existing, replay: true };
       }
-
-      let table = data.tableId
-        ? await this.findTable(data.tableId)
-        : await this.prisma.diningTable.findFirst({
-            where: {
-              label: { equals: data.tableLabel?.trim(), mode: 'insensitive' },
-              status: 'OPEN',
-            },
-            include: this.buildTableInclude(),
-          });
-
-      if (!table && data.tableLabel?.trim()) {
-        table = await this.createTable({ label: data.tableLabel, notes: data.tableNotes, cashRegisterId: data.cashRegisterId }, user);
+      const label = typeof data.tableLabel === 'string' ? data.tableLabel.trim() : '';
+      if (!data.tableId && (!label || label.length > 80)) throw new BadRequestException('Escribe un nombre de cuenta de 1 a 80 caracteres');
+      let table = data.tableId ? await tx.diningTable.findUnique({ where: { id: data.tableId } }) : null;
+      if (data.tableId && !table) throw new NotFoundException('Cuenta no encontrada');
+      if (table && table.status !== 'OPEN') throw new BadRequestException('La cuenta ya está cerrada');
+      const closing = await this.getActiveClosing(user.id, table?.cashRegisterId || data.cashRegisterId, tx);
+      if (!closing) throw new BadRequestException('Abre una caja antes de enviar pedidos');
+      if (!table) {
+        table = await tx.diningTable.create({ data: {
+          label, openedById: user.id, cashRegisterId: closing.cashRegisterId, cashClosingId: closing.id,
+        } });
       }
-      if (!table) throw new BadRequestException('Debes indicar una mesa válida');
-      if (table.status !== 'OPEN') throw new BadRequestException('La mesa ya no esta abierta');
-
-      const order = await this.ordersService.create({
-        customerName: data.tableLabel || table.label,
-        customerPhone: '3000000000',
-        customerAddress: table.label,
-        notes: data.notes,
-        items: data.items || [],
-        waiterId: user.id,
-        userId: user.id,
-        userRole: user.role,
-        orderType: 'LOCAL',
-        source: data.offline ? 'OFFLINE_TABLE' : 'TABLE',
-        paymentMethod: data.paymentMethod || 'CASH',
-        cashAmount: data.cashAmount,
-        transferAmount: data.transferAmount,
-        paymentReference: data.paymentReference,
-        cashRegisterId: table.cashRegisterId,
-        tableId: table.id,
-        clientMutationId,
-      });
-
-      await this.createKitchenTickets(order.id, user.id, false, data.changeSummary);
-      const full = await this.findTable(table.id);
-      this.socketGateway.server.emit('tableOrderSubmitted', { table: full, order });
-      this.socketGateway.emitTableUpdated(full);
-      this.socketGateway.server.to(`user:${user.id}`).emit('offlineOrderSynced', order);
-      return { table: full, order };
-    } catch (err) {
-      console.error('CRITICAL ERROR in createTableOrder:', err);
-      throw err;
+      if (await tx.payment.count({ where: { order: { tableId: table.id }, status: 'PENDING_REVIEW' } })) {
+        throw new BadRequestException('Espera a que caja revise el pago antes de agregar productos');
+      }
+      const order = await this.ordersService.createWithinTransaction({
+        customerName: table.label, customerPhone: '3000000000', customerAddress: table.label,
+        notes: data.notes, items: (data.items || []).map((item: any) => ({ menuItemId: item.menuItemId, quantity: item.quantity, notes: item.notes })),
+        waiterId: user.id, userId: user.id, userRole: user.role, orderType: 'LOCAL',
+        source: data.offline ? 'OFFLINE_TABLE' : 'TABLE', paymentMethod: 'CASH',
+        cashRegisterId: table.cashRegisterId, tableId: table.id, clientMutationId,
+      }, tx);
+      await this.createKitchenTickets(order.id, user.id, false, undefined, undefined, undefined, tx, tickets);
+      return { table: await this.findTable(table.id, tx), order, replay: false };
+    }, operationTransaction);
+    if (!result.replay) {
+      tickets.forEach(event => event.created ? this.socketGateway.emitKitchenTicketCreated(event.ticket) : this.socketGateway.emitKitchenTicketUpdated(event.ticket));
+      this.socketGateway.server.emit('tableOrderSubmitted', result);
+      this.socketGateway.emitTableUpdated(result.table);
+      await this.ordersService.notifyCreated(result.order);
     }
+    this.socketGateway.server.to(`user:${user.id}`).emit('offlineOrderSynced', result.order);
+    return { table: result.table, order: result.order };
   }
 
   private buildChangeSummary(before: any[], after: any[]) {
@@ -220,43 +207,38 @@ export class TablesService {
   }
 
   async updateTableOrder(orderId: string, data: any, user: any) {
-    const existing = await this.prisma.order.findUnique({
-      where: { id: orderId },
-      include: { items: { include: { menuItem: true } }, diningTable: true },
-    });
-    if (!existing?.tableId) throw new NotFoundException('Pedido de mesa no encontrado');
-
-    const menuItems = await this.prisma.menuItem.findMany({ where: { id: { in: (data.items || []).map((i: any) => i.menuItemId) } } });
-    const names = new Map(menuItems.map(i => [i.id, i.name]));
-    const after = (data.items || []).map((item: any) => ({ ...item, name: names.get(item.menuItemId) }));
-    const { summary, changeMap } = this.buildChangeSummary(existing.items, after);
-
-    const updated = await this.ordersService.update(orderId, {
-      customerName: existing.customerName,
-      customerPhone: existing.customerPhone,
-      customerAddress: existing.customerAddress,
-      notes: data.notes ?? existing.notes,
-      items: data.items || [],
-      paymentMethod: existing.paymentMethod,
-      orderType: 'LOCAL',
-    });
-
-    // Actualizar los tickets existentes de cocina sin duplicar tarjetas
-    await this.createKitchenTickets(orderId, user.id, true, data.changeSummary || summary, changeMap, existing.items);
-    const table = await this.findTable(existing.tableId);
-    this.socketGateway.emitTableUpdated(table);
-    return { table, order: updated, changeSummary: data.changeSummary || summary };
+    const tickets: any[] = [];
+    const result = await this.prisma.$transaction(async tx => {
+      await lockOperation(tx);
+      const existing = await tx.order.findUnique({ where: { id: orderId }, include: { items: { include: { menuItem: true } }, diningTable: true } });
+      if (!existing?.tableId) throw new NotFoundException('Pedido de mesa no encontrado');
+      if (existing.diningTable?.status !== 'OPEN') throw new BadRequestException('La cuenta está cerrada');
+      const { summary, changeMap } = this.buildChangeSummary(existing.items, data.items || []);
+      const updateData = {
+        customerName: existing.customerName, customerPhone: existing.customerPhone,
+        customerAddress: existing.customerAddress, notes: data.notes ?? existing.notes,
+        items: (data.items || []).map((item: any) => ({ menuItemId: item.menuItemId, quantity: item.quantity, notes: item.notes })),
+        paymentMethod: existing.paymentMethod, orderType: 'LOCAL',
+      };
+      const { updated } = await this.ordersService.updateWithinTransaction(orderId, updateData, tx);
+      await this.createKitchenTickets(orderId, user.id, true, summary, changeMap, existing.items, tx, tickets);
+      return { table: await this.findTable(existing.tableId, tx), order: updated, changeSummary: summary };
+    }, operationTransaction);
+    tickets.forEach(event => event.created ? this.socketGateway.emitKitchenTicketCreated(event.ticket) : this.socketGateway.emitKitchenTicketUpdated(event.ticket));
+    this.socketGateway.server.emit('tableOrderEdited', { orderId, changeSummary: result.changeSummary });
+    this.socketGateway.emitTableUpdated(result.table);
+    return result;
   }
 
-  private async getStations() {
-    let stations = await this.prisma.kitchenStation.findMany({
+  private async getStations(db: Prisma.TransactionClient = this.prisma) {
+    let stations = await db.kitchenStation.findMany({
       where: { active: true },
       include: { categories: true, users: { select: { id: true, name: true } } },
       orderBy: [{ priority: 'asc' }, { name: 'asc' }],
     });
     if (stations.length === 0) {
-      const cats = await this.prisma.menuCategory.findMany({ where: { active: true }, take: 2 });
-      const created = await this.prisma.kitchenStation.create({
+      const cats = await db.menuCategory.findMany({ where: { active: true }, take: 2 });
+      const created = await db.kitchenStation.create({
         data: {
           name: 'Cocina general',
           priority: 999,
@@ -269,8 +251,8 @@ export class TablesService {
     return stations;
   }
 
-  private async pickCook(stationId: string) {
-    const station = await this.prisma.kitchenStation.findUnique({
+  private async pickCook(stationId: string, db: Prisma.TransactionClient = this.prisma) {
+    const station = await db.kitchenStation.findUnique({
       where: { id: stationId },
       include: { users: true },
     });
@@ -278,7 +260,7 @@ export class TablesService {
     if (users.length === 0) return null;
     const loads = await Promise.all(users.map(async user => ({
       user,
-      count: await this.prisma.kitchenTicket.count({
+      count: await db.kitchenTicket.count({
         where: { stationId, assignedToId: user.id, status: { in: ACTIVE_KITCHEN } },
       }),
     })));
@@ -300,8 +282,8 @@ export class TablesService {
     );
   }
 
-  async getKitchenSettings() {
-    const setting = await this.prisma.appSetting.findUnique({ where: { key: 'kitchen_routing_settings' } });
+  async getKitchenSettings(db: Prisma.TransactionClient = this.prisma) {
+    const setting = await db.appSetting.findUnique({ where: { key: 'kitchen_routing_settings' } });
     if (setting) {
       try {
         return JSON.parse(setting.value);
@@ -329,16 +311,16 @@ export class TablesService {
     return { success: true };
   }
 
-  async createKitchenTickets(orderId: string, actorId: string, isEdited = false, changeSummary?: string, changeMap?: Map<string, any>, removedCandidateItems?: any[]) {
-    const order = await this.prisma.order.findUnique({
+  async createKitchenTickets(orderId: string, actorId: string, isEdited = false, changeSummary?: string, changeMap?: Map<string, any>, removedCandidateItems?: any[], db: Prisma.TransactionClient = this.prisma, events?: any[]) {
+    const order = await db.order.findUnique({
       where: { id: orderId },
       include: { items: { include: { menuItem: { include: { category: true } } } }, diningTable: true, waiter: true },
     });
     if (!order) throw new NotFoundException('Pedido de mesa no encontrado');
 
     const isSalon = !!(order.tableId || order.orderType === 'DINE_IN');
-    const allActiveStations = await this.getStations();
-    const settings = await this.getKitchenSettings();
+    const allActiveStations = await this.getStations(db);
+    const settings = await this.getKitchenSettings(db);
 
     // 1. Filtrar estaciones según canal (Salón vs Domicilios) si existen diferenciadas
     let eligibleStations = allActiveStations;
@@ -433,7 +415,7 @@ export class TablesService {
       // Buscar si YA EXISTE un ticket activo para este pedido y estación (UNA SOLA TARJETA)
       let existingTicket: any = null;
       if (isEdited) {
-        existingTicket = await this.prisma.kitchenTicket.findFirst({
+        existingTicket = await db.kitchenTicket.findFirst({
           where: {
             orderId,
             stationId,
@@ -474,7 +456,7 @@ export class TablesService {
 
       if (existingTicket) {
         // ACTUALIZAR LA TARJETA EXISTENTE (no crear duplicados)
-        await this.prisma.kitchenTicketItem.deleteMany({ where: { ticketId: existingTicket.id } });
+        await db.kitchenTicketItem.deleteMany({ where: { ticketId: existingTicket.id } });
 
         let newStatus = existingTicket.status;
         if (!hasActiveItems) {
@@ -483,7 +465,7 @@ export class TablesService {
           newStatus = 'PREPARING';
         }
 
-        const updatedTicket = await this.prisma.kitchenTicket.update({
+        const updatedTicket = await db.kitchenTicket.update({
           where: { id: existingTicket.id },
           data: {
             isEdited: true,
@@ -496,12 +478,12 @@ export class TablesService {
           include: { station: true, assignedTo: { select: { id: true, name: true } }, items: true, order: { include: { waiter: true, diningTable: true } } },
         });
         tickets.push(updatedTicket);
-        this.socketGateway.emitKitchenTicketUpdated(updatedTicket);
+        if (events) events.push({ created: false, ticket: updatedTicket }); else this.socketGateway.emitKitchenTicketUpdated(updatedTicket);
       } else {
         // CREAR TICKET NUEVO (primera vez para esta estación)
-        const assignedToId = await this.pickCook(stationId);
+        const assignedToId = await this.pickCook(stationId, db);
         const newStatus = hasActiveItems ? 'NEW' : 'CANCELLED';
-        const newTicket = await this.prisma.kitchenTicket.create({
+        const newTicket = await db.kitchenTicket.create({
           data: {
             orderId,
             tableId: order.tableId,
@@ -517,17 +499,17 @@ export class TablesService {
           include: { station: true, assignedTo: { select: { id: true, name: true } }, items: true, order: { include: { waiter: true, diningTable: true } } },
         });
         tickets.push(newTicket);
-        this.socketGateway.emitKitchenTicketCreated(newTicket);
+        if (events) events.push({ created: true, ticket: newTicket }); else this.socketGateway.emitKitchenTicketCreated(newTicket);
       }
     }
 
-    await this.prisma.order.update({
+    await db.order.update({
       where: { id: orderId },
       data: { kitchenStatus: 'SENT', sentToKitchenAt: order.sentToKitchenAt || new Date() },
     });
 
     if (isEdited) {
-      await this.prisma.orderChangeLog.create({
+      await db.orderChangeLog.create({
         data: {
           orderId,
           userId: actorId,
@@ -535,44 +517,37 @@ export class TablesService {
           changes: { summary: changeSummary || 'Pedido editado' },
         },
       });
-      this.socketGateway.server.emit('tableOrderEdited', { orderId, changeSummary });
+      if (!events) this.socketGateway.server.emit('tableOrderEdited', { orderId, changeSummary });
     }
     return tickets;
   }
 
   async updateKitchenTicket(ticketId: string, status: string, user: any) {
-    if (!['NEW', 'PREPARING', 'READY', 'SERVED', 'CANCELLED'].includes(status)) {
-      throw new BadRequestException('Estado de cocina invalido');
-    }
-    const ticket = await this.prisma.kitchenTicket.findUnique({ where: { id: ticketId }, include: { order: true } });
-    if (!ticket) throw new NotFoundException('Ticket no encontrado');
-    const updated = await this.prisma.kitchenTicket.update({
-      where: { id: ticketId },
-      data: {
-        status,
-        assignedToId: ticket.assignedToId || user.id,
-        ...(status === 'PREPARING' ? { startedAt: new Date() } : {}),
-        ...(status === 'READY' ? { readyAt: new Date() } : {}),
-        ...(status === 'SERVED' ? { servedAt: new Date() } : {}),
-      },
-      include: { station: true, assignedTo: { select: { id: true, name: true } }, items: true, order: { include: { waiter: true, diningTable: true } } },
-    });
-    this.socketGateway.emitKitchenTicketUpdated(updated);
-    if (status === 'READY') {
-      this.socketGateway.emitKitchenTicketReady(updated.order.waiterId, updated);
-    }
-    await this.refreshOrderKitchenStatus(ticket.orderId);
-    return updated;
-  }
-
-  private async refreshOrderKitchenStatus(orderId: string) {
-    const tickets = await this.prisma.kitchenTicket.findMany({ where: { orderId } });
-    if (tickets.length === 0) return;
-    const kitchenStatus = tickets.every(t => ['READY', 'SERVED'].includes(t.status)) ? 'READY' : 'ACTIVE';
-    await this.prisma.order.update({
-      where: { id: orderId },
-      data: { kitchenStatus, ...(kitchenStatus === 'READY' ? { servedAt: new Date() } : {}) },
-    });
+    if (!['NEW', 'PREPARING', 'READY', 'SERVED', 'CANCELLED'].includes(status)) throw new BadRequestException('Estado de cocina inválido');
+    const result = await this.prisma.$transaction(async tx => {
+      await lockOperation(tx);
+      const ticket = await tx.kitchenTicket.findUnique({ where: { id: ticketId }, include: { order: true } });
+      if (!ticket) throw new NotFoundException('Ticket no encontrado');
+      if (ticket.tableId) {
+        const table = await tx.diningTable.findUnique({ where: { id: ticket.tableId } });
+        if (table?.status === 'CLOSED' && ticket.status !== status) throw new BadRequestException('La cuenta ya está cerrada');
+      }
+      const transitions: Record<string, string[]> = { NEW: ['PREPARING', 'READY'], PREPARING: ['READY'], READY: ['SERVED'], SERVED: [], CANCELLED: [] };
+      if (ticket.status !== status && !transitions[ticket.status]?.includes(status)) throw new BadRequestException('El pedido cambió. Actualiza cocina antes de continuar.');
+      const updated = await tx.kitchenTicket.update({ where: { id: ticketId }, data: {
+        status, assignedToId: ticket.assignedToId || user.id,
+        ...(status === 'PREPARING' ? { startedAt: ticket.startedAt || new Date() } : {}),
+        ...(status === 'READY' ? { readyAt: ticket.readyAt || new Date() } : {}),
+        ...(status === 'SERVED' ? { servedAt: ticket.servedAt || new Date() } : {}),
+      }, include: { station: true, assignedTo: { select: { id: true, name: true } }, items: true, order: { include: { waiter: true, diningTable: true } } } });
+      const active = await tx.kitchenTicket.count({ where: { orderId: ticket.orderId, status: { in: ACTIVE_KITCHEN } } });
+      await tx.order.update({ where: { id: ticket.orderId }, data: { kitchenStatus: active ? 'ACTIVE' : 'READY' } });
+      return { updated, table: ticket.tableId ? await this.finishPaidTable(ticket.tableId, tx) : null };
+    }, operationTransaction);
+    this.socketGateway.emitKitchenTicketUpdated(result.updated);
+    if (status === 'READY') this.socketGateway.emitKitchenTicketReady(result.updated.order.waiterId, result.updated);
+    if (result.table) this.emitAccount(result.table);
+    return result.updated;
   }
 
   async listKitchenTickets(user: any, params: { status?: string; stationId?: string }) {
@@ -630,125 +605,108 @@ export class TablesService {
     return station;
   }
 
+  private async finishPaidTable(tableId: string, tx: Prisma.TransactionClient) {
+    let table = await this.findTable(tableId, tx);
+    if (table.status === 'OPEN' && table.orders.length && table.balance === 0 && table.kitchenStatus !== 'ACTIVE') {
+      await tx.order.updateMany({ where: { tableId, status: { not: 'CANCELLED' }, paymentStatus: 'CONFIRMED' }, data: { status: 'DELIVERED' } });
+      await tx.kitchenTicket.updateMany({ where: { tableId, status: 'READY' }, data: { status: 'SERVED', servedAt: new Date() } });
+      await tx.diningTable.update({ where: { id: tableId }, data: { status: 'CLOSED', closedAt: new Date() } });
+      table = await this.findTable(tableId, tx);
+    }
+    return table;
+  }
+
+  private emitAccount(table: any) {
+    if (table.status === 'CLOSED') this.socketGateway.emitTableClosed(table);
+    else this.socketGateway.emitTableUpdated(table);
+  }
+
   async submitPayment(tableId: string, data: any, user: any, file?: any) {
-    const table = await this.findTable(tableId);
-    const orders = (table.orders || []).filter((o: any) => o.status !== 'CANCELLED' && o.paymentStatus !== 'CONFIRMED');
-    if (orders.length === 0) throw new BadRequestException('La mesa no tiene saldo pendiente');
-    const order = orders[0];
-    const amount = Number(data.amount || order.total || 0);
-    const method = data.method === 'TRANSFER' ? 'TRANSFER' : 'CASH';
-
-    // Si es Efectivo: se confirma de inmediato y se libera la mesa
-    // Si es Transferencia: queda pendiente para validación del comprobante
-    const isCash = method === 'CASH';
-    const status = isCash ? 'CONFIRMED' : 'PENDING_REVIEW';
-
-    const payment = await this.prisma.payment.update({
-      where: { orderId: order.id },
-      data: {
-        method,
-        amount,
-        cashAmount: isCash ? amount : 0,
-        transferAmount: isCash ? 0 : amount,
-        reference: data.reference || null,
-        status,
-        confirmedBy: isCash ? user.id : null,
-        confirmedAt: isCash ? new Date() : null,
-      },
-    });
-    await this.prisma.order.update({
-      where: { id: order.id },
-      data: {
-        paymentMethod: method,
-        paymentStatus: status,
-        paymentReference: data.reference || null,
-        ...(isCash ? { status: 'DELIVERED' } : {})
-      },
-    });
-
-    let proof: any = null;
-    if (!isCash || file) {
-      proof = await this.storeProof({ paymentId: payment.id, orderId: order.id, tableId, amount, method, user, file });
+    if (!['CASH', 'TRANSFER'].includes(data.method)) throw new BadRequestException('Método de pago inválido');
+    const isCash = data.method === 'CASH';
+    const receipt = isCash ? null : validateReceipt(file);
+    const amount = Number(data.amount);
+    if (!Number.isFinite(amount) || amount <= 0) throw new BadRequestException('Monto de pago inválido');
+    const settlementId = typeof data.clientMutationId === 'string' && data.clientMutationId.trim() && data.clientMutationId.length <= 100 ? data.clientMutationId : randomUUID();
+    const result = await this.prisma.$transaction(async tx => {
+      await lockOperation(tx);
+      const table = await this.findTable(tableId, tx);
+      const repeated = await tx.payment.findMany({ where: { settlementId }, include: { order: true } });
+      if (repeated.length) {
+        if (repeated.some(p => p.order.tableId !== tableId || p.method !== data.method) || Math.abs(repeated.reduce((sum, p) => sum + p.amount, 0) - amount) > 0.01) {
+          throw new BadRequestException('El identificador de cobro ya está en uso');
+        }
+        return { table, payment: repeated[0], replay: true };
+      }
+      if (table.status !== 'OPEN') throw new BadRequestException('La cuenta está cerrada');
+      if (!await this.getActiveClosing(user.id, table.cashRegisterId, tx)) throw new BadRequestException('Abre la caja antes de cobrar');
+      const orders = table.orders.filter((order: any) => order.status !== 'CANCELLED' && order.paymentStatus !== 'CONFIRMED');
+      if (!orders.length) throw new BadRequestException('La cuenta ya está pagada');
+      if (orders.some((order: any) => order.paymentStatus === 'PENDING_REVIEW')) throw new BadRequestException('Ya hay un comprobante pendiente de revisión');
+      if (Math.abs(amount - table.balance) > 0.01) throw new BadRequestException('El monto debe coincidir con el saldo completo. Actualiza la cuenta y vuelve a intentar.');
+      const status = isCash ? 'CONFIRMED' : 'PENDING_REVIEW';
+      const payments: any[] = [];
+      for (const order of orders) {
+        const payment = await tx.payment.update({ where: { orderId: order.id }, data: {
+          amount: order.total, method: data.method, settlementId, status,
+          cashAmount: isCash ? order.total : 0, transferAmount: isCash ? 0 : order.total,
+          reference: String(data.reference || '').slice(0, 300) || null,
+          confirmedBy: isCash ? user.id : null, confirmedAt: isCash ? new Date() : null,
+        } });
+        payments.push(payment);
+        await tx.order.update({ where: { id: order.id }, data: {
+          paymentMethod: data.method, paymentStatus: status,
+          cashAmount: isCash ? order.total : 0, transferAmount: isCash ? 0 : order.total,
+          paymentReference: payment.reference,
+        } });
+      }
+      if (receipt) {
+        // One compressed image per account payment, stored durably in PostgreSQL.
+        // This works through Railway redeployments without duplicating ephemeral files.
+        await tx.transferProof.create({ data: {
+          paymentId: payments[0].id, orderId: orders[0].id, tableId,
+          cashClosingId: table.cashClosingId, submittedById: user.id,
+          amount, method: data.method, status: 'PENDING', filePath: null,
+          fileBase64: `data:${receipt.mime};base64,${receipt.bytes.toString('base64')}`,
+          mimeType: receipt.mime, fileSize: receipt.bytes.length,
+          originalName: String(file.originalname || 'comprobante.jpg').slice(0, 200),
+        } });
+      }
+      return { table: await this.finishPaidTable(tableId, tx), payment: payments[0], replay: false };
+    }, operationTransaction);
+    if (!result.replay) {
+      this.socketGateway.emitPaymentSubmitted(result);
+      this.emitAccount(result.table);
     }
-
-    let updatedTable = await this.findTable(tableId);
-
-    // Auto-cerrar y liberar la mesa si ya está completamente pagada
-    if (isCash && updatedTable.balance === 0) {
-      const closed = await this.prisma.diningTable.update({
-        where: { id: tableId },
-        data: { status: 'CLOSED', closedAt: new Date() },
-        include: this.buildTableInclude(),
-      });
-      updatedTable = this.summarizeTable(closed);
-      this.socketGateway.emitTableClosed(updatedTable);
-    } else {
-      this.socketGateway.emitPaymentSubmitted({ table: updatedTable, payment, proof });
-      this.socketGateway.emitTableUpdated(updatedTable);
-    }
-
-    return { table: updatedTable, payment, proof };
+    return result;
   }
 
-  private async storeProof(input: { paymentId: string; orderId: string; tableId: string; amount: number; method: string; user: any; file?: any }) {
-    if (!input.file) throw new BadRequestException('La foto del comprobante es obligatoria');
-    if (!input.file.mimetype || (!input.file.mimetype.startsWith('image/') && !input.file.mimetype.includes('octet-stream'))) {
-      throw new BadRequestException('Solo se permiten archivos de imagen');
-    }
-    if (input.file.size > 15 * 1024 * 1024) {
-      throw new BadRequestException('La imagen no puede pesar más de 15MB');
-    }
-    const closing = await this.getActiveClosing(input.user.id);
-    const closingId = closing?.id || 'general';
-
-    const ext = input.file.mimetype === 'image/png' ? 'png' : input.file.mimetype === 'image/webp' ? 'webp' : 'jpg';
-    const filePath = join(process.env.DATA_DIR || join(process.cwd(), '.tmp'), 'transfer-proofs', closingId, `${randomUUID()}.${ext}`);
-    try {
-      await mkdir(dirname(filePath), { recursive: true });
-      await writeFile(filePath, input.file.buffer);
-    } catch (e) {
-      console.warn('[storeProof] Error al escribir en disco:', e);
-    }
-
-    const fileBase64 = input.file.buffer
-      ? `data:${input.file.mimetype || 'image/jpeg'};base64,${input.file.buffer.toString('base64')}`
-      : null;
-
-    return this.prisma.transferProof.create({
-      data: {
-        paymentId: input.paymentId,
-        orderId: input.orderId,
-        tableId: input.tableId,
-        cashClosingId: closing?.id || null,
-        submittedById: input.user.id,
-        amount: input.amount,
-        method: input.method,
-        filePath,
-        fileBase64,
-        originalName: input.file.originalname || 'comprobante.jpg',
-        mimeType: input.file.mimetype || 'image/jpeg',
-        fileSize: input.file.size,
-      },
-      include: { table: true, order: true, payment: true, submittedBy: { select: { id: true, name: true } } },
-    });
-  }
-
-  async listPaymentValidation(status = 'PENDING', method = 'ALL') {
+  async listPaymentValidation(status = 'PENDING_REVIEW', method = 'ALL') {
     const payments = await this.prisma.payment.findMany({
-      where: { status: status === 'ALL' ? undefined : status },
+      where: { status: status === 'ALL' ? undefined : status, order: { tableId: { not: null } },
+        ...(method === 'CASH' ? { method: 'CASH' } : method === 'TRANSFER' ? { method: { not: 'CASH' } } : {}),
+      },
       include: {
         order: { include: { diningTable: true, waiter: { select: { id: true, name: true } } } },
-        transferProofs: { orderBy: { createdAt: 'desc' } },
+        transferProofs: { select: receiptSummary, orderBy: { createdAt: 'desc' } },
       },
-      orderBy: { createdAt: 'desc' },
-      take: 250,
+      orderBy: { createdAt: 'desc' }, take: 250,
     });
-    return payments.filter(p => {
-      if (p.order?.orderType !== 'LOCAL') return false;
-      if (method === 'CASH') return p.method === 'CASH';
-      if (method === 'TRANSFER') return p.method !== 'CASH' || p.transferAmount > 0 || p.transferProofs.length > 0;
-      return true;
-    });
+    const grouped = new Map<string, any>();
+    for (const payment of payments) {
+      const key = payment.settlementId || payment.id;
+      const current = grouped.get(key);
+      if (!current) grouped.set(key, { ...payment, orderCount: 1 });
+      else {
+        current.amount += payment.amount;
+        current.orderCount++;
+        if (payment.transferProofs.length) {
+          current.id = payment.id;
+          current.transferProofs = payment.transferProofs;
+        }
+      }
+    }
+    return [...grouped.values()];
   }
 
   async proofImage(proofId: string) {
@@ -758,78 +716,64 @@ export class TablesService {
   }
 
   async reviewPayment(paymentId: string, action: 'CONFIRMED' | 'REJECTED', user: any, reason?: string) {
-    const payment = await this.prisma.payment.findUnique({
-      where: { id: paymentId },
-      include: { order: { include: { diningTable: true } }, transferProofs: true },
-    });
-    if (!payment) throw new NotFoundException('Pago no encontrado');
-    const update = {
-      status: action,
-      confirmedBy: user.id,
-      confirmedAt: action === 'CONFIRMED' ? new Date() : null,
-    };
-    const updated = await this.prisma.payment.update({ where: { id: paymentId }, data: update });
-    await this.prisma.order.update({
-      where: { id: payment.orderId },
-      data: { paymentStatus: action, ...(action === 'CONFIRMED' ? { status: 'DELIVERED' } : {}) },
-    });
-    await this.prisma.transferProof.updateMany({
-      where: { paymentId },
-      data: {
-        status: action,
-        reviewedById: user.id,
-        reviewedAt: new Date(),
-        rejectionReason: action === 'REJECTED' ? reason || 'Rechazado por caja' : null,
-      },
-    });
-    let table = payment.order.tableId ? await this.findTable(payment.order.tableId) : null;
-    if (action === 'CONFIRMED') {
-      if (table && table.balance === 0) {
-        const closed = await this.prisma.diningTable.update({
-          where: { id: table.id },
-          data: { status: 'CLOSED', closedAt: new Date() },
-          include: this.buildTableInclude(),
-        });
-        table = this.summarizeTable(closed);
-        this.socketGateway.emitTableClosed(table);
-      } else {
-        this.socketGateway.emitPaymentValidated({ payment: updated, table });
-      }
-    } else {
-      this.socketGateway.emitPaymentRejected(payment.order.waiterId, { payment: updated, table, reason });
+    if (!['CONFIRMED', 'REJECTED'].includes(action)) throw new BadRequestException('Acción inválida');
+    const result = await this.prisma.$transaction(async tx => {
+      await lockOperation(tx);
+      const payment = await tx.payment.findUnique({ where: { id: paymentId }, include: { order: true } });
+      if (!payment?.order.tableId) throw new NotFoundException('Cobro de cuenta no encontrado');
+      if (payment.status === action) return { payment, table: await this.findTable(payment.order.tableId, tx), replay: true };
+      if (payment.status !== 'PENDING_REVIEW') throw new BadRequestException('Este pago ya fue revisado');
+      if (!await this.getActiveClosing(user.id, payment.order.cashRegisterId, tx)) throw new BadRequestException('Abre la caja antes de validar');
+      const group = await tx.payment.findMany({ where: payment.settlementId ? { settlementId: payment.settlementId } : { id: paymentId } });
+      if (group.some(p => p.status !== 'PENDING_REVIEW')) throw new BadRequestException('Actualiza la cuenta: uno de los pagos ya cambió');
+      const ids = group.map(p => p.id);
+      const pendingProofs = await tx.transferProof.count({ where: { paymentId: { in: ids }, status: 'PENDING' } });
+      if (!pendingProofs) throw new BadRequestException('No hay comprobante pendiente para este cobro');
+      await tx.payment.updateMany({ where: { id: { in: ids } }, data: {
+        status: action, confirmedBy: user.id, confirmedAt: action === 'CONFIRMED' ? new Date() : null,
+      } });
+      await tx.order.updateMany({ where: { id: { in: group.map(p => p.orderId) } }, data: { paymentStatus: action } });
+      await tx.transferProof.updateMany({ where: { paymentId: { in: ids }, status: 'PENDING' }, data: {
+        status: action, reviewedById: user.id, reviewedAt: new Date(),
+        rejectionReason: action === 'REJECTED' ? String(reason || 'Rechazado por caja').slice(0, 500) : null,
+      } });
+      return { payment: { ...payment, status: action }, table: await this.finishPaidTable(payment.order.tableId, tx), replay: false };
+    }, operationTransaction);
+    if (!result.replay) {
+      if (action === 'CONFIRMED') this.socketGateway.emitPaymentValidated(result);
+      else this.socketGateway.emitPaymentRejected(result.table.openedById, { ...result, reason });
+      this.emitAccount(result.table);
     }
-    return { payment: updated, table };
+    return result;
   }
 
   async closeTable(tableId: string, user: any) {
-    const table = await this.findTable(tableId);
-    if (table.kitchenStatus === 'ACTIVE') throw new BadRequestException('No puedes cerrar una mesa con cocina pendiente');
-    if (table.balance > 0 || table.paymentStatus !== 'CONFIRMED') throw new BadRequestException('No puedes cerrar una mesa con pago pendiente');
-    const closed = await this.prisma.diningTable.update({
-      where: { id: tableId },
-      data: { status: 'CLOSED', closedAt: new Date() },
-      include: this.buildTableInclude(),
-    });
-    this.socketGateway.emitTableClosed(this.summarizeTable(closed));
-    return this.summarizeTable(closed);
+    const table = await this.prisma.$transaction(async tx => {
+      await lockOperation(tx);
+      const table = await this.findTable(tableId, tx);
+      if (table.kitchenStatus === 'ACTIVE') throw new BadRequestException('Hay productos pendientes en cocina');
+      if (table.balance > 0 || !table.orders.length) throw new BadRequestException('La cuenta tiene pago pendiente');
+      return this.finishPaidTable(tableId, tx);
+    }, operationTransaction);
+    this.emitAccount(table);
+    return table;
   }
 
-  async purgeProofsForClosing(cashClosingId: string) {
-    const proofs = await this.prisma.transferProof.findMany({ where: { cashClosingId, status: { not: 'PURGED' } } });
-    for (const proof of proofs) {
-      if (proof.filePath && existsSync(proof.filePath)) {
-        await unlink(proof.filePath).catch(() => undefined);
-      }
-    }
+  async purgeProofsForClosing(_cashClosingId: string) {
+    // Preserve receipts after checkout; expire image bytes only after the configured retention.
+    // The amount, review status and audit metadata are always kept.
+    const days = Number(process.env.RECEIPT_RETENTION_DAYS || 30);
+    if (!Number.isFinite(days) || days < 1) return;
+    const before = new Date(Date.now() - days * 86400000);
     await this.prisma.transferProof.updateMany({
-      where: { cashClosingId },
-      data: { status: 'PURGED', filePath: null, purgedAt: new Date() },
+      where: { createdAt: { lt: before }, status: { in: ['CONFIRMED', 'REJECTED'] }, purgedAt: null, table: { status: 'CLOSED' } },
+      data: { fileBase64: null, purgedAt: new Date() },
     });
   }
 
   async assertNoOpenTableWork(cashRegisterId?: string) {
     const openTables = await this.prisma.diningTable.count({
-      where: { status: 'OPEN', ...(cashRegisterId ? { cashRegisterId } : {}) },
+      where: { status: 'OPEN', orders: { some: {} }, ...(cashRegisterId ? { cashRegisterId } : {}) },
     });
     if (openTables > 0) throw new BadRequestException(`No se puede cerrar la caja. Hay ${openTables} mesa(s) abierta(s).`);
     const pendingTickets = await this.prisma.kitchenTicket.count({

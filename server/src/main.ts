@@ -23,7 +23,14 @@ async function bootstrap() {
 
   app.useGlobalFilters(new AllExceptionsFilter(app.get(PrismaService)));
 
-  app.use(helmet());
+  app.use(helmet({
+    contentSecurityPolicy: {
+      directives: {
+        // Camera previews and authenticated receipt downloads use local object URLs.
+        imgSrc: ["'self'", 'data:', 'blob:', 'https:'],
+      },
+    },
+  }));
   
   const instance = app.getHttpAdapter().getInstance();
   if (typeof instance.set === 'function') {

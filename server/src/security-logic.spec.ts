@@ -73,6 +73,7 @@ describe('Security & Logic Audit Tests', () => {
       findUnique: jest.fn(),
     },
     $transaction: jest.fn((cb) => cb(mockPrisma)),
+    $queryRaw: jest.fn().mockResolvedValue([{ locked: 1 }]),
   };
 
   const mockSocket = {

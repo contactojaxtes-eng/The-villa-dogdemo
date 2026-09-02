@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { ArrowLeft, Minus, Plus, Save, Search, Send, WifiOff } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -23,7 +23,6 @@ type CartItem = {
   takeaway: boolean
 }
 
-const QUICK_TABLES = ['Mesa 1', 'Mesa 2', 'Mesa 3', 'Mesa 4', 'Mesa 5', 'Mesa 6', 'Mesa 7', 'Mesa 8', 'Mesa 9', 'Mesa 10']
 const QUICK_CHIPS = ['Sin cebolla', 'Salsas aparte', 'Sin ripio', 'Bien dorado', 'Sin salsas', 'Poco picante']
 
 export default function TableOrderPage() {
@@ -33,13 +32,14 @@ export default function TableOrderPage() {
   const editOrderId = params.get('editOrderId') || ''
   const [categories, setCategories] = useState<Category[]>([])
   const [selectedCategory, setSelectedCategory] = useState<string>('ALL')
-  const [tableLabel, setTableLabel] = useState('Mesa 1')
+  const [tableLabel, setTableLabel] = useState('')
   const [notes, setNotes] = useState('')
   const [search, setSearch] = useState('')
   const [cart, setCart] = useState<CartItem[]>([])
   const [pending, setPending] = useState<OfflineTableOrder[]>([])
   const [online, setOnline] = useState(navigator.onLine)
   const [saving, setSaving] = useState(false)
+  const submission = useRef({ signature: '', id: '' })
   const [showMobileCart, setShowMobileCart] = useState(false)
 
   const loadPending = useCallback(() => listOfflineOrders().then(setPending).catch(() => setPending([])), [])
@@ -47,6 +47,9 @@ export default function TableOrderPage() {
   useEffect(() => {
     api.get<Category[]>('/menu/categories').then(setCategories).catch(console.error)
     loadPending()
+    if (existingTableId && !editOrderId) {
+      api.get<{ label: string }>(`/tables/${existingTableId}`).then(table => setTableLabel(table.label)).catch(console.error)
+    }
     if (editOrderId) {
       api.get<DiningOrderSummary>(`/orders/${editOrderId}`).then(order => {
         setTableLabel(order.diningTable?.label || order.customerName || '')
@@ -67,7 +70,7 @@ export default function TableOrderPage() {
         }))
       }).catch(console.error)
     }
-  }, [editOrderId, loadPending])
+  }, [editOrderId, existingTableId, loadPending])
 
   useEffect(() => {
     const updateOnline = () => setOnline(navigator.onLine)
@@ -161,7 +164,13 @@ export default function TableOrderPage() {
   }
 
   const submit = async () => {
-    const effectiveTableLabel = (tableLabel.trim() || 'Mesa 1')
+    if (saving) return
+    const effectiveTableLabel = tableLabel.trim()
+    if (!effectiveTableLabel) {
+      alerts.warning('Escribe un nombre', 'Usa el nombre del cliente o una referencia, por ejemplo: Carlos o Carro rojo.')
+      document.getElementById('account-name')?.focus()
+      return
+    }
     if (cart.length === 0) {
       alerts.warning('Pedido vacío', 'Agrega al menos un producto a la cuenta.')
       return
@@ -188,7 +197,9 @@ export default function TableOrderPage() {
     )
     if (!confirmed) return
 
-    const clientMutationId = crypto.randomUUID()
+    const signature = JSON.stringify({ tableLabel: effectiveTableLabel, tableId: existingTableId, cart, notes })
+    if (submission.current.signature !== signature) submission.current = { signature, id: crypto.randomUUID() }
+    const clientMutationId = submission.current.id
     const payload: OfflineTableOrderPayload = {
       clientMutationId,
       tableId: existingTableId || undefined,
@@ -261,30 +272,15 @@ export default function TableOrderPage() {
 
         {!existingTableId && (
           <div className="space-y-2 rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-3">
-            <div className="flex flex-wrap items-center gap-1.5">
-              <span className="text-xs font-black text-[var(--text-muted)] uppercase tracking-wider mr-1">Mesas:</span>
-              {QUICK_TABLES.map(label => {
-                const isSelected = tableLabel === label
-                return (
-                  <button
-                    key={label}
-                    type="button"
-                    onClick={() => setTableLabel(label)}
-                    className={`rounded-lg px-2.5 py-1 text-xs font-black transition-all ${
-                      isSelected
-                        ? 'bg-[var(--accent)] text-white shadow-sm scale-105 ring-2 ring-[var(--accent)]'
-                        : 'bg-[var(--bg-elevated)] text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] border border-[var(--border-subtle)]'
-                    }`}
-                  >
-                    {label}
-                  </button>
-                )
-              })}
-            </div>
+            <label htmlFor="account-name" className="block text-sm font-bold text-[var(--text-primary)]">Nombre del cliente o de la cuenta</label>
+            <p className="text-xs text-[var(--text-secondary)]">La cuenta se crea cuando envías este pedido a cocina.</p>
             <Input
+              id="account-name"
+              maxLength={80}
+              autoComplete="off"
               value={tableLabel}
               onChange={e => setTableLabel(e.target.value)}
-              placeholder="Nombre de mesa o cuenta: Mesa 1, Carro rojo, Barra..."
+              placeholder="Ej. Carlos, Familia Pérez, Carro rojo"
               className="h-11 text-base font-bold"
             />
           </div>
@@ -498,7 +494,7 @@ export default function TableOrderPage() {
               <span className="flex h-7 w-7 items-center justify-center rounded-full bg-white text-xs font-black text-[var(--accent)] shadow">
                 {cart.reduce((s, i) => s + i.quantity, 0)}
               </span>
-              <span className="text-xs sm:text-sm font-black">Ver Cuenta ({tableLabel || 'Mesa 1'})</span>
+              <span className="text-xs sm:text-sm font-black">Ver Cuenta ({tableLabel || 'Sin nombre'})</span>
             </div>
             <div className="flex items-center gap-2">
               <span className="text-sm sm:text-base font-black">{formatCurrency(total)}</span>
@@ -513,7 +509,7 @@ export default function TableOrderPage() {
         <DialogContent className="max-w-md p-0 overflow-hidden bg-[var(--bg-panel)] rounded-2xl border-none">
           <div className="border-b border-[var(--border-subtle)] p-4 flex justify-between items-center bg-[var(--bg-panel)]">
             <div>
-              <h2 className="font-black text-base sm:text-lg text-[var(--text-primary)]">Cuenta ({tableLabel || 'Mesa 1'})</h2>
+              <h2 className="font-black text-base sm:text-lg text-[var(--text-primary)]">Cuenta ({tableLabel || 'Sin nombre'})</h2>
               <p className="text-xs text-[var(--text-secondary)]">{cart.reduce((s, i) => s + i.quantity, 0)} producto(s) - <b className="text-[var(--accent)]">{formatCurrency(total)}</b></p>
             </div>
             <Button size="icon" variant="ghost" className="h-8 w-8 text-xs font-bold" onClick={() => setShowMobileCart(false)}>✕</Button>

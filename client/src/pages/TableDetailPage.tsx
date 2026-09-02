@@ -1,5 +1,6 @@
 import { ProtectedImage } from '@/components/ProtectedImage'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { prepareReceiptPhoto } from '@/lib/receiptPhoto'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { io } from '@/lib/socket'
 import { ArrowLeft, Camera, CheckCircle2, Clock, Eye, Image as ImageIcon, PlusCircle, Trash2, Upload, User, Wallet, X, XCircle } from 'lucide-react'
@@ -23,6 +24,9 @@ export default function TableDetailPage() {
   const [preview, setPreview] = useState<string | null>(null)
   const [zoomUrl, setZoomUrl] = useState<string | null>(null)
   const [sending, setSending] = useState(false)
+  const [preparingPhoto, setPreparingPhoto] = useState(false)
+  const photoSelection = useRef(0)
+  const paymentAttempt = useRef({ signature: '', id: '' })
   const [actionLoading, setActionLoading] = useState<string | null>(null)
 
   const load = () => api.get<any>(`/tables/${id}`).then(t => {
@@ -68,16 +72,29 @@ export default function TableDetailPage() {
 
   useEffect(() => () => { if (preview) URL.revokeObjectURL(preview) }, [preview])
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0] || null
-    if (file) {
-      setProof(file)
-      if (preview) URL.revokeObjectURL(preview)
-      setPreview(URL.createObjectURL(file))
+    e.target.value = ''
+    if (!file) return
+    const selection = ++photoSelection.current
+    setPreparingPhoto(true)
+    setProof(null)
+    setPreview(null)
+    setZoomUrl(null)
+    try {
+      const prepared = await prepareReceiptPhoto(file)
+      if (selection !== photoSelection.current) return
+      setProof(prepared)
+      setPreview(URL.createObjectURL(prepared))
+    } catch (error: any) {
+      if (selection === photoSelection.current) alerts.error('No se pudo cargar la foto', error.message)
+    } finally {
+      if (selection === photoSelection.current) setPreparingPhoto(false)
     }
   }
 
   const submitPayment = async () => {
+    if (sending || preparingPhoto) return
     if (method !== 'CASH' && !proof) {
       alerts.warning('Foto obligatoria', 'Para pagos por transferencia es obligatorio tomar o subir la foto del comprobante.')
       return
@@ -86,15 +103,19 @@ export default function TableDetailPage() {
     setSending(true)
     try {
       const form = new FormData()
+      const signature = `${id}:${method}:${amount}:${reference}:${proof?.name || ''}`
+      if (paymentAttempt.current.signature !== signature) paymentAttempt.current = { signature, id: crypto.randomUUID() }
+      form.append('clientMutationId', paymentAttempt.current.id)
       form.append('method', method)
       form.append('amount', amount || String(table.balance || table.total || 0))
       form.append('reference', reference)
       if (proof) form.append('proof', proof)
-      await api.post(`/tables/${id}/payments`, form)
+      const result = await api.post<any>(`/tables/${id}/payments`, form)
 
       if (method === 'CASH') {
-        alerts.success('Mesa cobrada y liberada', 'El cobro en efectivo fue registrado y la mesa quedó cerrada y libre.')
-        navigate('/tables')
+        alerts.success('Cobro registrado', result.table?.status === 'CLOSED' ? 'La cuenta quedó pagada y cerrada.' : 'La cuenta está pagada. Se cerrará cuando cocina termine el pedido.')
+        if (result.table?.status === 'CLOSED') navigate('/tables')
+        else await load()
         return
       }
 
@@ -113,9 +134,10 @@ export default function TableDetailPage() {
   const validatePayment = async (paymentId: string) => {
     setActionLoading(paymentId)
     try {
-      await api.put(`/payment-validation/${paymentId}/validate`, {})
-      alerts.success('Pago aceptado y mesa liberada', 'El comprobante fue validado y la mesa quedó cerrada y libre.')
-      navigate('/tables')
+      const result = await api.put<any>(`/payment-validation/${paymentId}/validate`, {})
+      alerts.success('Pago validado', result.table?.status === 'CLOSED' ? 'La cuenta quedó pagada y cerrada.' : 'El pago fue confirmado. Cocina sigue preparando el pedido.')
+      if (result.table?.status === 'CLOSED') navigate('/tables')
+      else await load()
     } catch (err: any) {
       alerts.error('Error al validar pago', err?.response?.data?.message || err.message)
     } finally {
@@ -150,6 +172,7 @@ export default function TableDetailPage() {
 
   if (!table) return <div className="p-8 text-center text-sm text-[var(--text-secondary)]">Cargando mesa...</div>
 
+  const pendingReview = table.orders?.some((order: any) => order.paymentStatus === 'PENDING_REVIEW')
   const isStaff = ['ADMIN', 'SUPERADMIN', 'CASHIER'].includes(user?.role || '')
 
   return (
@@ -185,7 +208,7 @@ export default function TableDetailPage() {
           {table.status === 'OPEN' && (
             <Button
               onClick={closeTable}
-              disabled={table.balance > 0}
+              disabled={table.balance > 0 || table.kitchenStatus === 'ACTIVE'}
               className={`font-black ${table.balance > 0 ? 'bg-zinc-300 text-zinc-500 cursor-not-allowed' : 'bg-emerald-600 hover:bg-emerald-700 text-white'}`}
             >
               Cerrar mesa
@@ -196,7 +219,7 @@ export default function TableDetailPage() {
 
       <div className="grid gap-4 items-start lg:grid-cols-[1fr_380px]">
         {/* Orders Column */}
-        <section className="space-y-3">
+        <section className="min-w-0 space-y-3">
           <h2 className="font-black text-sm uppercase tracking-wider text-[var(--text-muted)]">Envíos y Comida en Mesa</h2>
           {table.orders?.map((order: any) => (
             <div key={order.id} className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-4 shadow-sm">
@@ -264,7 +287,7 @@ export default function TableDetailPage() {
         </section>
 
         {/* Payment and Billing Column */}
-        <aside className="space-y-4">
+        <aside className="min-w-0 space-y-4">
           {/* Balance card */}
           <div className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-4 shadow-sm">
             <div className="flex justify-between items-center text-sm text-[var(--text-secondary)]">
@@ -285,7 +308,8 @@ export default function TableDetailPage() {
           </div>
 
           {/* Payment Box */}
-          {table.status === 'OPEN' && table.balance > 0 && (
+          {pendingReview && <div role="status" className="rounded-2xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900">Comprobante enviado. Falta la validación de caja.</div>}
+          {table.status === 'OPEN' && table.balance > 0 && !pendingReview && (
             <div className="space-y-3 rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-4 shadow-sm">
               <div className="flex items-center justify-between">
                 <h2 className="font-black text-sm uppercase tracking-wider text-[var(--text-primary)]">Registrar Cobro</h2>
@@ -317,7 +341,8 @@ export default function TableDetailPage() {
                 <label className="text-xs font-bold text-[var(--text-secondary)]">Monto a cobrar</label>
                 <Input
                   value={amount}
-                  onChange={e => setAmount(e.target.value)}
+                  readOnly
+                  aria-label="Saldo completo a cobrar"
                   placeholder="Valor recibido"
                   className="font-bold text-base h-11"
                 />
@@ -335,7 +360,7 @@ export default function TableDetailPage() {
                 <div className="space-y-2.5 rounded-xl border border-amber-500/30 bg-amber-500/5 p-3.5">
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-black text-amber-800">📸 Foto de comprobante (Obligatoria)</span>
-                    {proof && <span className="text-[11px] text-emerald-600 font-black">✓ Adjuntada</span>}
+                    {preparingPhoto ? <span role="status" className="text-xs">Preparando foto…</span> : proof && <span className="text-[11px] text-emerald-600 font-black">✓ Lista</span>}
                   </div>
 
                   {/* 2 Opciones en comprobante: Tomar foto o Subir comprobante */}
@@ -367,9 +392,9 @@ export default function TableDetailPage() {
                   {/* Preview of selected photo */}
                   {preview && (
                     <div className="flex items-center justify-between gap-2 rounded-xl bg-[var(--bg-panel)] p-2 border border-[var(--border-subtle)]">
-                      <div className="flex items-center gap-2 overflow-hidden">
-                        <img src={preview} alt="Vista previa" className="h-10 w-10 rounded-lg object-cover border" />
-                        <div className="truncate text-xs">
+                      <div className="flex min-w-0 items-center gap-2 overflow-hidden">
+                        <img src={preview} alt="Vista previa" className="h-14 w-14 shrink-0 rounded-lg object-cover border" />
+                        <div className="min-w-0 truncate text-xs">
                           <p className="font-bold truncate text-[var(--text-primary)]">{proof?.name}</p>
                           <button
                             type="button"
@@ -384,7 +409,7 @@ export default function TableDetailPage() {
                         size="icon"
                         variant="ghost"
                         className="h-7 w-7 text-rose-500 hover:bg-rose-50"
-                        onClick={() => { setProof(null); setPreview(null); }}
+                        onClick={() => { photoSelection.current++; setProof(null); setPreview(null); setZoomUrl(null); }}
                       >
                         <X className="h-4 w-4" />
                       </Button>
@@ -395,7 +420,7 @@ export default function TableDetailPage() {
 
               {/* Submit Button */}
               <Button
-                disabled={sending}
+                disabled={sending || preparingPhoto || (method === 'TRANSFER' && !proof)}
                 onClick={submitPayment}
                 className="w-full h-11 font-black text-sm gap-2 bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-white shadow-md transition-all"
               >
