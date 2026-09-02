@@ -10,8 +10,9 @@ import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 
 async function bootstrap() {
-  validateProductionEnvironment();
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create(AppModule, {
+    logger: process.env.NODE_ENV === 'production' ? ['error', 'warn'] : undefined,
+  });
   app.enableShutdownHooks();
 
   app.setGlobalPrefix('api', {
