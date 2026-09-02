@@ -142,6 +142,8 @@ export default function KitchenPage() {
                         const isRemoved = item.changeType === 'REMOVED'
                         const isAdded = item.changeType === 'ADDED'
                         const isModified = item.changeType === 'MODIFIED'
+                        const isTakeaway = (item.notes || '').toLowerCase().includes('para llevar') || (item.notes || '').toLowerCase().includes('llevar')
+                        const cleanNotes = (item.notes || '').replace(/\[PARA LLEVAR\]/gi, '').replace(/\[MESA\]/gi, '').trim()
 
                         if (isRemoved) {
                           return (
@@ -158,13 +160,22 @@ export default function KitchenPage() {
                         if (isAdded) {
                           return (
                             <div key={item.id} className="rounded-xl border-2 border-emerald-500 bg-emerald-500/15 p-3 text-emerald-950 shadow-sm">
-                              <div className="flex items-center justify-between gap-2">
+                              <div className="flex items-center justify-between gap-2 flex-wrap">
                                 <span className="inline-flex items-center gap-1 rounded-full bg-emerald-600 px-2 py-0.5 text-[10px] font-black uppercase text-white tracking-wider">
                                   🟢 Nuevo a preparar
                                 </span>
+                                {isTakeaway ? (
+                                  <span className="inline-flex items-center gap-1 rounded-full bg-amber-500 text-slate-950 px-2 py-0.5 text-[10px] font-black uppercase tracking-wider shadow-sm">
+                                    🥡 PARA LLEVAR (EMPACAR)
+                                  </span>
+                                ) : (
+                                  <span className="inline-flex items-center gap-1 rounded-full bg-blue-500/20 text-blue-800 px-2 py-0.5 text-[10px] font-black">
+                                    🍽️ MESA
+                                  </span>
+                                )}
                               </div>
                               <p className="mt-1.5 text-base font-black text-emerald-950">{item.quantity} x {item.nameSnapshot}</p>
-                              {item.notes && <p className="text-xs font-bold text-emerald-800 mt-0.5">Nota: {item.notes}</p>}
+                              {cleanNotes && <p className="text-xs font-bold text-emerald-800 mt-0.5">Nota: {cleanNotes}</p>}
                             </div>
                           )
                         }
@@ -172,19 +183,41 @@ export default function KitchenPage() {
                         if (isModified) {
                           return (
                             <div key={item.id} className="rounded-xl border-2 border-amber-500 bg-amber-500/15 p-2.5 text-amber-950">
-                              <span className="inline-flex items-center gap-1 rounded-full bg-amber-600 px-2 py-0.5 text-[10px] font-black uppercase text-white">
-                                ✏️ Cantidad modificada {item.previousQty ? `(Antes: ${item.previousQty})` : ''}
-                              </span>
+                              <div className="flex items-center justify-between gap-2 flex-wrap">
+                                <span className="inline-flex items-center gap-1 rounded-full bg-amber-600 px-2 py-0.5 text-[10px] font-black uppercase text-white">
+                                  ✏️ Cantidad modificada {item.previousQty ? `(Antes: ${item.previousQty})` : ''}
+                                </span>
+                                {isTakeaway ? (
+                                  <span className="inline-flex items-center gap-1 rounded-full bg-amber-500 text-slate-950 px-2 py-0.5 text-[10px] font-black uppercase tracking-wider shadow-sm">
+                                    🥡 PARA LLEVAR (EMPACAR)
+                                  </span>
+                                ) : (
+                                  <span className="inline-flex items-center gap-1 rounded-full bg-blue-500/20 text-blue-800 px-2 py-0.5 text-[10px] font-black">
+                                    🍽️ MESA
+                                  </span>
+                                )}
+                              </div>
                               <p className="mt-1 text-sm font-black text-amber-950">{item.quantity} x {item.nameSnapshot}</p>
-                              {item.notes && <p className="text-xs text-amber-800 mt-0.5">Nota: {item.notes}</p>}
+                              {cleanNotes && <p className="text-xs text-amber-800 mt-0.5">Nota: {cleanNotes}</p>}
                             </div>
                           )
                         }
 
                         return (
                           <div key={item.id} className="rounded-xl bg-[var(--bg-elevated)] p-2.5 text-sm">
-                            <b className="text-[var(--text-primary)]">{item.quantity} x {item.nameSnapshot}</b>
-                            {item.notes && <p className="text-xs opacity-80 text-[var(--text-secondary)] mt-0.5">Nota: {item.notes}</p>}
+                            <div className="flex items-start justify-between gap-2">
+                              <b className="text-[var(--text-primary)]">{item.quantity} x {item.nameSnapshot}</b>
+                              {isTakeaway ? (
+                                <span className="inline-flex items-center gap-1 rounded-full bg-amber-500 text-slate-950 px-2 py-0.5 text-[10px] font-black uppercase tracking-wider shrink-0 shadow-sm">
+                                  🥡 PARA LLEVAR
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center gap-1 rounded-full bg-blue-500/15 text-blue-700 px-2 py-0.5 text-[10px] font-bold shrink-0">
+                                  🍽️ MESA
+                                </span>
+                              )}
+                            </div>
+                            {cleanNotes && <p className="text-xs opacity-80 text-[var(--text-secondary)] mt-0.5">Nota: {cleanNotes}</p>}
                           </div>
                         )
                       })}

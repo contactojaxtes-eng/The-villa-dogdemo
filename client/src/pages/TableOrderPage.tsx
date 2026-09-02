@@ -13,9 +13,18 @@ import { getErrorMessage, type DiningOrderSummary, type OfflineTableOrderPayload
 
 type MenuItem = { id: string; name: string; price: number; category?: { name: string } }
 type Category = { id: string; name: string; items: MenuItem[] }
-type CartItem = { menuItemId: string; name: string; price: number; quantity: number; notes?: string }
+type CartItem = {
+  cartKey: string
+  menuItemId: string
+  name: string
+  price: number
+  quantity: number
+  notes?: string
+  takeaway: boolean
+}
 
 const QUICK_TABLES = ['Mesa 1', 'Mesa 2', 'Mesa 3', 'Mesa 4', 'Mesa 5', 'Mesa 6', 'Mesa 7', 'Mesa 8', 'Mesa 9', 'Mesa 10']
+const QUICK_CHIPS = ['Sin cebolla', 'Salsas aparte', 'Sin ripio', 'Bien dorado', 'Sin salsas', 'Poco picante']
 
 export default function TableOrderPage() {
   const navigate = useNavigate()
@@ -42,13 +51,20 @@ export default function TableOrderPage() {
       api.get<DiningOrderSummary>(`/orders/${editOrderId}`).then(order => {
         setTableLabel(order.diningTable?.label || order.customerName || '')
         setNotes(order.notes || '')
-        setCart((order.items || []).map(item => ({
-          menuItemId: item.menuItemId,
-          name: item.menuItem?.name || 'Producto',
-          price: item.unitPrice || item.menuItem?.price || 0,
-          quantity: item.quantity,
-          notes: item.notes || '',
-        })))
+        setCart((order.items || []).map((item, idx) => {
+          const rawNotes = item.notes || ''
+          const isTakeaway = rawNotes.toLowerCase().includes('para llevar') || rawNotes.toLowerCase().includes('llevar')
+          const cleanNotes = rawNotes.replace(/\[PARA LLEVAR\]/gi, '').replace(/\[MESA\]/gi, '').trim()
+          return {
+            cartKey: `${item.menuItemId}_${isTakeaway ? 'takeaway' : 'dinein'}_${idx}`,
+            menuItemId: item.menuItemId,
+            name: item.menuItem?.name || 'Producto',
+            price: item.unitPrice || item.menuItem?.price || 0,
+            quantity: item.quantity,
+            notes: cleanNotes,
+            takeaway: isTakeaway,
+          }
+        }))
       }).catch(console.error)
     }
   }, [editOrderId, loadPending])
@@ -95,20 +111,53 @@ export default function TableOrderPage() {
 
   const total = cart.reduce((sum, item) => sum + item.price * item.quantity, 0)
 
-  const addItem = (item: MenuItem) => {
+  const addItem = (item: MenuItem, takeaway = false) => {
     setCart(prev => {
-      const found = prev.find(p => p.menuItemId === item.id && !p.notes)
-      if (found) return prev.map(p => p === found ? { ...p, quantity: p.quantity + 1 } : p)
-      return [...prev, { menuItemId: item.id, name: item.name, price: item.price, quantity: 1 }]
+      const targetKey = `${item.id}_${takeaway ? 'takeaway' : 'dinein'}`
+      const found = prev.find(p => p.cartKey === targetKey)
+      if (found) return prev.map(p => p.cartKey === targetKey ? { ...p, quantity: p.quantity + 1 } : p)
+      return [...prev, {
+        cartKey: targetKey,
+        menuItemId: item.id,
+        name: item.name,
+        price: item.price,
+        quantity: 1,
+        takeaway,
+        notes: '',
+      }]
     })
   }
 
-  const updateQty = (id: string, delta: number) => {
-    setCart(prev => prev.map(i => i.menuItemId === id ? { ...i, quantity: i.quantity + delta } : i).filter(i => i.quantity > 0))
+  const toggleTakeaway = (cartKey: string, takeaway: boolean) => {
+    setCart(prev => {
+      const item = prev.find(p => p.cartKey === cartKey)
+      if (!item || item.takeaway === takeaway) return prev
+      const newKey = `${item.menuItemId}_${takeaway ? 'takeaway' : 'dinein'}`
+      const existingNew = prev.find(p => p.cartKey === newKey && p.cartKey !== cartKey)
+      if (existingNew) {
+        return prev
+          .map(p => p.cartKey === newKey ? { ...p, quantity: p.quantity + item.quantity } : p)
+          .filter(p => p.cartKey !== cartKey)
+      }
+      return prev.map(p => p.cartKey === cartKey ? { ...p, cartKey: newKey, takeaway } : p)
+    })
   }
 
-  const updateNotes = (id: string, value: string) => {
-    setCart(prev => prev.map(i => i.menuItemId === id ? { ...i, notes: value } : i))
+  const appendNote = (cartKey: string, chipText: string) => {
+    setCart(prev => prev.map(i => {
+      if (i.cartKey !== cartKey) return i
+      const current = i.notes ? i.notes.trim() : ''
+      if (current.toLowerCase().includes(chipText.toLowerCase())) return i
+      return { ...i, notes: current ? `${current}, ${chipText}` : chipText }
+    }))
+  }
+
+  const updateQty = (cartKey: string, delta: number) => {
+    setCart(prev => prev.map(i => i.cartKey === cartKey ? { ...i, quantity: i.quantity + delta } : i).filter(i => i.quantity > 0))
+  }
+
+  const updateNotes = (cartKey: string, value: string) => {
+    setCart(prev => prev.map(i => i.cartKey === cartKey ? { ...i, notes: value } : i))
   }
 
   const submit = async () => {
@@ -117,13 +166,47 @@ export default function TableOrderPage() {
       alerts.warning('Pedido vacío', 'Agrega al menos un producto a la cuenta.')
       return
     }
+
+    const totalCount = cart.reduce((s, i) => s + i.quantity, 0)
+    const takeawayCount = cart.filter(i => i.takeaway || i.notes?.includes('[PARA LLEVAR]')).reduce((s, i) => s + i.quantity, 0)
+    const dineInCount = totalCount - takeawayCount
+
+    let summaryText = `${totalCount} producto(s)`
+    if (takeawayCount > 0 && dineInCount > 0) {
+      summaryText += ` (${dineInCount} para comer en mesa, ${takeawayCount} para llevar)`
+    } else if (takeawayCount > 0) {
+      summaryText += ` (Todos para llevar)`
+    }
+
+    // Confirmación interactiva antes de enviar a cocina
+    const confirmed = await alerts.confirm(
+      '¿Enviar pedido a cocina?',
+      `${effectiveTableLabel}: ${summaryText} • Total: ${formatCurrency(total)}`,
+      '🚀 Enviar a cocina',
+      'Revisar pedido',
+      'question'
+    )
+    if (!confirmed) return
+
     const clientMutationId = crypto.randomUUID()
     const payload: OfflineTableOrderPayload = {
       clientMutationId,
       tableId: existingTableId || undefined,
       tableLabel: effectiveTableLabel,
       notes,
-      items: cart.map(i => ({ menuItemId: i.menuItemId, quantity: i.quantity, notes: i.notes })),
+      items: cart.map(i => {
+        let noteText = i.notes?.trim() || ''
+        if (i.takeaway && !noteText.toLowerCase().includes('para llevar') && !noteText.toLowerCase().includes('llevar')) {
+          noteText = noteText ? `[PARA LLEVAR] ${noteText}` : '[PARA LLEVAR]'
+        } else if (!i.takeaway && !noteText.toLowerCase().includes('mesa')) {
+          noteText = noteText ? `[MESA] ${noteText}` : '[MESA]'
+        }
+        return {
+          menuItemId: i.menuItemId,
+          quantity: i.quantity,
+          notes: noteText || undefined,
+        }
+      }),
       paymentMethod: 'CASH',
       editOrderId: editOrderId || undefined,
     }
@@ -134,7 +217,7 @@ export default function TableOrderPage() {
       const res = editOrderId
         ? await api.put<{ table?: { id?: string; label?: string } }>(`/tables/orders/${editOrderId}`, payload)
         : await api.post<{ table?: { id?: string; label?: string } }>('/tables/orders', payload)
-      alerts.success('Pedido enviado a cocina', `Listo para preparar: ${res?.table?.label || tableLabel}.`)
+      alerts.toast(`Pedido enviado a cocina para ${res?.table?.label || tableLabel}`)
       setCart([])
       setNotes('')
       if (!existingTableId) setTableLabel('')
@@ -246,26 +329,43 @@ export default function TableOrderPage() {
         {/* Product Grid - 2 columns on mobile */}
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-2 xl:grid-cols-3">
           {items.map(item => {
-            const inCartQty = cart.find(c => c.menuItemId === item.id)?.quantity || 0
+            const inCartQty = cart.filter(c => c.menuItemId === item.id).reduce((s, c) => s + c.quantity, 0)
             return (
-              <button
+              <div
                 key={item.id}
-                onClick={() => addItem(item)}
-                className={`relative rounded-2xl border p-2.5 sm:p-3.5 text-left shadow-sm transition-all hover:scale-[1.01] active:scale-95 ${
+                onClick={() => addItem(item, false)}
+                className={`relative rounded-2xl border p-2.5 sm:p-3.5 text-left shadow-sm transition-all hover:scale-[1.01] active:scale-95 cursor-pointer flex flex-col justify-between ${
                   inCartQty > 0
                     ? 'border-[var(--accent)] bg-[var(--accent)]/5 ring-1 ring-[var(--accent)]'
                     : 'border-[var(--border-subtle)] bg-[var(--bg-panel)] hover:border-[var(--accent)] hover:bg-[var(--bg-hover)]'
                 }`}
               >
-                {inCartQty > 0 && (
-                  <span className="absolute right-2 top-2 flex h-5 w-5 sm:h-6 sm:w-6 items-center justify-center rounded-full bg-[var(--accent)] text-[10px] sm:text-xs font-black text-white shadow">
-                    {inCartQty}
-                  </span>
-                )}
-                <p className="font-black text-xs sm:text-sm text-[var(--text-primary)] pr-6 line-clamp-2">{item.name}</p>
-                <p className="text-[10px] sm:text-xs text-[var(--text-muted)] truncate">{item.category?.name}</p>
-                <p className="mt-1.5 text-xs sm:text-sm font-black text-[var(--accent)]">{formatCurrency(item.price)}</p>
-              </button>
+                <div>
+                  <div className="flex items-start justify-between gap-1">
+                    <p className="font-black text-xs sm:text-sm text-[var(--text-primary)] pr-2 line-clamp-2">{item.name}</p>
+                    {inCartQty > 0 && (
+                      <span className="shrink-0 flex h-5 w-5 sm:h-6 sm:w-6 items-center justify-center rounded-full bg-[var(--accent)] text-[10px] sm:text-xs font-black text-white shadow">
+                        {inCartQty}
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-[10px] sm:text-xs text-[var(--text-muted)] truncate">{item.category?.name}</p>
+                </div>
+                <div className="mt-2 flex items-center justify-between gap-1">
+                  <p className="text-xs sm:text-sm font-black text-[var(--accent)]">{formatCurrency(item.price)}</p>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      addItem(item, true)
+                    }}
+                    className="rounded-lg bg-amber-500/20 text-amber-900 dark:text-amber-300 px-2 py-0.5 text-[10px] font-black hover:bg-amber-500/30 transition border border-amber-500/30"
+                    title="Agregar para llevar"
+                  >
+                    🥡 +1 Llevar
+                  </button>
+                </div>
+              </div>
             )
           })}
         </div>
@@ -283,24 +383,76 @@ export default function TableOrderPage() {
 
         <div className="flex-1 space-y-2.5 overflow-y-auto p-4 min-h-0">
           {cart.map(item => (
-            <div key={item.menuItemId} className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-3">
+            <div key={item.cartKey} className={`rounded-xl border p-3 ${item.takeaway ? 'border-amber-500/40 bg-amber-500/5' : 'border-[var(--border-subtle)] bg-[var(--bg-elevated)]'}`}>
               <div className="flex items-start justify-between gap-2">
                 <div>
-                  <p className="text-sm font-black text-[var(--text-primary)]">{item.name}</p>
-                  <p className="text-xs font-black text-[var(--accent)]">{formatCurrency(item.price * item.quantity)}</p>
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <p className="text-sm font-black text-[var(--text-primary)]">{item.name}</p>
+                    {item.takeaway ? (
+                      <span className="rounded-full bg-amber-500 text-slate-950 font-black px-2 py-0.2 text-[9px] uppercase tracking-wide">
+                        🥡 Llevar
+                      </span>
+                    ) : (
+                      <span className="rounded-full bg-blue-500/15 text-blue-700 font-bold px-1.5 py-0.2 text-[9px]">
+                        🍽️ Mesa
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-xs font-black text-[var(--accent)] mt-0.5">{formatCurrency(item.price * item.quantity)}</p>
                 </div>
                 <div className="flex items-center gap-1 rounded-lg bg-[var(--bg-panel)] p-1 border border-[var(--border-subtle)]">
-                  <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => updateQty(item.menuItemId, -1)}><Minus className="h-3 w-3" /></Button>
+                  <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => updateQty(item.cartKey, -1)}><Minus className="h-3 w-3" /></Button>
                   <span className="w-6 text-center text-xs font-black">{item.quantity}</span>
-                  <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => updateQty(item.menuItemId, 1)}><Plus className="h-3 w-3" /></Button>
+                  <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => updateQty(item.cartKey, 1)}><Plus className="h-3 w-3" /></Button>
                 </div>
               </div>
+
+              {/* Toggles Mesa vs Llevar */}
+              <div className="mt-2 flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => toggleTakeaway(item.cartKey, false)}
+                  className={`rounded-lg px-2.5 py-1 text-[11px] font-black transition-all ${
+                    !item.takeaway
+                      ? 'bg-blue-600 text-white shadow-sm'
+                      : 'bg-[var(--bg-panel)] text-[var(--text-secondary)] border border-[var(--border-subtle)] hover:bg-[var(--bg-hover)]'
+                  }`}
+                >
+                  🍽️ En Mesa
+                </button>
+                <button
+                  type="button"
+                  onClick={() => toggleTakeaway(item.cartKey, true)}
+                  className={`rounded-lg px-2.5 py-1 text-[11px] font-black transition-all ${
+                    item.takeaway
+                      ? 'bg-amber-600 text-white shadow-sm'
+                      : 'bg-[var(--bg-panel)] text-[var(--text-secondary)] border border-[var(--border-subtle)] hover:bg-[var(--bg-hover)]'
+                  }`}
+                >
+                  🥡 Para Llevar
+                </button>
+              </div>
+
               <Input
                 value={item.notes || ''}
-                onChange={e => updateNotes(item.menuItemId, e.target.value)}
+                onChange={e => updateNotes(item.cartKey, e.target.value)}
                 placeholder="Nota: sin cebolla, salsas aparte..."
                 className="mt-2 h-8 text-xs bg-[var(--bg-panel)]"
               />
+
+              {/* Quick Chips for notes */}
+              <div className="mt-1.5 flex flex-wrap gap-1">
+                {QUICK_CHIPS.map(chip => (
+                  <button
+                    key={chip}
+                    type="button"
+                    onClick={() => appendNote(item.cartKey, chip)}
+                    className="rounded-md bg-[var(--bg-panel)] px-1.5 py-0.5 text-[10px] font-bold text-[var(--text-secondary)] border border-[var(--border-subtle)] hover:border-[var(--accent)] hover:text-[var(--accent)] transition"
+                  >
+                    +{chip}
+                  </button>
+                ))}
+              </div>
             </div>
           ))}
           {cart.length === 0 && (
@@ -367,26 +519,78 @@ export default function TableOrderPage() {
             <Button size="icon" variant="ghost" className="h-8 w-8 text-xs font-bold" onClick={() => setShowMobileCart(false)}>✕</Button>
           </div>
 
-          <div className="max-h-[50vh] space-y-2 overflow-y-auto p-4 min-h-0">
+          <div className="max-h-[50vh] space-y-2.5 overflow-y-auto p-4 min-h-0">
             {cart.map(item => (
-              <div key={item.menuItemId} className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-2.5">
+              <div key={item.cartKey} className={`rounded-xl border p-2.5 ${item.takeaway ? 'border-amber-500/40 bg-amber-500/5' : 'border-[var(--border-subtle)] bg-[var(--bg-elevated)]'}`}>
                 <div className="flex items-start justify-between gap-2">
                   <div>
-                    <p className="text-xs sm:text-sm font-black text-[var(--text-primary)]">{item.name}</p>
-                    <p className="text-xs font-black text-[var(--accent)]">{formatCurrency(item.price * item.quantity)}</p>
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <p className="text-xs sm:text-sm font-black text-[var(--text-primary)]">{item.name}</p>
+                      {item.takeaway ? (
+                        <span className="rounded-full bg-amber-500 text-slate-950 font-black px-1.5 py-0.2 text-[9px] uppercase tracking-wide">
+                          🥡 Llevar
+                        </span>
+                      ) : (
+                        <span className="rounded-full bg-blue-500/15 text-blue-700 font-bold px-1.5 py-0.2 text-[9px]">
+                          🍽️ Mesa
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-xs font-black text-[var(--accent)] mt-0.5">{formatCurrency(item.price * item.quantity)}</p>
                   </div>
                   <div className="flex items-center gap-1 rounded-lg bg-[var(--bg-panel)] p-1 border border-[var(--border-subtle)]">
-                    <Button size="icon" variant="ghost" className="h-6 w-6" onClick={() => updateQty(item.menuItemId, -1)}><Minus className="h-3 w-3" /></Button>
+                    <Button size="icon" variant="ghost" className="h-6 w-6" onClick={() => updateQty(item.cartKey, -1)}><Minus className="h-3 w-3" /></Button>
                     <span className="w-5 text-center text-xs font-black">{item.quantity}</span>
-                    <Button size="icon" variant="ghost" className="h-6 w-6" onClick={() => updateQty(item.menuItemId, 1)}><Plus className="h-3 w-3" /></Button>
+                    <Button size="icon" variant="ghost" className="h-6 w-6" onClick={() => updateQty(item.cartKey, 1)}><Plus className="h-3 w-3" /></Button>
                   </div>
                 </div>
+
+                {/* Toggles Mesa vs Llevar */}
+                <div className="mt-2 flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => toggleTakeaway(item.cartKey, false)}
+                    className={`rounded-lg px-2.5 py-1 text-[11px] font-black transition-all ${
+                      !item.takeaway
+                        ? 'bg-blue-600 text-white shadow-sm'
+                        : 'bg-[var(--bg-panel)] text-[var(--text-secondary)] border border-[var(--border-subtle)]'
+                    }`}
+                  >
+                    🍽️ En Mesa
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => toggleTakeaway(item.cartKey, true)}
+                    className={`rounded-lg px-2.5 py-1 text-[11px] font-black transition-all ${
+                      item.takeaway
+                        ? 'bg-amber-600 text-white shadow-sm'
+                        : 'bg-[var(--bg-panel)] text-[var(--text-secondary)] border border-[var(--border-subtle)]'
+                    }`}
+                  >
+                    🥡 Para Llevar
+                  </button>
+                </div>
+
                 <Input
                   value={item.notes || ''}
-                  onChange={e => updateNotes(item.menuItemId, e.target.value)}
+                  onChange={e => updateNotes(item.cartKey, e.target.value)}
                   placeholder="Nota: sin cebolla, salsas aparte..."
                   className="mt-1.5 h-7 text-xs bg-[var(--bg-panel)]"
                 />
+
+                {/* Quick Chips for notes */}
+                <div className="mt-1.5 flex flex-wrap gap-1">
+                  {QUICK_CHIPS.map(chip => (
+                    <button
+                      key={chip}
+                      type="button"
+                      onClick={() => appendNote(item.cartKey, chip)}
+                      className="rounded-md bg-[var(--bg-panel)] px-1.5 py-0.5 text-[10px] font-bold text-[var(--text-secondary)] border border-[var(--border-subtle)] hover:border-[var(--accent)] hover:text-[var(--accent)] transition"
+                    >
+                      +{chip}
+                    </button>
+                  ))}
+                </div>
               </div>
             ))}
           </div>

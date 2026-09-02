@@ -56,15 +56,16 @@ export const alerts = {
       confirmButtonText: 'Aceptar',
     })
   },
-  async confirm(title: string, text?: string, confirmText = 'Confirmar', cancelText = 'Cancelar') {
+  async confirm(title: string, text?: string, confirmText = 'Confirmar', cancelText = 'Cancelar', icon: 'question' | 'warning' | 'info' = 'question') {
     const result = await Swal.fire({
       ...getSwalOptions(),
-      icon: 'warning',
+      icon,
       title,
       text,
       showCancelButton: true,
       confirmButtonText: confirmText,
       cancelButtonText: cancelText,
+      reverseButtons: true,
     })
     return result.isConfirmed
   }
