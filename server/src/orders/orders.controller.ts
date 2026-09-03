@@ -75,6 +75,14 @@ export class OrdersController {
     return this.ordersService.findByNumber(parseInt(orderNumber));
   }
 
+  @Get('cancellations/pending')
+  @Roles('ADMIN', 'SUPERADMIN', 'CASHIER')
+  @UseGuards(RolesGuard)
+  @ApiOperation({ summary: 'Listar pedidos con cancelación pendiente de aprobación' })
+  listPendingCancellations() {
+    return this.ordersService.listPendingCancellations();
+  }
+
   @Get(':id')
   @ApiOperation({ summary: 'Obtener pedido por ID' })
   findOne(@Param('id') id: string) {
@@ -117,9 +125,25 @@ export class OrdersController {
   @Put(':id/cancel')
   @Roles('ADMIN', 'SUPERADMIN', 'CASHIER', 'WAITER')
   @UseGuards(RolesGuard)
-  @ApiOperation({ summary: 'Cancelar pedido con motivo' })
+  @ApiOperation({ summary: 'Cancelar pedido con motivo o solicitar cancelación' })
   cancelOrder(@Param('id') id: string, @Body('reason') reason: string, @Request() req: any) {
     return this.ordersService.cancelOrder(id, reason || 'Sin motivo', req.user);
+  }
+
+  @Put(':id/cancellation/approve')
+  @Roles('ADMIN', 'SUPERADMIN', 'CASHIER')
+  @UseGuards(RolesGuard)
+  @ApiOperation({ summary: 'Aprobar solicitud de cancelación de pedido' })
+  approveCancellation(@Param('id') id: string, @Request() req: any) {
+    return this.ordersService.approveCancellation(id, req.user);
+  }
+
+  @Put(':id/cancellation/reject')
+  @Roles('ADMIN', 'SUPERADMIN', 'CASHIER')
+  @UseGuards(RolesGuard)
+  @ApiOperation({ summary: 'Rechazar solicitud de cancelación de pedido' })
+  rejectCancellation(@Param('id') id: string, @Body('reason') reason: string, @Request() req: any) {
+    return this.ordersService.rejectCancellation(id, req.user, reason);
   }
 
   @Put(':id/assign')

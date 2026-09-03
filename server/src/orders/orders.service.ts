@@ -1186,6 +1186,46 @@ export class OrdersService implements OnModuleInit {
     if (order.status === 'CANCELLED') throw new BadRequestException('Pedido ya cancelado');
     if (order.status === 'DELIVERED') throw new BadRequestException('No se puede cancelar un pedido entregado');
 
+    // Si quien cancela es una MESERA (WAITER), se genera una solicitud pendiente de validación por caja/admin
+    if (userRole === 'WAITER') {
+      const updated = await this.prisma.order.update({
+        where: { id },
+        data: {
+          status: 'CANCELLATION_REQUESTED',
+          cancellationReason: reason || 'Cancelación solicitada por mesera',
+        },
+        include: {
+          waiter: { select: { id: true, name: true } },
+          assignee: { select: { id: true, name: true } },
+          diningTable: true,
+          items: { include: { menuItem: true } },
+        },
+      });
+
+      if (order.tableId) {
+        const table = await this.prisma.diningTable.findUnique({
+          where: { id: order.tableId },
+          include: { openedBy: true, orders: { include: { items: true, kitchenTickets: true } } },
+        });
+        if (table) {
+          this.socketGateway.emitTableUpdated(table);
+        }
+      }
+
+      this.socketGateway.emitOrderCancellationRequested({
+        order: updated,
+        reason: reason || 'Cancelación solicitada por mesera',
+        requestedBy: userParam,
+      });
+
+      return {
+        ...updated,
+        requested: true,
+        message: 'Solicitud de cancelación enviada a administración/caja para aprobación',
+      };
+    }
+
+    // Si es ADMIN, SUPERADMIN o CASHIER, se cancela de inmediato
     const updated = await this.prisma.order.update({
       where: { id },
       data: {
@@ -1212,7 +1252,7 @@ export class OrdersService implements OnModuleInit {
     if (order.tableId) {
       await this.prisma.kitchenTicket.updateMany({
         where: { orderId: id },
-        data: { status: 'CANCELLED', changeSummary: `Cancelado: ${reason || 'Por mesero'}` },
+        data: { status: 'CANCELLED', changeSummary: `Cancelado: ${reason || 'Por administración'}` },
       });
       const tickets = await this.prisma.kitchenTicket.findMany({
         where: { orderId: id },
@@ -1248,6 +1288,131 @@ export class OrdersService implements OnModuleInit {
         this.logger.error(`Error imprimiendo ticket de cancelación para pedido #${updated.orderNumber}`, err);
       }
     }
+
+    return updated;
+  }
+
+  async listPendingCancellations() {
+    return this.prisma.order.findMany({
+      where: { status: 'CANCELLATION_REQUESTED' },
+      include: {
+        waiter: { select: { id: true, name: true } },
+        diningTable: { include: { openedBy: { select: { id: true, name: true } } } },
+        items: { include: { menuItem: true } },
+      },
+      orderBy: { updatedAt: 'desc' },
+    });
+  }
+
+  async approveCancellation(id: string, adminUser: any) {
+    const adminId = typeof adminUser === 'string' ? adminUser : adminUser?.id;
+    const order = await this.prisma.order.findUnique({ where: { id }, include: { items: true } });
+    if (!order) throw new NotFoundException('Pedido no encontrado');
+    if (order.status !== 'CANCELLATION_REQUESTED') {
+      throw new BadRequestException('El pedido no tiene solicitud de cancelación pendiente');
+    }
+
+    const updated = await this.prisma.order.update({
+      where: { id },
+      data: {
+        status: 'CANCELLED',
+        cancellationReason: order.cancellationReason || 'Cancelación aprobada por administración',
+        cancelledAt: new Date(),
+        cancelledById: adminId,
+        paymentStatus: 'REJECTED',
+      },
+      include: {
+        waiter: { select: { id: true, name: true } },
+        assignee: { select: { id: true, name: true } },
+        cancelledBy: { select: { id: true, name: true } },
+        zone: true,
+        items: { include: { menuItem: true } },
+        payment: true,
+      },
+    });
+
+    await this.prisma.payment.updateMany({
+      where: { orderId: id },
+      data: { status: 'REJECTED' },
+    });
+
+    if (order.tableId) {
+      await this.prisma.kitchenTicket.updateMany({
+        where: { orderId: id },
+        data: { status: 'CANCELLED', changeSummary: `Cancelación aprobada: ${order.cancellationReason || 'Por administración'}` },
+      });
+      const tickets = await this.prisma.kitchenTicket.findMany({
+        where: { orderId: id },
+        include: { station: { include: { users: { select: { id: true, name: true, role: true } } } }, assignedTo: { select: { id: true, name: true } }, items: true, order: { include: { waiter: true, diningTable: true } } },
+      });
+      for (const t of tickets) {
+        this.socketGateway.emitKitchenTicketUpdated(t);
+      }
+      const table = await this.prisma.diningTable.findUnique({
+        where: { id: order.tableId },
+        include: { openedBy: true, orders: { include: { items: true, kitchenTickets: true } } },
+      });
+      if (table) {
+        this.socketGateway.emitTableUpdated(table);
+      }
+    }
+
+    this.socketGateway.emitOrderStatusChange(id, 'CANCELLED', updated);
+    this.socketGateway.emitOrderCancellationResolved({ orderId: id, status: 'CANCELLED', approved: true });
+
+    try {
+      await this.printService.printCancellation(updated);
+    } catch (err) {
+      this.logger.error(`Error imprimiendo ticket de cancelación para pedido #${updated.orderNumber}`, err);
+    }
+
+    return updated;
+  }
+
+  async rejectCancellation(id: string, adminUser: any, rejectReason?: string) {
+    const order = await this.prisma.order.findUnique({ where: { id }, include: { items: true } });
+    if (!order) throw new NotFoundException('Pedido no encontrado');
+    if (order.status !== 'CANCELLATION_REQUESTED') {
+      throw new BadRequestException('El pedido no tiene solicitud de cancelación pendiente');
+    }
+
+    const hasTickets = await this.prisma.kitchenTicket.count({
+      where: { orderId: id, status: { not: 'CANCELLED' } },
+    });
+    const revertStatus = hasTickets > 0 ? 'PREPARING' : 'PENDING';
+
+    const updated = await this.prisma.order.update({
+      where: { id },
+      data: {
+        status: revertStatus,
+        cancellationReason: null,
+      },
+      include: {
+        waiter: { select: { id: true, name: true } },
+        assignee: { select: { id: true, name: true } },
+        zone: true,
+        items: { include: { menuItem: true } },
+        payment: true,
+      },
+    });
+
+    if (order.tableId) {
+      const table = await this.prisma.diningTable.findUnique({
+        where: { id: order.tableId },
+        include: { openedBy: true, orders: { include: { items: true, kitchenTickets: true } } },
+      });
+      if (table) {
+        this.socketGateway.emitTableUpdated(table);
+      }
+    }
+
+    this.socketGateway.emitOrderStatusChange(id, revertStatus, updated);
+    this.socketGateway.emitOrderCancellationResolved({
+      orderId: id,
+      status: revertStatus,
+      approved: false,
+      reason: rejectReason,
+    });
 
     return updated;
   }

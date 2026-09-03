@@ -473,22 +473,25 @@ export class TablesService {
 
     const tickets: any[] = [];
     for (const [stationId, items] of stationGroups.entries()) {
-      // Buscar si YA EXISTE un ticket activo para este pedido y estación (UNA SOLA TARJETA)
+      // Buscar si YA EXISTE un ticket para este pedido y estación (UNA SOLA TARJETA SIEMPRE)
       let existingTicket: any = null;
       if (isEdited) {
         existingTicket = await db.kitchenTicket.findFirst({
           where: {
             orderId,
             stationId,
-            status: { in: ['NEW', 'PREPARING', 'READY'] },
+            status: { not: 'CANCELLED' },
           },
+          orderBy: { createdAt: 'desc' },
           include: { items: true },
         });
       }
 
       // Preparar los items actuales con su tipo de cambio exacto
       const ticketItemsData = items.map(item => {
-        const changeInfo = changeMap?.get(item.menuItemId);
+        const itemK = `${item.menuItemId}_${(item.notes || '').trim().toLowerCase()}`;
+        const itemKRaw = `${item.menuItemId}_${(item.notes || '').trim()}`;
+        const changeInfo = changeMap?.get(itemK) || changeMap?.get(itemKRaw) || changeMap?.get(item.menuItemId);
         let changeType = 'UNCHANGED';
         if (item.isRemovedItem || changeInfo?.changeType === 'REMOVED') {
           changeType = 'REMOVED';
@@ -508,8 +511,8 @@ export class TablesService {
           nameSnapshot: item.menuItem?.name || item.nameSnapshot || 'Producto',
           notes: item.notes || null,
           changeType,
-          previousQty: changeInfo?.previousQty || null,
-          previousNotes: changeInfo?.previousNotes || null,
+          previousQty: changeInfo?.previousQty ?? null,
+          previousNotes: changeInfo?.previousNotes ?? null,
         };
       });
 
@@ -548,8 +551,8 @@ export class TablesService {
         let newStatus = existingTicket.status;
         if (!hasActiveItems) {
           newStatus = 'CANCELLED';
-        } else if (existingTicket.status === 'READY' && stationIsEdited) {
-          // Solo si esta estación tuvo cambios vuelve a preparación; si sus productos no cambiaron, se conserva
+        } else if (stationIsEdited) {
+          // Si esta estación tuvo cambios, vuelve a preparación para que el cocinero lo atienda
           newStatus = 'PREPARING';
         }
 

@@ -212,6 +212,15 @@ export class SocketGateway implements OnGatewayConnection, OnGatewayDisconnect, 
     this.server.to('admins').to('cashiers').to(`user:${waiterId}`).emit('paymentRejected', payload);
   }
 
+  emitOrderCancellationRequested(payload: any) {
+    this.server.to('admins').to('cashiers').emit('cancellationRequested', payload);
+    this.server.emit('cancellationRequested', payload);
+  }
+
+  emitOrderCancellationResolved(payload: any) {
+    this.server.emit('cancellationResolved', payload);
+  }
+
   emitForceRefresh(payload: { triggeredBy: string; triggeredByName: string }) {
     this.server.emit('forceRefresh', payload);
     return { clientsNotified: this.connectedUsers.size };

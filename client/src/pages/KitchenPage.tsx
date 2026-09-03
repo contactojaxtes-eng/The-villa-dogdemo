@@ -71,29 +71,29 @@ export default function KitchenPage() {
       transports: ['websocket', 'polling'],
     })
 
-    // NUEVO TICKET CREADO: Cero polling, reactivo 100% por WebSockets
+    // TICKET CREADO
     socket.on('kitchenTicketCreated', (ticket: KitchenTicketSummary) => {
-      // Filtrar estrictamente: solo alertar y sonar si es para la estación de este cocinero
       if (!isTicketForThisCook(ticket)) return
-
-      alerts.toast(`🔔 Nuevo pedido #${ticket.order?.orderNumber || ''} para ${ticket.station?.name || 'cocina'}`)
       playUrgentBell()
 
-      // Actualización directa en memoria (cero recarga de pantalla)
+      const ticketKey = (t: any) => `${t.orderId || t.order?.id}_${t.stationId || t.station?.id}`
+      const incomingKey = ticketKey(ticket)
       setTickets(prev => {
-        const without = prev.filter(t => t.id !== ticket.id)
+        const without = prev.filter(t => t.id !== ticket.id && ticketKey(t) !== incomingKey)
         return [ticket, ...without]
       })
     })
 
     // TICKET ACTUALIZADO
     socket.on('kitchenTicketUpdated', (ticket: KitchenTicketSummary) => {
+      const ticketKey = (t: any) => `${t.orderId || t.order?.id}_${t.stationId || t.station?.id}`
+      const incomingKey = ticketKey(ticket)
       setTickets(prev => {
-        const exists = prev.some(t => t.id === ticket.id)
+        const exists = prev.some(t => t.id === ticket.id || ticketKey(t) === incomingKey)
         if (!exists) {
           return isTicketForThisCook(ticket) ? [ticket, ...prev] : prev
         }
-        return prev.map(t => t.id === ticket.id ? ticket : t)
+        return prev.map(t => (t.id === ticket.id || ticketKey(t) === incomingKey) ? ticket : t)
       })
     })
 
@@ -104,10 +104,12 @@ export default function KitchenPage() {
       alerts.toast(`✏️ Pedido editado #${ticket.order?.orderNumber || ''} (${ticket.station?.name || 'cocina'})`)
       playUrgentBell()
 
+      const ticketKey = (t: any) => `${t.orderId || t.order?.id}_${t.stationId || t.station?.id}`
+      const incomingKey = ticketKey(ticket)
       setTickets(prev => {
-        const exists = prev.some(t => t.id === ticket.id)
+        const exists = prev.some(t => t.id === ticket.id || ticketKey(t) === incomingKey)
         if (!exists) return [ticket, ...prev]
-        return prev.map(t => t.id === ticket.id ? ticket : t)
+        return prev.map(t => (t.id === ticket.id || ticketKey(t) === incomingKey) ? ticket : t)
       })
     })
 
@@ -115,31 +117,13 @@ export default function KitchenPage() {
   }, [isTicketForThisCook, user?.id, user?.name, user?.role])
 
   const consolidatedTickets = useMemo(() => {
-    // Garantizar UNA SOLA TARJETA por pedido y estación
+    // Garantizar UNA SOLA TARJETA por pedido y estación con los datos más recientes
     const map = new Map<string, KitchenTicketSummary>()
-    for (const t of tickets) {
+    const sorted = [...tickets].sort((a, b) => new Date(b.updatedAt || 0).getTime() - new Date(a.updatedAt || 0).getTime())
+    for (const t of sorted) {
       const key = `${t.orderId || t.order?.id}_${t.stationId || t.station?.id}`
       if (!map.has(key)) {
-        map.set(key, { ...t, items: [...(t.items || [])] })
-      } else {
-        const existing = map.get(key)!
-        const existingNames = new Set(existing.items?.map(i => i.nameSnapshot))
-        for (const item of (t.items || [])) {
-          if (!existingNames.has(item.nameSnapshot)) {
-            existing.items?.push(item)
-          } else {
-            const idx = existing.items?.findIndex(i => i.nameSnapshot === item.nameSnapshot)
-            if (idx !== undefined && idx >= 0 && item.changeType !== 'UNCHANGED') {
-              existing.items![idx] = item
-            }
-          }
-        }
-        if (t.isEdited) existing.isEdited = true
-        if (t.changeSummary) existing.changeSummary = t.changeSummary
-        if (t.status === 'PREPARING' && existing.status === 'NEW') existing.status = 'PREPARING'
-        if (t.status === 'READY' && ['NEW', 'PREPARING'].includes(existing.status)) existing.status = 'READY'
-        if (t.status === 'SERVED') existing.status = 'SERVED'
-        if (t.status === 'CANCELLED') existing.status = 'CANCELLED'
+        map.set(key, t)
       }
     }
     return Array.from(map.values())
@@ -441,46 +425,46 @@ export default function KitchenPage() {
                     </div>
                   )}
 
-                  {/* Lista de items: si el pedido fue editado, mostrar SOLO lo nuevo a preparar y lo quitado en letra GRANDE */}
+                  {/* Lista de items: si el pedido fue editado, mostrar EXCLUSIVAMENTE lo nuevo agregado/modificado en letra GRANDE */}
                   {(() => {
-                    const actionItems = ticket.isEdited
+                    const isEditedTicket = ticket.isEdited || (ticket.items || []).some(i => i.changeType === 'ADDED' || i.changeType === 'REMOVED' || i.changeType === 'MODIFIED')
+                    const actionItems = isEditedTicket
                       ? (ticket.items || []).filter(i => i.changeType === 'ADDED' || i.changeType === 'REMOVED' || (i.changeType === 'MODIFIED' && ((i.previousQty ?? i.quantity) !== i.quantity || i.notes !== i.previousNotes)))
                       : []
-                    const unchangedItems = ticket.isEdited
+                    const unchangedItems = isEditedTicket
                       ? (ticket.items || []).filter(i => !i.changeType || i.changeType === 'UNCHANGED' || (i.changeType === 'MODIFIED' && (i.previousQty ?? i.quantity) === i.quantity && i.notes === i.previousNotes))
                       : []
 
                     // Si fue editado y hay acciones específicas (agregados / quitados), mostrar modo enfocado en cocina
-                    if (ticket.isEdited && actionItems.length > 0 && !isFullyCancelled) {
+                    if (isEditedTicket && actionItems.length > 0 && !isFullyCancelled) {
                       return (
-                        <div className="mt-2.5 space-y-2">
+                        <div className="mt-2.5 space-y-2.5">
                           {/* Banner limpio y directo */}
-                          <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-amber-500/15 border border-amber-500/30 text-amber-900 dark:text-amber-200 text-[11px] font-black uppercase tracking-wider">
-                            <Flame className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400 animate-pulse" />
-                            <span>LO NUEVO A PREPARAR:</span>
+                          <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-500/20 border-2 border-amber-500/40 text-amber-900 dark:text-amber-200 text-xs font-black uppercase tracking-wider">
+                            <Flame className="h-4 w-4 text-amber-600 dark:text-amber-400 animate-pulse" />
+                            <span>🔥 SOLO LO AGREGADO / NUEVO:</span>
                           </div>
 
                           {/* Items agregados o modificados con letra GRANDE y clara */}
-                          <div className="space-y-2">
+                          <div className="space-y-2.5">
                             {actionItems.map((item: KitchenTicketItemSummary) => {
                               const isRemoved = item.changeType === 'REMOVED' || (item.changeType === 'MODIFIED' && (item.previousQty ?? item.quantity) > item.quantity)
-                              const isAdded = item.changeType === 'ADDED' || (item.changeType === 'MODIFIED' && (item.previousQty ?? item.quantity) < item.quantity)
                               const isTakeaway = (item.notes || '').toLowerCase().includes('llevar')
                               const cleanNotes = (item.notes || '').replace(/\[PARA LLEVAR\]/gi, '').replace(/\[MESA\]/gi, '').trim()
 
                               if (isRemoved) {
                                 const removedQty = item.changeType === 'REMOVED' ? item.quantity : ((item.previousQty ?? item.quantity) - item.quantity)
                                 return (
-                                  <div key={item.id} className="rounded-2xl border-2 border-rose-400 bg-rose-500/15 p-3 shadow-xs">
+                                  <div key={item.id} className="rounded-2xl border-2 border-rose-500 bg-rose-500/15 p-3.5 shadow-sm">
                                     <div className="flex items-center justify-between gap-1 mb-1">
-                                      <span className="font-black px-2 py-0.5 rounded-md bg-rose-600 text-white text-[10px] tracking-wider uppercase">
+                                      <span className="font-black px-2.5 py-1 rounded-lg bg-rose-600 text-white text-xs tracking-wider uppercase">
                                         SE ELIMINÓ ❌
                                       </span>
-                                      <span className="text-[11px] font-black text-rose-600 dark:text-rose-400">
+                                      <span className="text-xs font-black text-rose-600 dark:text-rose-400">
                                         ¡NO PREPARAR!
                                       </span>
                                     </div>
-                                    <div className="text-base sm:text-lg font-black text-rose-800 dark:text-rose-300 line-through leading-tight">
+                                    <div className="text-lg sm:text-xl font-black text-rose-800 dark:text-rose-300 line-through leading-tight mt-1">
                                       -{removedQty}x {item.nameSnapshot}
                                     </div>
                                     {cleanNotes && (
@@ -495,29 +479,29 @@ export default function KitchenPage() {
                               const addedQty = item.changeType === 'ADDED' ? item.quantity : (item.quantity - (item.previousQty ?? 0))
 
                               return (
-                                <div key={item.id} className="rounded-2xl border-2 border-emerald-500 bg-emerald-500/15 p-3 shadow-sm">
-                                  <div className="flex items-center justify-between gap-1 mb-1">
-                                    <span className="font-black px-2 py-0.5 rounded-md bg-emerald-600 text-white text-[10px] tracking-wider uppercase animate-pulse">
-                                      ¡SE AGREGÓ! ✨
+                                <div key={item.id} className="rounded-2xl border-2 border-emerald-500 bg-emerald-500/15 p-3.5 shadow-md">
+                                  <div className="flex items-center justify-between gap-1 mb-1.5">
+                                    <span className="font-black px-2.5 py-1 rounded-lg bg-emerald-600 text-white text-xs tracking-wider uppercase animate-pulse">
+                                      ✨ ¡SE AGREGÓ! (NUEVO)
                                     </span>
-                                    <span className={`shrink-0 rounded-full px-2.5 py-0.5 text-[10px] font-black tracking-wider ${isTakeaway ? 'bg-amber-500 text-slate-950' : 'bg-blue-600 text-white'}`}>
+                                    <span className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-black tracking-wider ${isTakeaway ? 'bg-amber-500 text-slate-950' : 'bg-blue-600 text-white'}`}>
                                       {isTakeaway ? '🥡 LLEVAR' : '🍽️ MESA'}
                                     </span>
                                   </div>
 
-                                  {/* Nombre y cantidad con letra GRANDE y destacada */}
-                                  <div className="text-base sm:text-lg font-black text-[var(--text-primary)] leading-tight mt-0.5">
+                                  {/* Nombre y cantidad con letra EXTRA GRANDE y destacada para cocina */}
+                                  <div className="text-xl sm:text-2xl font-black text-[var(--text-primary)] leading-tight mt-1">
                                     +{addedQty}x {item.nameSnapshot}
                                   </div>
 
                                   {item.changeType === 'MODIFIED' && item.previousQty && (
-                                    <div className="text-[11px] font-extrabold text-emerald-800 dark:text-emerald-300 mt-0.5">
-                                      (Total en cuenta: {item.quantity} un.)
+                                    <div className="text-xs font-extrabold text-emerald-800 dark:text-emerald-300 mt-1">
+                                      (Total acumulado en mesa: {item.quantity} un.)
                                     </div>
                                   )}
 
                                   {cleanNotes && (
-                                    <p className="text-xs sm:text-sm font-black text-amber-800 dark:text-amber-200 mt-1.5 pl-2 border-l-3 border-amber-500 bg-amber-500/10 py-1 rounded-r leading-tight">
+                                    <p className="text-sm font-black text-amber-800 dark:text-amber-200 mt-2 pl-2.5 border-l-4 border-amber-500 bg-amber-500/15 py-1.5 rounded-r leading-tight">
                                       👉 {cleanNotes}
                                     </p>
                                   )}
@@ -526,36 +510,12 @@ export default function KitchenPage() {
                             })}
                           </div>
 
-                          {/* Acordeón opcional para ver lo que ya se preparó anteriormente sin estorbar */}
+                          {/* Recordatorio discreto de que la mesa ya tenía comida anterior sin confundir al cocinero */}
                           {unchangedItems.length > 0 && (
-                            <div className="pt-2 border-t border-[var(--border-subtle)]">
-                              <button
-                                type="button"
-                                onClick={() => toggleShowPrevious(ticket.id)}
-                                className="w-full flex items-center justify-between text-[11px] font-bold text-[var(--text-secondary)] hover:text-[var(--text-primary)] py-1.5 px-2.5 rounded-xl bg-[var(--bg-elevated)] border border-[var(--border-subtle)] transition-colors cursor-pointer"
-                              >
-                                <span>📋 Pedido anterior ya preparado ({unchangedItems.length} producto{unchangedItems.length > 1 ? 's' : ''})</span>
-                                <span className="text-[10px] uppercase font-mono">{showPrevious[ticket.id] ? '▲ Ocultar' : '▼ Ver'}</span>
-                              </button>
-                              {showPrevious[ticket.id] && (
-                                <div className="mt-2 space-y-1 opacity-75">
-                                  {unchangedItems.map(item => {
-                                    const isTakeaway = (item.notes || '').toLowerCase().includes('llevar')
-                                    const cleanNotes = (item.notes || '').replace(/\[PARA LLEVAR\]/gi, '').replace(/\[MESA\]/gi, '').trim()
-                                    return (
-                                      <div key={item.id} className="rounded-xl p-2 text-xs bg-[var(--bg-elevated)] flex items-center justify-between">
-                                        <span className="font-bold text-[var(--text-primary)]">{item.quantity}x {item.nameSnapshot}</span>
-                                        <div className="flex items-center gap-1.5">
-                                          {cleanNotes && <span className="text-[10px] text-amber-600 font-semibold truncate">({cleanNotes})</span>}
-                                          <span className={`rounded-full px-1.5 py-0.2 text-[9px] font-black ${isTakeaway ? 'bg-amber-500 text-slate-950' : 'bg-blue-500/10 text-blue-700'}`}>
-                                            {isTakeaway ? '🥡 Llevar' : '🍽️ Mesa'}
-                                          </span>
-                                        </div>
-                                      </div>
-                                    )
-                                  })}
-                                </div>
-                              )}
+                            <div className="pt-2 text-center">
+                              <p className="text-[11px] font-bold text-[var(--text-muted)] italic">
+                                ℹ️ {unchangedItems.length} producto(s) anteriores de esta mesa ya fueron preparados.
+                              </p>
                             </div>
                           )}
                         </div>

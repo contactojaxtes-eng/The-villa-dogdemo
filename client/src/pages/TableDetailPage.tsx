@@ -60,14 +60,25 @@ export default function TableDetailPage() {
   }
 
   const handleCancelOrder = async (orderId: string, orderNumber: number) => {
-    const ok = await alerts.confirm(
-      `¿Cancelar Pedido #${orderNumber}?`,
-      'Esta acción avisará a cocina para no preparar estos productos y los retirará de la cuenta de la mesa.'
-    )
-    if (!ok) return
+    const isWaiter = user?.role === 'WAITER'
+    const promptMsg = isWaiter
+      ? `¿Solicitar cancelación del Pedido #${orderNumber}?\n\nLa solicitud será enviada al Administrador/Cajero para su aprobación y retiro de la mesa. Escribe el motivo:`
+      : `¿Cancelar Pedido #${orderNumber}?\n\nEscribe el motivo de la cancelación:`
+    
+    const reason = prompt(promptMsg, 'Cliente solicitó cancelación')
+    if (reason === null) return
+    if (!reason.trim()) {
+      alerts.warning('Motivo requerido', 'Debes escribir el motivo de la cancelación.')
+      return
+    }
+
     try {
-      await api.put(`/orders/${orderId}/cancel`, { reason: 'Cancelado por mesero desde mesa' })
-      alerts.success('Pedido cancelado', `El pedido #${orderNumber} fue cancelado y retirado de la cuenta.`)
+      const res: any = await api.put(`/orders/${orderId}/cancel`, { reason: reason.trim() })
+      if (res?.requested || isWaiter) {
+        alerts.success('Solicitud enviada a Caja', `La cancelación del pedido #${orderNumber} fue enviada al Administrador para su validación.`)
+      } else {
+        alerts.success('Pedido cancelado', `El pedido #${orderNumber} fue cancelado y retirado de la cuenta.`)
+      }
       load()
     } catch (err: any) {
       alerts.error('No se pudo cancelar', err?.response?.data?.message || err?.message || 'Error al cancelar')
@@ -273,15 +284,21 @@ export default function TableDetailPage() {
         </div>
         {(() => {
           const activeOrder = table.orders?.find((o: any) => !['DELIVERED', 'CANCELLED'].includes(o.status)) || table.orders?.[0]
+          const isCancelling = activeOrder?.status === 'CANCELLATION_REQUESTED'
           return (
-            <div className="flex gap-2">
-              <Button asChild variant="outline" className="gap-2 border-[var(--border-default)] font-black text-xs sm:text-sm">
+            <div className="flex gap-2 items-center flex-wrap">
+              <Button asChild variant="outline" className="gap-2 border-[var(--border-default)] font-black text-xs sm:text-sm" disabled={isCancelling}>
                 <Link to={activeOrder ? `/tables/new?tableId=${table.id}&editOrderId=${activeOrder.id}` : `/tables/new?tableId=${table.id}`}>
                   <Pencil className="h-4 w-4 text-[var(--accent)]" />Editar productos
                 </Link>
               </Button>
               {table.status === 'OPEN' && (
-                table.balance === 0 && (table.orders?.length || 0) > 0 ? (
+                isCancelling ? (
+                  <div className="rounded-xl px-3 py-2 bg-amber-500/15 border border-amber-500/30 text-amber-800 dark:text-amber-200 font-bold text-xs flex items-center gap-1.5 shadow-xs">
+                    <Clock className="h-4 w-4 text-amber-600 animate-pulse" />
+                    <span>⏳ Cancelación solicitada (en espera de Caja)</span>
+                  </div>
+                ) : table.balance === 0 && (table.orders?.length || 0) > 0 ? (
                   table.kitchenStatus === 'ACTIVE' || table.kitchenStatus === 'SENT' ? (
                     <div className="rounded-xl px-3 py-2 bg-amber-500/10 border border-amber-500/30 text-amber-700 dark:text-amber-300 font-black text-xs flex items-center gap-1.5 shadow-xs">
                       <ChefHat className="h-4 w-4 text-amber-600 animate-pulse" />
@@ -330,11 +347,13 @@ export default function TableDetailPage() {
                 <span className={`rounded-full px-2 py-0.5 text-[10px] font-black ${
                   order.status === 'CANCELLED'
                     ? 'bg-rose-500/15 text-rose-700 dark:text-rose-400'
+                    : order.status === 'CANCELLATION_REQUESTED'
+                    ? 'bg-amber-500/20 text-amber-800 dark:text-amber-300 border border-amber-400/40 animate-pulse'
                     : order.paymentStatus === 'CONFIRMED'
                     ? 'bg-emerald-500/10 text-emerald-600'
                     : 'bg-amber-500/10 text-amber-600'
                 }`}>
-                  {order.status === 'CANCELLED' ? 'CANCELADO' : order.paymentStatus === 'CONFIRMED' ? 'PAGADO' : 'PENDIENTE'}
+                  {order.status === 'CANCELLED' ? 'CANCELADO' : order.status === 'CANCELLATION_REQUESTED' ? '⏳ CANCELACIÓN SOLICITADA' : order.paymentStatus === 'CONFIRMED' ? 'PAGADO' : 'PENDIENTE'}
                 </span>
               </div>
 
@@ -367,6 +386,13 @@ export default function TableDetailPage() {
                   </span>
                 ))}
               </div>
+
+              {order.status === 'CANCELLATION_REQUESTED' && (
+                <div className="mt-2.5 rounded-xl border border-amber-400/40 bg-amber-500/15 p-2.5 text-xs text-amber-900 dark:text-amber-200 font-bold flex items-center gap-1.5">
+                  <Clock className="h-4 w-4 shrink-0 text-amber-600 animate-pulse" />
+                  <span>Solicitud de cancelación en revisión por Caja/Admin{order.cancellationReason ? `: "${order.cancellationReason}"` : ''}</span>
+                </div>
+              )}
 
               {order.status === 'CANCELLED' && (
                 <div className="mt-2.5 rounded-xl border border-rose-300 bg-rose-500/10 p-2.5 text-xs text-rose-700 dark:text-rose-400 font-bold flex items-center gap-1.5">
