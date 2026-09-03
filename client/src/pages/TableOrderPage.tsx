@@ -29,6 +29,13 @@ import { getErrorMessage, type DiningOrderSummary, type OfflineTableOrderPayload
 
 type MenuItem = { id: string; name: string; price: number; category?: { name: string } }
 type Category = { id: string; name: string; items: MenuItem[] }
+
+type CartAddition = {
+  id: string
+  name: string
+  price: number
+}
+
 type CartItem = {
   cartKey: string
   menuItemId: string
@@ -37,15 +44,41 @@ type CartItem = {
   quantity: number
   notes?: string
   takeaway: boolean
+  additions?: CartAddition[]
 }
 
 const QUICK_CHIPS = ['Sin cebolla', 'Salsas aparte', 'Sin ripio', 'Bien dorado', 'Sin salsas', 'Poco picante']
+const QUICK_MESAS = ['Mesa 1', 'Mesa 2', 'Mesa 3', 'Mesa 4', 'Mesa 5', 'Mesa 6', 'Mesa 7', 'Mesa 8']
 
 function genKey(prefix = 'item'): string {
   if (typeof crypto !== 'undefined' && crypto.randomUUID) {
     return `${prefix}_${crypto.randomUUID()}`
   }
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
+}
+
+function isFoodWithAdditions(item: { name: string; category?: { name: string } }): boolean {
+  const cat = (item.category?.name || '').toLowerCase()
+  const name = item.name.toLowerCase()
+  // No permitir adiciones en bebidas, jugos, agua ni en las adiciones mismas
+  if (
+    cat.includes('bebida') ||
+    cat.includes('gaseosa') ||
+    cat.includes('jugo') ||
+    cat.includes('agua') ||
+    cat.includes('adicion') ||
+    cat.includes('adicional') ||
+    name.includes('gaseosa') ||
+    name.includes('hit ') ||
+    name.includes('agua ') ||
+    name.includes('coca') ||
+    name.includes('postobon') ||
+    name.startsWith('adición') ||
+    name.startsWith('adicion')
+  ) {
+    return false
+  }
+  return true
 }
 
 export default function TableOrderPage() {
@@ -90,6 +123,7 @@ export default function TableOrderPage() {
             quantity: item.quantity,
             notes: cleanNotes,
             takeaway: isTakeaway,
+            additions: [],
           }
         }))
       }).catch(console.error)
@@ -128,6 +162,24 @@ export default function TableOrderPage() {
     if (online) syncPending().catch(() => undefined)
   }, [online, syncPending])
 
+  const availableAdditions = useMemo(() => {
+    return categories
+      .flatMap(c => c.items.map(i => ({ ...i, categoryName: c.name })))
+      .filter(i => {
+        const cat = (i.categoryName || '').toLowerCase()
+        const name = i.name.toLowerCase()
+        return cat.includes('adicion') || cat.includes('adicional') || name.startsWith('adición') || name.startsWith('adicion')
+      })
+  }, [categories])
+
+  const quesoAddition = useMemo(() => {
+    return availableAdditions.find(a => a.name.toLowerCase().includes('queso'))
+  }, [availableAdditions])
+
+  const tocinetaAddition = useMemo(() => {
+    return availableAdditions.find(a => a.name.toLowerCase().includes('tocineta'))
+  }, [availableAdditions])
+
   const items = useMemo(() => {
     const q = search.trim().toLowerCase()
     return categories
@@ -136,20 +188,45 @@ export default function TableOrderPage() {
       .filter(i => !q || `${i.name} ${i.category?.name || ''}`.toLowerCase().includes(q))
   }, [categories, search, selectedCategory])
 
-  const total = useMemo(() => cart.reduce((sum, item) => sum + item.price * item.quantity, 0), [cart])
-  const totalCount = useMemo(() => cart.reduce((s, i) => s + i.quantity, 0), [cart])
-  const takeawayCount = useMemo(() => cart.filter(i => i.takeaway || i.notes?.includes('[PARA LLEVAR]')).reduce((s, i) => s + i.quantity, 0), [cart])
-  const dineInCount = useMemo(() => totalCount - takeawayCount, [totalCount, takeawayCount])
+  const getItemUnitPrice = (item: CartItem) => {
+    const addTotal = (item.additions || []).reduce((s, a) => s + a.price, 0)
+    return item.price + addTotal
+  }
 
-  // Agregar producto (por defecto En Mesa o Llevar según botón)
-  const addItem = (item: MenuItem, takeaway = false) => {
+  const getItemLineTotal = (item: CartItem) => {
+    return getItemUnitPrice(item) * item.quantity
+  }
+
+  const total = useMemo(() => cart.reduce((sum, item) => sum + getItemLineTotal(item), 0), [cart])
+  const totalCount = useMemo(() => cart.reduce((s, i) => s + i.quantity, 0), [cart])
+  const dineInCount = useMemo(() => cart.filter(i => !i.takeaway).reduce((s, i) => s + i.quantity, 0), [cart])
+  const takeawayCount = useMemo(() => cart.filter(i => i.takeaway).reduce((s, i) => s + i.quantity, 0), [cart])
+
+  // Contadores por producto en el menú
+  const inCartCounts = useMemo(() => {
+    const map = new Map<string, { total: number; dineIn: number; takeaway: number }>()
+    for (const item of cart) {
+      const current = map.get(item.menuItemId) || { total: 0, dineIn: 0, takeaway: 0 }
+      current.total += item.quantity
+      if (item.takeaway) {
+        current.takeaway += item.quantity
+      } else {
+        current.dineIn += item.quantity
+      }
+      map.set(item.menuItemId, current)
+    }
+    return map
+  }, [cart])
+
+  // Agregar producto normal
+  const addItem = (item: MenuItem, isTakeaway = false) => {
     setCart(prev => {
-      // Si ya existe una línea exacta con el mismo producto, mismo takeaway y SIN notas particulares, incrementamos cantidad
-      const existingIdx = prev.findIndex(p => p.menuItemId === item.id && p.takeaway === takeaway && !p.notes?.trim())
-      if (existingIdx >= 0) {
-        const copy = [...prev]
-        copy[existingIdx] = { ...copy[existingIdx], quantity: copy[existingIdx].quantity + 1 }
-        return copy
+      // Buscar si ya existe una línea exactamente idéntica (sin adiciones, mismo modo, sin notas especiales)
+      const existing = prev.find(
+        i => i.menuItemId === item.id && i.takeaway === isTakeaway && !(i.notes || '').trim() && (!i.additions || i.additions.length === 0)
+      )
+      if (existing) {
+        return prev.map(i => (i.cartKey === existing.cartKey ? { ...i, quantity: i.quantity + 1 } : i))
       }
       return [
         ...prev,
@@ -159,44 +236,74 @@ export default function TableOrderPage() {
           name: item.name,
           price: item.price,
           quantity: 1,
-          takeaway,
+          takeaway: isTakeaway,
           notes: '',
+          additions: [],
         },
       ]
     })
+    alerts.toast(`+1 ${item.name} (${isTakeaway ? 'Llevar' : 'Mesa'})`)
   }
 
-  // Modificar cantidad (+ / -) de una línea específica del carrito
+  // Agregar producto directamente con una adición desde el menú
+  const addItemWithAddition = (item: MenuItem, addition: CartAddition) => {
+    setCart(prev => {
+      // Buscar si ya existe una línea con exactamente esta adición
+      const existing = prev.find(
+        i =>
+          i.menuItemId === item.id &&
+          !i.takeaway &&
+          !(i.notes || '').trim() &&
+          (i.additions || []).length === 1 &&
+          i.additions![0].id === addition.id
+      )
+      if (existing) {
+        return prev.map(i => (i.cartKey === existing.cartKey ? { ...i, quantity: i.quantity + 1 } : i))
+      }
+      return [
+        ...prev,
+        {
+          cartKey: genKey(`${item.id}_${addition.id}`),
+          menuItemId: item.id,
+          name: item.name,
+          price: item.price,
+          quantity: 1,
+          takeaway: false,
+          notes: '',
+          additions: [addition],
+        },
+      ]
+    })
+    alerts.toast(`+1 ${item.name} con ${addition.name}`)
+  }
+
+  // Restar en tarjeta de producto
+  const handleMenuCardDecrement = (menuItemId: string) => {
+    setCart(prev => {
+      const line = [...prev].reverse().find(i => i.menuItemId === menuItemId)
+      if (!line) return prev
+      if (line.quantity > 1) {
+        return prev.map(i => (i.cartKey === line.cartKey ? { ...i, quantity: i.quantity - 1 } : i))
+      }
+      return prev.filter(i => i.cartKey !== line.cartKey)
+    })
+  }
+
+  // Modificar cantidad en la cuenta
   const updateQty = (cartKey: string, delta: number) => {
     setCart(prev =>
       prev
-        .map(i => (i.cartKey === cartKey ? { ...i, quantity: i.quantity + delta } : i))
+        .map(i => (i.cartKey === cartKey ? { ...i, quantity: Math.max(0, i.quantity + delta) } : i))
         .filter(i => i.quantity > 0)
     )
   }
 
-  // Quitar producto completamente de una línea
+  // Eliminar ítem completo
   const removeItem = (cartKey: string) => {
     setCart(prev => prev.filter(i => i.cartKey !== cartKey))
   }
 
-  // Disminuir o sumar desde la tarjeta del menú directamente
-  const handleMenuCardDecrement = (menuItemId: string) => {
-    setCart(prev => {
-      // Buscar última línea agregada de este producto para restar
-      const idx = prev.map(p => p.menuItemId).lastIndexOf(menuItemId)
-      if (idx === -1) return prev
-      const target = prev[idx]
-      if (target.quantity > 1) {
-        const copy = [...prev]
-        copy[idx] = { ...target, quantity: target.quantity - 1 }
-        return copy
-      }
-      return prev.filter((_, i) => i !== idx)
-    })
-  }
-
-  // Separar una línea con cantidad > 1 en N ítems individuales de cantidad = 1
+  // Separar todas las unidades en líneas individuales
   const splitItem = (cartKey: string) => {
     setCart(prev => {
       const idx = prev.findIndex(p => p.cartKey === cartKey)
@@ -212,13 +319,14 @@ export default function TableOrderPage() {
         quantity: 1,
         takeaway: item.takeaway,
         notes: item.notes || '',
+        additions: item.additions ? [...item.additions] : [],
       }))
 
       const copy = [...prev]
       copy.splice(idx, 1, ...splitLines)
       return copy
     })
-    alerts.toast('Separado en unidades individuales para notas y llevar independiente.')
+    alerts.toast('Separado en unidades individuales.')
   }
 
   // Mover 1 unidad de esta línea al modo opuesto (Mesa <-> Llevar)
@@ -234,7 +342,7 @@ export default function TableOrderPage() {
         return copy
       }
 
-      // Si tiene más de 1, restamos 1 a la actual y creamos una nueva línea individual con el nuevo estado
+      // Si tiene más de 1, restamos 1 y creamos una línea individual
       const copy = [...prev]
       copy[idx] = { ...item, quantity: item.quantity - 1 }
       copy.push({
@@ -245,6 +353,7 @@ export default function TableOrderPage() {
         quantity: 1,
         takeaway: targetTakeaway,
         notes: item.notes || '',
+        additions: item.additions ? [...item.additions] : [],
       })
       return copy
     })
@@ -260,30 +369,82 @@ export default function TableOrderPage() {
     setCart(prev => prev.map(i => (i.cartKey === cartKey ? { ...i, notes: value } : i)))
   }
 
-  // Agregar chip rápido
+  // Agregar chip rápido: SI TIENE > 1 UNIDAD, SEPARA AUTOMÁTICAMENTE 1 UNIDAD CON ESA NOTA
   const appendNote = (cartKey: string, chipText: string) => {
-    setCart(prev =>
-      prev.map(i => {
-        if (i.cartKey !== cartKey) return i
-        const current = i.notes ? i.notes.trim() : ''
-        if (current.toLowerCase().includes(chipText.toLowerCase())) return i
-        return { ...i, notes: current ? `${current}, ${chipText}` : chipText }
-      })
-    )
+    setCart(prev => {
+      const target = prev.find(i => i.cartKey === cartKey)
+      if (!target) return prev
+
+      if (target.quantity > 1) {
+        // Separar automáticamente 1 unidad con esta nota
+        const remaining = { ...target, quantity: target.quantity - 1 }
+        const singleUnit: CartItem = {
+          ...target,
+          cartKey: genKey(`${target.menuItemId}_note`),
+          quantity: 1,
+          notes: chipText,
+          additions: target.additions ? [...target.additions] : [],
+        }
+        alerts.toast(`Se separó 1 ${target.name} con nota "${chipText}"`)
+        return prev.map(i => (i.cartKey === cartKey ? remaining : i)).concat(singleUnit)
+      }
+
+      // Si tiene 1 unidad, agregar a la nota actual
+      const current = target.notes ? target.notes.trim() : ''
+      if (current.toLowerCase().includes(chipText.toLowerCase())) return prev
+      const newNotes = current ? `${current}, ${chipText}` : chipText
+      return prev.map(i => (i.cartKey === cartKey ? { ...i, notes: newNotes } : i))
+    })
   }
 
-  // Unir ítems idénticos (mismo producto, mismo takeaway, misma nota)
+  // Alternar adición en una línea de la cuenta (SI TIENE > 1 UNIDAD, SEPARA 1 UNIDAD CON LA ADICIÓN)
+  const toggleItemAddition = (cartKey: string, addition: CartAddition) => {
+    setCart(prev => {
+      const target = prev.find(i => i.cartKey === cartKey)
+      if (!target) return prev
+
+      const currentAdditions = target.additions || []
+      const hasAddition = currentAdditions.some(a => a.id === addition.id)
+
+      if (!hasAddition && target.quantity > 1) {
+        // Separar automáticamente 1 unidad con esta adición
+        const remaining = { ...target, quantity: target.quantity - 1 }
+        const singleUnit: CartItem = {
+          ...target,
+          cartKey: genKey(`${target.menuItemId}_add`),
+          quantity: 1,
+          additions: [...currentAdditions, addition],
+        }
+        alerts.toast(`Se separó 1 ${target.name} con ${addition.name}`)
+        return prev.map(i => (i.cartKey === cartKey ? remaining : i)).concat(singleUnit)
+      }
+
+      // Si tiene 1 unidad o ya la tenía (quitar)
+      const newAdditions = hasAddition
+        ? currentAdditions.filter(a => a.id !== addition.id)
+        : [...currentAdditions, addition]
+
+      return prev.map(i => (i.cartKey === cartKey ? { ...i, additions: newAdditions } : i))
+    })
+  }
+
+  // Unir ítems idénticos
   const mergeIdentical = () => {
     setCart(prev => {
       const merged: CartItem[] = []
       for (const item of prev) {
+        const itemAdds = (item.additions || []).map(a => a.id).sort().join(',')
         const match = merged.find(
-          m => m.menuItemId === item.menuItemId && m.takeaway === item.takeaway && (m.notes || '').trim() === (item.notes || '').trim()
+          m =>
+            m.menuItemId === item.menuItemId &&
+            m.takeaway === item.takeaway &&
+            (m.notes || '').trim() === (item.notes || '').trim() &&
+            (m.additions || []).map(a => a.id).sort().join(',') === itemAdds
         )
         if (match) {
           match.quantity += item.quantity
         } else {
-          merged.push({ ...item })
+          merged.push({ ...item, additions: item.additions ? [...item.additions] : [] })
         }
       }
       return merged
@@ -293,13 +454,28 @@ export default function TableOrderPage() {
 
   const submit = async () => {
     if (saving) return
+
+    // 1. Validar nombre de mesa OBLIGATORIO
+    if (!existingTableId && !tableLabel.trim()) {
+      alerts.warning(
+        'Nombre de Mesa Requerido',
+        'Por favor escribe el número de mesa (ej. Mesa 1, Mesa 2) o el nombre del cliente para poder identificar el pedido.'
+      )
+      const input = document.getElementById('table-label-input')
+      if (input) {
+        input.focus()
+        input.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      }
+      return
+    }
+
+    // 2. Validar pedido no vacío
     if (cart.length === 0) {
       alerts.warning('Pedido vacío', 'Toca los productos del menú para agregarlos a la cuenta.')
       return
     }
 
-    const effectiveTableLabel = tableLabel.trim() || 'Nueva Mesa'
-    const displayLabel = tableLabel.trim() || 'Nueva Mesa (Automática)'
+    const effectiveTableLabel = tableLabel.trim()
 
     let summaryText = `${totalCount} producto(s)`
     if (takeawayCount > 0 && dineInCount > 0) {
@@ -312,7 +488,7 @@ export default function TableOrderPage() {
 
     const confirmed = await alerts.confirm(
       '¿Enviar pedido a cocina?',
-      `${displayLabel}: ${summaryText}\nTotal: ${formatCurrency(total)}\nMesera: ${user?.name || 'Mesera'}`,
+      `${effectiveTableLabel}: ${summaryText}\nTotal: ${formatCurrency(total)}\nMesera: ${user?.name || 'Mesera'}`,
       '🚀 Enviar a cocina',
       'Revisar pedido',
       'question'
@@ -323,24 +499,46 @@ export default function TableOrderPage() {
     if (submission.current.signature !== signature) submission.current = { signature, id: genKey('sub') }
     const clientMutationId = submission.current.id
 
+    // Construir lista de ítems para el backend (incluyendo productos base y adiciones facturables)
+    const itemsPayload: { menuItemId: string; quantity: number; notes?: string }[] = []
+
+    for (const item of cart) {
+      let noteText = item.notes?.trim() || ''
+      const additionNames = (item.additions || []).map(a => a.name.replace(/^adici[oó]n\s+de\s+/i, '')).join(', ')
+      if (additionNames) {
+        noteText = noteText ? `${noteText} (+ Con ${additionNames})` : `+ Con ${additionNames}`
+      }
+      if (item.takeaway && !noteText.toLowerCase().includes('para llevar') && !noteText.toLowerCase().includes('llevar')) {
+        noteText = noteText ? `[PARA LLEVAR] ${noteText}` : '[PARA LLEVAR]'
+      } else if (!item.takeaway && !noteText.toLowerCase().includes('mesa')) {
+        noteText = noteText ? `[MESA] ${noteText}` : '[MESA]'
+      }
+
+      // Producto principal
+      itemsPayload.push({
+        menuItemId: item.menuItemId,
+        quantity: item.quantity,
+        notes: noteText || undefined,
+      })
+
+      // Cada adición seleccionada como ítem adicional facturable
+      if (item.additions && item.additions.length > 0) {
+        for (const add of item.additions) {
+          itemsPayload.push({
+            menuItemId: add.id,
+            quantity: item.quantity,
+            notes: `Para: ${item.name} ${item.takeaway ? '[PARA LLEVAR]' : '[MESA]'}`,
+          })
+        }
+      }
+    }
+
     const payload: OfflineTableOrderPayload = {
       clientMutationId,
       tableId: existingTableId || undefined,
-      tableLabel: tableLabel.trim() || undefined,
+      tableLabel: effectiveTableLabel,
       notes,
-      items: cart.map(i => {
-        let noteText = i.notes?.trim() || ''
-        if (i.takeaway && !noteText.toLowerCase().includes('para llevar') && !noteText.toLowerCase().includes('llevar')) {
-          noteText = noteText ? `[PARA LLEVAR] ${noteText}` : '[PARA LLEVAR]'
-        } else if (!i.takeaway && !noteText.toLowerCase().includes('mesa')) {
-          noteText = noteText ? `[MESA] ${noteText}` : '[MESA]'
-        }
-        return {
-          menuItemId: i.menuItemId,
-          quantity: i.quantity,
-          notes: noteText || undefined,
-        }
-      }),
+      items: itemsPayload,
       paymentMethod: 'CASH',
       editOrderId: editOrderId || undefined,
     }
@@ -351,7 +549,7 @@ export default function TableOrderPage() {
       const res = editOrderId
         ? await api.put<{ table?: { id?: string; label?: string } }>(`/tables/orders/${editOrderId}`, payload)
         : await api.post<{ table?: { id?: string; label?: string } }>('/tables/orders', payload)
-      alerts.toast(`Pedido enviado a cocina para ${res?.table?.label || displayLabel}`)
+      alerts.toast(`Pedido enviado a cocina para ${res?.table?.label || effectiveTableLabel}`)
       setCart([])
       setNotes('')
       if (!existingTableId) setTableLabel('')
@@ -416,98 +614,103 @@ export default function TableOrderPage() {
           {pending.length > 0 && (
             <div className="flex items-center justify-between rounded-xl border border-amber-500/30 bg-amber-500/10 p-2.5 text-xs text-amber-700">
               <span>{pending.length} pedido(s) pendientes por sincronizar.</span>
-              <Button size="sm" variant="outline" className="h-7 text-xs" onClick={syncPending}>
-                Reintentar
+              <Button size="sm" variant="outline" onClick={() => syncPending()} className="h-7 text-xs font-bold">
+                Sincronizar
               </Button>
             </div>
           )}
 
-          {/* Nombre / Mesa del Pedido */}
-          {!existingTableId ? (
-            <div className="space-y-1.5 rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-3 shadow-xs">
-              <div className="flex items-center justify-between">
-                <label htmlFor="account-name" className="text-xs font-black uppercase tracking-wider text-[var(--text-primary)]">
-                  Mesa / Cliente / Referencia:
-                </label>
-                <span className="text-[11px] font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-md">
-                  ✨ Mesa automática
-                </span>
-              </div>
-              <Input
-                id="account-name"
-                maxLength={80}
-                autoComplete="off"
-                value={tableLabel}
-                onChange={e => setTableLabel(e.target.value)}
-                placeholder="Ej. Mesa 4, Carlos, Carro rojo (o déjalo vacío)..."
-                className="h-10 text-xs font-bold rounded-xl bg-[var(--bg-elevated)]"
-              />
-            </div>
-          ) : (
-            <div className="rounded-xl bg-[var(--accent)]/10 border border-[var(--accent)]/30 px-3 py-2 flex items-center justify-between">
-              <span className="text-xs font-black text-[var(--text-primary)]">
-                Agregando a: <strong className="text-[var(--accent)] text-sm">{tableLabel}</strong>
-              </span>
-              <span className="text-[10px] text-[var(--text-muted)] font-bold">Mesa existente</span>
-            </div>
-          )}
+          {/* Campo Mesa / Cliente / Referencia (OBLIGATORIO) */}
+          <div className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-3.5 shadow-xs">
+            <div className="flex items-center justify-between gap-2 mb-2">
+              <label htmlFor="table-label-input" className="text-xs font-black text-[var(--text-primary)] flex items-center gap-1.5 tracking-wider uppercase">
+                <span>MESA / CLIENTE / REFERENCIA:</span>
+                <span className="text-rose-600 font-black text-xs">* Obligatorio</span>
+              </label>
 
-          {/* Buscador de productos */}
+              {!existingTableId && (
+                <div className="flex items-center gap-1 flex-wrap">
+                  {QUICK_MESAS.slice(0, 6).map(quickMesa => (
+                    <button
+                      key={quickMesa}
+                      type="button"
+                      onClick={() => setTableLabel(quickMesa)}
+                      className={`px-2 py-0.5 rounded-md text-[10px] font-black transition cursor-pointer ${
+                        tableLabel === quickMesa
+                          ? 'bg-[var(--accent)] text-white shadow-xs'
+                          : 'bg-[var(--bg-elevated)] text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] border border-[var(--border-subtle)]'
+                      }`}
+                    >
+                      {quickMesa.replace('Mesa ', 'M')}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <Input
+              id="table-label-input"
+              value={tableLabel}
+              onChange={e => setTableLabel(e.target.value)}
+              placeholder="Escribe el número de mesa o nombre del cliente (Ej: Mesa 1, Mesa 4, Alexis)..."
+              disabled={!!existingTableId}
+              required
+              className={`text-sm font-bold bg-[var(--bg-elevated)] rounded-xl h-11 transition-all ${
+                !tableLabel.trim() && !existingTableId
+                  ? 'border-amber-500/60 focus:border-rose-500'
+                  : 'border-[var(--border-subtle)]'
+              }`}
+            />
+          </div>
+
+          {/* Barra de búsqueda de productos */}
           <div className="relative">
-            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--text-muted)]" />
+            <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-[var(--text-muted)]" />
             <Input
               value={search}
               onChange={e => setSearch(e.target.value)}
-              placeholder="Buscar producto..."
-              className="pl-9 pr-8 h-10 text-xs rounded-xl bg-[var(--bg-panel)]"
+              placeholder="Buscar producto (perro, hamburguesa, gaseosa)..."
+              className="pl-10 h-11 bg-[var(--bg-panel)] rounded-xl border-[var(--border-subtle)] text-sm font-medium"
             />
-            {search && (
-              <button
-                type="button"
-                onClick={() => setSearch('')}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-bold text-[var(--text-muted)] hover:text-[var(--text-primary)] cursor-pointer"
-              >
-                ✕
-              </button>
-            )}
           </div>
 
-          {/* Pestañas de categorías fluidas */}
-          <div className="flex items-center gap-1.5 overflow-x-auto pb-1 no-scrollbar sticky top-0 z-10 bg-[var(--bg-base)] py-1.5">
+          {/* Categorías (Pills horizontales) */}
+          <div className="flex items-center gap-2 overflow-x-auto pb-1 scrollbar-none">
             <button
               type="button"
               onClick={() => setSelectedCategory('ALL')}
-              className={`rounded-xl px-3.5 py-1.5 text-xs font-black whitespace-nowrap transition-all active:scale-95 cursor-pointer ${
+              className={`px-4 py-2 rounded-xl text-xs font-black shrink-0 transition-all cursor-pointer ${
                 selectedCategory === 'ALL'
                   ? 'bg-[var(--accent)] text-white shadow-xs'
-                  : 'bg-[var(--bg-panel)] text-[var(--text-secondary)] border border-[var(--border-subtle)] hover:bg-[var(--bg-hover)]'
+                  : 'bg-[var(--bg-panel)] text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] border border-[var(--border-subtle)]'
               }`}
             >
-              Todos ({categories.reduce((acc, c) => acc + c.items.length, 0)})
+              Todos ({categories.reduce((sum, c) => sum + c.items.length, 0)})
             </button>
-            {categories.map(c => (
+            {categories.map(cat => (
               <button
-                key={c.id}
+                key={cat.id}
                 type="button"
-                onClick={() => setSelectedCategory(c.id)}
-                className={`rounded-xl px-3.5 py-1.5 text-xs font-black whitespace-nowrap transition-all active:scale-95 cursor-pointer ${
-                  selectedCategory === c.id
+                onClick={() => setSelectedCategory(cat.id)}
+                className={`px-4 py-2 rounded-xl text-xs font-black shrink-0 transition-all cursor-pointer ${
+                  selectedCategory === cat.id
                     ? 'bg-[var(--accent)] text-white shadow-xs'
-                    : 'bg-[var(--bg-panel)] text-[var(--text-secondary)] border border-[var(--border-subtle)] hover:bg-[var(--bg-hover)]'
+                    : 'bg-[var(--bg-panel)] text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] border border-[var(--border-subtle)]'
                 }`}
               >
-                {c.name} ({c.items.length})
+                {cat.name} ({cat.items.length})
               </button>
             ))}
           </div>
 
-          {/* LISTA DE PRODUCTOS TÁCTIL (CLIC EN CUALQUIER PARTE PARA AGREGAR) */}
+          {/* GRID DE PRODUCTOS */}
           <div className="grid gap-2.5 sm:grid-cols-2">
             {items.map(item => {
-              const inCartItems = cart.filter(c => c.menuItemId === item.id)
-              const inCartTotal = inCartItems.reduce((s, i) => s + i.quantity, 0)
-              const inCartTakeaway = inCartItems.filter(i => i.takeaway).reduce((s, i) => s + i.quantity, 0)
-              const inCartDineIn = inCartTotal - inCartTakeaway
+              const counts = inCartCounts.get(item.id)
+              const inCartTotal = counts?.total || 0
+              const inCartDineIn = counts?.dineIn || 0
+              const inCartTakeaway = counts?.takeaway || 0
+              const allowAdditions = isFoodWithAdditions(item)
 
               return (
                 <div
@@ -580,7 +783,7 @@ export default function TableOrderPage() {
                           </button>
                         </div>
                       ) : (
-                        <div className="flex items-center gap-1.5">
+                        <div className="flex items-center gap-1.5 flex-wrap justify-end">
                           {/* Stepper directo */}
                           <div className="flex items-center gap-1 bg-[var(--bg-elevated)] p-1 rounded-xl border border-[var(--border-subtle)]">
                             <button
@@ -614,12 +817,12 @@ export default function TableOrderPage() {
                             +🥡
                           </button>
 
-                          {/* Botón directo para notas y separar */}
+                          {/* Botón directo para notas y cuenta */}
                           <button
                             type="button"
                             onClick={() => setShowMobileCart(true)}
                             className="h-9 px-2.5 rounded-xl bg-purple-500/15 text-purple-700 dark:text-purple-300 hover:bg-purple-500/25 font-black text-xs border border-purple-500/30 active:scale-90 transition cursor-pointer flex items-center gap-1"
-                            title="Poner notas o separar unidades de este producto"
+                            title="Poner notas o adiciones a este producto"
                           >
                             📝 Notas
                           </button>
@@ -627,6 +830,38 @@ export default function TableOrderPage() {
                       )}
                     </div>
                   </div>
+
+                  {/* ADICIONES RÁPIDAS EN LA TARJETA (Solo para comidas, no para bebidas) */}
+                  {allowAdditions && (
+                    <div
+                      className="mt-2.5 pt-2 border-t border-[var(--border-subtle)]/70 flex items-center gap-1.5 flex-wrap"
+                      onClick={e => e.stopPropagation()}
+                    >
+                      <span className="text-[10px] font-black text-[var(--text-muted)] uppercase tracking-wider">
+                        + Adición:
+                      </span>
+                      {quesoAddition && (
+                        <button
+                          type="button"
+                          onClick={() => addItemWithAddition(item, { id: quesoAddition.id, name: quesoAddition.name, price: quesoAddition.price })}
+                          className="px-2 py-0.5 rounded-md text-[10px] font-black bg-amber-500/15 text-amber-800 dark:text-amber-300 hover:bg-amber-500/25 border border-amber-500/30 transition active:scale-95 cursor-pointer flex items-center gap-0.5"
+                          title="Agregar 1 con Adición de Queso"
+                        >
+                          🧀 Queso ({formatCurrency(quesoAddition.price)})
+                        </button>
+                      )}
+                      {tocinetaAddition && (
+                        <button
+                          type="button"
+                          onClick={() => addItemWithAddition(item, { id: tocinetaAddition.id, name: tocinetaAddition.name, price: tocinetaAddition.price })}
+                          className="px-2 py-0.5 rounded-md text-[10px] font-black bg-rose-500/15 text-rose-800 dark:text-rose-300 hover:bg-rose-500/25 border border-rose-500/30 transition active:scale-95 cursor-pointer flex items-center gap-0.5"
+                          title="Agregar 1 con Adición de Tocineta"
+                        >
+                          🥓 Tocineta ({formatCurrency(tocinetaAddition.price)})
+                        </button>
+                      )}
+                    </div>
+                  )}
                 </div>
               )
             })}
@@ -641,158 +876,193 @@ export default function TableOrderPage() {
 
         {/* COLUMNA LATERAL DERECHA (DESKTOP): CUENTA DETALLADA */}
         <aside className="hidden lg:flex sticky top-4 max-h-[calc(100vh-5.5rem)] flex-col rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] shadow-sm overflow-hidden">
-          <div className="border-b border-[var(--border-subtle)] p-4 bg-[var(--bg-panel)]">
-            <div className="flex items-center justify-between">
-              <h2 className="font-black text-base text-[var(--text-primary)]">Cuenta del Pedido</h2>
-              {cart.length > 1 && (
-                <button
-                  type="button"
-                  onClick={mergeIdentical}
-                  className="text-[10px] font-bold text-[var(--accent)] hover:underline flex items-center gap-1 cursor-pointer"
-                  title="Agrupar ítems idénticos"
-                >
-                  <Layers className="h-3 w-3" /> Unir iguales
-                </button>
-              )}
+          {/* CABECERA DE LA CUENTA */}
+          <div className="border-b border-[var(--border-subtle)] p-3.5 flex items-center justify-between bg-[var(--bg-panel)]">
+            <div>
+              <div className="flex items-center gap-2">
+                <h2 className="font-black text-sm text-[var(--text-primary)]">
+                  Cuenta: {tableLabel || 'Mesa nueva'}
+                </h2>
+                {cart.length > 1 && (
+                  <button
+                    type="button"
+                    onClick={mergeIdentical}
+                    className="text-[10px] font-bold text-[var(--accent)] hover:underline flex items-center gap-1 cursor-pointer"
+                    title="Reagrupar ítems idénticos"
+                  >
+                    <Layers className="h-3 w-3" /> Unir
+                  </button>
+                )}
+              </div>
+              <p className="text-xs text-[var(--text-secondary)] mt-0.5">
+                {totalCount} ítem(s) • {dineInCount} mesa {takeawayCount > 0 ? `• ${takeawayCount} llevar` : ''}
+              </p>
             </div>
-            <div className="mt-1 flex items-center justify-between text-xs text-[var(--text-secondary)]">
-              <span>
-                {totalCount} producto(s)
-                {takeawayCount > 0 && <b className="ml-1 text-amber-600">({takeawayCount} llevar)</b>}
-              </span>
+            <div className="text-right">
+              <span className="text-[10px] font-black text-[var(--text-muted)] block">TOTAL</span>
               <b className="text-base font-black text-[var(--accent)]">{formatCurrency(total)}</b>
             </div>
           </div>
 
           {/* LISTA DE ÍTEMS EN CUENTA (DESKTOP) */}
           <div className="flex-1 space-y-3 overflow-y-auto p-3.5 min-h-0">
-            {cart.map(item => (
-              <div
-                key={item.cartKey}
-                className={`rounded-xl border p-3 transition-all ${
-                  item.takeaway ? 'border-amber-500/40 bg-amber-500/5' : 'border-[var(--border-subtle)] bg-[var(--bg-elevated)]'
-                }`}
-              >
-                {/* Cabecera del ítem */}
-                <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0">
-                    <p className="text-sm font-black text-[var(--text-primary)] leading-tight">{item.name}</p>
-                    <p className="text-xs font-black text-[var(--accent)] mt-0.5">
-                      {formatCurrency(item.price * item.quantity)}
-                      {item.quantity > 1 && (
-                        <span className="text-[10px] font-normal text-[var(--text-muted)] ml-1">
-                          ({formatCurrency(item.price)} c/u)
-                        </span>
+            {cart.map(item => {
+              const allowAdditions = isFoodWithAdditions(item)
+              const unitPrice = getItemUnitPrice(item)
+              const lineTotal = getItemLineTotal(item)
+
+              return (
+                <div
+                  key={item.cartKey}
+                  className={`rounded-xl border p-3 transition-all ${
+                    item.takeaway ? 'border-amber-500/40 bg-amber-500/5' : 'border-[var(--border-subtle)] bg-[var(--bg-elevated)]'
+                  }`}
+                >
+                  {/* Cabecera del ítem */}
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <p className="text-sm font-black text-[var(--text-primary)] leading-tight">{item.name}</p>
+                      <p className="text-xs font-black text-[var(--accent)] mt-0.5">
+                        {formatCurrency(lineTotal)}
+                        {item.quantity > 1 && (
+                          <span className="text-[10px] font-normal text-[var(--text-muted)] ml-1">
+                            ({formatCurrency(unitPrice)} c/u)
+                          </span>
+                        )}
+                      </p>
+                    </div>
+
+                    {/* Stepper y eliminar */}
+                    <div className="flex items-center gap-1 rounded-lg bg-[var(--bg-panel)] p-0.5 border border-[var(--border-subtle)] shrink-0">
+                      <button
+                        type="button"
+                        className="h-6 w-6 rounded flex items-center justify-center text-[var(--text-primary)] hover:bg-rose-50 hover:text-rose-600 font-bold active:scale-90"
+                        onClick={() => updateQty(item.cartKey, -1)}
+                      >
+                        <Minus className="h-3 w-3" />
+                      </button>
+                      <span className="w-5 text-center text-xs font-black">{item.quantity}</span>
+                      <button
+                        type="button"
+                        className="h-6 w-6 rounded flex items-center justify-center text-[var(--text-primary)] hover:bg-[var(--accent)] hover:text-white font-bold active:scale-90"
+                        onClick={() => updateQty(item.cartKey, 1)}
+                      >
+                        <Plus className="h-3 w-3" />
+                      </button>
+                      <button
+                        type="button"
+                        className="h-6 w-6 rounded flex items-center justify-center text-[var(--text-muted)] hover:text-rose-600 hover:bg-rose-50 font-bold active:scale-90 ml-1"
+                        onClick={() => removeItem(item.cartKey)}
+                        title="Quitar"
+                      >
+                        <Trash2 className="h-3 w-3" />
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* TOGGLE MESA VS LLEVAR */}
+                  <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => (item.quantity === 1 ? toggleAllTakeaway(item.cartKey, false) : moveOneTakeaway(item.cartKey, false))}
+                      className={`rounded-lg px-2.5 py-1 text-[11px] font-black transition-all cursor-pointer ${
+                        !item.takeaway
+                          ? 'bg-blue-600 text-white shadow-xs'
+                          : 'bg-[var(--bg-panel)] text-[var(--text-secondary)] border border-[var(--border-subtle)] hover:bg-[var(--bg-hover)]'
+                      }`}
+                    >
+                      🍽️ {item.quantity > 1 && item.takeaway ? 'Pasar 1 a Mesa' : 'En Mesa'}
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => (item.quantity === 1 ? toggleAllTakeaway(item.cartKey, true) : moveOneTakeaway(item.cartKey, true))}
+                      className={`rounded-lg px-2.5 py-1 text-[11px] font-black transition-all cursor-pointer ${
+                        item.takeaway
+                          ? 'bg-amber-600 text-white shadow-xs'
+                          : 'bg-[var(--bg-panel)] text-[var(--text-secondary)] border border-[var(--border-subtle)] hover:bg-[var(--bg-hover)]'
+                      }`}
+                    >
+                      🥡 {item.quantity > 1 && !item.takeaway ? 'Pasar 1 a Llevar' : 'Para Llevar'}
+                    </button>
+                  </div>
+
+                  {/* ADICIONES EN LA CUENTA (Solo para comidas) */}
+                  {allowAdditions && (
+                    <div className="mt-2 pt-2 border-t border-[var(--border-subtle)]/60 flex items-center gap-1.5 flex-wrap">
+                      <span className="text-[10px] font-black text-[var(--text-muted)] uppercase tracking-wider">
+                        Adición:
+                      </span>
+                      {quesoAddition && (
+                        <button
+                          type="button"
+                          onClick={() => toggleItemAddition(item.cartKey, { id: quesoAddition.id, name: quesoAddition.name, price: quesoAddition.price })}
+                          className={`px-2 py-0.5 rounded-md text-[11px] font-black transition cursor-pointer flex items-center gap-1 ${
+                            (item.additions || []).some(a => a.id === quesoAddition.id)
+                              ? 'bg-amber-500 text-slate-950 shadow-xs'
+                              : 'bg-[var(--bg-panel)] text-[var(--text-secondary)] border border-[var(--border-subtle)] hover:border-amber-500/40'
+                          }`}
+                        >
+                          {(item.additions || []).some(a => a.id === quesoAddition.id) ? '✓ 🧀 Queso' : '+ 🧀 Queso ($1.500)'}
+                        </button>
                       )}
-                    </p>
+                      {tocinetaAddition && (
+                        <button
+                          type="button"
+                          onClick={() => toggleItemAddition(item.cartKey, { id: tocinetaAddition.id, name: tocinetaAddition.name, price: tocinetaAddition.price })}
+                          className={`px-2 py-0.5 rounded-md text-[11px] font-black transition cursor-pointer flex items-center gap-1 ${
+                            (item.additions || []).some(a => a.id === tocinetaAddition.id)
+                              ? 'bg-rose-500 text-white shadow-xs'
+                              : 'bg-[var(--bg-panel)] text-[var(--text-secondary)] border border-[var(--border-subtle)] hover:border-rose-500/40'
+                          }`}
+                        >
+                          {(item.additions || []).some(a => a.id === tocinetaAddition.id) ? '✓ 🥓 Tocineta' : '+ 🥓 Tocineta ($1.000)'}
+                        </button>
+                      )}
+                    </div>
+                  )}
+
+                  {/* CAMPO DE NOTA INDIVIDUAL */}
+                  <Input
+                    value={item.notes || ''}
+                    onChange={e => updateNotes(item.cartKey, e.target.value)}
+                    placeholder={item.quantity > 1 ? `Nota general (o toca abajo para separar 1)...` : "Nota (sin cebolla, salsas aparte...)"}
+                    className="mt-2 h-8 text-xs bg-[var(--bg-panel)] rounded-lg"
+                  />
+
+                  {/* Chips rápidos para notas (Separación automática si quantity > 1) */}
+                  <div className="mt-1.5 flex flex-wrap gap-1">
+                    {QUICK_CHIPS.map(chip => (
+                      <button
+                        key={chip}
+                        type="button"
+                        onClick={() => appendNote(item.cartKey, chip)}
+                        className="rounded-md bg-[var(--bg-panel)] px-1.5 py-0.5 text-[10px] font-bold text-[var(--text-secondary)] border border-[var(--border-subtle)] hover:border-[var(--accent)] hover:text-[var(--accent)] transition cursor-pointer"
+                        title={item.quantity > 1 ? `Separar 1 unidad con nota "${chip}"` : `Agregar nota "${chip}"`}
+                      >
+                        +{chip}
+                      </button>
+                    ))}
                   </div>
 
-                  {/* Stepper y eliminar */}
-                  <div className="flex items-center gap-1 rounded-lg bg-[var(--bg-panel)] p-0.5 border border-[var(--border-subtle)] shrink-0">
-                    <button
-                      type="button"
-                      className="h-6 w-6 rounded flex items-center justify-center text-[var(--text-primary)] hover:bg-rose-50 hover:text-rose-600 font-bold active:scale-90"
-                      onClick={() => updateQty(item.cartKey, -1)}
-                    >
-                      <Minus className="h-3 w-3" />
-                    </button>
-                    <span className="w-5 text-center text-xs font-black">{item.quantity}</span>
-                    <button
-                      type="button"
-                      className="h-6 w-6 rounded flex items-center justify-center text-[var(--text-primary)] hover:bg-[var(--accent)] hover:text-white font-bold active:scale-90"
-                      onClick={() => updateQty(item.cartKey, 1)}
-                    >
-                      <Plus className="h-3 w-3" />
-                    </button>
-                    <button
-                      type="button"
-                      className="h-6 w-6 rounded flex items-center justify-center text-[var(--text-muted)] hover:text-rose-600 hover:bg-rose-50 font-bold active:scale-90 ml-1"
-                      onClick={() => removeItem(item.cartKey)}
-                      title="Quitar"
-                    >
-                      <Trash2 className="h-3 w-3" />
-                    </button>
-                  </div>
-                </div>
-
-                {/* TOGGLE MESA VS LLEVAR + OPCIONES DE SEPARAR */}
-                <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
-                  <button
-                    type="button"
-                    onClick={() => (item.quantity === 1 ? toggleAllTakeaway(item.cartKey, false) : moveOneTakeaway(item.cartKey, false))}
-                    className={`rounded-lg px-2.5 py-1 text-[11px] font-black transition-all cursor-pointer ${
-                      !item.takeaway
-                        ? 'bg-blue-600 text-white shadow-xs'
-                        : 'bg-[var(--bg-panel)] text-[var(--text-secondary)] border border-[var(--border-subtle)] hover:bg-[var(--bg-hover)]'
-                    }`}
-                  >
-                    🍽️ {item.quantity > 1 && item.takeaway ? 'Pasar 1 a Mesa' : 'En Mesa'}
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => (item.quantity === 1 ? toggleAllTakeaway(item.cartKey, true) : moveOneTakeaway(item.cartKey, true))}
-                    className={`rounded-lg px-2.5 py-1 text-[11px] font-black transition-all cursor-pointer ${
-                      item.takeaway
-                        ? 'bg-amber-600 text-white shadow-xs'
-                        : 'bg-[var(--bg-panel)] text-[var(--text-secondary)] border border-[var(--border-subtle)] hover:bg-[var(--bg-hover)]'
-                    }`}
-                  >
-                    🥡 {item.quantity > 1 && !item.takeaway ? 'Pasar 1 a Llevar' : 'Para Llevar'}
-                  </button>
-
-                  {/* Botón para dividir en unidades independientes */}
+                  {/* Único botón de separación manual si tiene varias unidades */}
                   {item.quantity > 1 && (
-                    <button
-                      type="button"
-                      onClick={() => splitItem(item.cartKey)}
-                      className="rounded-lg px-2 py-1 text-[10px] font-black bg-purple-500/10 text-purple-700 dark:text-purple-300 border border-purple-500/30 hover:bg-purple-500/20 active:scale-95 transition flex items-center gap-1 cursor-pointer"
-                      title="Dividir en unidades individuales para notas o llevar independientes"
-                    >
-                      <Scissors className="h-3 w-3" /> Separar ({item.quantity})
-                    </button>
+                    <div className="mt-2 pt-1.5 border-t border-[var(--border-subtle)]/60 flex items-center justify-between text-[10px]">
+                      <span className="text-[var(--text-muted)] font-medium">
+                        💡 Tocar un chip separa 1 con esa nota.
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => splitItem(item.cartKey)}
+                        className="text-purple-600 dark:text-purple-400 font-bold hover:underline flex items-center gap-1 cursor-pointer"
+                      >
+                        <Scissors className="h-3 w-3" /> Separar ({item.quantity})
+                      </button>
+                    </div>
                   )}
                 </div>
-
-                {/* CAMPO DE NOTA INDIVIDUAL */}
-                <Input
-                  value={item.notes || ''}
-                  onChange={e => updateNotes(item.cartKey, e.target.value)}
-                  placeholder="Nota (sin cebolla, salsas aparte...)"
-                  className="mt-2 h-8 text-xs bg-[var(--bg-panel)] rounded-lg"
-                />
-
-                {/* Chips rápidos para notas */}
-                <div className="mt-1.5 flex flex-wrap gap-1">
-                  {QUICK_CHIPS.map(chip => (
-                    <button
-                      key={chip}
-                      type="button"
-                      onClick={() => appendNote(item.cartKey, chip)}
-                      className="rounded-md bg-[var(--bg-panel)] px-1.5 py-0.5 text-[10px] font-bold text-[var(--text-secondary)] border border-[var(--border-subtle)] hover:border-[var(--accent)] hover:text-[var(--accent)] transition cursor-pointer"
-                    >
-                      +{chip}
-                    </button>
-                  ))}
-                </div>
-
-                {/* Si tiene varias unidades, sugerir aplicar a 1 solo si quiere */}
-                {item.quantity > 1 && (
-                  <div className="mt-2 p-2 rounded-xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-between gap-2">
-                    <span className="text-[11px] text-amber-900 dark:text-amber-200 font-bold leading-tight">
-                      ¿1 sin cebolla o nota individual?
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => splitItem(item.cartKey)}
-                      className="shrink-0 px-2 py-1 rounded-lg bg-amber-500 text-slate-950 font-black text-xs hover:bg-amber-400 active:scale-95 transition flex items-center gap-1 cursor-pointer shadow-xs"
-                    >
-                      <Scissors className="h-3 w-3" /> Separar ({item.quantity})
-                    </button>
-                  </div>
-                )}
-              </div>
-            ))}
+              )
+            })}
 
             {cart.length === 0 && (
               <div className="py-12 text-center text-sm text-[var(--text-muted)]">
@@ -846,7 +1116,7 @@ export default function TableOrderPage() {
               </span>
               <div className="text-left min-w-0">
                 <p className="text-xs sm:text-sm font-black truncate">
-                  Ver Cuenta y Notas ({totalCount})
+                  {tableLabel ? `Cuenta: ${tableLabel}` : 'Ver Cuenta y Notas'} ({totalCount})
                 </p>
                 <p className="text-[10px] text-white/90 font-semibold truncate">
                   {dineInCount} en mesa {takeawayCount > 0 ? `• ${takeawayCount} para llevar` : ''}
@@ -870,7 +1140,7 @@ export default function TableOrderPage() {
             <div>
               <div className="flex items-center gap-2">
                 <h2 className="font-black text-base text-[var(--text-primary)]">
-                  Cuenta ({tableLabel || 'Mesa nueva'})
+                  Cuenta: {tableLabel || 'Mesa nueva'}
                 </h2>
                 {cart.length > 1 && (
                   <button
@@ -898,129 +1168,162 @@ export default function TableOrderPage() {
 
           {/* LISTA SCROLLEABLE EN MÓVIL */}
           <div className="flex-1 space-y-3 overflow-y-auto p-4 min-h-0">
-            {cart.map(item => (
-              <div
-                key={item.cartKey}
-                className={`rounded-xl border p-3 ${
-                  item.takeaway ? 'border-amber-500/40 bg-amber-500/5' : 'border-[var(--border-subtle)] bg-[var(--bg-elevated)]'
-                }`}
-              >
-                {/* Cabecera ítem móvil */}
-                <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0">
-                    <p className="text-sm font-black text-[var(--text-primary)] leading-tight">{item.name}</p>
-                    <p className="text-xs font-black text-[var(--accent)] mt-0.5">
-                      {formatCurrency(item.price * item.quantity)}
-                      {item.quantity > 1 && (
-                        <span className="text-[10px] font-normal text-[var(--text-muted)] ml-1">
-                          ({formatCurrency(item.price)} c/u)
-                        </span>
+            {cart.map(item => {
+              const allowAdditions = isFoodWithAdditions(item)
+              const unitPrice = getItemUnitPrice(item)
+              const lineTotal = getItemLineTotal(item)
+
+              return (
+                <div
+                  key={item.cartKey}
+                  className={`rounded-xl border p-3 ${
+                    item.takeaway ? 'border-amber-500/40 bg-amber-500/5' : 'border-[var(--border-subtle)] bg-[var(--bg-elevated)]'
+                  }`}
+                >
+                  {/* Cabecera ítem móvil */}
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <p className="text-sm font-black text-[var(--text-primary)] leading-tight">{item.name}</p>
+                      <p className="text-xs font-black text-[var(--accent)] mt-0.5">
+                        {formatCurrency(lineTotal)}
+                        {item.quantity > 1 && (
+                          <span className="text-[10px] font-normal text-[var(--text-muted)] ml-1">
+                            ({formatCurrency(unitPrice)} c/u)
+                          </span>
+                        )}
+                      </p>
+                    </div>
+
+                    {/* Stepper móvil */}
+                    <div className="flex items-center gap-1 rounded-lg bg-[var(--bg-panel)] p-0.5 border border-[var(--border-subtle)] shrink-0">
+                      <button
+                        type="button"
+                        className="h-7 w-7 rounded flex items-center justify-center text-[var(--text-primary)] hover:bg-rose-50 hover:text-rose-600 font-bold active:scale-90"
+                        onClick={() => updateQty(item.cartKey, -1)}
+                      >
+                        <Minus className="h-3 w-3" />
+                      </button>
+                      <span className="w-5 text-center text-xs font-black">{item.quantity}</span>
+                      <button
+                        type="button"
+                        className="h-7 w-7 rounded flex items-center justify-center text-[var(--text-primary)] hover:bg-[var(--accent)] hover:text-white font-bold active:scale-90"
+                        onClick={() => updateQty(item.cartKey, 1)}
+                      >
+                        <Plus className="h-3 w-3" />
+                      </button>
+                      <button
+                        type="button"
+                        className="h-7 w-7 rounded flex items-center justify-center text-[var(--text-muted)] hover:text-rose-600 font-bold active:scale-90 ml-1"
+                        onClick={() => removeItem(item.cartKey)}
+                        title="Quitar"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Toggles Mesa vs Llevar móvil */}
+                  <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => (item.quantity === 1 ? toggleAllTakeaway(item.cartKey, false) : moveOneTakeaway(item.cartKey, false))}
+                      className={`rounded-lg px-2.5 py-1 text-[11px] font-black transition-all cursor-pointer ${
+                        !item.takeaway
+                          ? 'bg-blue-600 text-white shadow-xs'
+                          : 'bg-[var(--bg-panel)] text-[var(--text-secondary)] border border-[var(--border-subtle)]'
+                      }`}
+                    >
+                      🍽️ {item.quantity > 1 && item.takeaway ? 'Pasar 1 a Mesa' : 'En Mesa'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => (item.quantity === 1 ? toggleAllTakeaway(item.cartKey, true) : moveOneTakeaway(item.cartKey, true))}
+                      className={`rounded-lg px-2.5 py-1 text-[11px] font-black transition-all cursor-pointer ${
+                        item.takeaway
+                          ? 'bg-amber-600 text-white shadow-xs'
+                          : 'bg-[var(--bg-panel)] text-[var(--text-secondary)] border border-[var(--border-subtle)]'
+                      }`}
+                    >
+                      🥡 {item.quantity > 1 && !item.takeaway ? 'Pasar 1 a Llevar' : 'Para Llevar'}
+                    </button>
+                  </div>
+
+                  {/* ADICIONES MÓVIL (Solo para comidas) */}
+                  {allowAdditions && (
+                    <div className="mt-2 pt-2 border-t border-[var(--border-subtle)]/60 flex items-center gap-1.5 flex-wrap">
+                      <span className="text-[10px] font-black text-[var(--text-muted)] uppercase tracking-wider">
+                        Adición:
+                      </span>
+                      {quesoAddition && (
+                        <button
+                          type="button"
+                          onClick={() => toggleItemAddition(item.cartKey, { id: quesoAddition.id, name: quesoAddition.name, price: quesoAddition.price })}
+                          className={`px-2 py-1 rounded-lg text-[11px] font-black transition cursor-pointer flex items-center gap-1 ${
+                            (item.additions || []).some(a => a.id === quesoAddition.id)
+                              ? 'bg-amber-500 text-slate-950 shadow-xs ring-1 ring-amber-600'
+                              : 'bg-[var(--bg-panel)] text-[var(--text-secondary)] border border-[var(--border-subtle)]'
+                          }`}
+                        >
+                          {(item.additions || []).some(a => a.id === quesoAddition.id) ? '✓ 🧀 Queso' : '+ 🧀 Queso ($1.500)'}
+                        </button>
                       )}
-                    </p>
+                      {tocinetaAddition && (
+                        <button
+                          type="button"
+                          onClick={() => toggleItemAddition(item.cartKey, { id: tocinetaAddition.id, name: tocinetaAddition.name, price: tocinetaAddition.price })}
+                          className={`px-2 py-1 rounded-lg text-[11px] font-black transition cursor-pointer flex items-center gap-1 ${
+                            (item.additions || []).some(a => a.id === tocinetaAddition.id)
+                              ? 'bg-rose-500 text-white shadow-xs ring-1 ring-rose-600'
+                              : 'bg-[var(--bg-panel)] text-[var(--text-secondary)] border border-[var(--border-subtle)]'
+                          }`}
+                        >
+                          {(item.additions || []).some(a => a.id === tocinetaAddition.id) ? '✓ 🥓 Tocineta' : '+ 🥓 Tocineta ($1.000)'}
+                        </button>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Campo de notas móvil */}
+                  <Input
+                    value={item.notes || ''}
+                    onChange={e => updateNotes(item.cartKey, e.target.value)}
+                    placeholder={item.quantity > 1 ? `Nota para todos (o toca un chip abajo)...` : "Nota: sin cebolla, salsas aparte..."}
+                    className="mt-2 h-8 text-xs bg-[var(--bg-panel)] rounded-lg"
+                  />
+
+                  {/* Chips rápidos (Separación automática si quantity > 1) */}
+                  <div className="mt-1.5 flex flex-wrap gap-1">
+                    {QUICK_CHIPS.map(chip => (
+                      <button
+                        key={chip}
+                        type="button"
+                        onClick={() => appendNote(item.cartKey, chip)}
+                        className="rounded-md bg-[var(--bg-panel)] px-1.5 py-0.5 text-[10px] font-bold text-[var(--text-secondary)] border border-[var(--border-subtle)] hover:border-[var(--accent)] hover:text-[var(--accent)] transition"
+                        title={item.quantity > 1 ? `Separar 1 unidad con nota "${chip}"` : `Agregar nota "${chip}"`}
+                      >
+                        +{chip}
+                      </button>
+                    ))}
                   </div>
 
-                  {/* Stepper móvil */}
-                  <div className="flex items-center gap-1 rounded-lg bg-[var(--bg-panel)] p-0.5 border border-[var(--border-subtle)] shrink-0">
-                    <button
-                      type="button"
-                      className="h-7 w-7 rounded flex items-center justify-center text-[var(--text-primary)] hover:bg-rose-50 hover:text-rose-600 font-bold active:scale-90"
-                      onClick={() => updateQty(item.cartKey, -1)}
-                    >
-                      <Minus className="h-3 w-3" />
-                    </button>
-                    <span className="w-5 text-center text-xs font-black">{item.quantity}</span>
-                    <button
-                      type="button"
-                      className="h-7 w-7 rounded flex items-center justify-center text-[var(--text-primary)] hover:bg-[var(--accent)] hover:text-white font-bold active:scale-90"
-                      onClick={() => updateQty(item.cartKey, 1)}
-                    >
-                      <Plus className="h-3 w-3" />
-                    </button>
-                    <button
-                      type="button"
-                      className="h-7 w-7 rounded flex items-center justify-center text-[var(--text-muted)] hover:text-rose-600 font-bold active:scale-90 ml-1"
-                      onClick={() => removeItem(item.cartKey)}
-                      title="Quitar"
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </button>
-                  </div>
-                </div>
-
-                {/* Toggles Mesa vs Llevar móvil */}
-                <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
-                  <button
-                    type="button"
-                    onClick={() => (item.quantity === 1 ? toggleAllTakeaway(item.cartKey, false) : moveOneTakeaway(item.cartKey, false))}
-                    className={`rounded-lg px-2.5 py-1 text-[11px] font-black transition-all cursor-pointer ${
-                      !item.takeaway
-                        ? 'bg-blue-600 text-white shadow-xs'
-                        : 'bg-[var(--bg-panel)] text-[var(--text-secondary)] border border-[var(--border-subtle)]'
-                    }`}
-                  >
-                    🍽️ {item.quantity > 1 && item.takeaway ? 'Pasar 1 a Mesa' : 'En Mesa'}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => (item.quantity === 1 ? toggleAllTakeaway(item.cartKey, true) : moveOneTakeaway(item.cartKey, true))}
-                    className={`rounded-lg px-2.5 py-1 text-[11px] font-black transition-all cursor-pointer ${
-                      item.takeaway
-                        ? 'bg-amber-600 text-white shadow-xs'
-                        : 'bg-[var(--bg-panel)] text-[var(--text-secondary)] border border-[var(--border-subtle)]'
-                    }`}
-                  >
-                    🥡 {item.quantity > 1 && !item.takeaway ? 'Pasar 1 a Llevar' : 'Para Llevar'}
-                  </button>
-
+                  {/* Único botón de separación manual si tiene varias unidades */}
                   {item.quantity > 1 && (
-                    <button
-                      type="button"
-                      onClick={() => splitItem(item.cartKey)}
-                      className="rounded-lg px-2 py-1 text-[10px] font-black bg-purple-500/10 text-purple-700 dark:text-purple-300 border border-purple-500/30 active:scale-95 transition flex items-center gap-1 cursor-pointer"
-                    >
-                      <Scissors className="h-3 w-3" /> Separar ({item.quantity})
-                    </button>
+                    <div className="mt-2 pt-1.5 border-t border-[var(--border-subtle)]/60 flex items-center justify-between text-[10px]">
+                      <span className="text-[var(--text-muted)] font-medium">
+                        💡 Tocar un chip separa 1 con esa nota.
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => splitItem(item.cartKey)}
+                        className="text-purple-600 dark:text-purple-400 font-bold hover:underline flex items-center gap-1 cursor-pointer"
+                      >
+                        <Scissors className="h-3 w-3" /> Separar ({item.quantity})
+                      </button>
+                    </div>
                   )}
                 </div>
-
-                {/* Campo de notas móvil */}
-                <Input
-                  value={item.notes || ''}
-                  onChange={e => updateNotes(item.cartKey, e.target.value)}
-                  placeholder="Nota: sin cebolla, salsas aparte..."
-                  className="mt-2 h-8 text-xs bg-[var(--bg-panel)] rounded-lg"
-                />
-
-                {/* Chips rápidos */}
-                <div className="mt-1.5 flex flex-wrap gap-1">
-                  {QUICK_CHIPS.map(chip => (
-                    <button
-                      key={chip}
-                      type="button"
-                      onClick={() => appendNote(item.cartKey, chip)}
-                      className="rounded-md bg-[var(--bg-panel)] px-1.5 py-0.5 text-[10px] font-bold text-[var(--text-secondary)] border border-[var(--border-subtle)] hover:border-[var(--accent)] hover:text-[var(--accent)] transition"
-                    >
-                      +{chip}
-                    </button>
-                  ))}
-                </div>
-
-                {item.quantity > 1 && (
-                  <div className="mt-2 p-2.5 rounded-xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-between gap-2">
-                    <span className="text-[11px] text-amber-900 dark:text-amber-200 font-bold leading-tight">
-                      ¿1 sin cebolla o nota individual?
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => splitItem(item.cartKey)}
-                      className="shrink-0 px-2.5 py-1.5 rounded-lg bg-amber-500 text-slate-950 font-black text-xs hover:bg-amber-400 active:scale-95 transition flex items-center gap-1 cursor-pointer shadow-xs"
-                    >
-                      <Scissors className="h-3.5 w-3.5" /> Separar en {item.quantity}
-                    </button>
-                  </div>
-                )}
-              </div>
-            ))}
+              )
+            })}
           </div>
 
           {/* Pie del modal móvil */}
