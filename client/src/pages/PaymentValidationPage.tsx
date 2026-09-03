@@ -84,9 +84,9 @@ export default function PaymentValidationPage() {
     if (activeTab === 'PENDING_REVIEW') {
       list = list.filter(p => p.status === 'PENDING_REVIEW')
     } else if (activeTab === 'CASH') {
-      list = list.filter(p => p.method === 'CASH')
+      list = list.filter(p => p.method === 'CASH' && p.status === 'PENDING_REVIEW')
     } else if (activeTab === 'TRANSFER') {
-      list = list.filter(p => p.method !== 'CASH')
+      list = list.filter(p => p.method !== 'CASH' && p.status === 'PENDING_REVIEW')
     } else if (activeTab === 'CONFIRMED') {
       list = list.filter(p => p.status === 'CONFIRMED')
     } else if (activeTab === 'REJECTED') {
@@ -114,6 +114,9 @@ export default function PaymentValidationPage() {
       PENDING_REVIEW: safePayments.filter(p => p.status === 'PENDING_REVIEW').length,
       CASH: safePayments.filter(p => p.method === 'CASH' && p.status === 'PENDING_REVIEW').length,
       TRANSFER: safePayments.filter(p => p.method !== 'CASH' && p.status === 'PENDING_REVIEW').length,
+      CONFIRMED: safePayments.filter(p => p.status === 'CONFIRMED').length,
+      REJECTED: safePayments.filter(p => p.status === 'REJECTED').length,
+      ALL: safePayments.length,
     }
   }, [safePayments])
 
@@ -181,7 +184,7 @@ export default function PaymentValidationPage() {
         <div className="flex flex-wrap gap-1.5 items-center">
           {validationTabs.map(s => {
             const isActive = activeTab === s.value
-            const count = s.value === 'PENDING_REVIEW' ? tabCounts.PENDING_REVIEW : s.value === 'CASH' ? tabCounts.CASH : s.value === 'TRANSFER' ? tabCounts.TRANSFER : null
+            const count = tabCounts[s.value as keyof typeof tabCounts]
             return (
               <button
                 key={s.value}
@@ -194,7 +197,7 @@ export default function PaymentValidationPage() {
                 }`}
               >
                 <span>{s.label}</span>
-                {count !== null && count > 0 && (
+                {count !== undefined && count > 0 && (
                   <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-black ${
                     isActive ? 'bg-white/25 text-white' : 'bg-[var(--accent)] text-white'
                   }`}>

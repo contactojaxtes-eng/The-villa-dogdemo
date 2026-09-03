@@ -274,6 +274,7 @@ export class OrdersService implements OnModuleInit {
         items: { include: { menuItem: true } },
         payment: true,
         deliveryDriver: true,
+        diningTable: true,
       },
     });
     if (!order) throw new NotFoundException('Pedido no encontrado');

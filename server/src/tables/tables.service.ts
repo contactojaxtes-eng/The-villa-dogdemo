@@ -180,27 +180,39 @@ export class TablesService {
     return { table: result.table, order: result.order };
   }
 
-  private buildChangeSummary(before: any[], after: any[]) {
+  private async buildChangeSummary(before: any[], after: any[], db: Prisma.TransactionClient = this.prisma) {
     const key = (item: any) => `${item.menuItemId}_${(item.notes || '').trim()}`;
     const beforeMap = new Map(before.map(item => [key(item), item]));
     const afterMap = new Map(after.map(item => [key(item), item]));
     const changeMap = new Map<string, any>();
     const parts: string[] = [];
 
+    // Resolver nombres reales de productos para items nuevos
+    const missingIds = after.filter(a => !before.some(b => b.menuItemId === a.menuItemId)).map(a => a.menuItemId);
+    const resolvedNewItems = missingIds.length > 0 ? await db.menuItem.findMany({ where: { id: { in: missingIds } } }) : [];
+    const newItemsNameMap = new Map(resolvedNewItems.map(m => [m.id, m.name]));
+
+    const getName = (item: any) => {
+      return item.name || item.menuItem?.name || newItemsNameMap.get(item.menuItemId) || before.find(b => b.menuItemId === item.menuItemId)?.menuItem?.name || 'Producto';
+    };
+
     for (const item of after) {
       const itemK = key(item);
       const prev = beforeMap.get(itemK);
+      const prodName = getName(item);
       if (!prev) {
-        parts.push(`Nuevo: ${item.quantity} x ${item.name || item.menuItem?.name || 'Producto'}${item.notes ? ` (${item.notes})` : ''}`);
-        changeMap.set(itemK, { changeType: 'ADDED' });
-        if (!changeMap.has(item.menuItemId)) changeMap.set(item.menuItemId, { changeType: 'ADDED' });
+        parts.push(`✨ Agregado: +${item.quantity}x ${prodName}${item.notes ? ` (${item.notes})` : ''}`);
+        changeMap.set(itemK, { changeType: 'ADDED', quantity: item.quantity });
+        if (!changeMap.has(item.menuItemId)) changeMap.set(item.menuItemId, { changeType: 'ADDED', quantity: item.quantity });
       } else if (Number(prev.quantity) !== Number(item.quantity) || String(prev.notes || '').trim() !== String(item.notes || '').trim()) {
-        parts.push(`Editado: ${item.name || item.menuItem?.name || 'Producto'} (${prev.quantity} -> ${item.quantity})${item.notes ? ` (${item.notes})` : ''}`);
-        const modInfo = { changeType: 'MODIFIED', previousQty: prev.quantity, previousNotes: prev.notes };
+        const qtyDiff = Number(item.quantity) - Number(prev.quantity);
+        const qtyText = qtyDiff > 0 ? `+${qtyDiff} un. (${prev.quantity} -> ${item.quantity})` : `-${Math.abs(qtyDiff)} un. (${prev.quantity} -> ${item.quantity})`;
+        parts.push(`✏️ Modificado: ${prodName} [${qtyText}]${item.notes ? ` (${item.notes})` : ''}`);
+        const modInfo = { changeType: 'MODIFIED', previousQty: prev.quantity, previousNotes: prev.notes, quantity: item.quantity };
         changeMap.set(itemK, modInfo);
         changeMap.set(item.menuItemId, modInfo);
       } else {
-        const unchInfo = { changeType: 'UNCHANGED' };
+        const unchInfo = { changeType: 'UNCHANGED', quantity: item.quantity };
         changeMap.set(itemK, unchInfo);
         if (!changeMap.has(item.menuItemId)) changeMap.set(item.menuItemId, unchInfo);
       }
@@ -209,7 +221,8 @@ export class TablesService {
     for (const item of before) {
       const itemK = key(item);
       if (!afterMap.has(itemK)) {
-        parts.push(`Quitado: ${item.menuItem?.name || 'Producto'}`);
+        const prodName = getName(item);
+        parts.push(`❌ Quitado: -${item.quantity}x ${prodName}`);
         const remInfo = { changeType: 'REMOVED', previousQty: item.quantity, previousNotes: item.notes };
         changeMap.set(itemK, remInfo);
         if (!after.some(a => a.menuItemId === item.menuItemId)) {
@@ -225,10 +238,13 @@ export class TablesService {
     const tickets: any[] = [];
     const result = await this.prisma.$transaction(async tx => {
       await lockOperation(tx);
-      const existing = await tx.order.findUnique({ where: { id: orderId }, include: { items: { include: { menuItem: true } }, diningTable: true } });
+      const existing = await tx.order.findUnique({
+        where: { id: orderId },
+        include: { items: { include: { menuItem: { include: { category: true } } } }, diningTable: true },
+      });
       if (!existing?.tableId) throw new NotFoundException('Pedido de mesa no encontrado');
       if (existing.diningTable?.status !== 'OPEN') throw new BadRequestException('La cuenta está cerrada');
-      const { summary, changeMap } = this.buildChangeSummary(existing.items, data.items || []);
+      const { summary, changeMap } = await this.buildChangeSummary(existing.items, data.items || [], tx);
       const updateData = {
         customerName: existing.customerName, customerPhone: existing.customerPhone,
         customerAddress: existing.customerAddress, notes: data.notes ?? existing.notes,
@@ -416,18 +432,21 @@ export class TablesService {
       for (const oldItem of removedCandidateItems) {
         if (changeMap.get(oldItem.menuItemId)?.changeType === 'REMOVED') {
           const catName = oldItem.menuItem?.category?.name || '';
-          let targetStation = generalStation;
+          const fallbackStation = generalStation || eligibleStations[0] || allActiveStations[0];
+          let targetStation = fallbackStation;
           if (this.isDrinkOrSideCategory(catName)) {
             const perroStation = eligibleStations.find(s => /perro/i.test(s.name));
-            targetStation = perroStation || generalStation;
+            targetStation = perroStation || fallbackStation;
           } else {
-            targetStation = eligibleStations.find(s => s.categories.some(c => c.id === oldItem.menuItem?.categoryId)) || generalStation;
+            targetStation = eligibleStations.find(s => s.categories?.some(c => c.id === oldItem.menuItem?.categoryId)) || fallbackStation;
           }
-          if (!stationGroups.has(targetStation.id)) stationGroups.set(targetStation.id, []);
-          stationGroups.get(targetStation.id)!.push({
-            ...oldItem,
-            isRemovedItem: true,
-          });
+          if (targetStation?.id) {
+            if (!stationGroups.has(targetStation.id)) stationGroups.set(targetStation.id, []);
+            stationGroups.get(targetStation.id)!.push({
+              ...oldItem,
+              isRemovedItem: true,
+            });
+          }
         }
       }
     }
@@ -497,7 +516,7 @@ export class TablesService {
               create: ticketItemsData,
             },
           },
-          include: { station: true, assignedTo: { select: { id: true, name: true } }, items: true, order: { include: { waiter: true, diningTable: true } } },
+          include: { station: { include: { users: { select: { id: true, name: true, role: true } } } }, assignedTo: { select: { id: true, name: true } }, items: true, order: { include: { waiter: true, diningTable: true } } },
         });
         tickets.push(updatedTicket);
         if (events) events.push({ created: false, ticket: updatedTicket }); else this.socketGateway.emitKitchenTicketUpdated(updatedTicket);
@@ -518,7 +537,7 @@ export class TablesService {
               create: ticketItemsData,
             },
           },
-          include: { station: true, assignedTo: { select: { id: true, name: true } }, items: true, order: { include: { waiter: true, diningTable: true } } },
+          include: { station: { include: { users: { select: { id: true, name: true, role: true } } } }, assignedTo: { select: { id: true, name: true } }, items: true, order: { include: { waiter: true, diningTable: true } } },
         });
         tickets.push(newTicket);
         if (events) events.push({ created: true, ticket: newTicket }); else this.socketGateway.emitKitchenTicketCreated(newTicket);
@@ -554,14 +573,20 @@ export class TablesService {
         const table = await tx.diningTable.findUnique({ where: { id: ticket.tableId } });
         if (table?.status === 'CLOSED' && ticket.status !== status) throw new BadRequestException('La cuenta ya está cerrada');
       }
-      const transitions: Record<string, string[]> = { NEW: ['PREPARING', 'READY'], PREPARING: ['READY'], READY: ['SERVED'], SERVED: [], CANCELLED: [] };
+      const transitions: Record<string, string[]> = {
+        NEW: ['PREPARING', 'READY', 'CANCELLED'],
+        PREPARING: ['READY', 'NEW', 'CANCELLED'],
+        READY: ['SERVED', 'PREPARING', 'NEW', 'CANCELLED'],
+        SERVED: ['READY', 'PREPARING', 'CANCELLED'],
+        CANCELLED: ['NEW', 'PREPARING'],
+      };
       if (ticket.status !== status && !transitions[ticket.status]?.includes(status)) throw new BadRequestException('El pedido cambió. Actualiza cocina antes de continuar.');
       const updated = await tx.kitchenTicket.update({ where: { id: ticketId }, data: {
         status, assignedToId: ticket.assignedToId || user.id,
         ...(status === 'PREPARING' ? { startedAt: ticket.startedAt || new Date() } : {}),
         ...(status === 'READY' ? { readyAt: ticket.readyAt || new Date() } : {}),
         ...(status === 'SERVED' ? { servedAt: ticket.servedAt || new Date() } : {}),
-      }, include: { station: true, assignedTo: { select: { id: true, name: true } }, items: true, order: { include: { waiter: true, diningTable: true } } } });
+      }, include: { station: { include: { users: { select: { id: true, name: true, role: true } } } }, assignedTo: { select: { id: true, name: true } }, items: true, order: { include: { waiter: true, diningTable: true } } } });
       const active = await tx.kitchenTicket.count({ where: { orderId: ticket.orderId, status: { in: ACTIVE_KITCHEN } } });
       await tx.order.update({ where: { id: ticket.orderId }, data: { kitchenStatus: active ? 'ACTIVE' : 'READY' } });
       return { updated, table: ticket.tableId ? await this.finishPaidTable(ticket.tableId, tx) : null };
@@ -583,7 +608,7 @@ export class TablesService {
     } else if (params.status === 'ALL') {
       // No filtrar por estado
     } else {
-      where.status = { in: ['NEW', 'PREPARING', 'READY', 'SERVED'] };
+      where.status = { in: ['NEW', 'PREPARING', 'READY', 'SERVED', 'CANCELLED'] };
     }
     if (params.stationId) where.stationId = params.stationId;
     if (!['ADMIN', 'SUPERADMIN', 'CASHIER'].includes(user.role)) {
@@ -594,12 +619,12 @@ export class TablesService {
     }
     const tickets = await this.prisma.kitchenTicket.findMany({
       where,
-      include: { station: true, assignedTo: { select: { id: true, name: true } }, items: true, order: { include: { waiter: true, diningTable: true } } },
-      orderBy: [{ status: 'asc' }, { createdAt: 'asc' }],
+      include: { station: { include: { users: { select: { id: true, name: true, role: true } } } }, assignedTo: { select: { id: true, name: true } }, items: true, order: { include: { waiter: true, diningTable: true } } },
+      orderBy: [{ updatedAt: 'desc' }, { createdAt: 'desc' }],
       take: 250,
     });
 
-    // Garantizar que cada orden y estación tenga una sola tarjeta activa visible
+    // Garantizar que cada orden y estación tenga una sola tarjeta activa visible (la más reciente)
     const seen = new Set<string>();
     const deduped: typeof tickets = [];
     for (const t of tickets) {
@@ -767,16 +792,21 @@ export class TablesService {
       const group = await tx.payment.findMany({ where: payment.settlementId ? { settlementId: payment.settlementId } : { id: paymentId } });
       if (group.some(p => p.status !== 'PENDING_REVIEW')) throw new BadRequestException('Actualiza la cuenta: uno de los pagos ya cambió');
       const ids = group.map(p => p.id);
-      const pendingProofs = await tx.transferProof.count({ where: { paymentId: { in: ids }, status: 'PENDING' } });
-      if (!pendingProofs) throw new BadRequestException('No hay comprobante pendiente para este cobro');
+      const isTransferGroup = group.some(p => p.method !== 'CASH');
+      if (isTransferGroup) {
+        const pendingProofs = await tx.transferProof.count({ where: { paymentId: { in: ids }, status: 'PENDING' } });
+        if (!pendingProofs) throw new BadRequestException('No hay comprobante pendiente para este cobro');
+      }
       await tx.payment.updateMany({ where: { id: { in: ids } }, data: {
         status: action, confirmedBy: user.id, confirmedAt: action === 'CONFIRMED' ? new Date() : null,
       } });
       await tx.order.updateMany({ where: { id: { in: group.map(p => p.orderId) } }, data: { paymentStatus: action } });
-      await tx.transferProof.updateMany({ where: { paymentId: { in: ids }, status: 'PENDING' }, data: {
-        status: action, reviewedById: user.id, reviewedAt: new Date(),
-        rejectionReason: action === 'REJECTED' ? String(reason || 'Rechazado por caja').slice(0, 500) : null,
-      } });
+      if (isTransferGroup) {
+        await tx.transferProof.updateMany({ where: { paymentId: { in: ids }, status: 'PENDING' }, data: {
+          status: action, reviewedById: user.id, reviewedAt: new Date(),
+          rejectionReason: action === 'REJECTED' ? String(reason || 'Rechazado por caja').slice(0, 500) : null,
+        } });
+      }
       return { payment: { ...payment, status: action }, table: await this.finishPaidTable(payment.order.tableId, tx), replay: false };
     }, operationTransaction);
     if (!result.replay) {

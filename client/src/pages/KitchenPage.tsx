@@ -1,6 +1,17 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { io } from '@/lib/socket'
-import { Bell, CheckCircle2, ChefHat, Clock, Flame, History, RefreshCw, Undo2, UtensilsCrossed, XCircle } from 'lucide-react'
+import {
+  AlertTriangle,
+  Bell,
+  CheckCircle2,
+  Clock,
+  Flame,
+  History,
+  RefreshCw,
+  Undo2,
+  UtensilsCrossed,
+  XCircle,
+} from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { api } from '@/lib/api'
 import { alerts } from '@/lib/alerts'
@@ -8,24 +19,48 @@ import { useAuth } from '@/hooks/useAuth'
 import { getErrorMessage, type KitchenTicketItemSummary, type KitchenTicketSummary } from '@/lib/tableTypes'
 import { playUrgentBell } from '@/lib/sound'
 
+type KitchenTab = 'ALL_ACTIVE' | 'NEW' | 'PREPARING' | 'READY' | 'HISTORY'
+
 export default function KitchenPage() {
   const { user } = useAuth()
   const [tickets, setTickets] = useState<KitchenTicketSummary[]>([])
   const [loading, setLoading] = useState(true)
-  const [activeTab, setActiveTab] = useState<'ACTIVE' | 'HISTORY'>('ACTIVE')
+  const [activeTab, setActiveTab] = useState<KitchenTab>('ALL_ACTIVE')
   const [stationFilter, setStationFilter] = useState<string>('ALL')
 
-  const load = useCallback(() => {
-    setLoading(true)
+  // Carga inicial (silenciosa en segundo plano para no hacer parpadear la pantalla)
+  const load = useCallback((showSpinner = false) => {
+    if (showSpinner) setLoading(true)
     api.get<KitchenTicketSummary[]>('/kitchen/tickets')
       .then(setTickets)
       .catch(console.error)
-      .finally(() => setLoading(false))
+      .finally(() => {
+        if (showSpinner) setLoading(false)
+      })
   }, [])
 
   useEffect(() => {
-    void Promise.resolve().then(load)
+    load(true)
   }, [load])
+
+  // Determinar si un ticket pertenece específicamente a este cocinero / estación
+  const isTicketForThisCook = useCallback((ticket: KitchenTicketSummary) => {
+    // Si es Admin, Superadmin o Cajero en la pantalla de cocina, ve todo
+    if (['ADMIN', 'SUPERADMIN', 'CASHIER'].includes(user?.role || '')) {
+      return true
+    }
+    // Si es cocinero (KITCHEN):
+    if (user?.role === 'KITCHEN') {
+      const assignedId = ticket.assignedToId || ticket.assignedTo?.id
+      // 1. Asignado específicamente a este cocinero
+      if (assignedId && assignedId === user?.id) return true
+      // 2. Si no tiene cocinero asignado directamente, pero la estación está asignada a este usuario
+      const stationUsers = ticket.station?.users || []
+      if (!assignedId && stationUsers.some(u => u.id === user?.id)) return true
+      return false
+    }
+    return false
+  }, [user?.id, user?.role])
 
   useEffect(() => {
     const socketUrl = import.meta.env.VITE_API_URL || window.location.origin
@@ -33,19 +68,49 @@ export default function KitchenPage() {
       query: { userId: user?.id, userName: user?.name, userRole: user?.role },
       transports: ['websocket', 'polling'],
     })
+
+    // NUEVO TICKET CREADO: Cero polling, reactivo 100% por WebSockets
     socket.on('kitchenTicketCreated', (ticket: KitchenTicketSummary) => {
-      alerts.toast(`🔔 Nuevo pedido para ${ticket.station?.name || 'cocina'}`)
+      // Filtrar estrictamente: solo alertar y sonar si es para la estación de este cocinero
+      if (!isTicketForThisCook(ticket)) return
+
+      alerts.toast(`🔔 Nuevo pedido #${ticket.order?.orderNumber || ''} para ${ticket.station?.name || 'cocina'}`)
       playUrgentBell()
-      load()
+
+      // Actualización directa en memoria (cero recarga de pantalla)
+      setTickets(prev => {
+        const without = prev.filter(t => t.id !== ticket.id)
+        return [ticket, ...without]
+      })
     })
-    socket.on('kitchenTicketUpdated', load)
+
+    // TICKET ACTUALIZADO
+    socket.on('kitchenTicketUpdated', (ticket: KitchenTicketSummary) => {
+      setTickets(prev => {
+        const exists = prev.some(t => t.id === ticket.id)
+        if (!exists) {
+          return isTicketForThisCook(ticket) ? [ticket, ...prev] : prev
+        }
+        return prev.map(t => t.id === ticket.id ? ticket : t)
+      })
+    })
+
+    // TICKET EDITADO (modificaciones de mesera)
     socket.on('kitchenTicketEdited', (ticket: KitchenTicketSummary) => {
-      alerts.toast(`✏️ Pedido actualizado para ${ticket.station?.name || 'cocina'}`)
+      if (!isTicketForThisCook(ticket)) return
+
+      alerts.toast(`✏️ Pedido editado #${ticket.order?.orderNumber || ''} (${ticket.station?.name || 'cocina'})`)
       playUrgentBell()
-      load()
+
+      setTickets(prev => {
+        const exists = prev.some(t => t.id === ticket.id)
+        if (!exists) return [ticket, ...prev]
+        return prev.map(t => t.id === ticket.id ? ticket : t)
+      })
     })
+
     return () => { socket.disconnect() }
-  }, [load, user?.id, user?.name, user?.role])
+  }, [isTicketForThisCook, user?.id, user?.name, user?.role])
 
   const consolidatedTickets = useMemo(() => {
     // Garantizar UNA SOLA TARJETA por pedido y estación
@@ -70,6 +135,9 @@ export default function KitchenPage() {
         if (t.isEdited) existing.isEdited = true
         if (t.changeSummary) existing.changeSummary = t.changeSummary
         if (t.status === 'PREPARING' && existing.status === 'NEW') existing.status = 'PREPARING'
+        if (t.status === 'READY' && ['NEW', 'PREPARING'].includes(existing.status)) existing.status = 'READY'
+        if (t.status === 'SERVED') existing.status = 'SERVED'
+        if (t.status === 'CANCELLED') existing.status = 'CANCELLED'
       }
     }
     return Array.from(map.values())
@@ -87,46 +155,66 @@ export default function KitchenPage() {
     return list
   }, [consolidatedTickets])
 
-  // Activos: NUEVO o PREPARANDO (los que cocina debe despachar)
-  // FIFO: El pedido que llegó de PRIMERO arriba, nuevos pedidos cargan ABAJO
-  const activeTickets = useMemo(() => {
-    const list = consolidatedTickets.filter(t => {
-      const isPending = t.status === 'NEW' || t.status === 'PREPARING'
-      if (!isPending) return false
+  // Tickets filtrados por usuario/rol y estación
+  const scopedTickets = useMemo(() => {
+    return consolidatedTickets.filter(t => {
       if (stationFilter !== 'ALL' && t.stationId !== stationFilter && t.station?.id !== stationFilter) return false
       // Si el usuario logueado es cocinero (KITCHEN), mostrar ÚNICAMENTE sus tickets asignados
       if (user?.role === 'KITCHEN') {
         const assignedId = t.assignedToId || t.assignedTo?.id
         if (assignedId && assignedId !== user.id) return false
+        const stationUsers = t.station?.users || []
+        if (!assignedId && stationUsers.length > 0 && !stationUsers.some(u => u.id === user.id)) return false
       }
       return true
     })
+  }, [consolidatedTickets, stationFilter, user?.id, user?.role])
+
+  // Contadores vivos precisos
+  const countNew = useMemo(() => scopedTickets.filter(t => t.status === 'NEW').length, [scopedTickets])
+  const countPreparing = useMemo(() => scopedTickets.filter(t => t.status === 'PREPARING').length, [scopedTickets])
+  const countReady = useMemo(() => scopedTickets.filter(t => t.status === 'READY').length, [scopedTickets])
+  const countCancelled = useMemo(() => scopedTickets.filter(t => t.status === 'CANCELLED').length, [scopedTickets])
+  // En Cocina (Activos en preparación): los que requieren atención inmediata del cocinero
+  const countAllActive = countNew + countPreparing + countCancelled
+  const countHistory = useMemo(() => scopedTickets.filter(t => ['SERVED', 'CANCELLED', 'READY'].includes(t.status)).length, [scopedTickets])
+
+  // Lista de tickets según la pestaña activa (orden FIFO: el más antiguo primero arriba)
+  // Exactamente 2 pasos en cocina: Preparar -> Listo y pasa a Listos/Historial
+  const displayTickets = useMemo(() => {
+    let list: KitchenTicketSummary[] = []
+    if (activeTab === 'ALL_ACTIVE') {
+      list = scopedTickets.filter(t => ['NEW', 'PREPARING', 'CANCELLED'].includes(t.status))
+    } else if (activeTab === 'NEW') {
+      list = scopedTickets.filter(t => t.status === 'NEW')
+    } else if (activeTab === 'PREPARING') {
+      list = scopedTickets.filter(t => t.status === 'PREPARING')
+    } else if (activeTab === 'READY') {
+      list = scopedTickets.filter(t => t.status === 'READY')
+    } else if (activeTab === 'HISTORY') {
+      list = scopedTickets.filter(t => ['SERVED', 'CANCELLED', 'READY'].includes(t.status))
+    }
     return list.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime())
-  }, [consolidatedTickets, stationFilter, user?.id, user?.role])
+  }, [scopedTickets, activeTab])
 
-  // Historial: LISTOS o SERVIDOS (los ya completados)
-  const historyTickets = useMemo(() => {
-    return consolidatedTickets.filter(t => {
-      const isDone = t.status === 'READY' || t.status === 'SERVED'
-      if (!isDone) return false
-      if (stationFilter !== 'ALL' && t.stationId !== stationFilter && t.station?.id !== stationFilter) return false
-      if (user?.role === 'KITCHEN') {
-        const assignedId = t.assignedToId || t.assignedTo?.id
-        if (assignedId && assignedId !== user.id) return false
-      }
-      return true
-    })
-  }, [consolidatedTickets, stationFilter, user?.id, user?.role])
-
-  const setStatus = async (ticket: KitchenTicketSummary, status: string) => {
+  // Cambio de estado sin modales bloqueantes
+  const setStatus = async (ticket: KitchenTicketSummary, newStatus: string) => {
     try {
-      await api.put(`/kitchen/tickets/${ticket.id}/status`, { status })
-      if (status === 'READY') {
-        alerts.success('¡Listo para entregar!', `Pedido #${ticket.order?.orderNumber} despachado a mesera.`)
+      // Actualización optimista inmediata en memoria
+      setTickets(prev => prev.map(t => t.id === ticket.id ? { ...t, status: newStatus } : t))
+      await api.put(`/kitchen/tickets/${ticket.id}/status`, { status: newStatus })
+
+      // Notificación discreta sin popup modal bloqueante
+      if (newStatus === 'READY') {
+        alerts.toast(`¡Pedido #${ticket.order?.orderNumber} listo para entrega! Avisado a mesera.`)
+      } else if (newStatus === 'PREPARING') {
+        alerts.toast(`Iniciada preparación #${ticket.order?.orderNumber}`)
+      } else if (newStatus === 'SERVED') {
+        alerts.toast(`Pedido #${ticket.order?.orderNumber} archivado a historial`)
       }
-      load()
     } catch (err: unknown) {
       alerts.error('No se pudo actualizar', getErrorMessage(err))
+      load(false)
     }
   }
 
@@ -139,20 +227,59 @@ export default function KitchenPage() {
 
   return (
     <div className="space-y-3">
-      {/* Barra de control compacta en una sola fila */}
-      <div className="flex flex-wrap items-center justify-between gap-2.5 bg-[var(--bg-panel)] p-2 sm:p-2.5 rounded-2xl border border-[var(--border-subtle)] shadow-xs">
-        {/* Pestañas: Activos vs Historial */}
-        <div className="flex items-center gap-1.5">
+      {/* Barra de control superior con Filtros de Estado y Estación */}
+      <div className="flex flex-wrap items-center justify-between gap-2.5 bg-[var(--bg-panel)] p-2.5 sm:p-3 rounded-2xl border border-[var(--border-subtle)] shadow-xs">
+        {/* Pestañas de estado: Todos Activos, Nuevos, En Preparación, Listos, Historial */}
+        <div className="flex items-center gap-1.5 overflow-x-auto pb-1 sm:pb-0">
           <Button
             size="sm"
-            variant={activeTab === 'ACTIVE' ? 'default' : 'ghost'}
-            onClick={() => setActiveTab('ACTIVE')}
-            className={`font-black gap-1.5 h-8 text-xs ${activeTab === 'ACTIVE' ? 'bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-white shadow-xs' : ''}`}
+            variant={activeTab === 'ALL_ACTIVE' ? 'default' : 'ghost'}
+            onClick={() => setActiveTab('ALL_ACTIVE')}
+            className={`font-black gap-1.5 h-8 text-xs shrink-0 ${activeTab === 'ALL_ACTIVE' ? 'bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-white shadow-xs' : ''}`}
           >
             <Flame className="h-3.5 w-3.5" />
             <span>En Cocina</span>
-            <span className={`ml-1 rounded-full px-1.5 py-0.2 text-[10px] font-black ${activeTab === 'ACTIVE' ? 'bg-white text-[var(--accent)]' : 'bg-[var(--bg-elevated)] text-[var(--text-primary)]'}`}>
-              {activeTickets.length}
+            <span className={`ml-1 rounded-full px-1.5 py-0.2 text-[10px] font-black ${activeTab === 'ALL_ACTIVE' ? 'bg-white text-[var(--accent)]' : 'bg-[var(--bg-elevated)] text-[var(--text-primary)]'}`}>
+              {countAllActive}
+            </span>
+          </Button>
+
+          <Button
+            size="sm"
+            variant={activeTab === 'NEW' ? 'default' : 'ghost'}
+            onClick={() => setActiveTab('NEW')}
+            className={`font-black gap-1.5 h-8 text-xs shrink-0 ${activeTab === 'NEW' ? 'bg-blue-600 hover:bg-blue-700 text-white shadow-xs' : ''}`}
+          >
+            <Clock className="h-3.5 w-3.5" />
+            <span>Nuevos</span>
+            <span className={`ml-1 rounded-full px-1.5 py-0.2 text-[10px] font-black ${activeTab === 'NEW' ? 'bg-white text-blue-600' : 'bg-[var(--bg-elevated)] text-[var(--text-primary)]'}`}>
+              {countNew}
+            </span>
+          </Button>
+
+          <Button
+            size="sm"
+            variant={activeTab === 'PREPARING' ? 'default' : 'ghost'}
+            onClick={() => setActiveTab('PREPARING')}
+            className={`font-black gap-1.5 h-8 text-xs shrink-0 ${activeTab === 'PREPARING' ? 'bg-amber-500 hover:bg-amber-600 text-slate-950 shadow-xs' : ''}`}
+          >
+            <Flame className="h-3.5 w-3.5" />
+            <span>En Preparación</span>
+            <span className={`ml-1 rounded-full px-1.5 py-0.2 text-[10px] font-black ${activeTab === 'PREPARING' ? 'bg-slate-950 text-amber-400' : 'bg-[var(--bg-elevated)] text-[var(--text-primary)]'}`}>
+              {countPreparing}
+            </span>
+          </Button>
+
+          <Button
+            size="sm"
+            variant={activeTab === 'READY' ? 'default' : 'ghost'}
+            onClick={() => setActiveTab('READY')}
+            className={`font-black gap-1.5 h-8 text-xs shrink-0 ${activeTab === 'READY' ? 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs' : ''}`}
+          >
+            <CheckCircle2 className="h-3.5 w-3.5" />
+            <span>Listos</span>
+            <span className={`ml-1 rounded-full px-1.5 py-0.2 text-[10px] font-black ${activeTab === 'READY' ? 'bg-white text-emerald-600' : 'bg-[var(--bg-elevated)] text-[var(--text-primary)]'}`}>
+              {countReady}
             </span>
           </Button>
 
@@ -160,12 +287,12 @@ export default function KitchenPage() {
             size="sm"
             variant={activeTab === 'HISTORY' ? 'default' : 'ghost'}
             onClick={() => setActiveTab('HISTORY')}
-            className={`font-bold gap-1.5 h-8 text-xs ${activeTab === 'HISTORY' ? 'bg-[var(--text-primary)] text-white shadow-xs' : ''}`}
+            className={`font-bold gap-1.5 h-8 text-xs shrink-0 ${activeTab === 'HISTORY' ? 'bg-[var(--text-primary)] text-white shadow-xs' : ''}`}
           >
             <History className="h-3.5 w-3.5" />
             <span>Historial</span>
             <span className="ml-1 rounded-full bg-[var(--bg-elevated)] px-1.5 py-0.2 text-[10px] font-bold text-[var(--text-secondary)]">
-              {historyTickets.length}
+              {countHistory}
             </span>
           </Button>
         </div>
@@ -196,241 +323,311 @@ export default function KitchenPage() {
             </div>
           )}
 
-          <Button variant="outline" size="sm" onClick={load} className="gap-1.5 font-bold h-8 text-xs">
+          <Button variant="outline" size="sm" onClick={() => load(true)} className="gap-1.5 font-bold h-8 text-xs cursor-pointer">
             <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
             <span className="hidden sm:inline">Actualizar</span>
           </Button>
         </div>
       </div>
 
-      {loading ? (
+      {loading && tickets.length === 0 ? (
         <p className="text-sm text-[var(--text-secondary)] py-8 text-center">Cargando pedidos de cocina...</p>
-      ) : activeTab === 'ACTIVE' ? (
-        /* VISTA PRINCIPAL: PEDIDOS ACTIVOS EN GRILLA COMPACTA DE HASTA 5 COLUMNAS */
-        activeTickets.length === 0 ? (
-          <div className="rounded-2xl border-2 border-dashed border-[var(--border-default)] p-12 text-center bg-[var(--bg-panel)]">
-            <UtensilsCrossed className="h-12 w-12 text-emerald-500 mx-auto mb-2 opacity-80" />
-            <h3 className="text-lg font-black text-[var(--text-primary)]">¡Cocina al día!</h3>
-            <p className="text-sm text-[var(--text-secondary)] mt-1">No hay pedidos pendientes en este momento.</p>
-          </div>
-        ) : (
-          <div className="grid gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 items-start">
-            {activeTickets.map(ticket => {
-              const hasActiveItems = ticket.items?.some(item => item.changeType !== 'REMOVED')
-              const isFullyCancelled = !hasActiveItems || ticket.status === 'CANCELLED'
-              const minutesAgo = getMinutesAgo(ticket.order?.createdAt)
-              const isDelayed = minutesAgo !== null && minutesAgo >= 15
-              const isWarning = minutesAgo !== null && minutesAgo >= 10 && !isDelayed
+      ) : displayTickets.length === 0 ? (
+        /* VISTA VACÍA */
+        <div className="rounded-2xl border-2 border-dashed border-[var(--border-default)] p-12 text-center bg-[var(--bg-panel)]">
+          {activeTab === 'HISTORY' ? (
+            <>
+              <History className="h-12 w-12 text-[var(--text-muted)] mx-auto mb-2 opacity-70" />
+              <h3 className="text-lg font-black text-[var(--text-primary)]">Sin pedidos despachados</h3>
+              <p className="text-sm text-[var(--text-secondary)] mt-1">Aún no hay pedidos marcados como despachados o cancelados en este turno.</p>
+            </>
+          ) : activeTab === 'READY' ? (
+            <>
+              <CheckCircle2 className="h-12 w-12 text-emerald-500 mx-auto mb-2 opacity-80" />
+              <h3 className="text-lg font-black text-[var(--text-primary)]">Sin pedidos esperando recogida</h3>
+              <p className="text-sm text-[var(--text-secondary)] mt-1">Cuando marques un pedido como listo, se mostrará aquí para que la mesera lo retire.</p>
+            </>
+          ) : (
+            <>
+              <UtensilsCrossed className="h-12 w-12 text-emerald-500 mx-auto mb-2 opacity-80" />
+              <h3 className="text-lg font-black text-[var(--text-primary)]">¡Cocina al día!</h3>
+              <p className="text-sm text-[var(--text-secondary)] mt-1">No hay pedidos pendientes en esta sección.</p>
+            </>
+          )}
+        </div>
+      ) : (
+        /* GRILLA DE TICKETS */
+        <div className="grid gap-3 grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 2xl:grid-cols-5 items-start">
+          {displayTickets.map(ticket => {
+            const hasActiveItems = ticket.items?.some(i => i.changeType !== 'REMOVED')
+            const isFullyCancelled = !hasActiveItems || ticket.status === 'CANCELLED'
+            const minutesAgo = getMinutesAgo(ticket.order?.createdAt)
+            const isDelayed = minutesAgo !== null && minutesAgo >= 15
+            const isWarning = minutesAgo !== null && minutesAgo >= 10 && !isDelayed
 
-              return (
-                <article
-                  key={ticket.id}
-                  className={`rounded-2xl border bg-[var(--bg-panel)] p-3.5 shadow-sm transition-all flex flex-col justify-between ${
-                    isFullyCancelled
-                      ? 'border-rose-300 bg-rose-50/60 dark:bg-rose-950/20'
-                      : ticket.isEdited
-                      ? 'border-emerald-500 ring-2 ring-emerald-500/20'
-                      : 'border-[var(--border-subtle)] hover:border-[var(--accent)] hover:shadow-md'
-                  }`}
-                >
-                  <div>
-                    {/* Cabecera del ticket */}
-                    <div className="flex items-start justify-between gap-2 border-b border-[var(--border-subtle)] pb-2.5">
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-1.5 flex-wrap">
-                          <span className="text-lg font-black text-[var(--text-primary)] leading-tight">
-                            #{ticket.order?.orderNumber || '0'} · {ticket.order?.diningTable?.label || ticket.order?.customerName || 'Mesa'}
-                          </span>
-                        </div>
-                        <p className="text-xs text-[var(--text-secondary)] mt-0.5 flex flex-wrap items-center gap-1.5">
-                          <span>Mesera: <strong className="text-[var(--text-primary)]">{ticket.order?.waiter?.name || 'Sin asignar'}</strong></span>
-                          {ticket.assignedTo?.name && (
-                            <span className="text-[10px] font-bold bg-[var(--bg-elevated)] border border-[var(--border-subtle)] px-1.5 py-0.2 rounded text-[var(--text-primary)]">
-                              👨‍🍳 {ticket.assignedTo.name}
-                            </span>
-                          )}
-                          {ticket.station?.name && <span className="opacity-75">· {ticket.station.name}</span>}
-                        </p>
-                      </div>
-
-                      {/* Tiempo o Cancelado badge */}
-                      {isFullyCancelled ? (
-                        <span className="shrink-0 rounded-full bg-rose-500/15 px-2 py-0.5 text-[10px] font-black text-rose-700 flex items-center gap-1">
-                          <XCircle className="h-3 w-3" /> CANCELADO
+            return (
+              <article
+                key={ticket.id}
+                className={`rounded-2xl border bg-[var(--bg-panel)] p-3.5 shadow-sm transition-all flex flex-col justify-between ${
+                  isFullyCancelled
+                    ? 'border-rose-300 bg-rose-50/60 dark:bg-rose-950/20'
+                    : ticket.isEdited
+                    ? 'border-amber-500 ring-2 ring-amber-500/20'
+                    : ticket.status === 'READY'
+                    ? 'border-emerald-500 ring-2 ring-emerald-500/20'
+                    : 'border-[var(--border-subtle)] hover:border-[var(--accent)] hover:shadow-md'
+                }`}
+              >
+                <div>
+                  {/* Cabecera del ticket */}
+                  <div className="flex items-start justify-between gap-2 border-b border-[var(--border-subtle)] pb-2.5">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className="text-lg font-black text-[var(--text-primary)] leading-tight">
+                          #{ticket.order?.orderNumber || '0'} · {ticket.order?.diningTable?.label || ticket.order?.customerName || 'Mesa'}
                         </span>
-                      ) : (
-                        <div className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-black flex items-center gap-1 ${
-                          isDelayed ? 'bg-rose-500/15 text-rose-700 animate-pulse' :
-                          isWarning ? 'bg-amber-500/15 text-amber-700' :
-                          'bg-[var(--bg-elevated)] text-[var(--text-secondary)]'
-                        }`}>
-                          <Clock className="h-3 w-3" />
-                          {minutesAgo !== null ? `${minutesAgo} min` : 'Reciente'}
-                        </div>
-                      )}
+                        {ticket.isEdited && (
+                          <span className="rounded-full bg-amber-500 text-slate-950 px-2 py-0.5 text-[10px] font-black flex items-center gap-1 shadow-xs animate-pulse">
+                            <AlertTriangle className="h-3 w-3" /> PEDIDO EDITADO
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-xs text-[var(--text-secondary)] mt-0.5 flex flex-wrap items-center gap-1.5">
+                        <span>Mesera: <strong className="text-[var(--text-primary)]">{ticket.order?.waiter?.name || 'Sin asignar'}</strong></span>
+                        {ticket.assignedTo?.name && (
+                          <span className="text-[10px] font-bold bg-[var(--bg-elevated)] border border-[var(--border-subtle)] px-1.5 py-0.2 rounded text-[var(--text-primary)]">
+                            👨‍🍳 {ticket.assignedTo.name}
+                          </span>
+                        )}
+                        {ticket.station?.name && <span className="opacity-75">· {ticket.station.name}</span>}
+                      </p>
                     </div>
 
-                    {/* Nota general del pedido */}
-                    {ticket.order?.notes && (
-                      <div className="mt-2 rounded-xl border border-amber-400/40 bg-amber-500/10 p-2 text-xs text-amber-950 dark:text-amber-200">
-                        <span className="block text-[10px] uppercase font-black tracking-wider text-amber-700 dark:text-amber-400">
-                          📝 Nota del pedido:
-                        </span>
-                        <span className="font-bold">{ticket.order.notes}</span>
+                    {/* Tiempo, Listo o Cancelado badge */}
+                    {isFullyCancelled ? (
+                      <span className="shrink-0 rounded-full bg-rose-500/15 px-2 py-0.5 text-[10px] font-black text-rose-700 dark:text-rose-400 flex items-center gap-1">
+                        <XCircle className="h-3 w-3" /> CANCELADO
+                      </span>
+                    ) : ticket.status === 'READY' ? (
+                      <span className="shrink-0 rounded-full bg-emerald-500 text-white px-2 py-0.5 text-[10px] font-black flex items-center gap-1 shadow-xs">
+                        <CheckCircle2 className="h-3 w-3" /> ¡LISTO!
+                      </span>
+                    ) : ticket.status === 'SERVED' ? (
+                      <span className="shrink-0 rounded-full bg-slate-700 text-white px-2 py-0.5 text-[10px] font-bold flex items-center gap-1">
+                        <CheckCircle2 className="h-3 w-3" /> Despachado
+                      </span>
+                    ) : (
+                      <div className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-black flex items-center gap-1 ${
+                        isDelayed ? 'bg-rose-500/15 text-rose-700 dark:text-rose-400 animate-pulse' :
+                        isWarning ? 'bg-amber-500/15 text-amber-700 dark:text-amber-400' :
+                        'bg-[var(--bg-elevated)] text-[var(--text-secondary)]'
+                      }`}>
+                        <Clock className="h-3 w-3" />
+                        {minutesAgo !== null ? `${minutesAgo} min` : 'Reciente'}
                       </div>
                     )}
+                  </div>
 
-                    {/* Alerta de modificación si el mesero quitó/agregó algo */}
-                    {ticket.isEdited && ticket.changeSummary && !isFullyCancelled && (
-                      <div className="mt-2 rounded-lg border border-emerald-400 bg-emerald-500/10 px-2.5 py-1.5 text-xs font-bold text-emerald-800 flex items-center gap-1.5">
-                        <Bell className="h-3.5 w-3.5 text-emerald-600 shrink-0 animate-bounce" />
-                        <span className="truncate">{ticket.changeSummary}</span>
+                  {/* Nota general del pedido */}
+                  {ticket.order?.notes && (
+                    <div className="mt-2 rounded-xl border border-amber-400/40 bg-amber-500/10 p-2 text-xs text-amber-950 dark:text-amber-200">
+                      <span className="block text-[10px] uppercase font-black tracking-wider text-amber-700 dark:text-amber-400">
+                        📝 Nota del pedido:
+                      </span>
+                      <span className="font-bold">{ticket.order.notes}</span>
+                    </div>
+                  )}
+
+                  {/* Banner llamativo de cambios si fue editado */}
+                  {ticket.isEdited && ticket.changeSummary && !isFullyCancelled && (
+                    <div className="mt-2 rounded-xl border-2 border-amber-500 bg-amber-500/15 p-2 text-xs text-amber-950 dark:text-amber-100 shadow-xs">
+                      <div className="flex items-center gap-1.5 font-black text-amber-800 dark:text-amber-300 mb-1">
+                        <Bell className="h-3.5 w-3.5 shrink-0 animate-bounce text-amber-600 dark:text-amber-400" />
+                        <span>CAMBIOS REALIZADOS:</span>
                       </div>
-                    )}
+                      <div className="font-extrabold text-[11px] leading-snug space-y-0.5">
+                        {ticket.changeSummary.split('|').map((part, pIdx) => (
+                          <div key={pIdx} className="flex items-start gap-1">
+                            <span>•</span>
+                            <span>{part.trim()}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
 
-                    {/* Lista compacta de items */}
-                    <div className="mt-2.5 space-y-1.5">
-                      {ticket.items?.map((item: KitchenTicketItemSummary) => {
-                        const isRemoved = item.changeType === 'REMOVED'
-                        const isAdded = item.changeType === 'ADDED'
-                        const isTakeaway = (item.notes || '').toLowerCase().includes('llevar')
-                        const cleanNotes = (item.notes || '').replace(/\[PARA LLEVAR\]/gi, '').replace(/\[MESA\]/gi, '').trim()
+                  {/* Lista de items con estilos visuales diferenciados según cambio */}
+                  <div className="mt-2.5 space-y-1.5">
+                    {ticket.items?.map((item: KitchenTicketItemSummary) => {
+                      const isRemoved = item.changeType === 'REMOVED'
+                      const isAdded = item.changeType === 'ADDED'
+                      const isModified = item.changeType === 'MODIFIED'
+                      const isTakeaway = (item.notes || '').toLowerCase().includes('llevar')
+                      const cleanNotes = (item.notes || '').replace(/\[PARA LLEVAR\]/gi, '').replace(/\[MESA\]/gi, '').trim()
 
-                        if (isRemoved) {
-                          return (
-                            <div key={item.id} className="rounded-lg bg-rose-500/10 px-2 py-1 text-xs text-rose-800 line-through opacity-75">
-                              ❌ Quitado: {item.quantity}x {item.nameSnapshot}
-                            </div>
-                          )
-                        }
-
+                      if (isRemoved) {
                         return (
-                          <div
-                            key={item.id}
-                            className={`rounded-xl p-2 text-xs border ${
-                              isAdded
-                                ? 'border-emerald-400 bg-emerald-500/10 text-emerald-950 font-bold'
-                                : 'border-transparent bg-[var(--bg-elevated)]'
-                            }`}
-                          >
-                            <div className="flex items-center justify-between gap-1.5">
-                              <span className="text-sm font-black text-[var(--text-primary)]">
-                                {item.quantity}x {item.nameSnapshot}
-                              </span>
-                              {isTakeaway ? (
-                                <span className="shrink-0 rounded-full bg-amber-500 text-slate-950 px-1.5 py-0.2 text-[10px] font-black uppercase tracking-wider shadow-sm">
-                                  🥡 LLEVAR
-                                </span>
-                              ) : (
-                                <span className="shrink-0 rounded-full bg-blue-500/10 text-blue-700 px-1.5 py-0.2 text-[10px] font-bold">
-                                  🍽️ MESA
-                                </span>
-                              )}
+                          <div key={item.id} className="rounded-xl border border-rose-300 bg-rose-500/15 p-2 text-xs text-rose-800 dark:text-rose-300 flex items-center justify-between">
+                            <div className="flex items-center gap-1.5 min-w-0">
+                              <span className="font-black px-1.5 py-0.5 rounded bg-rose-600 text-white text-[9px] shrink-0">QUITADO ❌</span>
+                              <span className="line-through font-bold truncate">-{item.quantity}x {item.nameSnapshot}</span>
                             </div>
-                            {cleanNotes && (
-                              <p className="text-xs font-bold text-amber-700 dark:text-amber-400 mt-1 pl-1.5 border-l-2 border-amber-500 bg-amber-500/10 py-0.5 rounded-r">
-                                👉 {cleanNotes}
-                              </p>
-                            )}
+                            <span className="text-[10px] font-black text-rose-600 dark:text-rose-400 shrink-0">¡NO PREPARAR!</span>
                           </div>
                         )
-                      })}
-                    </div>
-                  </div>
+                      }
 
-                  {/* Botones de acción: Primero Preparar, luego Listo - Bien cotejados */}
-                  <div className="mt-3.5 pt-2 border-t border-[var(--border-subtle)]">
-                    {isFullyCancelled ? (
+                      if (isAdded) {
+                        return (
+                          <div key={item.id} className="rounded-xl border-2 border-emerald-500 bg-emerald-500/15 p-2 text-xs text-emerald-950 dark:text-emerald-100 font-bold shadow-xs">
+                            <div className="flex items-start justify-between gap-1">
+                              <div className="min-w-0 flex-1">
+                                <div className="flex items-center gap-1.5 flex-wrap">
+                                  <span className="font-black px-1.5 py-0.5 rounded bg-emerald-600 text-white text-[9px] animate-pulse">¡AGREGADO! ✨</span>
+                                  <span className="text-sm font-black text-[var(--text-primary)]">+{item.quantity}x {item.nameSnapshot}</span>
+                                </div>
+                                {cleanNotes && (
+                                  <p className="text-xs font-bold text-amber-700 dark:text-amber-400 mt-1 pl-1.5 border-l-2 border-amber-500">
+                                    👉 {cleanNotes}
+                                  </p>
+                                )}
+                              </div>
+                              <span className={`shrink-0 rounded-full px-1.5 py-0.2 text-[10px] font-black tracking-wider ${isTakeaway ? 'bg-amber-500 text-slate-950' : 'bg-blue-600 text-white'}`}>
+                                {isTakeaway ? '🥡 LLEVAR' : '🍽️ MESA'}
+                              </span>
+                            </div>
+                          </div>
+                        )
+                      }
+
+                      if (isModified) {
+                        return (
+                          <div key={item.id} className="rounded-xl border-2 border-amber-500 bg-amber-500/15 p-2 text-xs text-amber-950 dark:text-amber-100 font-bold shadow-xs">
+                            <div className="flex items-start justify-between gap-1">
+                              <div className="min-w-0 flex-1">
+                                <div className="flex items-center gap-1.5 flex-wrap">
+                                  <span className="font-black px-1.5 py-0.5 rounded bg-amber-600 text-white text-[9px]">EDITADO ✏️</span>
+                                  <span className="text-sm font-black text-[var(--text-primary)]">{item.quantity}x {item.nameSnapshot}</span>
+                                  {item.previousQty !== undefined && item.previousQty !== null && item.previousQty !== item.quantity && (
+                                    <span className="text-[11px] font-extrabold text-amber-800 dark:text-amber-300">
+                                      (Antes: {item.previousQty} un.)
+                                    </span>
+                                  )}
+                                </div>
+                                {cleanNotes && (
+                                  <p className="text-xs font-bold text-amber-700 dark:text-amber-400 mt-1 pl-1.5 border-l-2 border-amber-500">
+                                    👉 {cleanNotes}
+                                  </p>
+                                )}
+                              </div>
+                              <span className={`shrink-0 rounded-full px-1.5 py-0.2 text-[10px] font-black tracking-wider ${isTakeaway ? 'bg-amber-500 text-slate-950' : 'bg-blue-600 text-white'}`}>
+                                {isTakeaway ? '🥡 LLEVAR' : '🍽️ MESA'}
+                              </span>
+                            </div>
+                          </div>
+                        )
+                      }
+
+                      return (
+                        <div key={item.id} className="rounded-xl p-2 text-xs border border-transparent bg-[var(--bg-elevated)]">
+                          <div className="flex items-start justify-between gap-1">
+                            <div className="min-w-0 flex-1">
+                              <span className="text-sm font-black text-[var(--text-primary)] leading-tight">
+                                {item.quantity}x {item.nameSnapshot}
+                              </span>
+                              {cleanNotes && (
+                                <p className="text-xs font-bold text-amber-700 dark:text-amber-400 mt-1 pl-1.5 border-l-2 border-amber-500 bg-amber-500/10 py-0.5 rounded-r">
+                                  👉 {cleanNotes}
+                                </p>
+                              )}
+                            </div>
+                            <span className={`shrink-0 rounded-full px-1.5 py-0.2 text-[10px] font-black tracking-wider ${isTakeaway ? 'bg-amber-500 text-slate-950' : 'bg-blue-500/10 text-blue-700 dark:text-blue-300'}`}>
+                              {isTakeaway ? '🥡 LLEVAR' : '🍽️ MESA'}
+                            </span>
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+
+                {/* EXACTAMENTE 2 PASOS: 1. PREPARAR -> 2. LISTO (Y YA QUEDA COMPLETO) */}
+                <div className="mt-3.5 pt-2 border-t border-[var(--border-subtle)]">
+                  {isFullyCancelled ? (
+                    <Button
+                      variant="outline"
+                      onClick={() => setStatus(ticket, 'SERVED')}
+                      className="w-full h-11 border-rose-300 text-rose-700 hover:bg-rose-50 font-black text-xs gap-1.5 cursor-pointer rounded-xl"
+                    >
+                      <XCircle className="h-4 w-4" /> Descartar y archivar a historial
+                    </Button>
+                  ) : ticket.status === 'NEW' ? (
+                    /* PASO 1: SOLO PREPARAR (ÁMBAR) */
+                    <Button
+                      size="sm"
+                      onClick={() => setStatus(ticket, 'PREPARING')}
+                      className="w-full h-11 bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-xs gap-2 rounded-xl shadow-md transition-all active:scale-95 cursor-pointer"
+                    >
+                      <Flame className="h-4 w-4" /> 1. Empezar a Preparar
+                    </Button>
+                  ) : ticket.status === 'PREPARING' ? (
+                    /* PASO 2: EN PREPARACIÓN -> BOTÓN LISTO (ESMERALDA) + OPCIÓN REVERTIR */
+                    <div className="flex gap-2 items-center w-full">
                       <Button
+                        size="sm"
                         variant="outline"
-                        onClick={() => setStatus(ticket, 'CANCELLED')}
-                        className="w-full h-11 border-rose-300 text-rose-700 hover:bg-rose-50 font-black text-xs gap-1.5"
+                        onClick={() => setStatus(ticket, 'NEW')}
+                        className="h-11 px-3 border-amber-400 text-amber-700 dark:text-amber-300 font-bold text-xs gap-1 rounded-xl shrink-0 hover:bg-amber-500/10 cursor-pointer"
+                        title="Regresar a Pendiente si se presionó por error"
                       >
-                        <XCircle className="h-4 w-4" /> Descartar pedido cancelado
+                        <Undo2 className="h-3.5 w-3.5" /> Revertir
                       </Button>
-                    ) : (
-                      <div className="flex gap-2 items-center">
-                        {/* 1. Botón Preparar (a la izquierda) */}
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => setStatus(ticket, 'PREPARING')}
-                          disabled={ticket.status === 'PREPARING'}
-                          className={`flex-1 h-11 rounded-xl font-black text-xs gap-1.5 border transition-all active:scale-95 ${
-                            ticket.status === 'PREPARING'
-                              ? 'bg-amber-500 text-slate-950 border-amber-500 opacity-90 cursor-default shadow-sm'
-                              : 'border-amber-400 text-amber-600 hover:bg-amber-500/15'
-                          }`}
-                        >
-                          <Flame className="h-4 w-4" />
-                          {ticket.status === 'PREPARING' ? 'En Proceso' : 'Preparar'}
-                        </Button>
-
-                        {/* 2. Botón Listo (a la derecha) */}
-                        <Button
-                          size="sm"
-                          onClick={() => setStatus(ticket, 'READY')}
-                          className="flex-1 h-11 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs gap-1.5 rounded-xl shadow-md transition-all active:scale-95"
-                        >
-                          <CheckCircle2 className="h-4 w-4" />
-                          ¡Listo!
-                        </Button>
-                      </div>
-                    )}
-                  </div>
-                </article>
-              )
-            })}
-          </div>
-        )
-      ) : (
-        /* VISTA DE HISTORIAL: PEDIDOS YA DESPACHADOS */
-        historyTickets.length === 0 ? (
-          <p className="rounded-2xl border border-dashed border-[var(--border-default)] p-8 text-center text-sm text-[var(--text-muted)]">
-            Aún no hay pedidos despachados en este turno.
-          </p>
-        ) : (
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-            {historyTickets.map(ticket => (
-              <article key={ticket.id} className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-3.5 opacity-85 shadow-sm">
-                <div className="flex items-start justify-between gap-2 border-b border-[var(--border-subtle)] pb-2">
-                  <div>
-                    <p className="text-base font-black text-[var(--text-primary)]">
-                      #{ticket.order?.orderNumber || '0'} · {ticket.order?.diningTable?.label || ticket.order?.customerName || 'Mesa'}
-                    </p>
-                    <p className="text-xs text-[var(--text-secondary)]">
-                      Mesera: {ticket.order?.waiter?.name || 'Sin asignar'}
-                    </p>
-                  </div>
-                  <span className="rounded-full bg-emerald-500/10 px-2 py-0.5 text-[11px] font-black text-emerald-700 flex items-center gap-1">
-                    <CheckCircle2 className="h-3.5 w-3.5" /> Despachado
-                  </span>
-                </div>
-
-                <div className="mt-2 space-y-1">
-                  {ticket.items?.filter(i => i.changeType !== 'REMOVED').map(item => (
-                    <p key={item.id} className="text-xs text-[var(--text-primary)] font-medium">
-                      • {item.quantity}x {item.nameSnapshot}
-                    </p>
-                  ))}
-                </div>
-
-                <div className="mt-3 pt-2 border-t border-[var(--border-subtle)] flex justify-between items-center text-xs">
-                  <span className="text-[var(--text-muted)]">Completado</span>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => setStatus(ticket, 'PREPARING')}
-                    className="h-7 text-xs font-bold gap-1 text-[var(--text-muted)] hover:text-[var(--accent)]"
-                    title="Si se marcó listo por error, devolver a cocina"
-                  >
-                    <Undo2 className="h-3 w-3" /> Reabrir
-                  </Button>
+                      <Button
+                        size="sm"
+                        onClick={() => setStatus(ticket, 'READY')}
+                        className="flex-1 h-11 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs gap-2 rounded-xl shadow-md transition-all active:scale-95 cursor-pointer"
+                      >
+                        <CheckCircle2 className="h-4 w-4" /> 2. ¡Listo para Entrega!
+                      </Button>
+                    </div>
+                  ) : ticket.status === 'READY' ? (
+                    /* ESTADO LISTO (EN PESTAÑA LISTOS): AVISADO A MESERA CON OPCIÓN DE REABRIR */
+                    <div className="w-full rounded-xl bg-emerald-500/10 border border-emerald-500/30 p-2 flex items-center justify-between gap-2">
+                      <span className="text-xs font-black text-emerald-700 dark:text-emerald-400 flex items-center gap-1.5">
+                        <CheckCircle2 className="h-4 w-4" /> ¡Listo! Esperando recogida
+                      </span>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => setStatus(ticket, 'PREPARING')}
+                        className="h-8 px-2 text-[11px] font-bold text-[var(--text-muted)] hover:text-amber-600 cursor-pointer"
+                        title="Reabrir a preparación si se marcó listo por error"
+                      >
+                        <Undo2 className="h-3 w-3" /> Reabrir
+                      </Button>
+                    </div>
+                  ) : (
+                    /* ESTADO SERVIDO / HISTORIAL */
+                    <div className="flex items-center justify-between text-xs pt-1">
+                      <span className="font-bold text-[var(--text-muted)]">
+                        {ticket.status === 'CANCELLED' ? 'Pedido Cancelado' : 'Pedido Despachado'}
+                      </span>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => setStatus(ticket, 'PREPARING')}
+                        className="h-7 text-xs font-bold gap-1 text-[var(--text-muted)] hover:text-[var(--accent)] cursor-pointer"
+                        title="Reabrir pedido a cocina"
+                      >
+                        <Undo2 className="h-3 w-3" /> Reabrir
+                      </Button>
+                    </div>
+                  )}
                 </div>
               </article>
-            ))}
-          </div>
-        )
+            )
+          })}
+        </div>
       )}
     </div>
   )

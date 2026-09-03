@@ -95,6 +95,7 @@ export default function TableOrderPage() {
   const [pending, setPending] = useState<OfflineTableOrder[]>([])
   const [online, setOnline] = useState(navigator.onLine)
   const [saving, setSaving] = useState(false)
+  const [editOrderNumber, setEditOrderNumber] = useState<number | null>(null)
   const submission = useRef({ signature: '', id: '' })
   const [showMobileCart, setShowMobileCart] = useState(false)
 
@@ -103,12 +104,19 @@ export default function TableOrderPage() {
   useEffect(() => {
     api.get<Category[]>('/menu/categories').then(setCategories).catch(console.error)
     loadPending()
-    if (existingTableId && !editOrderId) {
-      api.get<{ label: string }>(`/tables/${existingTableId}`).then(table => setTableLabel(table.label)).catch(console.error)
+    if (existingTableId) {
+      api.get<{ label: string }>(`/tables/${existingTableId}`).then(table => {
+        if (table?.label) setTableLabel(table.label)
+      }).catch(console.error)
     }
     if (editOrderId) {
       api.get<DiningOrderSummary>(`/orders/${editOrderId}`).then(order => {
-        setTableLabel(order.diningTable?.label || order.customerName || '')
+        if (order.orderNumber) setEditOrderNumber(order.orderNumber)
+        if (order.diningTable?.label) {
+          setTableLabel(order.diningTable.label)
+        } else if (order.customerName) {
+          setTableLabel(order.customerName)
+        }
         setNotes(order.notes || '')
         setCart((order.items || []).map((item, idx) => {
           const rawNotes = item.notes || ''
@@ -474,7 +482,7 @@ export default function TableOrderPage() {
       return
     }
 
-    const effectiveTableLabel = tableLabel.trim()
+    const effectiveTableLabel = tableLabel.trim() || (existingTableId ? 'Mesa' : '')
 
     let summaryText = `${totalCount} producto(s)`
     if (takeawayCount > 0 && dineInCount > 0) {
@@ -486,9 +494,9 @@ export default function TableOrderPage() {
     }
 
     const confirmed = await alerts.confirm(
-      '¿Enviar pedido a cocina?',
+      editOrderId ? '¿Guardar cambios y notificar a cocina?' : '¿Enviar pedido a cocina?',
       `${effectiveTableLabel}: ${summaryText}\nTotal: ${formatCurrency(total)}\nMesera: ${user?.name || 'Mesera'}`,
-      '🚀 Enviar a cocina',
+      editOrderId ? '💾 Guardar y avisar cocina' : '🚀 Enviar a cocina',
       'Revisar pedido',
       'question'
     )
@@ -548,7 +556,7 @@ export default function TableOrderPage() {
       const res = editOrderId
         ? await api.put<{ table?: { id?: string; label?: string } }>(`/tables/orders/${editOrderId}`, payload)
         : await api.post<{ table?: { id?: string; label?: string } }>('/tables/orders', payload)
-      alerts.toast(`Pedido enviado a cocina para ${res?.table?.label || effectiveTableLabel}`)
+      alerts.toast(editOrderId ? `Pedido actualizado y avisado a cocina para ${res?.table?.label || effectiveTableLabel}` : `Pedido enviado a cocina para ${res?.table?.label || effectiveTableLabel}`)
       setCart([])
       setNotes('')
       if (!existingTableId) setTableLabel('')
@@ -583,10 +591,22 @@ export default function TableOrderPage() {
                 </Link>
               </Button>
               <div className="min-w-0">
-                <h1 className="text-base sm:text-lg font-black text-[var(--text-primary)] truncate">
-                  {editOrderId ? 'Editar Pedido' : 'Tomar Pedido'}
-                </h1>
-                <span className="text-[11px] font-bold text-amber-600 dark:text-amber-400 flex items-center gap-1">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <h1 className="text-base sm:text-lg font-black text-[var(--text-primary)] truncate">
+                    {editOrderId ? `Editar Pedido` : 'Tomar Pedido'}
+                  </h1>
+                  {editOrderNumber && (
+                    <span className="px-2 py-0.5 rounded-md bg-amber-500 text-slate-950 font-black text-xs shadow-xs">
+                      #{editOrderNumber}
+                    </span>
+                  )}
+                  {tableLabel && (
+                    <span className="text-xs font-black text-[var(--accent)] bg-[var(--accent)]/10 px-2 py-0.5 rounded-md">
+                      {tableLabel}
+                    </span>
+                  )}
+                </div>
+                <span className="text-[11px] font-bold text-amber-600 dark:text-amber-400 flex items-center gap-1 mt-0.5">
                   <User className="h-3 w-3" /> Mesera: {user?.name || 'Mesera'}
                 </span>
               </div>
@@ -1069,9 +1089,9 @@ export default function TableOrderPage() {
             >
               <Send className="h-4 w-4" />
               {saving
-                ? 'Enviando...'
+                ? 'Guardando cambios...'
                 : editOrderId
-                ? 'Guardar y avisar cocina'
+                ? `Guardar cambios #${editOrderNumber || ''} y avisar cocina`
                 : `Enviar a cocina (${formatCurrency(total)})`}
             </Button>
             <p className="flex items-center justify-center gap-1 text-[10px] text-[var(--text-muted)]">
@@ -1325,9 +1345,9 @@ export default function TableOrderPage() {
             >
               <Send className="h-4 w-4" />
               {saving
-                ? 'Guardando...'
+                ? 'Guardando cambios...'
                 : editOrderId
-                ? 'Guardar y avisar cocina'
+                ? `Guardar cambios #${editOrderNumber || ''} y avisar cocina`
                 : `Enviar a cocina (${formatCurrency(total)})`}
             </Button>
           </div>

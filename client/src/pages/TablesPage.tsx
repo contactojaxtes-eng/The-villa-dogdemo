@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { io } from '@/lib/socket'
-import { PlusCircle, RefreshCw, Search, UtensilsCrossed, Wallet, ChefHat } from 'lucide-react'
+import { PlusCircle, RefreshCw, Search, UtensilsCrossed, Wallet, ChefHat, CheckCircle2, Clock } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { api } from '@/lib/api'
@@ -124,13 +124,27 @@ export default function TablesPage() {
                 </div>
                 <div className="mt-3.5 grid grid-cols-3 gap-2 text-xs">
                   <div className="rounded-xl bg-[var(--bg-elevated)] p-2"><Wallet className="mb-1 h-4 w-4 text-[var(--accent)]" /><b>{formatCurrency(table.total || 0)}</b><span className="block text-[var(--text-muted)]">Total</span></div>
-                  <div className="rounded-xl bg-[var(--bg-elevated)] p-2"><ChefHat className="mb-1 h-4 w-4 text-[var(--accent)]" /><b>{table.kitchenStatus}</b><span className="block text-[var(--text-muted)]">Cocina</span></div>
+                  <div className={`rounded-xl p-2 border ${table.kitchenStatus === 'READY' ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-800 dark:text-emerald-300' : 'bg-[var(--bg-elevated)] border-transparent'}`}>
+                    <ChefHat className={`mb-1 h-4 w-4 ${table.kitchenStatus === 'READY' ? 'text-emerald-600 animate-bounce' : 'text-[var(--accent)]'}`} />
+                    <b className="truncate block font-black">
+                      {table.kitchenStatus === 'READY' ? '¡LISTO! 🏃' : table.kitchenStatus === 'ACTIVE' || table.kitchenStatus === 'SENT' ? 'COCINANDO' : table.kitchenStatus || 'SIN PEDIDO'}
+                    </b>
+                    <span className="block text-[10px] opacity-75">Cocina</span>
+                  </div>
                   <div className="rounded-xl bg-[var(--bg-elevated)] p-2"><UtensilsCrossed className="mb-1 h-4 w-4 text-[var(--accent)]" /><b>{table.orders?.length || 0}</b><span className="block text-[var(--text-muted)]">Envíos</span></div>
                 </div>
               </div>
               <div className="mt-3 pt-2.5 border-t border-[var(--border-subtle)] flex items-center justify-between text-[11px] text-[var(--text-muted)]">
                 <span>Cuenta activa</span>
-                <span className="font-bold text-[var(--accent)] group-hover:underline">Cobrar / Ver →</span>
+                {table.kitchenStatus === 'READY' || table.balance === 0 ? (
+                  <span className="font-black text-emerald-600 dark:text-emerald-400 group-hover:underline flex items-center gap-1">
+                    <CheckCircle2 className="h-3.5 w-3.5" /> ¡Listo! Cobrar / Ver →
+                  </span>
+                ) : (
+                  <span className="font-bold text-amber-600 dark:text-amber-400 group-hover:underline flex items-center gap-1">
+                    <Clock className="h-3.5 w-3.5" /> En Cocina · Ver mesa →
+                  </span>
+                )}
               </div>
             </Link>
           ))}

@@ -96,7 +96,7 @@ export class OrdersController {
   }
 
   @Put(':id')
-  @Roles('ADMIN', 'SUPERADMIN', 'DELIVERY_MANAGER', 'CASHIER')
+  @Roles('ADMIN', 'SUPERADMIN', 'DELIVERY_MANAGER', 'CASHIER', 'WAITER')
   @UseGuards(RolesGuard)
   @ApiOperation({ summary: 'Actualizar pedido completo' })
   update(@Param('id') id: string, @Body() body: any) {

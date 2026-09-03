@@ -72,6 +72,9 @@ interface Order {
   cancelledBy?: { id: string; name: string } | null
   cashRegister?: { name: string } | null
   orderType: string
+  tableId?: string | null
+  diningTable?: { id: string; label: string } | null
+  source?: string | null
   deliveryDriverId?: string | null
   deliveryDriver?: { id: string; name: string; phone: string } | null
 }

@@ -24,6 +24,7 @@ export interface OrderItemSummary {
   unitPrice?: number
   totalPrice?: number
   notes?: string
+  nameSnapshot?: string
   menuItem?: MenuItemSummary
 }
 
@@ -71,6 +72,9 @@ export interface KitchenTicketSummary {
   status: 'NEW' | 'PREPARING' | 'READY' | 'SERVED' | string
   changeSummary?: string
   isEdited?: boolean
+  assignedToId?: string
+  assignedTo?: BasicUser
+  createdAt: string
   station?: KitchenStationSummary
   order?: DiningOrderSummary
   items?: KitchenTicketItemSummary[]

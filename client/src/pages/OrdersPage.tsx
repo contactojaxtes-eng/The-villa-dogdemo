@@ -74,6 +74,9 @@ interface Order {
   cancelledBy?: { id: string; name: string } | null
   cashRegister?: { name: string } | null
   orderType: string
+  tableId?: string | null
+  diningTable?: { id: string; label: string } | null
+  source?: string | null
   deliveryDriverId?: string | null
   deliveryDriver?: { id: string; name: string; phone: string } | null
 }
@@ -1144,7 +1147,10 @@ export default function OrdersPage() {
                         )}
                         {['PENDING', 'PREPARING', 'READY', 'IN_ROUTE'].includes(order.status) && ['SUPERADMIN', 'ADMIN', 'CASHIER', 'DELIVERY_MANAGER', 'WAITER'].includes(user?.role || '') && (
                           <>
-                            <Link to={`/orders/new?edit=${order.id}`} title="Editar Pedido">
+                            <Link
+                              to={order.tableId ? `/tables/new?tableId=${order.tableId}&editOrderId=${order.id}` : `/orders/new?edit=${order.id}`}
+                              title="Editar Pedido"
+                            >
                               <Button size="sm" variant="ghost" className="h-9 w-9 p-0 rounded-xl border border-[var(--accent)]/20 text-[var(--accent)] bg-[var(--accent)]/5 hover:bg-[var(--accent)]/10 active:scale-95 transition-all cursor-pointer">
                                 <Edit className="h-4 w-4" />
                               </Button>

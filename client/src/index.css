@@ -1,5 +1,7 @@
 @import "tailwindcss";
 
+@custom-variant dark (&:where(.dark, .dark *));
+
 /* ============ DESIGN TOKENS ============ */
 :root {
   --radius: 0.75rem;
@@ -92,7 +94,7 @@
   --shadow-color: rgba(227, 6, 19, 0.12);
 }
 
-html.dark, .dark {
+:root.dark, html.dark, body.dark, .dark {
   --bg-base: #17100D;
   --bg-panel: #211712;
   --bg-elevated: #2B1C15;
