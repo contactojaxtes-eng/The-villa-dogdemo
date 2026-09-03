@@ -49,9 +49,9 @@ async function bootstrap() {
   app.use(
     rateLimit({
       windowMs: 1 * 60 * 1000, // 1 minute
-      max: 1000, // limit each IP to 1000 requests per windowMs
+      max: 5000, // limit each IP to 5000 requests per windowMs (permite 15-25 dispositivos en el mismo WiFi)
       validate: { xForwardedForHeader: false },
-      message: 'Demasiadas peticiones desde esta IP, por favor intenta de nuevo en un minuto',
+      message: 'Demasiadas peticiones desde esta red, por favor intenta de nuevo en un minuto',
     }),
   );
 

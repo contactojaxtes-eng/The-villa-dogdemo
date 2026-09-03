@@ -857,16 +857,26 @@ export class TablesService {
     return table;
   }
 
-  async purgeProofsForClosing(_cashClosingId: string) {
-    // Preserve receipts after checkout; expire image bytes only after the configured retention.
-    // The amount, review status and audit metadata are always kept.
-    const days = Number(process.env.RECEIPT_RETENTION_DAYS || 30);
-    if (!Number.isFinite(days) || days < 1) return;
-    const before = new Date(Date.now() - days * 86400000);
-    await this.prisma.transferProof.updateMany({
-      where: { createdAt: { lt: before }, status: { in: ['CONFIRMED', 'REJECTED'] }, purgedAt: null, table: { status: 'CLOSED' } },
-      data: { fileBase64: null, purgedAt: new Date() },
-    });
+  async purgeProofsForClosing(cashClosingId?: string) {
+    // Al cerrar la caja, liberamos los bytes pesados de las imágenes (fileBase64) de los
+    // comprobantes de transferencia ya confirmados/cerrados, para no saturar la base de datos
+    // de PostgreSQL ni la memoria del servidor. Todos los datos contables (montos, referencia,
+    // método, autor, hora, estado) permanecen intactos para el historial y reporte Z.
+    try {
+      await this.prisma.transferProof.updateMany({
+        where: {
+          fileBase64: { not: null },
+          status: { in: ['CONFIRMED', 'REJECTED'] },
+          OR: [
+            ...(cashClosingId ? [{ cashClosingId }, { table: { cashClosingId } }] : []),
+            { table: { status: 'CLOSED' } },
+          ],
+        },
+        data: { fileBase64: null, purgedAt: new Date() },
+      });
+    } catch (err: any) {
+      console.warn('[purgeProofsForClosing] Error al purgar imágenes de comprobantes:', err?.message);
+    }
   }
 
   async assertNoOpenTableWork(cashRegisterId?: string) {
