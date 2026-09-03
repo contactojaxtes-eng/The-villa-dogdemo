@@ -567,20 +567,23 @@ export class TablesService {
     if (!['NEW', 'PREPARING', 'READY', 'SERVED', 'CANCELLED'].includes(status)) throw new BadRequestException('Estado de cocina inválido');
     const result = await this.prisma.$transaction(async tx => {
       await lockOperation(tx);
-      const ticket = await tx.kitchenTicket.findUnique({ where: { id: ticketId }, include: { order: true } });
+      const ticket = await tx.kitchenTicket.findUnique({ where: { id: ticketId }, include: { order: { include: { waiter: true, diningTable: true } } } });
       if (!ticket) throw new NotFoundException('Ticket no encontrado');
       if (ticket.tableId) {
         const table = await tx.diningTable.findUnique({ where: { id: ticket.tableId } });
         if (table?.status === 'CLOSED' && ticket.status !== status) throw new BadRequestException('La cuenta ya está cerrada');
       }
+      if (ticket.status === status) {
+        return { updated: ticket, table: null };
+      }
       const transitions: Record<string, string[]> = {
-        NEW: ['PREPARING', 'READY', 'CANCELLED'],
-        PREPARING: ['READY', 'NEW', 'CANCELLED'],
+        NEW: ['PREPARING', 'READY', 'SERVED', 'CANCELLED'],
+        PREPARING: ['READY', 'SERVED', 'NEW', 'CANCELLED'],
         READY: ['SERVED', 'PREPARING', 'NEW', 'CANCELLED'],
         SERVED: ['READY', 'PREPARING', 'CANCELLED'],
-        CANCELLED: ['NEW', 'PREPARING'],
+        CANCELLED: ['SERVED', 'NEW', 'PREPARING', 'CANCELLED'],
       };
-      if (ticket.status !== status && !transitions[ticket.status]?.includes(status)) throw new BadRequestException('El pedido cambió. Actualiza cocina antes de continuar.');
+      if (!transitions[ticket.status]?.includes(status)) throw new BadRequestException('El pedido cambió. Actualiza cocina antes de continuar.');
       const updated = await tx.kitchenTicket.update({ where: { id: ticketId }, data: {
         status, assignedToId: ticket.assignedToId || user.id,
         ...(status === 'PREPARING' ? { startedAt: ticket.startedAt || new Date() } : {}),
@@ -593,7 +596,7 @@ export class TablesService {
     }, operationTransaction);
     this.socketGateway.emitKitchenTicketUpdated(result.updated);
     if (status === 'READY') {
-      const waiterId = result.updated.order?.waiterId || result.updated.order?.diningTable?.openedById || result.table?.openedById;
+      const waiterId = (result.updated.order as any)?.waiterId || (result.updated.order as any)?.diningTable?.openedById || result.table?.openedById;
       this.socketGateway.emitKitchenTicketReady(waiterId, result.updated);
       this.socketGateway.emitOrderStatusChange(result.updated.orderId, 'READY', result.updated.order);
     }

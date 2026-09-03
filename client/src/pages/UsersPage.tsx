@@ -502,30 +502,23 @@ export default function UsersPage() {
     }
   }
 
-  const handleDeleteUserClick = (u: UserData) => {
+  const handleDeleteUserClick = async (u: UserData) => {
     if (u.role === 'SUPERADMIN') {
       alerts.error('Operación denegada', 'El Super Administrador no se puede eliminar')
       return
     }
-    setPendingSecurityAction({
-      type: 'DELETE',
-      actionName: `Eliminar Definitivamente al Usuario "${u.name}"`,
-      userId: u.id,
-    })
-    setShowSecurityModal(true)
-  }
-
-  const executeDeleteUser = async (action?: any) => {
-    const targetUserId = action?.userId || pendingSecurityAction?.userId
-    if (!targetUserId) return
+    const ok = await alerts.confirm(
+      `¿Eliminar definitivamente a "${u.name}"?`,
+      'El usuario será retirado del sistema. Esta acción no se puede deshacer.'
+    )
+    if (!ok) return
     setDeleting(true)
     try {
-      await api.delete(`/users/${targetUserId}`)
-      alerts.success('Usuario Eliminado', 'El usuario ha sido retirado definitivamente del sistema.')
-      setPendingSecurityAction(null)
+      await api.delete(`/users/${u.id}`)
+      alerts.success('Usuario Eliminado', `El usuario "${u.name}" ha sido retirado definitivamente.`)
       loadUsers()
     } catch (err: any) {
-      alerts.error('Error al eliminar', err.message || 'No se pudo eliminar el usuario')
+      alerts.error('Error al eliminar', err?.response?.data?.message || err.message || 'No se pudo eliminar el usuario')
     } finally {
       setDeleting(false)
     }
@@ -533,26 +526,18 @@ export default function UsersPage() {
 
   const toggleActive = async (id: string, active: boolean) => {
     const targetUser = users.find(u => u.id === id)
-    setPendingSecurityAction({
-      type: 'TOGGLE',
-      actionName: active ? `Desactivar Cuenta de "${targetUser?.name || 'Usuario'}"` : `Reactivar Cuenta de "${targetUser?.name || 'Usuario'}"`,
-      userId: id,
-      userActive: active,
-    })
-    setShowSecurityModal(true)
-  }
-
-  const executeToggleActive = async (action?: any) => {
-    const targetUserId = action?.userId || pendingSecurityAction?.userId
-    const userActive = action?.userActive !== undefined ? action.userActive : pendingSecurityAction?.userActive
-    if (!targetUserId) return
+    const actionName = active ? 'desactivar' : 'reactivar'
+    const ok = await alerts.confirm(
+      `¿Deseas ${actionName} a "${targetUser?.name || 'este usuario'}"?`,
+      active ? 'El usuario no podrá iniciar sesión mientras esté desactivado.' : 'El usuario volverá a tener acceso al sistema.'
+    )
+    if (!ok) return
     try {
-      await api.put(`/users/${targetUserId}`, { active: !userActive })
-      alerts.success('Estado Actualizado', 'El estado del usuario ha sido modificado exitosamente.')
-      setPendingSecurityAction(null)
+      await api.put(`/users/${id}`, { active: !active })
+      alerts.success('Estado Actualizado', `La cuenta ha sido ${active ? 'desactivada' : 'reactivada'} correctamente.`)
       loadUsers()
     } catch (err: any) {
-      alerts.error('Error al actualizar', err.message || 'No se pudo cambiar el estado')
+      alerts.error('Error al actualizar', err?.response?.data?.message || err.message || 'No se pudo cambiar el estado')
     }
   }
 
@@ -584,8 +569,8 @@ export default function UsersPage() {
     }
   }
 
-  const activeUsers = users.filter(u => u.active)
-  const inactiveUsers = users.filter(u => !u.active)
+  const activeUsers = users.filter(u => u.active && !u.email.startsWith('deleted_'))
+  const inactiveUsers = users.filter(u => !u.active && !u.email.startsWith('deleted_'))
   const displayedUsers = activeTab === 'active' ? activeUsers : inactiveUsers
 
   const getInitials = (n: string) => {
@@ -1050,73 +1035,76 @@ export default function UsersPage() {
             >
               <div className="space-y-4">
                 {/* User Top Row: Avatar, Name, Email, Action Icons */}
-                <div className="flex items-start justify-between gap-3">
-                  <div className="flex items-center gap-3">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex items-center gap-2.5 min-w-0 flex-1">
                     <div
-                      className="h-12 w-12 rounded-2xl flex items-center justify-center text-white font-bold text-base shadow-sm shrink-0"
+                      className="h-10 w-10 rounded-2xl flex items-center justify-center text-white font-bold text-sm shadow-sm shrink-0"
                       style={{ backgroundColor: getRoleColor(u.role) }}
                     >
                       {getInitials(u.name)}
                     </div>
-                    <div className="min-w-0">
-                      <h3 className="text-base font-bold text-[var(--text-primary)] truncate flex items-center gap-2">
-                        {u.name}
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        <h3 className="text-sm font-bold text-[var(--text-primary)] truncate" title={u.name}>
+                          {u.name}
+                        </h3>
                         {isCurrent && (
-                          <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-[var(--accent)]/10 text-[var(--accent)] font-bold">
+                          <span className="text-[9px] px-1.5 py-0.2 rounded-full bg-[var(--accent)]/10 text-[var(--accent)] font-black shrink-0">
                             TÚ
                           </span>
                         )}
-                      </h3>
+                      </div>
                       <p className="text-xs text-[var(--text-secondary)] truncate flex items-center gap-1 mt-0.5 font-semibold">
                         {u.email.endsWith('@thevilladog.local') ? (
                           <>
-                            <span className="text-[var(--accent)] font-bold text-sm">@</span>
-                            <span>{u.email.replace('@thevilladog.local', '')}</span>
+                            <span className="text-[var(--accent)] font-bold text-xs shrink-0">@</span>
+                            <span className="truncate">{u.email.replace('@thevilladog.local', '')}</span>
                           </>
                         ) : (
                           <>
-                            <Mail className="h-3 w-3 shrink-0" /> {u.email}
+                            <Mail className="h-3 w-3 shrink-0" />
+                            <span className="truncate">{u.email}</span>
                           </>
                         )}
                       </p>
                     </div>
                   </div>
 
-                    {/* Action Icons */}
-                    <div className="flex items-center gap-1 shrink-0">
+                  {/* Action Icons - ALWAYS VISIBLE, NEVER CLIPPED */}
+                  <div className="flex items-center gap-0.5 shrink-0">
+                    <button
+                      onClick={() => openEdit(u)}
+                      className="h-8 w-8 rounded-xl flex items-center justify-center text-emerald-600 hover:bg-emerald-500/10 transition-colors cursor-pointer"
+                      title="Editar usuario y matriz de permisos"
+                    >
+                      <Edit className="h-4 w-4" />
+                    </button>
+                    <button
+                      onClick={() => openPasswordDialog(u)}
+                      className="h-8 w-8 rounded-xl flex items-center justify-center text-purple-600 hover:bg-purple-500/10 transition-colors cursor-pointer"
+                      title="Cambiar contraseña"
+                    >
+                      <KeyRound className="h-4 w-4" />
+                    </button>
+                    {isSuperAdmin && u.id !== currentUser?.id && u.role !== 'SUPERADMIN' && (
                       <button
-                        onClick={() => openEdit(u)}
-                        className="h-8 w-8 rounded-xl flex items-center justify-center text-emerald-600 hover:bg-emerald-500/10 transition-colors cursor-pointer"
-                        title="Editar usuario y matriz de permisos"
+                        onClick={() => handleImpersonate(u)}
+                        className="h-8 w-8 rounded-xl flex items-center justify-center text-amber-600 hover:bg-amber-500/10 transition-colors cursor-pointer"
+                        title="Iniciar sesión de soporte"
                       >
-                        <Edit className="h-4 w-4" />
+                        {impersonatingId === u.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <LogIn className="h-4 w-4" />}
                       </button>
+                    )}
+                    {u.role !== 'SUPERADMIN' && u.id !== currentUser?.id && (
                       <button
-                        onClick={() => openPasswordDialog(u)}
-                        className="h-8 w-8 rounded-xl flex items-center justify-center text-purple-600 hover:bg-purple-500/10 transition-colors cursor-pointer"
-                        title="Cambiar contraseña"
+                        onClick={() => handleDeleteUserClick(u)}
+                        className="h-8 w-8 rounded-xl flex items-center justify-center text-rose-600 hover:bg-rose-500/10 transition-colors cursor-pointer"
+                        title="Eliminar usuario definitivamente"
                       >
-                        <KeyRound className="h-4 w-4" />
+                        <Trash2 className="h-4 w-4" />
                       </button>
-                      {isSuperAdmin && u.id !== currentUser?.id && u.role !== 'SUPERADMIN' && (
-                        <button
-                          onClick={() => handleImpersonate(u)}
-                          className="h-8 w-8 rounded-xl flex items-center justify-center text-amber-600 hover:bg-amber-500/10 transition-colors cursor-pointer"
-                          title="Iniciar sesión de soporte"
-                        >
-                          {impersonatingId === u.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <LogIn className="h-4 w-4" />}
-                        </button>
-                      )}
-                      {u.role !== 'SUPERADMIN' && u.id !== currentUser?.id && (
-                        <button
-                          onClick={() => handleDeleteUserClick(u)}
-                          className="h-8 w-8 rounded-xl flex items-center justify-center text-rose-600 hover:bg-rose-500/10 transition-colors cursor-pointer"
-                          title="Eliminar usuario definitivamente"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </button>
-                      )}
-                    </div>
+                    )}
+                  </div>
                 </div>
 
                 {/* Role and Info Badges */}
@@ -1172,19 +1160,29 @@ export default function UsersPage() {
                 </div>
               </div>
 
-              {/* Bottom Toggle Button */}
+              {/* Bottom Actions: Desactivar/Reactivar + Eliminar */}
               {u.role !== 'SUPERADMIN' && (
-                <div className="mt-4 pt-3 border-t border-[var(--border-subtle)]">
+                <div className="mt-4 pt-3 border-t border-[var(--border-subtle)] flex items-center justify-between gap-2">
                   <button
                     onClick={() => toggleActive(u.id, u.active)}
-                    className={`w-full py-2 rounded-xl text-xs font-bold uppercase tracking-wider transition-colors cursor-pointer ${
+                    className={`py-1.5 px-3 rounded-xl text-xs font-bold uppercase tracking-wider transition-colors cursor-pointer ${
                       u.active
-                        ? 'text-rose-600 hover:bg-rose-500/10'
+                        ? 'text-amber-600 hover:bg-amber-500/10'
                         : 'text-emerald-600 hover:bg-emerald-500/10'
                     }`}
                   >
-                    {u.active ? 'DESACTIVAR CUENTA' : 'REACTIVAR CUENTA'}
+                    {u.active ? 'Desactivar' : 'Reactivar'}
                   </button>
+
+                  {u.id !== currentUser?.id && (
+                    <button
+                      onClick={() => handleDeleteUserClick(u)}
+                      className="py-1.5 px-3 rounded-xl text-xs font-bold uppercase tracking-wider text-rose-600 hover:bg-rose-500/10 transition-colors cursor-pointer flex items-center gap-1"
+                      title="Eliminar cuenta definitivamente"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" /> Eliminar
+                    </button>
+                  )}
                 </div>
               )}
             </motion.div>
@@ -1277,10 +1275,6 @@ export default function UsersPage() {
           setPendingSecurityAction(null)
           if (action?.type === 'SUBMIT') {
             await executeSaveUser(action)
-          } else if (action?.type === 'DELETE') {
-            await executeDeleteUser(action)
-          } else if (action?.type === 'TOGGLE') {
-            await executeToggleActive(action)
           }
         }}
       />

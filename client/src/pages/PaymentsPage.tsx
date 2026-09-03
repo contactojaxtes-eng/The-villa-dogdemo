@@ -343,24 +343,8 @@ export default function PaymentsPage() {
       })
       setOpeningDialog(false)
       setInitialCash('0')
-      const regId = selectedRegisterId
       setSelectedRegisterId('')
       alerts.success('Caja Abierta', 'El turno de caja ha sido abierto exitosamente.')
-      
-      // Imprimir comprobante de apertura de turno de caja
-      if (openingResult) {
-        const regObj = registersList.find(r => r.id === regId)
-        try {
-          await printOpeningSmart({
-            ...openingResult,
-            user: { name: user?.name },
-            cashRegister: { name: regObj?.name || 'Principal' }
-          }, user?.role)
-        } catch (printErr) {
-          console.warn('Error imprimiendo apertura de caja:', printErr)
-        }
-      }
-
       loadData()
     } catch (err: any) {
       alerts.error('Error al abrir caja', err.message || 'No se pudo abrir la caja registradora.')

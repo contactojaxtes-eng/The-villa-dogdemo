@@ -250,6 +250,14 @@ export class UsersService {
 
     // Desvincular todas las relaciones opcionales del usuario
     try {
+      await this.prisma.user.update({
+        where: { id },
+        data: { kitchenStations: { set: [] } },
+      }).catch(() => {});
+      await this.prisma.kitchenTicket.updateMany({
+        where: { assignedToId: id },
+        data: { assignedToId: null },
+      }).catch(() => {});
       await this.prisma.cashRegister.updateMany({
         where: { managerId: id },
         data: { managerId: null },
