@@ -6,43 +6,7 @@ import { api } from '@/lib/api'
 import { alerts } from '@/lib/alerts'
 import { useAuth } from '@/hooks/useAuth'
 import { getErrorMessage, type KitchenTicketItemSummary, type KitchenTicketSummary } from '@/lib/tableTypes'
-
-// Sonido de campana de cocina usando Web Audio API
-function playKitchenBell() {
-  try {
-    const AudioCtx = window.AudioContext || (window as any).webkitAudioContext
-    if (!AudioCtx) return
-    const ctx = new AudioCtx()
-    const now = ctx.currentTime
-
-    // Campana 1
-    const osc1 = ctx.createOscillator()
-    const gain1 = ctx.createGain()
-    osc1.type = 'sine'
-    osc1.frequency.setValueAtTime(880, now)
-    gain1.gain.setValueAtTime(0.35, now)
-    gain1.gain.exponentialRampToValueAtTime(0.001, now + 0.4)
-    osc1.connect(gain1)
-    gain1.connect(ctx.destination)
-    osc1.start(now)
-    osc1.stop(now + 0.4)
-
-    // Campana 2 (armonía aguda)
-    const osc2 = ctx.createOscillator()
-    const gain2 = ctx.createGain()
-    osc2.type = 'sine'
-    osc2.frequency.setValueAtTime(1320, now + 0.12)
-    gain2.gain.setValueAtTime(0.4, now + 0.12)
-    gain2.gain.exponentialRampToValueAtTime(0.001, now + 0.6)
-    osc2.connect(gain2)
-    gain2.connect(ctx.destination)
-    osc2.start(now + 0.12)
-    osc2.stop(now + 0.6)
-    osc2.onended = () => { void ctx.close() }
-  } catch {
-    // Silencioso si el navegador no permite audio automático
-  }
-}
+import { playUrgentBell } from '@/lib/sound'
 
 export default function KitchenPage() {
   const { user } = useAuth()
@@ -71,13 +35,13 @@ export default function KitchenPage() {
     })
     socket.on('kitchenTicketCreated', (ticket: KitchenTicketSummary) => {
       alerts.toast(`🔔 Nuevo pedido para ${ticket.station?.name || 'cocina'}`)
-      playKitchenBell()
+      playUrgentBell()
       load()
     })
     socket.on('kitchenTicketUpdated', load)
     socket.on('kitchenTicketEdited', (ticket: KitchenTicketSummary) => {
       alerts.toast(`✏️ Pedido actualizado para ${ticket.station?.name || 'cocina'}`)
-      playKitchenBell()
+      playUrgentBell()
       load()
     })
     return () => { socket.disconnect() }

@@ -578,10 +578,12 @@ export class TablesService {
 
   async listKitchenTickets(user: any, params: { status?: string; stationId?: string }) {
     const where: any = {};
-    if (params.status) {
+    if (params.status && params.status !== 'ALL') {
       where.status = params.status;
+    } else if (params.status === 'ALL') {
+      // No filtrar por estado
     } else {
-      where.status = { in: ['NEW', 'PREPARING', 'READY'] };
+      where.status = { in: ['NEW', 'PREPARING', 'READY', 'SERVED'] };
     }
     if (params.stationId) where.stationId = params.stationId;
     if (!['ADMIN', 'SUPERADMIN', 'CASHIER'].includes(user.role)) {

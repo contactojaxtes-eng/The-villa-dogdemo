@@ -4,6 +4,7 @@ import { toast } from 'sonner'
 import { useAuth } from './useAuth'
 import { Bike, Bell, CheckCircle2, XCircle, MessageCircle, UserPlus } from 'lucide-react'
 import { getUsbDevice, printUsb, buildEscPosBuffer } from '@/lib/useUsbPrinter'
+import { playUrgentBell } from '@/lib/sound'
 
 // Simple notification sound using Web Audio API
 function playNotificationSound(type: 'message' | 'urgent' = 'message') {
@@ -142,7 +143,7 @@ export function useNotifications() {
             icon: <CheckCircle2 className="h-5 w-5 text-emerald-500" />,
             duration: 8000,
           })
-          playNotificationSound('urgent')
+          playUrgentBell()
         }
         return
       }
@@ -176,7 +177,7 @@ export function useNotifications() {
         icon: <CheckCircle2 className="h-5 w-5 text-emerald-500" />,
         duration: 9000,
       })
-      playNotificationSound('urgent')
+      playUrgentBell()
       showBrowserNotification(
         isMyOrder ? `🏃 ¡Ve a recoger el pedido de ${tableLabel}!` : `🍽️ Pedido listo: ${tableLabel}`,
         `${stationName} terminó. Pasa a recogerlo a la cocina para llevarlo a la mesa.`,

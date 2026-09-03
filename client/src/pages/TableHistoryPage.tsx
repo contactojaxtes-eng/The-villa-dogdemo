@@ -23,7 +23,7 @@ export default function TableHistoryPage() {
   const [tables, setTables] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
-  const [filterStatus, setFilterStatus] = useState<string>('CLOSED')
+  const [filterStatus, setFilterStatus] = useState<string>('ALL')
   const [zoomUrl, setZoomUrl] = useState<string | null>(null)
 
   const load = useCallback(async () => {
@@ -98,9 +98,9 @@ export default function TableHistoryPage() {
 
         <div className="flex gap-1 bg-[var(--bg-elevated)] p-1 rounded-xl shrink-0 overflow-x-auto">
           {[
+            { id: 'ALL', label: 'Todas las Mesas' },
+            { id: 'OPEN', label: 'Mesas Abiertas' },
             { id: 'CLOSED', label: 'Cerradas y Pagadas' },
-            { id: 'ALL', label: 'Todas' },
-            { id: 'OPEN', label: 'Abiertas' },
           ].map(f => (
             <button
               key={f.id}
