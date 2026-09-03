@@ -171,4 +171,83 @@ export class SuperadminService {
 
     return { sessionsDeleted, messagesDeleted };
   }
+
+  async resetTestSales(actor: { id: string; name: string; role: string }) {
+    // 1. Comprobantes de transferencia y fotos de prueba
+    const transferProofs = await this.prisma.transferProof.deleteMany();
+
+    // 2. Comandas e ítems de cocina de prueba
+    const ticketItems = await this.prisma.kitchenTicketItem.deleteMany();
+    const tickets = await this.prisma.kitchenTicket.deleteMany();
+
+    // 3. Pagos y registros vinculados a órdenes
+    const payments = await this.prisma.payment.deleteMany();
+    await this.prisma.stockMovement.deleteMany({ where: { orderId: { not: null } } });
+    await this.prisma.orderChangeLog.deleteMany();
+    const orderItems = await this.prisma.orderItem.deleteMany();
+
+    // 4. Órdenes y pedidos
+    const orders = await this.prisma.order.deleteMany();
+
+    // 5. Mesas de salón de prueba (para abrir desde cero)
+    const tables = await this.prisma.diningTable.deleteMany();
+
+    // 6. Cierres de caja y turnos anteriores de prueba
+    const closings = await this.prisma.cashClosing.deleteMany();
+
+    // 7. Gastos, abonos y métricas de prueba
+    const expenses = await this.prisma.expense.deleteMany();
+    const customerPayments = await this.prisma.customerPayment.deleteMany();
+    await this.prisma.waiterMetric.deleteMany();
+    await this.prisma.printJob.deleteMany();
+    await this.prisma.notification.deleteMany();
+
+    // 8. Auditoría
+    await this.auditService.log({
+      actorId: actor.id,
+      actorName: actor.name,
+      actorRole: actor.role,
+      action: 'RESET_TEST_SALES',
+      metadata: {
+        ordersDeleted: orders.count,
+        orderItemsDeleted: orderItems.count,
+        tablesDeleted: tables.count,
+        ticketsDeleted: tickets.count,
+        closingsDeleted: closings.count,
+        paymentsDeleted: payments.count,
+        transferProofsDeleted: transferProofs.count,
+      },
+    });
+
+    // 9. Avisar por WebSockets en tiempo real a todas las pantallas abiertas
+    try {
+      this.socketGateway.server.emit('tableCreated');
+      this.socketGateway.server.emit('tableClosed');
+      this.socketGateway.server.emit('cashStatusChanged', { isOpen: false });
+      this.socketGateway.server.emit('cashRegistersChanged');
+      this.socketGateway.server.emit('ticketStatusChanged');
+      this.socketGateway.emitForceRefresh({
+        triggeredBy: actor.id,
+        triggeredByName: actor.name,
+      });
+    } catch (e) {
+      console.warn('WebSocket broadcast error on resetTestSales:', e);
+    }
+
+    return {
+      success: true,
+      message: 'Base de datos limpia y lista para operación real. Menú, productos, precios, usuarios y cajas registradoras preservados.',
+      summary: {
+        ordersDeleted: orders.count,
+        orderItemsDeleted: orderItems.count,
+        tablesDeleted: tables.count,
+        ticketsDeleted: tickets.count,
+        closingsDeleted: closings.count,
+        paymentsDeleted: payments.count,
+        transferProofsDeleted: transferProofs.count,
+        expensesDeleted: expenses.count,
+        customerPaymentsDeleted: customerPayments.count,
+      },
+    };
+  }
 }

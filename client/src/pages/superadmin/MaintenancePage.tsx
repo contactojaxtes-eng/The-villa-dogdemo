@@ -25,6 +25,7 @@ export default function MaintenancePage() {
   const [loading, setLoading] = useState(true)
   const [olderThanDays, setOlderThanDays] = useState(365)
   const [purging, setPurging] = useState(false)
+  const [resetting, setResetting] = useState(false)
 
   const loadDbSize = () => {
     setLoading(true)
@@ -35,6 +36,28 @@ export default function MaintenancePage() {
   }
 
   useEffect(() => { loadDbSize() }, [])
+
+  const handleResetSales = async () => {
+    const ok = await alerts.confirm(
+      '¿LIMPIAR VENTAS Y PEDIDOS DE PRUEBA?',
+      'Se eliminarán TODOS los pedidos, comandas de cocina, turnos anteriores y mesas de prueba para iniciar la operación del restaurante en ceros. Tus productos, precios, menú, usuarios y cajas activas se conservan 100% intactos.',
+      '🧹 Sí, limpiar en ceros',
+      'Cancelar',
+      'warning'
+    )
+    if (!ok) return
+
+    setResetting(true)
+    try {
+      const res = await api.post<{ message: string; summary: any }>('/superadmin/maintenance/reset-test-sales', {})
+      alerts.success('¡Base de Datos Limpia!', res.message)
+      loadDbSize()
+    } catch (err: any) {
+      alerts.error('Error al restablecer datos', err?.response?.data?.message || err.message)
+    } finally {
+      setResetting(false)
+    }
+  }
 
   const handlePurge = async () => {
     const ok = await alerts.confirm(
@@ -164,6 +187,32 @@ export default function MaintenancePage() {
                   {purging ? <Loader2 className="h-4 w-4 animate-spin" /> : <><Trash2 className="h-4 w-4" /> EXECUTE PURGE</>}
                 </button>
               </div>
+            </div>
+          </motion.div>
+
+          {/* Reset Sales & Test Data */}
+          <motion.div variants={itemVariants} className="lg:col-span-3">
+            <div className="bg-[#FFFBEB] rounded-2xl border border-amber-300 shadow-sm overflow-hidden flex flex-col md:flex-row items-center justify-between p-6 gap-6">
+              <div className="space-y-1.5">
+                <div className="flex items-center gap-2">
+                  <span className="px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-800 text-[10px] font-mono font-black uppercase tracking-widest">
+                    OPERACIÓN EN VIVO
+                  </span>
+                  <h3 className="text-base font-black text-amber-950 uppercase tracking-tight">
+                    Limpieza de Ventas y Pedidos de Prueba
+                  </h3>
+                </div>
+                <p className="text-xs text-amber-800/80 max-w-2xl leading-relaxed">
+                  Restablece en ceros todas las órdenes, comandas de cocina, comprobantes y cierres de turno de prueba para iniciar la operación del restaurante. <strong>Tu menú, precios, usuarios y cajas activas se conservan 100% intactos.</strong>
+                </p>
+              </div>
+              <button
+                onClick={handleResetSales}
+                disabled={resetting}
+                className="shrink-0 px-6 py-3.5 bg-amber-600 hover:bg-amber-700 active:scale-95 text-white font-mono font-black rounded-xl text-xs uppercase tracking-wider transition-all shadow-md cursor-pointer flex items-center gap-2"
+              >
+                {resetting ? <Loader2 className="h-4 w-4 animate-spin" /> : <><Trash2 className="h-4 w-4" /> LIMPIAR BASE DE DATOS EN CEROS</>}
+              </button>
             </div>
           </motion.div>
 
