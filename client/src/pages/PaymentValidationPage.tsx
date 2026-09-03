@@ -30,6 +30,12 @@ const methodLabels: Record<string, string> = {
   CORTESIA: 'Cortesía',
 }
 
+const statusLabels: Record<string, string> = {
+  PENDING_REVIEW: 'Pendiente',
+  CONFIRMED: 'Pagado',
+  REJECTED: 'Rechazado',
+}
+
 export default function PaymentValidationPage() {
   const { user, hasPermission } = useAuth()
   const [payments, setPayments] = useState<any[]>([])
@@ -262,7 +268,7 @@ export default function PaymentValidationPage() {
                       {methodLabels[payment.method] || payment.method}
                     </span>
                     <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-[var(--bg-elevated)] text-[var(--text-secondary)]">
-                      {statusFilters.find(s => s.value === payment.status)?.label || payment.status}
+                      {statusLabels[payment.status] || payment.status}
                     </span>
                   </div>
 
