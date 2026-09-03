@@ -201,7 +201,7 @@ export function AppLayout() {
         </main>
 
         {/* Waiter Native Mobile Bottom Navigation Bar */}
-        {user?.role === 'WAITER' && (
+        {user?.role === 'WAITER' && !location.pathname.startsWith('/tables/new') && (
           <nav className="fixed bottom-0 left-0 right-0 z-30 flex h-16 items-center justify-around border-t border-[var(--border-subtle)] bg-[var(--bg-panel)] px-2 shadow-lg md:hidden">
             <Link
               to="/tables"

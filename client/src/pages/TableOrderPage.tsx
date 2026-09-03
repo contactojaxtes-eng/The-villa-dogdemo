@@ -10,6 +10,7 @@ import {
   Scissors,
   Search,
   Send,
+  ShoppingBag,
   Trash2,
   User,
   UtensilsCrossed,
@@ -393,11 +394,23 @@ export default function TableOrderPage() {
                 </span>
               </div>
             </div>
-            {!online && (
-              <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-2.5 py-0.5 text-[10px] font-black text-amber-600 shrink-0">
-                <WifiOff className="h-3 w-3" /> Sin internet
-              </span>
-            )}
+            <div className="flex items-center gap-2 shrink-0">
+              {cart.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setShowMobileCart(true)}
+                  className="lg:hidden flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[var(--accent)] text-white text-xs font-black shadow-md active:scale-95 transition-all cursor-pointer animate-in fade-in"
+                >
+                  <ShoppingBag className="h-4 w-4" />
+                  <span>Ver Cuenta ({totalCount})</span>
+                </button>
+              )}
+              {!online && (
+                <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-2.5 py-0.5 text-[10px] font-black text-amber-600 shrink-0">
+                  <WifiOff className="h-3 w-3" /> Sin red
+                </span>
+              )}
+            </div>
           </div>
 
           {pending.length > 0 && (
@@ -600,6 +613,16 @@ export default function TableOrderPage() {
                           >
                             +🥡
                           </button>
+
+                          {/* Botón directo para notas y separar */}
+                          <button
+                            type="button"
+                            onClick={() => setShowMobileCart(true)}
+                            className="h-9 px-2.5 rounded-xl bg-purple-500/15 text-purple-700 dark:text-purple-300 hover:bg-purple-500/25 font-black text-xs border border-purple-500/30 active:scale-90 transition cursor-pointer flex items-center gap-1"
+                            title="Poner notas o separar unidades de este producto"
+                          >
+                            📝 Notas
+                          </button>
                         </div>
                       )}
                     </div>
@@ -755,14 +778,16 @@ export default function TableOrderPage() {
 
                 {/* Si tiene varias unidades, sugerir aplicar a 1 solo si quiere */}
                 {item.quantity > 1 && (
-                  <div className="mt-1.5 pt-1.5 border-t border-[var(--border-subtle)]/50 flex items-center justify-between text-[10px] text-[var(--text-muted)]">
-                    <span>💡 Aplica a los {item.quantity} productos.</span>
+                  <div className="mt-2 p-2 rounded-xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-between gap-2">
+                    <span className="text-[11px] text-amber-900 dark:text-amber-200 font-bold leading-tight">
+                      ¿1 sin cebolla o nota individual?
+                    </span>
                     <button
                       type="button"
                       onClick={() => splitItem(item.cartKey)}
-                      className="text-[var(--accent)] font-bold hover:underline"
+                      className="shrink-0 px-2 py-1 rounded-lg bg-amber-500 text-slate-950 font-black text-xs hover:bg-amber-400 active:scale-95 transition flex items-center gap-1 cursor-pointer shadow-xs"
                     >
-                      Separar para notas individuales →
+                      <Scissors className="h-3 w-3" /> Separar ({item.quantity})
                     </button>
                   </div>
                 )}
@@ -809,29 +834,29 @@ export default function TableOrderPage() {
 
       {/* BARRA FLOTANTE MÓVIL (TÁCTIL Y VISIBLE EN CELULAR) */}
       {cart.length > 0 && (
-        <div className="fixed bottom-3 left-3 right-3 z-30 lg:hidden animate-in fade-in slide-in-from-bottom-4 duration-200">
+        <div className="fixed bottom-3 left-3 right-3 z-50 lg:hidden animate-in fade-in slide-in-from-bottom-4 duration-200">
           <button
             type="button"
             onClick={() => setShowMobileCart(true)}
-            className="flex w-full items-center justify-between rounded-2xl bg-[var(--accent)] px-4 py-3 text-white shadow-2xl active:scale-[0.98] transition-all cursor-pointer border border-white/20"
+            className="flex w-full items-center justify-between rounded-2xl bg-[var(--accent)] px-4 py-3.5 text-white shadow-2xl active:scale-[0.98] transition-all cursor-pointer border-2 border-white/30"
           >
             <div className="flex items-center gap-2.5 min-w-0">
-              <span className="flex h-7 w-7 items-center justify-center rounded-full bg-white text-xs font-black text-[var(--accent)] shadow-sm shrink-0">
+              <span className="flex h-8 w-8 items-center justify-center rounded-full bg-white text-xs font-black text-[var(--accent)] shadow-sm shrink-0">
                 {totalCount}
               </span>
               <div className="text-left min-w-0">
                 <p className="text-xs sm:text-sm font-black truncate">
-                  Cuenta ({tableLabel || 'Sin nombre'})
+                  Ver Cuenta y Notas ({totalCount})
                 </p>
-                <p className="text-[10px] text-white/80 font-semibold truncate">
-                  {dineInCount} mesa {takeawayCount > 0 ? `• ${takeawayCount} llevar` : ''}
+                <p className="text-[10px] text-white/90 font-semibold truncate">
+                  {dineInCount} en mesa {takeawayCount > 0 ? `• ${takeawayCount} para llevar` : ''}
                 </p>
               </div>
             </div>
             <div className="flex items-center gap-2 shrink-0">
               <span className="text-sm sm:text-base font-black">{formatCurrency(total)}</span>
-              <span className="rounded-xl bg-black/25 px-2.5 py-1 text-xs font-bold flex items-center gap-1">
-                Ver Cuenta <ChevronRight className="h-3.5 w-3.5" />
+              <span className="rounded-xl bg-black/30 px-3 py-1.5 text-xs font-black flex items-center gap-1 shadow-inner">
+                Revisar y Enviar →
               </span>
             </div>
           </button>
@@ -981,14 +1006,16 @@ export default function TableOrderPage() {
                 </div>
 
                 {item.quantity > 1 && (
-                  <div className="mt-1.5 pt-1.5 border-t border-[var(--border-subtle)]/50 flex items-center justify-between text-[10px] text-[var(--text-muted)]">
-                    <span>💡 Nota para las {item.quantity} unidades.</span>
+                  <div className="mt-2 p-2.5 rounded-xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-between gap-2">
+                    <span className="text-[11px] text-amber-900 dark:text-amber-200 font-bold leading-tight">
+                      ¿1 sin cebolla o nota individual?
+                    </span>
                     <button
                       type="button"
                       onClick={() => splitItem(item.cartKey)}
-                      className="text-[var(--accent)] font-bold"
+                      className="shrink-0 px-2.5 py-1.5 rounded-lg bg-amber-500 text-slate-950 font-black text-xs hover:bg-amber-400 active:scale-95 transition flex items-center gap-1 cursor-pointer shadow-xs"
                     >
-                      Separar unidades →
+                      <Scissors className="h-3.5 w-3.5" /> Separar en {item.quantity}
                     </button>
                   </div>
                 )}
