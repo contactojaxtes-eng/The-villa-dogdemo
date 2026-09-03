@@ -181,29 +181,40 @@ export class TablesService {
   }
 
   private buildChangeSummary(before: any[], after: any[]) {
-    const key = (item: any) => item.menuItemId;
+    const key = (item: any) => `${item.menuItemId}_${(item.notes || '').trim()}`;
     const beforeMap = new Map(before.map(item => [key(item), item]));
     const afterMap = new Map(after.map(item => [key(item), item]));
     const changeMap = new Map<string, any>();
     const parts: string[] = [];
 
     for (const item of after) {
-      const prev = beforeMap.get(key(item));
+      const itemK = key(item);
+      const prev = beforeMap.get(itemK);
       if (!prev) {
-        parts.push(`Nuevo: ${item.quantity} x ${item.name || item.menuItem?.name || 'Producto'}`);
-        changeMap.set(item.menuItemId, { changeType: 'ADDED' });
+        parts.push(`Nuevo: ${item.quantity} x ${item.name || item.menuItem?.name || 'Producto'}${item.notes ? ` (${item.notes})` : ''}`);
+        changeMap.set(itemK, { changeType: 'ADDED' });
+        if (!changeMap.has(item.menuItemId)) changeMap.set(item.menuItemId, { changeType: 'ADDED' });
       } else if (Number(prev.quantity) !== Number(item.quantity) || String(prev.notes || '').trim() !== String(item.notes || '').trim()) {
-        parts.push(`Editado: ${item.name || item.menuItem?.name || 'Producto'} (${prev.quantity} -> ${item.quantity})`);
-        changeMap.set(item.menuItemId, { changeType: 'MODIFIED', previousQty: prev.quantity, previousNotes: prev.notes });
+        parts.push(`Editado: ${item.name || item.menuItem?.name || 'Producto'} (${prev.quantity} -> ${item.quantity})${item.notes ? ` (${item.notes})` : ''}`);
+        const modInfo = { changeType: 'MODIFIED', previousQty: prev.quantity, previousNotes: prev.notes };
+        changeMap.set(itemK, modInfo);
+        changeMap.set(item.menuItemId, modInfo);
       } else {
-        changeMap.set(item.menuItemId, { changeType: 'UNCHANGED' });
+        const unchInfo = { changeType: 'UNCHANGED' };
+        changeMap.set(itemK, unchInfo);
+        if (!changeMap.has(item.menuItemId)) changeMap.set(item.menuItemId, unchInfo);
       }
     }
 
     for (const item of before) {
-      if (!afterMap.has(key(item))) {
+      const itemK = key(item);
+      if (!afterMap.has(itemK)) {
         parts.push(`Quitado: ${item.menuItem?.name || 'Producto'}`);
-        changeMap.set(item.menuItemId, { changeType: 'REMOVED', previousQty: item.quantity, previousNotes: item.notes });
+        const remInfo = { changeType: 'REMOVED', previousQty: item.quantity, previousNotes: item.notes };
+        changeMap.set(itemK, remInfo);
+        if (!after.some(a => a.menuItemId === item.menuItemId)) {
+          changeMap.set(item.menuItemId, remInfo);
+        }
       }
     }
 

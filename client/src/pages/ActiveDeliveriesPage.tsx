@@ -328,7 +328,13 @@ export default function ActiveDeliveriesPage() {
     if (!silent) setLoading(true)
     const params = new URLSearchParams()
     if (submittedSearch) params.set('search', submittedSearch)
-    api.get<Order[]>(`/orders/active?${params.toString()}`).then(setOrders).catch(console.error).finally(() => setLoading(false))
+    api.get<Order[]>(`/orders/active?${params.toString()}`)
+      .then(data => {
+        const deliveryOnly = (data || []).filter(o => !o.tableId && o.orderType !== 'LOCAL' && o.source !== 'TABLE' && o.source !== 'OFFLINE_TABLE')
+        setOrders(deliveryOnly)
+      })
+      .catch(console.error)
+      .finally(() => setLoading(false))
   }, [submittedSearch])
 
   useEffect(() => {
@@ -373,11 +379,15 @@ export default function ActiveDeliveriesPage() {
     })
     socket.on('orderStatusChanged', (data: { orderId: string; status: string; order?: any }) => {
       if (data && data.orderId) {
-        setOrders(prev => prev.map(o => o.id === data.orderId ? {
-          ...o,
-          status: data.status,
-          ...(data.order || {}),
-        } : o))
+        if (data.order?.tableId || data.order?.orderType === 'LOCAL' || data.order?.source === 'TABLE' || data.order?.source === 'OFFLINE_TABLE') {
+          setOrders(prev => prev.filter(o => o.id !== data.orderId))
+        } else {
+          setOrders(prev => prev.map(o => o.id === data.orderId ? {
+            ...o,
+            status: data.status,
+            ...(data.order || {}),
+          } : o))
+        }
 
         setDetailOrder(prev => (prev && prev.id === data.orderId) ? { ...prev, status: data.status, ...(data.order || {}) } : prev)
 
@@ -397,7 +407,11 @@ export default function ActiveDeliveriesPage() {
 
     socket.on('orderUpdated', (updatedOrder: any) => {
       if (updatedOrder && updatedOrder.id) {
-        setOrders(prev => prev.map(o => o.id === updatedOrder.id ? { ...o, ...updatedOrder } : o))
+        if (updatedOrder.tableId || updatedOrder.orderType === 'LOCAL' || updatedOrder.source === 'TABLE' || updatedOrder.source === 'OFFLINE_TABLE') {
+          setOrders(prev => prev.filter(o => o.id !== updatedOrder.id))
+        } else {
+          setOrders(prev => prev.map(o => o.id === updatedOrder.id ? { ...o, ...updatedOrder } : o))
+        }
         setDetailOrder(prev => (prev && prev.id === updatedOrder.id) ? { ...prev, ...updatedOrder } : prev)
       }
       loadOrders(true)

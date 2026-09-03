@@ -1388,7 +1388,10 @@ export class OrdersService implements OnModuleInit {
 
   async getActiveOrders() {
     return this.prisma.order.findMany({
-      where: { status: { notIn: ['DELIVERED', 'CANCELLED'] } },
+      where: {
+        status: { notIn: ['DELIVERED', 'CANCELLED'] },
+        tableId: null,
+      },
       include: {
         waiter: { select: { id: true, name: true } },
         assignee: { select: { id: true, name: true } },
