@@ -24,6 +24,7 @@ const getSwalOptions = () => {
 
 export const alerts = {
   toast(title: string) {
+    if (localStorage.getItem('the_villa_dog_mute_notifications') === 'true') return
     return toast(title)
   },
   async warning(title: string, text?: string) {

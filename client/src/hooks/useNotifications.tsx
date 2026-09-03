@@ -138,10 +138,10 @@ export function useNotifications() {
       const isReady = data.status === 'READY'
       
       if (isReady) {
-        // Cocineros y administradores NO reciben la orden de ir a recoger platos a cocina
-        if (['KITCHEN', 'ADMIN', 'SUPERADMIN'].includes(user.role || '')) return
+        // ÚNICAMENTE el mesero (WAITER) que atiende la mesa recibe la orden de ir a recoger platos
+        if (user.role !== 'WAITER') return
         const order = data.order
-        const waiterId = order?.waiterId || order?.waiter?.id || order?.diningTable?.openedById
+        const waiterId = order?.waiterId || order?.waiter?.id
         const isMyOrder = waiterId === user.id || (order?.waiter?.name && order?.waiter?.name === user.name)
 
         // Estricto: Solo al mesero asignado a la mesa
@@ -152,14 +152,14 @@ export function useNotifications() {
         toast.success(`🏃 ¡Ve a recoger el pedido! (${tableLabel})`, {
           description: `Tu pedido ${orderNum} de ${tableLabel} está listo en Cocina. Pasa a recogerlo para llevarlo a la mesa.`,
           icon: <CheckCircle2 className="h-5 w-5 text-emerald-500" />,
-          duration: 6000,
+          duration: 5000,
         })
         playUrgentBell()
         return
       }
 
       // No saturar al admin con cancelados o entregados si no son domicilios
-      if (['ADMIN', 'SUPERADMIN'].includes(user.role || '') && !data.order?.deliveryZone) return
+      if (['ADMIN', 'SUPERADMIN', 'CASHIER'].includes(user.role || '') && !data.order?.deliveryZone) return
 
       toast(isCancel ? 'Pedido cancelado' : label, {
         description: `Pedido #${data.order?.orderNumber ?? ''}`,
@@ -168,19 +168,19 @@ export function useNotifications() {
           : isDone
             ? <CheckCircle2 className="h-4 w-4 text-[#F97316]" />
             : <Bell className="h-4 w-4 text-[#F59E0B]" />,
-        duration: 5000,
+        duration: 4000,
       })
     })
 
     socket.on('kitchenTicketReady', (ticket: any) => {
       if (isMuted()) return
-      // Cocineros y administradores no reciben este aviso de "Ve a recoger el pedido"
-      if (['KITCHEN', 'ADMIN', 'SUPERADMIN'].includes(user.role || '')) return
+      // ÚNICAMENTE el mesero (WAITER) que atiende la mesa recibe el aviso de "Ve a recoger el pedido"
+      if (user.role !== 'WAITER') return
 
       const tableLabel = ticket?.order?.diningTable?.label || ticket?.table?.label || ticket?.order?.customerName || 'Mesa'
       const stationName = ticket?.station?.name || 'Cocina'
       const orderNum = ticket?.order?.orderNumber ? `#${ticket.order.orderNumber}` : ''
-      const waiterId = ticket?.order?.waiterId || ticket?.order?.waiter?.id || ticket?.order?.diningTable?.openedById || ticket?.table?.openedById
+      const waiterId = ticket?.order?.waiterId || ticket?.order?.waiter?.id
       const isMyOrder = waiterId === user.id || (ticket?.order?.waiter?.name && ticket?.order?.waiter?.name === user.name)
 
       // Estricto: Solo al mesero que tomó el pedido
@@ -189,7 +189,7 @@ export function useNotifications() {
       toast.success(`🏃 ¡VE A RECOGER EL PEDIDO! (${tableLabel})`, {
         description: `El pedido ${orderNum} de ${tableLabel} ya está listo en ${stationName}. Pasa a la cocina a recogerlo para servirlo a la mesa.`,
         icon: <CheckCircle2 className="h-5 w-5 text-emerald-500" />,
-        duration: 6000,
+        duration: 5000,
       })
       playUrgentBell()
       showBrowserNotification(

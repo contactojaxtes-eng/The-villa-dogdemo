@@ -15,7 +15,8 @@ import {
 import { BrandLogo } from '@/components/brand/BrandLogo'
 import { Button } from '@/components/ui/button'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
-import { ChevronLeft, ChevronRight, Crown, GripVertical, LogOut, Moon, Sun, X } from 'lucide-react'
+import { Bell, BellOff, ChevronLeft, ChevronRight, Crown, GripVertical, LogOut, Moon, Sun, X } from 'lucide-react'
+import { isNotificationsMuted, toggleNotificationsMuted } from '@/lib/notificationSettings'
 
 const roleLabels: Record<string, string> = {
   SUPERADMIN: 'Super Administrador',
@@ -40,16 +41,27 @@ export function Sidebar({ onClose, isCollapsed = false, onToggleCollapse }: Side
   const { theme, toggleTheme } = useTheme()
   const initials = user?.name?.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase() || '??'
   const [hiddenModules, setHiddenModules] = useState<string[]>(() => getHiddenModules())
+  const [isMuted, setIsMuted] = useState(() => isNotificationsMuted())
 
   useEffect(() => {
     const syncModules = () => setHiddenModules(getHiddenModules())
+    const syncMute = () => setIsMuted(isNotificationsMuted())
     window.addEventListener('storage', syncModules)
+    window.addEventListener('storage', syncMute)
     window.addEventListener('the-villa-dog-modules-changed', syncModules)
+    window.addEventListener('the-villa-dog-mute-changed', syncMute)
     return () => {
       window.removeEventListener('storage', syncModules)
+      window.removeEventListener('storage', syncMute)
       window.removeEventListener('the-villa-dog-modules-changed', syncModules)
+      window.removeEventListener('the-villa-dog-mute-changed', syncMute)
     }
   }, [])
+
+  const handleToggleMute = () => {
+    const next = toggleNotificationsMuted()
+    setIsMuted(next)
+  }
 
   const hasItemAccess = (item: NavItem) => {
     if (!hasNavItemAccess(user, item)) return false
@@ -260,10 +272,19 @@ export function Sidebar({ onClose, isCollapsed = false, onToggleCollapse }: Side
               <AvatarFallback className="bg-[var(--bg-base)] text-[10px] font-extrabold text-[var(--text-primary)]">{initials}</AvatarFallback>
             </Avatar>
           </Link>
-          <Button variant="ghost" size="icon" className="h-7 w-7 text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] rounded-xl" onClick={toggleTheme} title="Cambiar tema">
+          <Button
+            variant="ghost"
+            size="icon"
+            className={cn("h-7 w-7 rounded-xl transition cursor-pointer", isMuted ? "text-amber-500 hover:bg-amber-500/15" : "text-emerald-500 hover:bg-emerald-500/15")}
+            onClick={handleToggleMute}
+            title={isMuted ? "Notificaciones silenciadas (clic para activar)" : "Notificaciones activadas (clic para silenciar)"}
+          >
+            {isMuted ? <BellOff className="h-3.5 w-3.5" /> : <Bell className="h-3.5 w-3.5" />}
+          </Button>
+          <Button variant="ghost" size="icon" className="h-7 w-7 text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] rounded-xl cursor-pointer" onClick={toggleTheme} title="Cambiar tema">
             {theme === 'dark' ? <Sun className="h-3.5 w-3.5" /> : <Moon className="h-3.5 w-3.5" />}
           </Button>
-          <Button variant="ghost" size="icon" className="h-7 w-7 text-[var(--text-secondary)] hover:text-[var(--destructive)] hover:bg-[var(--bg-hover)] rounded-xl" onClick={logout} title="Cerrar sesion">
+          <Button variant="ghost" size="icon" className="h-7 w-7 text-[var(--text-secondary)] hover:text-[var(--destructive)] hover:bg-[var(--bg-hover)] rounded-xl cursor-pointer" onClick={logout} title="Cerrar sesion">
             <LogOut className="h-3.5 w-3.5" />
           </Button>
         </div>
@@ -279,10 +300,19 @@ export function Sidebar({ onClose, isCollapsed = false, onToggleCollapse }: Side
             </div>
           </Link>
           <div className="flex gap-1 shrink-0 items-center">
-            <Button variant="ghost" size="icon" className="h-8 w-8 text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] rounded-xl" onClick={toggleTheme} title="Cambiar tema">
+            <Button
+              variant="ghost"
+              size="icon"
+              className={cn("h-8 w-8 rounded-xl transition cursor-pointer", isMuted ? "text-amber-500 hover:bg-amber-500/15" : "text-emerald-500 hover:bg-emerald-500/15")}
+              onClick={handleToggleMute}
+              title={isMuted ? "Notificaciones silenciadas (clic para activar)" : "Notificaciones activadas (clic para silenciar)"}
+            >
+              {isMuted ? <BellOff className="h-4 w-4" /> : <Bell className="h-4 w-4" />}
+            </Button>
+            <Button variant="ghost" size="icon" className="h-8 w-8 text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] rounded-xl cursor-pointer" onClick={toggleTheme} title="Cambiar tema">
               {theme === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
             </Button>
-            <Button variant="ghost" size="icon" className="h-8 w-8 text-rose-500 hover:text-rose-600 hover:bg-rose-500/10 rounded-xl" onClick={logout} title="Cerrar sesion">
+            <Button variant="ghost" size="icon" className="h-8 w-8 text-rose-500 hover:text-rose-600 hover:bg-rose-500/10 rounded-xl cursor-pointer" onClick={logout} title="Cerrar sesion">
               <LogOut className="h-4 w-4" />
             </Button>
           </div>

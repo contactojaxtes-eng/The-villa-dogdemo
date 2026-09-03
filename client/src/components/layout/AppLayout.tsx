@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link, Outlet, useLocation } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Sidebar } from './Sidebar'
-import { Menu, Eye, LogOut, PlusCircle, ScrollText, UtensilsCrossed, ChefHat, Clock, Maximize, Minimize, Moon, Sun } from 'lucide-react'
+import { Menu, Eye, LogOut, PlusCircle, ScrollText, UtensilsCrossed, ChefHat, Clock, Maximize, Minimize, Moon, Sun, Bell, BellOff } from 'lucide-react'
 import { BrandLogo } from '@/components/brand/BrandLogo'
 import { useAuth } from '@/hooks/useAuth'
 import { useTheme } from '@/hooks/useTheme'
@@ -10,6 +10,7 @@ import { cn } from '@/lib/utils'
 import { ErrorBoundary } from '../ErrorBoundary'
 import { autoReconnectUsbDevices } from '@/lib/useUsbPrinter'
 import { ForceEmailVerificationModal } from '@/components/auth/ForceEmailVerificationModal'
+import { isNotificationsMuted, toggleNotificationsMuted } from '@/lib/notificationSettings'
 
 export function AppLayout() {
   const location = useLocation()
@@ -24,6 +25,22 @@ export function AppLayout() {
 
   const [isFullscreen, setIsFullscreen] = useState(false)
   const [timeStr, setTimeStr] = useState(() => new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }))
+  const [isMuted, setIsMuted] = useState(() => isNotificationsMuted())
+
+  useEffect(() => {
+    const syncMute = () => setIsMuted(isNotificationsMuted())
+    window.addEventListener('storage', syncMute)
+    window.addEventListener('the-villa-dog-mute-changed', syncMute)
+    return () => {
+      window.removeEventListener('storage', syncMute)
+      window.removeEventListener('the-villa-dog-mute-changed', syncMute)
+    }
+  }, [])
+
+  const handleToggleMute = () => {
+    const next = toggleNotificationsMuted()
+    setIsMuted(next)
+  }
 
   // Auto-reconnect WebUSB printers silently on mount
   useEffect(() => {
@@ -191,8 +208,19 @@ export function AppLayout() {
             <div className="flex rounded-2xl bg-white py-1 px-2.5 border border-slate-200/80 shadow-2xs">
               <BrandLogo compact imageClassName="w-20" />
             </div>
-            {/* Acciones directas en móvil: Tema y Salir sin abrir el menú */}
+            {/* Acciones directas en móvil: Notificaciones, Tema y Salir sin abrir el menú */}
             <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={handleToggleMute}
+                className={cn(
+                  "h-8 w-8 rounded-xl flex items-center justify-center transition cursor-pointer",
+                  isMuted ? "text-amber-500 hover:bg-amber-500/15" : "text-emerald-500 hover:bg-emerald-500/15"
+                )}
+                title={isMuted ? "Notificaciones silenciadas (clic para activar)" : "Notificaciones activadas (clic para silenciar)"}
+              >
+                {isMuted ? <BellOff className="h-4 w-4" /> : <Bell className="h-4 w-4" />}
+              </button>
               <button
                 type="button"
                 onClick={toggleTheme}

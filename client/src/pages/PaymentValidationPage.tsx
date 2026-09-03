@@ -1,14 +1,15 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { io } from '@/lib/socket'
-import { Banknote, CheckCircle2, Eye, Image, RefreshCw, Search, Wallet, XCircle } from 'lucide-react'
+import { Banknote, Bell, BellOff, CheckCircle2, Eye, Image, RefreshCw, Search, Wallet, XCircle } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Dialog, DialogContent } from '@/components/ui/dialog'
 import { api } from '@/lib/api'
 import { alerts } from '@/lib/alerts'
-import { formatCurrency } from '@/lib/utils'
+import { formatCurrency, cn } from '@/lib/utils'
 import { useAuth } from '@/hooks/useAuth'
 import { ProtectedImage } from '@/components/ProtectedImage'
+import { isNotificationsMuted, toggleNotificationsMuted } from '@/lib/notificationSettings'
 
 const validationTabs = [
   { value: 'PENDING_REVIEW', label: 'Pendientes' },
@@ -44,6 +45,22 @@ export default function PaymentValidationPage() {
   const [activeTab, setActiveTab] = useState('PENDING_REVIEW')
   const [search, setSearch] = useState('')
   const [imageUrl, setImageUrl] = useState<string | null>(null)
+  const [isMuted, setIsMuted] = useState(() => isNotificationsMuted())
+
+  useEffect(() => {
+    const syncMute = () => setIsMuted(isNotificationsMuted())
+    window.addEventListener('the-villa-dog-mute-changed', syncMute)
+    window.addEventListener('storage', syncMute)
+    return () => {
+      window.removeEventListener('the-villa-dog-mute-changed', syncMute)
+      window.removeEventListener('storage', syncMute)
+    }
+  }, [])
+
+  const handleToggleMute = () => {
+    const next = toggleNotificationsMuted()
+    setIsMuted(next)
+  }
 
   // Cargar todos los pagos para filtrado reactivo e instantáneo (0ms) en memoria
   const load = useCallback(() => {
@@ -184,9 +201,25 @@ export default function PaymentValidationPage() {
             Comprobantes de mesas y cajas. Visualización compacta en un solo toque.
           </p>
         </div>
-        <Button variant="outline" onClick={load} className="gap-2 font-bold h-9">
-          <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} /> Actualizar
-        </Button>
+        <div className="flex items-center gap-2 flex-wrap">
+          <button
+            type="button"
+            onClick={handleToggleMute}
+            className={cn(
+              "flex items-center gap-2 px-3.5 h-9 rounded-xl text-xs font-bold transition-all border shadow-xs cursor-pointer",
+              isMuted
+                ? "bg-amber-500/15 border-amber-500/30 text-amber-700 dark:text-amber-300 hover:bg-amber-500/25"
+                : "bg-emerald-500/15 border-emerald-500/30 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-500/25"
+            )}
+            title={isMuted ? "Notificaciones silenciadas (clic para activar)" : "Notificaciones activadas (clic para silenciar)"}
+          >
+            {isMuted ? <BellOff className="h-4 w-4 text-amber-500" /> : <Bell className="h-4 w-4 text-emerald-500" />}
+            <span>{isMuted ? "🔕 Notificaciones: DESACTIVADAS" : "🔔 Notificaciones: ACTIVADAS"}</span>
+          </button>
+          <Button variant="outline" onClick={load} className="gap-2 font-bold h-9 rounded-xl cursor-pointer">
+            <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} /> Actualizar
+          </Button>
+        </div>
       </div>
 
       {/* Barra de Filtros Instantáneos Unificada (Una sola fila) */}
