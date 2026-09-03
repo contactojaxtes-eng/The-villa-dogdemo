@@ -41,18 +41,28 @@ export default function TablesPage() {
     return () => { socket.disconnect() }
   }, [load, user?.id, user?.name, user?.role])
 
+  const [filterMode, setFilterMode] = useState<'ALL' | 'MINE'>('ALL')
+
+  const myTablesCount = useMemo(() => tables.filter(t => t.openedBy?.id === user?.id).length, [tables, user?.id])
+
   const filtered = useMemo(() => {
+    let list = tables
+    if (filterMode === 'MINE' && user?.id) {
+      list = list.filter(t => t.openedBy?.id === user.id)
+    }
     const q = search.trim().toLowerCase()
-    if (!q) return tables
-    return tables.filter(t => `${t.label} ${t.openedBy?.name || ''}`.toLowerCase().includes(q))
-  }, [tables, search])
+    if (q) {
+      list = list.filter(t => `${t.label} ${t.openedBy?.name || ''}`.toLowerCase().includes(q))
+    }
+    return list
+  }, [tables, filterMode, user?.id, search])
 
   return (
     <div className="space-y-4">
       <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div>
           <h1 className="text-2xl font-black text-[var(--text-primary)]">Mesas abiertas</h1>
-          <p className="text-sm text-[var(--text-secondary)]">Cuentas activas de salon, cocina y cobro.</p>
+          <p className="text-sm text-[var(--text-secondary)]">Cuentas activas de salón. Cualquier mesera puede atender o cobrar cualquier mesa.</p>
         </div>
         <div className="flex gap-2">
           <Button variant="outline" onClick={load} className="gap-2"><RefreshCw className="h-4 w-4" />Actualizar</Button>
@@ -60,9 +70,37 @@ export default function TablesPage() {
         </div>
       </div>
 
-      <div className="relative max-w-lg">
-        <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--text-muted)]" />
-        <Input value={search} onChange={e => setSearch(e.target.value)} placeholder="Buscar mesa, carro, cliente o mesera..." className="pl-9" />
+      {/* Pestañas: Todas las mesas vs Mis mesas + Buscador */}
+      <div className="flex flex-col sm:flex-row gap-2.5 sm:items-center sm:justify-between">
+        <div className="flex items-center gap-1 bg-[var(--bg-panel)] p-1 rounded-xl border border-[var(--border-subtle)] w-fit">
+          <button
+            type="button"
+            onClick={() => setFilterMode('ALL')}
+            className={`px-3 py-1.5 rounded-lg text-xs font-black transition cursor-pointer ${
+              filterMode === 'ALL'
+                ? 'bg-[var(--accent)] text-white shadow-xs'
+                : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+            }`}
+          >
+            Todas las mesas ({tables.length})
+          </button>
+          <button
+            type="button"
+            onClick={() => setFilterMode('MINE')}
+            className={`px-3 py-1.5 rounded-lg text-xs font-black transition cursor-pointer ${
+              filterMode === 'MINE'
+                ? 'bg-[var(--accent)] text-white shadow-xs'
+                : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+            }`}
+          >
+            Mis mesas ({myTablesCount})
+          </button>
+        </div>
+
+        <div className="relative max-w-sm w-full">
+          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--text-muted)]" />
+          <Input value={search} onChange={e => setSearch(e.target.value)} placeholder="Buscar mesa o mesera..." className="pl-9 h-9 text-xs" />
+        </div>
       </div>
 
       {loading ? <p className="text-sm text-[var(--text-secondary)]">Cargando mesas...</p> : (
@@ -73,8 +111,15 @@ export default function TablesPage() {
                 <div className="flex items-start justify-between gap-3">
                   <div>
                     <p className="text-lg font-black text-[var(--text-primary)] group-hover:text-[var(--accent)] transition-colors">{table.label}</p>
-                    <div className="mt-1 flex items-center gap-1.5 text-xs font-bold text-amber-700 bg-amber-500/10 px-2 py-0.5 rounded-lg w-fit">
-                      <span>👤 Atendido por: {table.openedBy?.name || 'Mesero'}</span>
+                    <div className="mt-1 flex items-center gap-1.5 flex-wrap">
+                      <span className="text-[11px] font-bold text-amber-700 dark:text-amber-300 bg-amber-500/10 px-2 py-0.5 rounded-md flex items-center gap-1">
+                        👤 Tomado por: <strong>{table.openedBy?.name || 'Mesero'}</strong>
+                      </span>
+                      {table.openedBy?.id === user?.id ? (
+                        <span className="text-[10px] font-bold text-blue-600 bg-blue-500/10 px-1.5 py-0.5 rounded">Tú</span>
+                      ) : (
+                        <span className="text-[10px] font-bold text-emerald-600 bg-emerald-500/10 px-1.5 py-0.5 rounded">Puedes cobrar</span>
+                      )}
                     </div>
                   </div>
                   <span className="rounded-full bg-emerald-500/10 px-2.5 py-1 text-[10px] font-black text-emerald-600 tracking-wider">ABIERTA</span>
@@ -82,16 +127,16 @@ export default function TablesPage() {
                 <div className="mt-3.5 grid grid-cols-3 gap-2 text-xs">
                   <div className="rounded-xl bg-[var(--bg-elevated)] p-2"><Wallet className="mb-1 h-4 w-4 text-[var(--accent)]" /><b>{formatCurrency(table.total || 0)}</b><span className="block text-[var(--text-muted)]">Total</span></div>
                   <div className="rounded-xl bg-[var(--bg-elevated)] p-2"><ChefHat className="mb-1 h-4 w-4 text-[var(--accent)]" /><b>{table.kitchenStatus}</b><span className="block text-[var(--text-muted)]">Cocina</span></div>
-                  <div className="rounded-xl bg-[var(--bg-elevated)] p-2"><UtensilsCrossed className="mb-1 h-4 w-4 text-[var(--accent)]" /><b>{table.orders?.length || 0}</b><span className="block text-[var(--text-muted)]">Envios</span></div>
+                  <div className="rounded-xl bg-[var(--bg-elevated)] p-2"><UtensilsCrossed className="mb-1 h-4 w-4 text-[var(--accent)]" /><b>{table.orders?.length || 0}</b><span className="block text-[var(--text-muted)]">Envíos</span></div>
                 </div>
               </div>
               <div className="mt-3 pt-2.5 border-t border-[var(--border-subtle)] flex items-center justify-between text-[11px] text-[var(--text-muted)]">
-                <span>Cualquier mesero o cajero puede cobrar</span>
-                <span className="font-bold text-[var(--accent)] group-hover:underline">Ver y cobrar →</span>
+                <span>Cualquier mesera puede cobrar</span>
+                <span className="font-bold text-[var(--accent)] group-hover:underline">Cobrar / Ver →</span>
               </div>
             </Link>
           ))}
-          {filtered.length === 0 && <div className="rounded-2xl border border-dashed border-[var(--border-default)] p-8 text-center text-sm text-[var(--text-secondary)]">No hay mesas abiertas.</div>}
+          {filtered.length === 0 && <div className="col-span-full rounded-2xl border border-dashed border-[var(--border-default)] p-8 text-center text-sm text-[var(--text-secondary)]">No hay mesas abiertas en este filtro.</div>}
         </div>
       )}
     </div>

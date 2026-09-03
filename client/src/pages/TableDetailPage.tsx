@@ -191,11 +191,13 @@ export default function TableDetailPage() {
               </span>
             </div>
             <div className="flex flex-wrap items-center gap-2 mt-1 text-xs text-[var(--text-secondary)]">
-              <span className="flex items-center gap-1 font-bold text-amber-700 bg-amber-500/10 px-2 py-0.5 rounded-md">
+              <span className="flex items-center gap-1 font-bold text-amber-700 dark:text-amber-300 bg-amber-500/10 px-2 py-0.5 rounded-md">
                 👤 Tomado por: {table.openedBy?.name || 'Mesero'}
               </span>
               <span>•</span>
-              <span className="text-xs text-[var(--text-muted)]">Cualquier mesero o cajero puede cobrarla</span>
+              <span className="text-xs text-emerald-600 dark:text-emerald-400 font-bold bg-emerald-500/10 px-2 py-0.5 rounded-md">
+                Atendiendo: {user?.name} (puedes cobrar libremente)
+              </span>
             </div>
           </div>
         </div>
@@ -218,8 +220,8 @@ export default function TableDetailPage() {
       </div>
 
       <div className="grid gap-4 items-start lg:grid-cols-[1fr_380px]">
-        {/* Orders Column */}
-        <section className="min-w-0 space-y-3">
+        {/* Orders Column: on mobile goes below payment box so waitresses can charge immediately */}
+        <section className="min-w-0 space-y-3 order-2 lg:order-1">
           <h2 className="font-black text-sm uppercase tracking-wider text-[var(--text-muted)]">Envíos y Comida en Mesa</h2>
           {table.orders?.map((order: any) => (
             <div key={order.id} className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-4 shadow-sm">
@@ -286,8 +288,8 @@ export default function TableDetailPage() {
           )}
         </section>
 
-        {/* Payment and Billing Column */}
-        <aside className="min-w-0 space-y-4">
+        {/* Payment and Billing Column: order-1 on mobile so waitresses can charge immediately */}
+        <aside className="min-w-0 space-y-4 order-1 lg:order-2">
           {/* Balance card */}
           <div className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-4 shadow-sm">
             <div className="flex justify-between items-center text-sm text-[var(--text-secondary)]">
@@ -313,7 +315,7 @@ export default function TableDetailPage() {
             <div className="space-y-3 rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-4 shadow-sm">
               <div className="flex items-center justify-between">
                 <h2 className="font-black text-sm uppercase tracking-wider text-[var(--text-primary)]">Registrar Cobro</h2>
-                <span className="text-xs text-[var(--text-muted)]">Cualquier mesero/cajero</span>
+                <span className="text-[11px] font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-md">Cualquier mesera puede cobrar</span>
               </div>
 
               {/* Method Tabs - EXACTAMENTE 2 MÉTODOS */}

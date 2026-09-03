@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
-import { ArrowLeft, Minus, Plus, Save, Search, Send, WifiOff } from 'lucide-react'
+import { ArrowLeft, Minus, Plus, Save, Search, Send, User, UtensilsCrossed, WifiOff } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
@@ -8,6 +8,7 @@ import { Dialog, DialogContent } from '@/components/ui/dialog'
 import { api } from '@/lib/api'
 import { alerts } from '@/lib/alerts'
 import { formatCurrency } from '@/lib/utils'
+import { useAuth } from '@/hooks/useAuth'
 import { deleteOfflineOrder, listOfflineOrders, saveOfflineOrder, type OfflineTableOrder } from '@/lib/offlineTableOrders'
 import { getErrorMessage, type DiningOrderSummary, type OfflineTableOrderPayload } from '@/lib/tableTypes'
 
@@ -24,9 +25,11 @@ type CartItem = {
 }
 
 const QUICK_CHIPS = ['Sin cebolla', 'Salsas aparte', 'Sin ripio', 'Bien dorado', 'Sin salsas', 'Poco picante']
+const QUICK_TABLES = ['Mesa 1', 'Mesa 2', 'Mesa 3', 'Mesa 4', 'Mesa 5', 'Mesa 6', 'Mesa 7', 'Mesa 8', 'Barra', 'Para Llevar']
 
 export default function TableOrderPage() {
   const navigate = useNavigate()
+  const { user } = useAuth()
   const [params] = useSearchParams()
   const existingTableId = params.get('tableId') || ''
   const editOrderId = params.get('editOrderId') || ''
@@ -113,6 +116,7 @@ export default function TableOrderPage() {
   }, [categories, search, selectedCategory])
 
   const total = cart.reduce((sum, item) => sum + item.price * item.quantity, 0)
+  const totalCount = cart.reduce((s, i) => s + i.quantity, 0)
 
   const addItem = (item: MenuItem, takeaway = false) => {
     setCart(prev => {
@@ -167,30 +171,28 @@ export default function TableOrderPage() {
     if (saving) return
     const effectiveTableLabel = tableLabel.trim()
     if (!effectiveTableLabel) {
-      alerts.warning('Escribe un nombre', 'Usa el nombre del cliente o una referencia, por ejemplo: Carlos o Carro rojo.')
+      alerts.warning('Selecciona una mesa', 'Elige un botón de mesa arriba o escribe un nombre para la cuenta.')
       document.getElementById('account-name')?.focus()
       return
     }
     if (cart.length === 0) {
-      alerts.warning('Pedido vacío', 'Agrega al menos un producto a la cuenta.')
+      alerts.warning('Pedido vacío', 'Agrega al menos un producto a la cuenta tocando "+ Agregar".')
       return
     }
 
-    const totalCount = cart.reduce((s, i) => s + i.quantity, 0)
     const takeawayCount = cart.filter(i => i.takeaway || i.notes?.includes('[PARA LLEVAR]')).reduce((s, i) => s + i.quantity, 0)
     const dineInCount = totalCount - takeawayCount
 
     let summaryText = `${totalCount} producto(s)`
     if (takeawayCount > 0 && dineInCount > 0) {
-      summaryText += ` (${dineInCount} para comer en mesa, ${takeawayCount} para llevar)`
+      summaryText += ` (${dineInCount} en mesa, ${takeawayCount} para llevar)`
     } else if (takeawayCount > 0) {
       summaryText += ` (Todos para llevar)`
     }
 
-    // Confirmación interactiva antes de enviar a cocina
     const confirmed = await alerts.confirm(
       '¿Enviar pedido a cocina?',
-      `${effectiveTableLabel}: ${summaryText} • Total: ${formatCurrency(total)}`,
+      `${effectiveTableLabel}: ${summaryText} • Total: ${formatCurrency(total)}\nMesera: ${user?.name || 'Mesero'}`,
       '🚀 Enviar a cocina',
       'Revisar pedido',
       'question'
@@ -250,57 +252,111 @@ export default function TableOrderPage() {
   }
 
   return (
-    <div className="grid min-h-[calc(100dvh-95px)] gap-4 items-start lg:grid-cols-[1fr_370px]">
-      <section className="space-y-4">
-        <div className="flex items-center justify-between gap-3">
-          <div className="flex items-center gap-2">
-            <Button asChild variant="ghost" size="icon"><Link to="/tables"><ArrowLeft className="h-5 w-5" /></Link></Button>
-            <div>
-              <h1 className="text-2xl font-black text-[var(--text-primary)]">{editOrderId ? 'Editar Pedido' : 'Nuevo Pedido'}</h1>
-              <p className="text-xs text-[var(--text-secondary)]">{online ? 'Conectado: despacho directo a estaciones de cocina.' : 'Sin conexión: guardando en este dispositivo.'}</p>
+    <div className="grid min-h-[calc(100dvh-95px)] gap-4 items-start lg:grid-cols-[1fr_370px] pb-32 lg:pb-6">
+      <section className="space-y-3">
+        {/* Cabecera compacta con identificación de la mesera */}
+        <div className="flex items-center justify-between gap-2 bg-[var(--bg-panel)] p-2.5 rounded-2xl border border-[var(--border-subtle)] shadow-xs">
+          <div className="flex items-center gap-2 min-w-0">
+            <Button asChild variant="ghost" size="icon" className="h-8 w-8 shrink-0">
+              <Link to="/tables"><ArrowLeft className="h-4 w-4" /></Link>
+            </Button>
+            <div className="min-w-0">
+              <h1 className="text-base sm:text-lg font-black text-[var(--text-primary)] truncate">
+                {editOrderId ? 'Editar Pedido' : 'Nuevo Pedido'}
+              </h1>
+              <span className="text-[11px] font-bold text-amber-600 dark:text-amber-400 flex items-center gap-1">
+                <User className="h-3 w-3" /> Mesera: {user?.name || 'Mesera'}
+              </span>
             </div>
           </div>
-          {!online && <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-3 py-1 text-xs font-black text-amber-600"><WifiOff className="h-4 w-4" />Sin conexión</span>}
+          {!online && (
+            <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-2.5 py-0.5 text-[10px] font-black text-amber-600 shrink-0">
+              <WifiOff className="h-3 w-3" /> Sin internet
+            </span>
+          )}
         </div>
 
         {pending.length > 0 && (
-          <div className="flex items-center justify-between rounded-2xl border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-700">
+          <div className="flex items-center justify-between rounded-xl border border-amber-500/30 bg-amber-500/10 p-2.5 text-xs text-amber-700">
             <span>{pending.length} pedido(s) pendientes por sincronizar.</span>
-            <Button size="sm" variant="outline" onClick={syncPending}>Reintentar</Button>
+            <Button size="sm" variant="outline" className="h-7 text-xs" onClick={syncPending}>Reintentar</Button>
           </div>
         )}
 
-        {!existingTableId && (
-          <div className="space-y-2 rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-3">
-            <label htmlFor="account-name" className="block text-sm font-bold text-[var(--text-primary)]">Nombre del cliente o de la cuenta</label>
-            <p className="text-xs text-[var(--text-secondary)]">La cuenta se crea cuando envías este pedido a cocina.</p>
+        {/* Selector Rápido de Mesas en 1 Toque */}
+        {!existingTableId ? (
+          <div className="space-y-2 rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-3 shadow-xs">
+            <div className="flex items-center justify-between">
+              <label htmlFor="account-name" className="text-xs font-black uppercase tracking-wider text-[var(--text-secondary)]">
+                1. Elige la Mesa o Cliente:
+              </label>
+              {tableLabel && (
+                <span className="text-xs font-black text-[var(--accent)] bg-[var(--accent)]/10 px-2 py-0.5 rounded-md">
+                  ✓ {tableLabel}
+                </span>
+              )}
+            </div>
+
+            {/* Botones de Mesas Frecuentes (1 Toque en Celular) */}
+            <div className="flex items-center gap-1.5 overflow-x-auto pb-1 no-scrollbar">
+              {QUICK_TABLES.map(quick => {
+                const isSelected = tableLabel.trim().toLowerCase() === quick.toLowerCase()
+                return (
+                  <button
+                    key={quick}
+                    type="button"
+                    onClick={() => setTableLabel(quick)}
+                    className={`rounded-xl px-3 py-1.5 text-xs font-black whitespace-nowrap transition-all active:scale-95 cursor-pointer ${
+                      isSelected
+                        ? 'bg-[var(--accent)] text-white shadow-xs scale-105 ring-2 ring-[var(--accent)]/30'
+                        : 'bg-[var(--bg-elevated)] text-[var(--text-primary)] border border-[var(--border-subtle)] hover:border-[var(--accent)]'
+                    }`}
+                  >
+                    {quick}
+                  </button>
+                )
+              })}
+            </div>
+
+            {/* Input para nombre personalizado */}
             <Input
               id="account-name"
               maxLength={80}
               autoComplete="off"
               value={tableLabel}
               onChange={e => setTableLabel(e.target.value)}
-              placeholder="Ej. Carlos, Familia Pérez, Carro rojo"
-              className="h-11 text-base font-bold"
+              placeholder="O escribe nombre / carro / referencia (ej: Carro rojo)..."
+              className="h-9 text-xs font-bold rounded-xl bg-[var(--bg-elevated)]"
             />
+          </div>
+        ) : (
+          <div className="rounded-xl bg-[var(--accent)]/10 border border-[var(--accent)]/30 px-3 py-2 flex items-center justify-between">
+            <span className="text-xs font-black text-[var(--text-primary)]">
+              Agregando a: <strong className="text-[var(--accent)] text-sm">{tableLabel}</strong>
+            </span>
+            <span className="text-[10px] text-[var(--text-muted)] font-bold">Mesa existente</span>
           </div>
         )}
 
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-          <div className="relative flex-1">
-            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--text-muted)]" />
-            <Input value={search} onChange={e => setSearch(e.target.value)} placeholder="Buscar producto..." className="pl-9" />
-          </div>
+        {/* Buscador de productos */}
+        <div className="relative">
+          <Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--text-muted)]" />
+          <Input
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            placeholder="Buscar perro, hamburguesa, bebida..."
+            className="pl-8 h-9 text-xs rounded-xl bg-[var(--bg-panel)]"
+          />
         </div>
 
-        {/* Category Tabs */}
-        <div className="flex items-center gap-1.5 overflow-x-auto pb-1 no-scrollbar">
+        {/* Pestañas de categorías con scroll horizontal fluido */}
+        <div className="flex items-center gap-1.5 overflow-x-auto pb-1 no-scrollbar sticky top-0 z-10 bg-[var(--bg-base)] py-1">
           <button
             type="button"
             onClick={() => setSelectedCategory('ALL')}
-            className={`rounded-xl px-3.5 py-1.5 text-xs font-black whitespace-nowrap transition-all ${
+            className={`rounded-xl px-3 py-1.5 text-xs font-black whitespace-nowrap transition-all active:scale-95 cursor-pointer ${
               selectedCategory === 'ALL'
-                ? 'bg-[var(--accent)] text-white shadow-sm'
+                ? 'bg-[var(--accent)] text-white shadow-xs'
                 : 'bg-[var(--bg-panel)] text-[var(--text-secondary)] border border-[var(--border-subtle)] hover:bg-[var(--bg-hover)]'
             }`}
           >
@@ -311,9 +367,9 @@ export default function TableOrderPage() {
               key={c.id}
               type="button"
               onClick={() => setSelectedCategory(c.id)}
-              className={`rounded-xl px-3.5 py-1.5 text-xs font-black whitespace-nowrap transition-all ${
+              className={`rounded-xl px-3 py-1.5 text-xs font-black whitespace-nowrap transition-all active:scale-95 cursor-pointer ${
                 selectedCategory === c.id
-                  ? 'bg-[var(--accent)] text-white shadow-sm'
+                  ? 'bg-[var(--accent)] text-white shadow-xs'
                   : 'bg-[var(--bg-panel)] text-[var(--text-secondary)] border border-[var(--border-subtle)] hover:bg-[var(--bg-hover)]'
               }`}
             >
@@ -322,44 +378,92 @@ export default function TableOrderPage() {
           ))}
         </div>
 
-        {/* Product Grid - 2 columns on mobile */}
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-2 xl:grid-cols-3">
+        {/* Lista de productos táctil optimizada para celular */}
+        <div className="space-y-2">
           {items.map(item => {
-            const inCartQty = cart.filter(c => c.menuItemId === item.id).reduce((s, c) => s + c.quantity, 0)
+            const dineInKey = `${item.id}_dinein`
+            const takeawayKey = `${item.id}_takeaway`
+            const dineInItem = cart.find(c => c.cartKey === dineInKey)
+            const takeawayItem = cart.find(c => c.cartKey === takeawayKey)
+            const inCartQty = (dineInItem?.quantity || 0) + (takeawayItem?.quantity || 0)
+
             return (
               <div
                 key={item.id}
-                onClick={() => addItem(item, false)}
-                className={`relative rounded-2xl border p-2.5 sm:p-3.5 text-left shadow-sm transition-all hover:scale-[1.01] active:scale-95 cursor-pointer flex flex-col justify-between ${
+                className={`rounded-2xl border p-3 bg-[var(--bg-panel)] shadow-2xs transition-all flex items-center justify-between gap-3 ${
                   inCartQty > 0
-                    ? 'border-[var(--accent)] bg-[var(--accent)]/5 ring-1 ring-[var(--accent)]'
-                    : 'border-[var(--border-subtle)] bg-[var(--bg-panel)] hover:border-[var(--accent)] hover:bg-[var(--bg-hover)]'
+                    ? 'border-[var(--accent)] bg-[var(--accent)]/5 ring-1 ring-[var(--accent)]/30'
+                    : 'border-[var(--border-subtle)] hover:border-[var(--border-default)]'
                 }`}
               >
-                <div>
-                  <div className="flex items-start justify-between gap-1">
-                    <p className="font-black text-xs sm:text-sm text-[var(--text-primary)] pr-2 line-clamp-2">{item.name}</p>
-                    {inCartQty > 0 && (
-                      <span className="shrink-0 flex h-5 w-5 sm:h-6 sm:w-6 items-center justify-center rounded-full bg-[var(--accent)] text-[10px] sm:text-xs font-black text-white shadow">
-                        {inCartQty}
-                      </span>
-                    )}
+                {/* Nombre y Precio */}
+                <div className="min-w-0 flex-1">
+                  <p className="font-black text-sm text-[var(--text-primary)] leading-tight">{item.name}</p>
+                  <div className="flex items-center gap-2 mt-0.5">
+                    <span className="text-xs font-black text-[var(--accent)]">{formatCurrency(item.price)}</span>
+                    <span className="text-[10px] text-[var(--text-muted)] font-medium truncate">{item.category?.name}</span>
                   </div>
-                  <p className="text-[10px] sm:text-xs text-[var(--text-muted)] truncate">{item.category?.name}</p>
                 </div>
-                <div className="mt-2 flex items-center justify-between gap-1">
-                  <p className="text-xs sm:text-sm font-black text-[var(--accent)]">{formatCurrency(item.price)}</p>
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      addItem(item, true)
-                    }}
-                    className="rounded-lg bg-amber-500/20 text-amber-900 dark:text-amber-300 px-2 py-0.5 text-[10px] font-black hover:bg-amber-500/30 transition border border-amber-500/30"
-                    title="Agregar para llevar"
-                  >
-                    🥡 +1 Llevar
-                  </button>
+
+                {/* Botones de acción táctil */}
+                <div className="flex items-center gap-1.5 shrink-0">
+                  {inCartQty === 0 ? (
+                    <div className="flex items-center gap-1">
+                      <Button
+                        type="button"
+                        size="sm"
+                        onClick={() => addItem(item, false)}
+                        className="h-8.5 px-3 rounded-xl bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-white font-black text-xs gap-1 shadow-xs active:scale-95 cursor-pointer"
+                      >
+                        <Plus className="h-3.5 w-3.5 stroke-[3]" />
+                        <span>Agregar</span>
+                      </Button>
+                      <button
+                        type="button"
+                        onClick={() => addItem(item, true)}
+                        className="h-8.5 px-2 rounded-xl bg-amber-500/15 text-amber-800 dark:text-amber-300 font-bold text-[10px] border border-amber-500/30 hover:bg-amber-500/25 active:scale-95 transition cursor-pointer"
+                        title="Agregar para llevar"
+                      >
+                        🥡 Llevar
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-1.5">
+                      {/* Contador directo en el producto */}
+                      <div className="flex items-center gap-1 bg-[var(--bg-elevated)] p-1 rounded-xl border border-[var(--border-subtle)]">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (dineInItem) updateQty(dineInKey, -1)
+                            else if (takeawayItem) updateQty(takeawayKey, -1)
+                          }}
+                          className="h-7 w-7 rounded-lg bg-[var(--bg-panel)] flex items-center justify-center text-[var(--text-primary)] hover:bg-rose-50 hover:text-rose-600 active:scale-90 font-black transition cursor-pointer"
+                        >
+                          <Minus className="h-3.5 w-3.5 stroke-[3]" />
+                        </button>
+                        <span className="w-5 text-center font-black text-sm text-[var(--text-primary)]">
+                          {inCartQty}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => addItem(item, false)}
+                          className="h-7 w-7 rounded-lg bg-[var(--accent)] text-white flex items-center justify-center active:scale-90 font-black transition shadow-2xs cursor-pointer"
+                        >
+                          <Plus className="h-3.5 w-3.5 stroke-[3]" />
+                        </button>
+                      </div>
+
+                      {/* Botón rápido para sumar para llevar */}
+                      <button
+                        type="button"
+                        onClick={() => addItem(item, true)}
+                        className="h-8 px-1.5 rounded-xl bg-amber-500/15 text-amber-800 dark:text-amber-300 font-bold text-[10px] border border-amber-500/30 hover:bg-amber-500/25 active:scale-95 transition cursor-pointer"
+                        title="Sumar para llevar"
+                      >
+                        +🥡
+                      </button>
+                    </div>
+                  )}
                 </div>
               </div>
             )
