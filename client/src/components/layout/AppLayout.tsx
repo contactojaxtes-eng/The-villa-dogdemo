@@ -20,6 +20,7 @@ export function AppLayout() {
   // Modo pantalla completa exclusiva de tablet: ÚNICAMENTE para usuarios con rol KITCHEN (cocineros).
   // Administradores y cajeros ven la barra lateral normal para navegar fluidamente.
   const isDedicatedKitchen = user?.role === 'KITCHEN'
+  const isKitchen = isDedicatedKitchen || location.pathname === '/kitchen'
 
   const [isFullscreen, setIsFullscreen] = useState(false)
   const [timeStr, setTimeStr] = useState(() => new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }))
