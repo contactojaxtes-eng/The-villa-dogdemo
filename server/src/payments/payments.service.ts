@@ -151,7 +151,12 @@ export class PaymentsService {
     const orders = await this.prisma.order.findMany({
       where: { 
         createdAt: { gte: start, lte: end }, 
-        status: 'DELIVERED',
+        status: { not: 'CANCELLED' },
+        OR: [
+          { status: 'DELIVERED' },
+          { paymentStatus: 'CONFIRMED' },
+          { paymentMethod: { not: null } },
+        ],
         ...(openCash.cashRegisterId
           ? { cashRegisterId: openCash.cashRegisterId }
           : (targetIsCashier ? {
@@ -517,10 +522,15 @@ export class PaymentsService {
       });
     }
 
-    // Obtener pedidos DELIVERED del turno
+    // Obtener pedidos del turno (entregados o con pago confirmado)
     const whereOrders: any = {
       createdAt: { gte: closing.shiftStart, lte: effectiveEnd },
-      status: 'DELIVERED',
+      status: { not: 'CANCELLED' },
+      OR: [
+        { status: 'DELIVERED' },
+        { paymentStatus: 'CONFIRMED' },
+        { paymentMethod: { not: null } },
+      ],
     };
     if (closing.cashRegisterId) {
       whereOrders.cashRegisterId = closing.cashRegisterId;
@@ -777,11 +787,16 @@ export class PaymentsService {
       }
     }
 
-    // Get all orders delivered on this day for all registers
+    // Get all orders delivered or paid on this day for all registers
     const orders = await this.prisma.order.findMany({
       where: {
         createdAt: { gte: start, lte: end },
-        status: 'DELIVERED',
+        status: { not: 'CANCELLED' },
+        OR: [
+          { status: 'DELIVERED' },
+          { paymentStatus: 'CONFIRMED' },
+          { paymentMethod: { not: null } },
+        ],
       },
     });
 

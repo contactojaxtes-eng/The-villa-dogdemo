@@ -131,10 +131,23 @@ export class CashRegistersService {
     const orders = await this.prisma.order.findMany({
       where: {
         cashRegisterId: registerId,
-        status: 'DELIVERED',
+        status: { not: 'CANCELLED' },
+        OR: [
+          { status: 'DELIVERED' },
+          { paymentStatus: 'CONFIRMED' },
+          { paymentMethod: { not: null } },
+        ],
         createdAt: { gte: openClosing.shiftStart },
       },
     });
+
+    const expenses = await this.prisma.expense.findMany({
+      where: {
+        createdAt: { gte: openClosing.shiftStart },
+        ...(registerId ? { cashRegisterId: registerId } : {}),
+      },
+    });
+    const totalExpenses = expenses.reduce((s, e) => s + (e.amount || 0), 0);
 
     const cashSales = orders.reduce((sum, o) => {
       if (o.paymentMethod === 'CASH') return sum + o.total;
@@ -143,12 +156,14 @@ export class CashRegistersService {
     }, 0);
 
     const transferSales = orders.reduce((sum, o) => {
-      if (o.paymentMethod === 'TRANSFER' || o.paymentMethod === 'NEQUI' || o.paymentMethod === 'BANCOLOMBIA' || o.paymentMethod === 'DAVIPLATA') return sum + o.total;
+      if (['TRANSFER', 'NEQUI', 'BANCOLOMBIA', 'DAVIPLATA'].includes(o.paymentMethod || '')) return sum + o.total;
       if (o.paymentMethod === 'MIXED') return sum + (o.transferAmount || 0);
       return sum;
     }, 0);
 
     const initialCash = openClosing.initialCash || 0;
+    const totalSales = orders.reduce((s, o) => s + o.total, 0);
+    const cashInDrawer = Math.max(0, initialCash + cashSales - totalExpenses);
 
     return {
       registerId,
@@ -157,10 +172,11 @@ export class CashRegistersService {
       shiftStart: openClosing.shiftStart,
       operatorName: openClosing.user?.name || 'Cajero',
       orderCount: orders.length,
-      totalSales: orders.reduce((s, o) => s + o.total, 0),
+      totalSales,
       totalCash: cashSales,
       initialCash,
-      cashInDrawer: initialCash + cashSales,
+      cashInDrawer,
+      totalExpenses,
       totalTransfer: transferSales,
       totalNequi: orders.filter(o => o.paymentMethod === 'NEQUI').reduce((s, o) => s + o.total, 0),
       totalBancolombia: orders.filter(o => o.paymentMethod === 'BANCOLOMBIA').reduce((s, o) => s + o.total, 0),

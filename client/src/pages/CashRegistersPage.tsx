@@ -121,12 +121,21 @@ export default function CashRegistersPage() {
       transports: ['websocket', 'polling'],
     })
 
-    socket.on('cashRegistersChanged', () => {
+    const handleRefresh = () => {
       load().catch(console.error)
-    })
-    socket.on('cashStatusChanged', () => {
-      load().catch(console.error)
-    })
+    }
+
+    socket.on('cashRegistersChanged', handleRefresh)
+    socket.on('cashStatusChanged', handleRefresh)
+    socket.on('orderCreated', handleRefresh)
+    socket.on('orderUpdated', handleRefresh)
+    socket.on('orderStatusChanged', handleRefresh)
+    socket.on('tableOrderSubmitted', handleRefresh)
+    socket.on('tableClosed', handleRefresh)
+    socket.on('paymentSubmitted', handleRefresh)
+    socket.on('paymentValidated', handleRefresh)
+    socket.on('paymentUpdated', handleRefresh)
+    socket.on('expenseCreated', handleRefresh)
 
     return () => {
       socket.disconnect()
@@ -422,17 +431,17 @@ export default function CashRegistersPage() {
                       <div className="rounded-xl bg-[var(--bg-elevated)] border border-[var(--border-subtle)] p-3">
                         <p className="text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-wider">Efectivo en Caja</p>
                         <p className="text-lg font-black text-[var(--text-primary)] mt-0.5">
-                          {formatCurrency(isOpen ? (sum.cashInDrawer ?? (sum.totalCash + (sum.initialCash || 0))) : 0)}
+                          {formatCurrency(isOpen ? (sum.cashInDrawer ?? ((sum.initialCash || 0) + (sum.totalCash || 0))) : 0)}
                         </p>
                         <p className="text-[10px] text-[var(--text-secondary)] mt-0.5">
-                          {isOpen && sum.initialCash ? `Base ($${Math.round(sum.initialCash).toLocaleString('de-DE')}) + Efectivo` : 'Recaudado en físico'}
+                          {isOpen ? `Base (${formatCurrency(sum.initialCash || 0)}) + Ventas (${formatCurrency(sum.totalCash || 0)})` : 'Recaudado en físico'}
                         </p>
                       </div>
 
                       <div className="rounded-xl bg-[var(--bg-elevated)] border border-[var(--border-subtle)] p-3">
                         <p className="text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-wider">Transferencias & Digitales</p>
                         <p className="text-base font-extrabold text-[var(--text-primary)] mt-0.5">
-                          {formatCurrency(isOpen ? (sum.totalTransfer + sum.totalNequi + sum.totalBancolombia + sum.totalDaviplata) : 0)}
+                          {formatCurrency(isOpen ? (sum.totalTransfer || 0) : 0)}
                         </p>
                         <p className="text-[10px] text-[var(--text-secondary)] mt-0.5">Bancos / Nequi / Daviplata</p>
                       </div>
@@ -440,7 +449,7 @@ export default function CashRegistersPage() {
                       <div className="rounded-xl bg-[var(--bg-elevated)] border border-[var(--border-subtle)] p-3">
                         <p className="text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-wider">Total General del Turno</p>
                         <p className="text-base font-extrabold text-emerald-400 mt-0.5">
-                          {formatCurrency(isOpen ? ((sum.initialCash || 0) + sum.totalSales) : 0)}
+                          {formatCurrency(isOpen ? ((sum.initialCash || 0) + (sum.totalSales || 0)) : 0)}
                         </p>
                         <p className="text-[10px] text-[var(--text-secondary)] mt-0.5">Inicial + Ventas Totales</p>
                       </div>

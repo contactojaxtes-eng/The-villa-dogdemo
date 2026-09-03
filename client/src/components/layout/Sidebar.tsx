@@ -15,7 +15,7 @@ import {
 import { BrandLogo } from '@/components/brand/BrandLogo'
 import { Button } from '@/components/ui/button'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
-import { ChevronLeft, ChevronRight, Crown, LogOut, Moon, Sun, X } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Crown, GripVertical, LogOut, Moon, Sun, X } from 'lucide-react'
 
 const roleLabels: Record<string, string> = {
   SUPERADMIN: 'Super Administrador',
@@ -71,6 +71,9 @@ export function Sidebar({ onClose, isCollapsed = false, onToggleCollapse }: Side
   }, [navOrder])
 
   const [isEditing, setIsEditing] = useState(false)
+  const [draggedIdx, setDraggedIdx] = useState<number | null>(null)
+  const [dragOverIdx, setDragOverIdx] = useState<number | null>(null)
+
   const displayItems = navOrder
     .map(href => allNavItems.find(i => i.href === href))
     .filter((item): item is NavItem => Boolean(item && hasItemAccess(item)))
@@ -86,6 +89,36 @@ export function Sidebar({ onClose, isCollapsed = false, onToggleCollapse }: Side
     newOrder[index] = newOrder[targetIdx]
     newOrder[targetIdx] = temp
     setNavOrder(newOrder)
+  }
+
+  const handleDragStart = (e: React.DragEvent, index: number) => {
+    e.dataTransfer.effectAllowed = 'move'
+    e.dataTransfer.setData('text/plain', index.toString())
+    setDraggedIdx(index)
+  }
+
+  const handleDragOver = (e: React.DragEvent, index: number) => {
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'move'
+    if (dragOverIdx !== index) {
+      setDragOverIdx(index)
+    }
+  }
+
+  const handleDrop = (e: React.DragEvent, targetIndex: number) => {
+    e.preventDefault()
+    if (draggedIdx === null || draggedIdx === targetIndex) {
+      setDraggedIdx(null)
+      setDragOverIdx(null)
+      return
+    }
+    const newOrder = [...finalItems.map(i => i.href)]
+    const [moved] = newOrder.splice(draggedIdx, 1)
+    newOrder.splice(targetIndex, 0, moved)
+    setNavOrder(newOrder)
+    localStorage.setItem(SIDEBAR_ORDER_STORAGE_KEY, JSON.stringify(newOrder))
+    setDraggedIdx(null)
+    setDragOverIdx(null)
   }
 
   return (
@@ -130,7 +163,21 @@ export function Sidebar({ onClose, isCollapsed = false, onToggleCollapse }: Side
             )
             const showHeader = index === 0 || item.section !== finalItems[index - 1].section
             return (
-              <li key={item.href} className="relative group">
+              <li
+                key={item.href}
+                className={cn(
+                  "relative group transition-all duration-150",
+                  isEditing && !isCollapsed && "cursor-grab active:cursor-grabbing",
+                  dragOverIdx === index && "bg-[var(--accent)]/15 ring-2 ring-[var(--accent)] rounded-xl scale-[1.02]",
+                  draggedIdx === index && "opacity-40"
+                )}
+                draggable={isEditing && !isCollapsed}
+                onDragStart={e => handleDragStart(e, index)}
+                onDragOver={e => handleDragOver(e, index)}
+                onDragLeave={() => { if (dragOverIdx === index) setDragOverIdx(null) }}
+                onDrop={e => handleDrop(e, index)}
+                onDragEnd={() => { setDraggedIdx(null); setDragOverIdx(null) }}
+              >
                 {showHeader && !isCollapsed && (
                   <div className={cn("mb-1 px-3 flex items-center justify-between", index === 0 ? "" : "mt-4")}>
                     <p className={cn("text-[10px] font-bold tracking-widest uppercase flex items-center gap-1", item.section === 'SuperAdmin' ? 'text-amber-500' : 'text-[var(--text-muted)]')}>
@@ -161,8 +208,14 @@ export function Sidebar({ onClose, isCollapsed = false, onToggleCollapse }: Side
                   </div>
                 )}
                 <div className="flex items-center">
+                  {isEditing && !isCollapsed && (
+                    <div className="text-[var(--text-muted)] group-hover:text-[var(--text-primary)] cursor-grab shrink-0 pl-1">
+                      <GripVertical className="h-4 w-4" />
+                    </div>
+                  )}
                   <Link
                     to={item.href}
+                    onClick={e => { if (isEditing) e.preventDefault() }}
                     title={isCollapsed ? item.label : undefined}
                     className={cn(
                       'relative flex items-center py-2.5 text-sm z-10 transition-all duration-200 flex-1',

@@ -16,6 +16,7 @@ import {
   Layers, RefreshCw, Banknote, CreditCard, Smartphone, ShieldCheck, PieChart, BarChart2,
   Eye, FileText, ChevronRight, Receipt, X
 } from 'lucide-react'
+import { io } from '@/lib/socket'
 import { PageHeader } from '@/components/ui/PageHeader'
 import { printClosingSmart } from '@/lib/printer'
 
@@ -135,6 +136,31 @@ export default function CashControlPage() {
 
   useEffect(() => {
     loadData()
+
+    const socketUrl = import.meta.env.VITE_API_URL || window.location.origin
+    const socket = io(`${socketUrl}/the-villa-dog`, {
+      transports: ['websocket', 'polling'],
+    })
+
+    const handleRefresh = () => {
+      loadData()
+    }
+
+    socket.on('cashRegistersChanged', handleRefresh)
+    socket.on('cashStatusChanged', handleRefresh)
+    socket.on('paymentSubmitted', handleRefresh)
+    socket.on('paymentValidated', handleRefresh)
+    socket.on('paymentUpdated', handleRefresh)
+    socket.on('orderCreated', handleRefresh)
+    socket.on('orderUpdated', handleRefresh)
+    socket.on('orderStatusChanged', handleRefresh)
+    socket.on('tableOrderSubmitted', handleRefresh)
+    socket.on('tableClosed', handleRefresh)
+    socket.on('expenseCreated', handleRefresh)
+
+    return () => {
+      socket.disconnect()
+    }
   }, [])
 
   // Load closing detail when selected
@@ -201,7 +227,8 @@ export default function CashControlPage() {
     let totalSales = 0
     let totalCash = 0
     let totalTransfers = 0
-    let totalVirtual = 0
+    let totalInitial = 0
+    let totalCashInDrawer = 0
     let totalTips = 0
     let orderCount = 0
 
@@ -209,14 +236,15 @@ export default function CashControlPage() {
       totalSales += s.totalSales || 0
       totalCash += s.totalCash || 0
       totalTransfers += s.totalTransfer || 0
-      totalVirtual += (s.totalNequi || 0) + (s.totalBancolombia || 0) + (s.totalDaviplata || 0)
+      totalInitial += s.initialCash || 0
+      totalCashInDrawer += s.cashInDrawer ?? ((s.initialCash || 0) + (s.totalCash || 0))
       totalTips += s.totalTips || 0
       orderCount += s.orderCount || 0
     })
 
     const openCount = registers.filter(r => r.closings.some(c => c.isOpen)).length
 
-    return { totalSales, totalCash, totalTransfers, totalVirtual, totalTips, orderCount, openCount }
+    return { totalSales, totalCash, totalTransfers, totalInitial, totalCashInDrawer, totalTips, orderCount, openCount }
   }, [summaries, registers])
 
   // Print the detail as professional Reporte Z
@@ -281,9 +309,9 @@ export default function CashControlPage() {
               <Banknote className="h-6 w-6" />
             </div>
             <div>
-              <p className="text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-wider">Efectivo Consolidado</p>
-              <p className="text-2xl font-black text-[var(--text-primary)] tracking-tight mt-0.5">{formatCurrency(globalSummary.totalCash)}</p>
-              <p className="text-[11px] text-[var(--text-secondary)] mt-0.5">En cajas físicas activas</p>
+              <p className="text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-wider">Efectivo en Cajas</p>
+              <p className="text-2xl font-black text-[var(--text-primary)] tracking-tight mt-0.5">{formatCurrency(globalSummary.totalCashInDrawer)}</p>
+              <p className="text-[11px] text-[var(--text-secondary)] mt-0.5">Base ({formatCurrency(globalSummary.totalInitial)}) + Ventas ({formatCurrency(globalSummary.totalCash)})</p>
             </div>
           </div>
         </Card>
@@ -294,7 +322,7 @@ export default function CashControlPage() {
             </div>
             <div>
               <p className="text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-wider">Bancos y Digitales</p>
-              <p className="text-2xl font-black text-[var(--text-primary)] tracking-tight mt-0.5">{formatCurrency(globalSummary.totalTransfers + globalSummary.totalVirtual)}</p>
+              <p className="text-2xl font-black text-[var(--text-primary)] tracking-tight mt-0.5">{formatCurrency(globalSummary.totalTransfers)}</p>
               <p className="text-[11px] text-[var(--text-secondary)] mt-0.5">Transferencias / Nequi / Daviplata</p>
             </div>
           </div>

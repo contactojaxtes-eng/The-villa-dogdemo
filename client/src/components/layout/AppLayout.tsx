@@ -17,7 +17,9 @@ export function AppLayout() {
   const { theme, toggleTheme } = useTheme()
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false)
   const [isCollapsed, setIsCollapsed] = useState(() => localStorage.getItem('sidebar-collapsed') === 'true')
-  const isKitchen = location.pathname.startsWith('/kitchen') || user?.role === 'KITCHEN'
+  // Modo pantalla completa exclusiva de tablet: ÚNICAMENTE para usuarios con rol KITCHEN (cocineros).
+  // Administradores y cajeros ven la barra lateral normal para navegar fluidamente.
+  const isDedicatedKitchen = user?.role === 'KITCHEN'
 
   const [isFullscreen, setIsFullscreen] = useState(false)
   const [timeStr, setTimeStr] = useState(() => new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }))
@@ -34,12 +36,12 @@ export function AppLayout() {
 
   // Reloj en vivo para tablet de cocina
   useEffect(() => {
-    if (!isKitchen) return
+    if (!isDedicatedKitchen) return
     const timer = setInterval(() => {
       setTimeStr(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }))
     }, 1000)
     return () => clearInterval(timer)
-  }, [isKitchen])
+  }, [isDedicatedKitchen])
 
   const toggleFullScreen = () => {
     if (!document.fullscreenElement) {
@@ -53,8 +55,8 @@ export function AppLayout() {
 
   return (
     <div className="flex h-screen overflow-hidden bg-[var(--bg-base)]">
-      {/* Desktop Sidebar: Totalmente oculta en Cocina para aprovechar 100% la pantalla de tablet */}
-      {!isKitchen && (
+      {/* Desktop Sidebar: Oculta únicamente en modo Cocinero dedicado (Tablet KITCHEN) */}
+      {!isDedicatedKitchen && (
         <div className="hidden md:flex shrink-0 overflow-visible">
           <Sidebar 
             isCollapsed={isCollapsed} 
@@ -67,8 +69,8 @@ export function AppLayout() {
         </div>
       )}
 
-      {/* Mobile Drawer Sidebar (solo si no estamos en cocina) */}
-      {!isKitchen && (
+      {/* Mobile Drawer Sidebar (solo si no es tablet de cocinero) */}
+      {!isDedicatedKitchen && (
         <AnimatePresence>
           {isMobileMenuOpen && (
             <>
@@ -111,7 +113,7 @@ export function AppLayout() {
         )}
 
         {/* Kitchen Top Bar (Barra superior dedicada para Tablets de Cocina) */}
-        {isKitchen ? (
+        {isDedicatedKitchen ? (
           <header className="flex h-14 items-center justify-between border-b border-[var(--border-subtle)] bg-[var(--bg-panel)] px-3 sm:px-4 shrink-0 shadow-xs">
             <div className="flex items-center gap-2.5">
               <div className="flex rounded-xl bg-[var(--bg-base)] py-1 px-2 border border-[var(--border-subtle)]">
