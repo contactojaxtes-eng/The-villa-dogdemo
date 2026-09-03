@@ -130,10 +130,15 @@ export default function KitchenPage() {
       const isPending = t.status === 'NEW' || t.status === 'PREPARING'
       if (!isPending) return false
       if (stationFilter !== 'ALL' && t.stationId !== stationFilter && t.station?.id !== stationFilter) return false
+      // Si el usuario logueado es cocinero (KITCHEN), mostrar ÚNICAMENTE sus tickets asignados
+      if (user?.role === 'KITCHEN') {
+        const assignedId = t.assignedToId || t.assignedTo?.id
+        if (assignedId && assignedId !== user.id) return false
+      }
       return true
     })
     return list.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime())
-  }, [consolidatedTickets, stationFilter])
+  }, [consolidatedTickets, stationFilter, user?.id, user?.role])
 
   // Historial: LISTOS o SERVIDOS (los ya completados)
   const historyTickets = useMemo(() => {
@@ -141,9 +146,13 @@ export default function KitchenPage() {
       const isDone = t.status === 'READY' || t.status === 'SERVED'
       if (!isDone) return false
       if (stationFilter !== 'ALL' && t.stationId !== stationFilter && t.station?.id !== stationFilter) return false
+      if (user?.role === 'KITCHEN') {
+        const assignedId = t.assignedToId || t.assignedTo?.id
+        if (assignedId && assignedId !== user.id) return false
+      }
       return true
     })
-  }, [consolidatedTickets, stationFilter])
+  }, [consolidatedTickets, stationFilter, user?.id, user?.role])
 
   const setStatus = async (ticket: KitchenTicketSummary, status: string) => {
     try {
@@ -269,9 +278,14 @@ export default function KitchenPage() {
                             #{ticket.order?.orderNumber || '0'} · {ticket.order?.diningTable?.label || ticket.order?.customerName || 'Mesa'}
                           </span>
                         </div>
-                        <p className="text-xs text-[var(--text-secondary)] mt-0.5 truncate">
-                          Mesera: <strong className="text-[var(--text-primary)]">{ticket.order?.waiter?.name || 'Sin asignar'}</strong>
-                          {ticket.station?.name && <span> · {ticket.station.name}</span>}
+                        <p className="text-xs text-[var(--text-secondary)] mt-0.5 flex flex-wrap items-center gap-1.5">
+                          <span>Mesera: <strong className="text-[var(--text-primary)]">{ticket.order?.waiter?.name || 'Sin asignar'}</strong></span>
+                          {ticket.assignedTo?.name && (
+                            <span className="text-[10px] font-bold bg-[var(--bg-elevated)] border border-[var(--border-subtle)] px-1.5 py-0.2 rounded text-[var(--text-primary)]">
+                              👨‍🍳 {ticket.assignedTo.name}
+                            </span>
+                          )}
+                          {ticket.station?.name && <span className="opacity-75">· {ticket.station.name}</span>}
                         </p>
                       </div>
 
@@ -291,6 +305,16 @@ export default function KitchenPage() {
                         </div>
                       )}
                     </div>
+
+                    {/* Nota general del pedido */}
+                    {ticket.order?.notes && (
+                      <div className="mt-2 rounded-xl border border-amber-400/40 bg-amber-500/10 p-2 text-xs text-amber-950 dark:text-amber-200">
+                        <span className="block text-[10px] uppercase font-black tracking-wider text-amber-700 dark:text-amber-400">
+                          📝 Nota del pedido:
+                        </span>
+                        <span className="font-bold">{ticket.order.notes}</span>
+                      </div>
+                    )}
 
                     {/* Alerta de modificación si el mesero quitó/agregó algo */}
                     {ticket.isEdited && ticket.changeSummary && !isFullyCancelled && (
@@ -340,8 +364,8 @@ export default function KitchenPage() {
                               )}
                             </div>
                             {cleanNotes && (
-                              <p className="text-[11px] font-semibold text-[var(--text-secondary)] mt-0.5 pl-1 border-l-2 border-[var(--accent)]">
-                                {cleanNotes}
+                              <p className="text-xs font-bold text-amber-700 dark:text-amber-400 mt-1 pl-1.5 border-l-2 border-amber-500 bg-amber-500/10 py-0.5 rounded-r">
+                                👉 {cleanNotes}
                               </p>
                             )}
                           </div>
@@ -350,36 +374,42 @@ export default function KitchenPage() {
                     </div>
                   </div>
 
-                  {/* Botón rápido y directo de acción */}
+                  {/* Botones de acción: Primero Preparar, luego Listo - Bien cotejados */}
                   <div className="mt-3.5 pt-2 border-t border-[var(--border-subtle)]">
                     {isFullyCancelled ? (
                       <Button
                         variant="outline"
                         onClick={() => setStatus(ticket, 'CANCELLED')}
-                        className="w-full h-9 border-rose-300 text-rose-700 hover:bg-rose-50 font-black text-xs gap-1.5"
+                        className="w-full h-11 border-rose-300 text-rose-700 hover:bg-rose-50 font-black text-xs gap-1.5"
                       >
                         <XCircle className="h-4 w-4" /> Descartar pedido cancelado
                       </Button>
                     ) : (
                       <div className="flex gap-2 items-center">
-                        {/* Botón para marcar en preparación opcional */}
-                        {ticket.status === 'NEW' && (
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => setStatus(ticket, 'PREPARING')}
-                            className="h-10 px-3 text-orange-600 border-orange-300 hover:bg-orange-50 font-bold text-xs"
-                            title="Marcar que se empezó a preparar"
-                          >
-                            <Flame className="h-4 w-4" />
-                          </Button>
-                        )}
-                        {/* Botón principal de LISTO (1 solo toque y sale al historial) */}
+                        {/* 1. Botón Preparar (a la izquierda) */}
                         <Button
-                          onClick={() => setStatus(ticket, 'READY')}
-                          className="flex-1 h-10 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-sm gap-2 shadow-md transition-all active:scale-95"
+                          size="sm"
+                          variant="outline"
+                          onClick={() => setStatus(ticket, 'PREPARING')}
+                          disabled={ticket.status === 'PREPARING'}
+                          className={`flex-1 h-11 rounded-xl font-black text-xs gap-1.5 border transition-all active:scale-95 ${
+                            ticket.status === 'PREPARING'
+                              ? 'bg-amber-500 text-slate-950 border-amber-500 opacity-90 cursor-default shadow-sm'
+                              : 'border-amber-400 text-amber-600 hover:bg-amber-500/15'
+                          }`}
                         >
-                          <CheckCircle2 className="h-5 w-5" /> ¡LISTO / DESPACHAR!
+                          <Flame className="h-4 w-4" />
+                          {ticket.status === 'PREPARING' ? 'En Proceso' : 'Preparar'}
+                        </Button>
+
+                        {/* 2. Botón Listo (a la derecha) */}
+                        <Button
+                          size="sm"
+                          onClick={() => setStatus(ticket, 'READY')}
+                          className="flex-1 h-11 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs gap-1.5 rounded-xl shadow-md transition-all active:scale-95"
+                        >
+                          <CheckCircle2 className="h-4 w-4" />
+                          ¡Listo!
                         </Button>
                       </div>
                     )}

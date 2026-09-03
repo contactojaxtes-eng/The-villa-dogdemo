@@ -565,6 +565,7 @@ export class TablesService {
     if (status === 'READY') {
       const waiterId = result.updated.order?.waiterId || result.updated.order?.diningTable?.openedById || result.table?.openedById;
       this.socketGateway.emitKitchenTicketReady(waiterId, result.updated);
+      this.socketGateway.emitOrderStatusChange(result.updated.orderId, 'READY', result.updated.order);
     }
     if (result.table) this.emitAccount(result.table);
     return result.updated;
@@ -579,7 +580,10 @@ export class TablesService {
     }
     if (params.stationId) where.stationId = params.stationId;
     if (!['ADMIN', 'SUPERADMIN', 'CASHIER'].includes(user.role)) {
-      where.OR = [{ assignedToId: user.id }, { station: { users: { some: { id: user.id } } } }];
+      where.OR = [
+        { assignedToId: user.id },
+        { assignedToId: null, station: { users: { some: { id: user.id } } } },
+      ];
     }
     const tickets = await this.prisma.kitchenTicket.findMany({
       where,

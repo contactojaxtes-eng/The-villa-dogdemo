@@ -8,10 +8,15 @@ import { getUsbDevice, printUsb, buildEscPosBuffer } from '@/lib/useUsbPrinter'
 // Simple notification sound using Web Audio API
 function playNotificationSound(type: 'message' | 'urgent' = 'message') {
   try {
-    const ctx = new AudioContext()
+    const AudioCtx = window.AudioContext || (window as any).webkitAudioContext
+    if (!AudioCtx) return
+    const ctx = new AudioCtx()
+    if (ctx.state === 'suspended') {
+      ctx.resume().catch(() => {})
+    }
     const osc = ctx.createOscillator()
     const gain = ctx.createGain()
-    osc.onended = () => { void ctx.close() };
+    osc.onended = () => { void ctx.close().catch(() => {}) };
     osc.connect(gain)
     gain.connect(ctx.destination)
     
@@ -122,14 +127,20 @@ export function useNotifications() {
       if (!label) return
       const isCancel = data.status === 'CANCELLED'
       const isDone = data.status === 'DELIVERED'
+      const isReady = data.status === 'READY'
+      if (isReady) {
+        playNotificationSound('urgent')
+      }
       toast(isCancel ? 'Pedido cancelado' : label, {
-        description: `Pedido #${data.order?.orderNumber ?? ''}`,
+        description: `Pedido #${data.order?.orderNumber ?? ''} ${isReady ? '¡Listo en cocina!' : ''}`,
         icon: isCancel
           ? <XCircle className="h-4 w-4 text-[#EF4444]" />
-          : isDone
-            ? <CheckCircle2 className="h-4 w-4 text-[#F97316]" />
-            : <Bell className="h-4 w-4 text-[#F59E0B]" />,
-        duration: 5000,
+          : isReady
+            ? <CheckCircle2 className="h-4 w-4 text-emerald-500" />
+            : isDone
+              ? <CheckCircle2 className="h-4 w-4 text-[#F97316]" />
+              : <Bell className="h-4 w-4 text-[#F59E0B]" />,
+        duration: 6000,
       })
     })
 
