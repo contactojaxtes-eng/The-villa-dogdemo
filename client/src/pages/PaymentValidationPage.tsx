@@ -165,7 +165,7 @@ export default function PaymentValidationPage() {
 
     try {
       await api.put(`/payment-validation/${payment.id}/${action}`, action === 'reject' ? { reason: reasonText } : {})
-      alerts.success(action === 'validate' ? 'Pago validado' : 'Pago rechazado', payment.order?.diningTable?.label || payment.order?.customerName || 'Mesa actualizada')
+      alerts.toast(action === 'validate' ? `✅ Pago validado (${payment.order?.diningTable?.label || payment.order?.customerName || 'Mesa'})` : `❌ Pago rechazado`)
       load()
     } catch (err: any) {
       alerts.error('No se pudo procesar', err?.response?.data?.message || err.message)

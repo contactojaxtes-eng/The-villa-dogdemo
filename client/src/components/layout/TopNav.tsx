@@ -44,21 +44,25 @@ export function TopNav() {
 
   const filteredItems = navItems.filter(item => hasRole(...item.roles))
   const getInitials = (name: string) => name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2)
-  const [isMutedWa, setIsMutedWa] = useState(() => localStorage.getItem('niche_mute_wa_toasts') === 'true')
+  const [isMutedNotifications, setIsMutedNotifications] = useState(() => {
+    return localStorage.getItem('the_villa_dog_mute_notifications') === 'true' || localStorage.getItem('niche_mute_wa_toasts') === 'true'
+  })
   const [showProfileModal, setShowProfileModal] = useState(false)
 
-  const toggleMuteWa = () => {
-    const next = !isMutedWa
-    setIsMutedWa(next)
+  const toggleMuteNotifications = () => {
+    const next = !isMutedNotifications
+    setIsMutedNotifications(next)
+    localStorage.setItem('the_villa_dog_mute_notifications', String(next))
     localStorage.setItem('niche_mute_wa_toasts', String(next))
+    window.dispatchEvent(new Event('storage'))
     if (next) {
-      toast.info('🔕 Avisos emergentes silenciados', {
-        description: 'No recibirás popups de cada mensaje de WhatsApp.',
+      toast.info('🔕 Notificaciones silenciadas', {
+        description: 'No saldrán avisos emergentes ni sonidos en tu pantalla.',
         duration: 3000,
       })
     } else {
-      toast.success('🔔 Avisos emergentes activados', {
-        description: 'Recibirás avisos de mensajes entrantes.',
+      toast.success('🔔 Notificaciones activadas', {
+        description: 'Recibirás avisos de pedidos y mensajes.',
         duration: 3000,
       })
     }
@@ -126,22 +130,22 @@ export function TopNav() {
             {theme === 'dark' ? <Sun className="h-4.5 w-4.5" /> : <Moon className="h-4.5 w-4.5" />}
           </Button>
           <button
-            onClick={toggleMuteWa}
+            onClick={toggleMuteNotifications}
             className={cn(
               "relative rounded-xl p-2 transition-all cursor-pointer",
-              isMutedWa
+              isMutedNotifications
                 ? "text-amber-500/80 hover:bg-amber-500/10 hover:text-amber-500"
                 : "text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]"
             )}
-            title={isMutedWa ? "Avisos emergentes silenciados (Clic para activar)" : "Avisos emergentes activados (Clic para silenciar)"}
-            aria-label="Silenciar o activar notificaciones de chat"
+            title={isMutedNotifications ? "Notificaciones silenciadas (Clic para activar)" : "Notificaciones activadas (Clic para silenciar)"}
+            aria-label="Silenciar o activar notificaciones del sistema"
           >
-            {isMutedWa ? (
+            {isMutedNotifications ? (
               <BellOff className="h-4.5 w-4.5 text-amber-500" />
             ) : (
               <Bell className="h-4.5 w-4.5" />
             )}
-            {isMutedWa && (
+            {isMutedNotifications && (
               <span className="absolute top-1.5 right-1.5 h-2 w-2 rounded-full bg-amber-500 ring-2 ring-[var(--bg-panel)]" />
             )}
           </button>

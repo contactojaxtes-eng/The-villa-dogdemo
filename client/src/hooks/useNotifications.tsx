@@ -107,7 +107,10 @@ export function useNotifications() {
       transports: ['websocket', 'polling'],
     })
 
+    const isMuted = () => localStorage.getItem('the_villa_dog_mute_notifications') === 'true'
+
     socket.on('newOrder', (order: { orderNumber?: number; customerName?: string }) => {
+      if (isMuted()) return
       // Cocineros y meseros NO deben recibir la alerta con bicicleta de domicilios
       if (['KITCHEN', 'WAITER'].includes(user.role || '')) return
 
@@ -121,6 +124,7 @@ export function useNotifications() {
     })
 
     socket.on('orderStatusChanged', (data: { orderId: string; status: string; order?: any }) => {
+      if (isMuted()) return
       const labels: Record<string, string> = {
         READY: 'Listo para despacho',
         IN_ROUTE: 'En ruta',
@@ -134,21 +138,21 @@ export function useNotifications() {
       const isReady = data.status === 'READY'
       
       if (isReady) {
-        if (user.role === 'KITCHEN') return
+        // Cocineros y administradores NO reciben la orden de ir a recoger platos a cocina
+        if (['KITCHEN', 'ADMIN', 'SUPERADMIN'].includes(user.role || '')) return
         const order = data.order
         const waiterId = order?.waiterId || order?.waiter?.id || order?.diningTable?.openedById
         const isMyOrder = waiterId === user.id || (order?.waiter?.name && order?.waiter?.name === user.name)
-        const isAdminTester = ['ADMIN', 'SUPERADMIN'].includes(user.role || '')
 
-        // Estricto: Solo al mesero que tomó el pedido (o admin de pruebas)
-        if (!isMyOrder && !isAdminTester) return
+        // Estricto: Solo al mesero asignado a la mesa
+        if (!isMyOrder) return
 
         const tableLabel = order?.diningTable?.label || order?.customerName || 'Mesa'
         const orderNum = order?.orderNumber ? `#${order.orderNumber}` : ''
         toast.success(`🏃 ¡Ve a recoger el pedido! (${tableLabel})`, {
           description: `Tu pedido ${orderNum} de ${tableLabel} está listo en Cocina. Pasa a recogerlo para llevarlo a la mesa.`,
           icon: <CheckCircle2 className="h-5 w-5 text-emerald-500" />,
-          duration: 12000,
+          duration: 6000,
         })
         playUrgentBell()
         return
@@ -169,23 +173,23 @@ export function useNotifications() {
     })
 
     socket.on('kitchenTicketReady', (ticket: any) => {
-      // Cocineros no reciben este aviso porque ellos acaban de terminar el plato
-      if (user.role === 'KITCHEN') return
+      if (isMuted()) return
+      // Cocineros y administradores no reciben este aviso de "Ve a recoger el pedido"
+      if (['KITCHEN', 'ADMIN', 'SUPERADMIN'].includes(user.role || '')) return
 
       const tableLabel = ticket?.order?.diningTable?.label || ticket?.table?.label || ticket?.order?.customerName || 'Mesa'
       const stationName = ticket?.station?.name || 'Cocina'
       const orderNum = ticket?.order?.orderNumber ? `#${ticket.order.orderNumber}` : ''
       const waiterId = ticket?.order?.waiterId || ticket?.order?.waiter?.id || ticket?.order?.diningTable?.openedById || ticket?.table?.openedById
       const isMyOrder = waiterId === user.id || (ticket?.order?.waiter?.name && ticket?.order?.waiter?.name === user.name)
-      const isAdminTester = ['ADMIN', 'SUPERADMIN'].includes(user.role || '')
 
-      // Estricto: Solo al mesero que tomó el pedido (o admin de pruebas)
-      if (!isMyOrder && !isAdminTester) return
+      // Estricto: Solo al mesero que tomó el pedido
+      if (!isMyOrder) return
 
       toast.success(`🏃 ¡VE A RECOGER EL PEDIDO! (${tableLabel})`, {
         description: `El pedido ${orderNum} de ${tableLabel} ya está listo en ${stationName}. Pasa a la cocina a recogerlo para servirlo a la mesa.`,
         icon: <CheckCircle2 className="h-5 w-5 text-emerald-500" />,
-        duration: 12000,
+        duration: 6000,
       })
       playUrgentBell()
       showBrowserNotification(
@@ -196,6 +200,7 @@ export function useNotifications() {
     })
 
     socket.on('paymentSubmitted', (payload: any) => {
+      if (isMuted()) return
       if (!['ADMIN', 'SUPERADMIN', 'CASHIER'].includes(user.role || '')) return
       toast.warning('Pago pendiente por validar', {
         description: `${payload?.table?.label || 'Mesa'} - revisa caja`,
@@ -205,6 +210,7 @@ export function useNotifications() {
     })
 
     socket.on('paymentRejected', (payload: any) => {
+      if (isMuted()) return
       toast.error('Pago rechazado', {
         description: payload?.reason || payload?.table?.label || 'Revisar mesa',
         icon: <XCircle className="h-4 w-4 text-[#EF4444]" />,
@@ -223,9 +229,8 @@ export function useNotifications() {
       // Solo notificar mensajes entrantes (del cliente)
       if (payload.direction !== 'IN') return
 
-      // Si el usuario silenció los mensajes emergentes de WhatsApp, no mostrar popup ni sonido
-      const isMuted = localStorage.getItem('niche_mute_wa_toasts') === 'true'
-      if (isMuted) return
+      // Si el usuario silenció los mensajes emergentes, no mostrar popup ni sonido
+      if (isMuted() || localStorage.getItem('niche_mute_wa_toasts') === 'true') return
 
       const msgPreview = payload.messageType === 'image' ? '📷 Foto'
         : payload.messageType === 'audio' ? '🎙️ Audio'

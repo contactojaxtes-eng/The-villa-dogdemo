@@ -197,7 +197,7 @@ export default function TableDetailPage() {
     setActionLoading(paymentId)
     try {
       const result = await api.put<any>(`/payment-validation/${paymentId}/validate`, {})
-      alerts.success('Pago validado', result.table?.status === 'CLOSED' ? 'La cuenta quedó pagada y cerrada.' : 'El pago fue confirmado. Cocina sigue preparando el pedido.')
+      alerts.toast(result.table?.status === 'CLOSED' ? '✅ Pago validado: Cuenta cerrada' : '✅ Pago validado')
       if (result.table?.status === 'CLOSED') navigate('/tables')
       else await load()
     } catch (err: any) {
