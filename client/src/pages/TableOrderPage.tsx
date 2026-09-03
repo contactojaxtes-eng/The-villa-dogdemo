@@ -46,7 +46,7 @@ type CartItem = {
   additions?: CartAddition[]
 }
 
-const QUICK_CHIPS = ['Sin cebolla', 'Con cebolla', 'Sin ripio', 'Sin salsas', 'Salsas aparte', 'Bien dorado']
+const QUICK_CHIPS = ['Sin cebolla', 'Sin ripio', 'Sin salsas', 'Salsas aparte', 'Bien dorado']
 
 function genKey(prefix = 'item'): string {
   if (typeof crypto !== 'undefined' && crypto.randomUUID) {
