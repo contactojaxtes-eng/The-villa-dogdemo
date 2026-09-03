@@ -500,19 +500,21 @@ export default function TableDetailPage() {
 
       {/* Full Resolution Zoom Modal for Image */}
       <Dialog open={!!zoomUrl} onOpenChange={v => !v && setZoomUrl(null)}>
-        <DialogContent className="max-w-4xl bg-black/95 p-3 border-none flex flex-col items-center">
-          <div className="flex w-full justify-between items-center text-white pb-2 px-1">
-            <span className="text-sm font-black flex items-center gap-1.5"><ImageIcon className="h-4 w-4 text-[var(--accent)]" /> Comprobante de Transferencia</span>
-            <Button size="sm" variant="ghost" className="text-white hover:bg-white/20 h-8 text-xs font-bold" onClick={() => setZoomUrl(null)}>
+        <DialogContent className="max-w-md w-[92vw] bg-[var(--bg-panel)] p-3.5 border border-[var(--border-default)] text-[var(--text-primary)] rounded-2xl shadow-2xl flex flex-col items-center">
+          <div className="flex w-full justify-between items-center pb-2 border-b border-[var(--border-subtle)] px-1">
+            <span className="text-sm font-black flex items-center gap-1.5 text-[var(--text-primary)]">
+              <ImageIcon className="h-4 w-4 text-[var(--accent)]" /> Comprobante de Transferencia
+            </span>
+            <Button size="sm" variant="ghost" className="h-8 px-2 text-xs font-bold text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]" onClick={() => setZoomUrl(null)}>
               ✕ Cerrar
             </Button>
           </div>
           {zoomUrl && (
-            <div className="max-h-[82vh] w-full flex items-center justify-center overflow-auto rounded-xl bg-black/50 p-1">
+            <div className="max-h-[78vh] w-full flex items-center justify-center overflow-auto rounded-xl bg-[var(--bg-elevated)] p-1.5 mt-2">
               <ProtectedImage
                 endpoint={zoomUrl}
                 alt="Comprobante completo"
-                className="max-h-[80vh] max-w-full object-contain rounded-lg shadow-2xl"
+                className="max-h-[74vh] w-auto max-w-full object-contain rounded-lg shadow-sm"
               />
             </div>
           )}
