@@ -303,6 +303,8 @@ export default function PaymentValidationPage() {
 
                   <div className="flex items-center gap-2 text-xs text-[var(--text-secondary)] mt-0.5 flex-wrap">
                     <span>Mesera: <strong>{payment.order?.waiter?.name || 'Sin asignar'}</strong></span>
+                    <span>•</span>
+                    <span>Cobrado por: <strong className="text-[var(--text-primary)]">{proof?.submittedBy?.name || payment.order?.diningTable?.openedBy?.name || payment.order?.waiter?.name || 'Sin asignar'}</strong></span>
                     {proof?.createdAt && (
                       <>
                         <span>•</span>

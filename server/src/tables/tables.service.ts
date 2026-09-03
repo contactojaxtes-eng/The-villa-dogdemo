@@ -786,8 +786,20 @@ export class TablesService {
         ...(method === 'CASH' ? { method: 'CASH' } : method === 'TRANSFER' ? { method: 'TRANSFER' } : method === 'MIXED' ? { method: 'MIXED' } : {}),
       },
       include: {
-        order: { include: { diningTable: true, waiter: { select: { id: true, name: true } } } },
-        transferProofs: { select: receiptSummary, orderBy: { createdAt: 'desc' } },
+        order: {
+          include: {
+            diningTable: { include: { openedBy: { select: { id: true, name: true } } } },
+            waiter: { select: { id: true, name: true } },
+          },
+        },
+        transferProofs: {
+          select: {
+            ...receiptSummary,
+            submittedBy: { select: { id: true, name: true } },
+            reviewedBy: { select: { id: true, name: true } },
+          },
+          orderBy: { createdAt: 'desc' },
+        },
       },
       orderBy: { createdAt: 'desc' }, take: 250,
     });
