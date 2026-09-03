@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react'
 import { prepareReceiptPhoto } from '@/lib/receiptPhoto'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { io } from '@/lib/socket'
-import { ArrowLeft, Camera, CheckCircle2, Clock, Eye, Image as ImageIcon, Pencil, PlusCircle, Trash2, Upload, User, Wallet, X, XCircle } from 'lucide-react'
+import { ArrowLeft, Camera, CheckCircle2, ChefHat, Clock, Eye, Image as ImageIcon, Pencil, PlusCircle, Trash2, Upload, User, Wallet, X, XCircle } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Dialog, DialogContent } from '@/components/ui/dialog'
@@ -246,10 +246,18 @@ export default function TableDetailPage() {
           <div>
             <div className="flex items-center gap-2">
               <h1 className="text-2xl font-black text-[var(--text-primary)]">{table.label}</h1>
-              <span className={`rounded-full px-2.5 py-0.5 text-[10px] font-bold tracking-wider ${
-                table.status === 'OPEN' ? 'bg-[var(--accent)]/10 text-[var(--accent)] border border-[var(--accent)]/25' : 'bg-[var(--bg-elevated)] text-[var(--text-muted)] border border-[var(--border-subtle)]'
+              <span className={`rounded-full px-2.5 py-0.5 text-[10px] font-black tracking-wider border ${
+                table.status === 'CLOSED'
+                  ? 'bg-[var(--bg-elevated)] text-[var(--text-muted)] border-[var(--border-subtle)]'
+                  : table.balance === 0
+                  ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border-emerald-500/30'
+                  : 'bg-[var(--accent)]/10 text-[var(--accent)] border-[var(--accent)]/25'
               }`}>
-                {table.status === 'OPEN' ? 'MESA ABIERTA' : 'CERRADA'}
+                {table.status === 'CLOSED'
+                  ? 'CERRADA'
+                  : table.balance === 0
+                  ? (table.kitchenStatus === 'READY' ? '✅ COBRADA · ¡LISTA PARA ENTREGAR! 🏃' : '✅ COBRADA · EN PREPARACIÓN 👨‍🍳')
+                  : 'MESA ABIERTA'}
               </span>
             </div>
             <div className="flex flex-wrap items-center gap-2 mt-1 text-xs text-[var(--text-secondary)]">
@@ -274,12 +282,19 @@ export default function TableDetailPage() {
               </Button>
               {table.status === 'OPEN' && (
                 table.balance === 0 && (table.orders?.length || 0) > 0 ? (
-                  <Button
-                    onClick={closeTable}
-                    className="bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs sm:text-sm gap-1.5 cursor-pointer"
-                  >
-                    <CheckCircle2 className="h-4 w-4" /> Cerrar mesa
-                  </Button>
+                  table.kitchenStatus === 'ACTIVE' || table.kitchenStatus === 'SENT' ? (
+                    <div className="rounded-xl px-3 py-2 bg-amber-500/10 border border-amber-500/30 text-amber-700 dark:text-amber-300 font-black text-xs flex items-center gap-1.5 shadow-xs">
+                      <ChefHat className="h-4 w-4 text-amber-600 animate-pulse" />
+                      <span>Cocinando (Mesa ya cobrada)</span>
+                    </div>
+                  ) : (
+                    <Button
+                      onClick={closeTable}
+                      className="bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs sm:text-sm gap-1.5 cursor-pointer shadow-xs"
+                    >
+                      <CheckCircle2 className="h-4 w-4" /> Cerrar mesa
+                    </Button>
+                  )
                 ) : (
                   <Button
                     variant="outline"
@@ -383,8 +398,14 @@ export default function TableDetailPage() {
                   {formatCurrency(table.balance || 0)}
                 </p>
               </div>
-              <span className={`rounded-full px-2.5 py-1 text-xs font-bold border ${table.balance === 0 ? 'bg-[var(--bg-elevated)] border-[var(--border-subtle)] text-[var(--text-primary)]' : 'bg-[var(--accent)]/10 border-[var(--accent)]/30 text-[var(--accent)]'}`}>
-                {table.balance === 0 ? 'PAGADO COMPLETO' : 'POR COBRAR'}
+              <span className={`rounded-full px-2.5 py-1 text-xs font-black border ${
+                table.balance === 0
+                  ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-700 dark:text-emerald-400'
+                  : 'bg-[var(--accent)]/10 border-[var(--accent)]/30 text-[var(--accent)]'
+              }`}>
+                {table.balance === 0
+                  ? (table.kitchenStatus === 'READY' ? '✅ COBRADA · ¡LISTA!' : '✅ COBRADA · EN COCINA')
+                  : 'POR COBRAR'}
               </span>
             </div>
           </div>
@@ -392,22 +413,16 @@ export default function TableDetailPage() {
           {/* Payment Box */}
           {pendingReview && <div role="status" className="rounded-2xl border border-[var(--border-default)] bg-[var(--bg-elevated)] p-4 text-sm text-[var(--text-primary)] font-bold flex items-center gap-2">⏳ Pago enviado a caja. Pendiente de validación.</div>}
           {table.status === 'OPEN' && table.balance > 0 && !pendingReview && (
-            table.kitchenStatus !== 'READY' && (table.orders?.length || 0) > 0 && !['ADMIN', 'SUPERADMIN', 'CASHIER'].includes(user?.role || '') ? (
-              <div className="rounded-2xl border border-amber-500/40 bg-amber-500/10 p-4 text-xs font-bold text-amber-900 dark:text-amber-200 flex flex-col gap-2 shadow-xs">
-                <div className="flex items-center gap-2 font-black text-sm text-amber-700 dark:text-amber-400">
-                  <Clock className="h-4 w-4 animate-spin text-amber-600" />
-                  <span>Platos en Cocina</span>
-                </div>
-                <p className="text-[11px] leading-relaxed">
-                  El pedido está siendo preparado en cocina. Cuando el cocinero marque el pedido como <strong>¡LISTO!</strong> y te llegue el aviso para recogerlo, se desplegará aquí automáticamente el módulo para cobrar la cuenta.
-                </p>
-              </div>
-            ) : (
             <div className="space-y-3 rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-4 shadow-sm animate-in fade-in slide-in-from-top-2">
-              {table.kitchenStatus === 'READY' && (
+              {table.kitchenStatus === 'READY' ? (
                 <div className="rounded-xl bg-emerald-500/15 border border-emerald-500/30 p-2 text-xs font-black text-emerald-800 dark:text-emerald-300 flex items-center gap-1.5">
                   <CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0" />
                   <span>¡Pedido listo en cocina! Pasa a recogerlo y registra el cobro.</span>
+                </div>
+              ) : (
+                <div className="rounded-xl bg-blue-500/10 border border-blue-500/25 p-2.5 text-xs font-medium text-blue-800 dark:text-blue-300 flex items-center gap-2">
+                  <Clock className="h-4 w-4 text-blue-600 shrink-0" />
+                  <span><strong>Cobro anticipado:</strong> Puedes cobrar ahora mismo. La cocina continuará preparando los platos normalmente.</span>
                 </div>
               )}
               <div className="flex items-center justify-between">
@@ -572,7 +587,21 @@ export default function TableDetailPage() {
                   : `🔀 Enviar Pago Mixto (${formatCurrency(Number(amount) || table.balance)})`}
               </Button>
             </div>
-          ))}
+          )}
+
+          {table.status === 'OPEN' && table.balance === 0 && !pendingReview && (
+            <div className="rounded-2xl border border-emerald-500/30 bg-emerald-500/10 p-4 text-xs font-bold text-emerald-900 dark:text-emerald-200 flex flex-col gap-2 shadow-xs">
+              <div className="flex items-center gap-2 font-black text-sm text-emerald-700 dark:text-emerald-400">
+                <CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0" />
+                <span>Cuenta Cobrada por Adelantado ✅</span>
+              </div>
+              <p className="text-[11px] leading-relaxed">
+                {table.kitchenStatus === 'READY'
+                  ? '¡El pedido ya está listo en cocina! Puedes entregarlo a la mesa y cerrar la cuenta.'
+                  : 'Esta cuenta ya fue cobrada y confirmada. La cocina continuará preparando los platos normalmente.'}
+              </p>
+            </div>
+          )}
 
           {/* Transfer Proofs & Payments List */}
           <div className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-4 shadow-sm">

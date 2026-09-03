@@ -62,7 +62,7 @@ export class TablesController {
   }
 
   @Put(':id/close')
-  @Roles('ADMIN', 'SUPERADMIN', 'CASHIER')
+  @Roles('ADMIN', 'SUPERADMIN', 'CASHIER', 'WAITER')
   @ApiOperation({ summary: 'Cerrar mesa pagada y lista' })
   close(@Param('id') id: string, @Request() req: any) {
     return this.tablesService.closeTable(id, req.user);

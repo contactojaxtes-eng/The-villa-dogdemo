@@ -131,7 +131,13 @@ export default function TablesPage() {
                       )}
                     </div>
                   </div>
-                  <span className="rounded-full bg-[var(--accent)]/10 border border-[var(--accent)]/25 px-2.5 py-0.5 text-[10px] font-bold text-[var(--accent)] tracking-wider">ABIERTA</span>
+                  <span className={`rounded-full px-2.5 py-0.5 text-[10px] font-black tracking-wider border ${
+                    table.balance === 0
+                      ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-700 dark:text-emerald-400'
+                      : 'bg-[var(--accent)]/10 border-[var(--accent)]/25 text-[var(--accent)]'
+                  }`}>
+                    {table.balance === 0 ? '✅ COBRADA' : 'ABIERTA'}
+                  </span>
                 </div>
                 <div className="mt-3.5 grid grid-cols-3 gap-2 text-xs">
                   <div className="rounded-xl bg-[var(--bg-elevated)] p-2"><Wallet className="mb-1 h-4 w-4 text-[var(--accent)]" /><b>{formatCurrency(table.total || 0)}</b><span className="block text-[var(--text-muted)]">Total</span></div>
@@ -146,14 +152,24 @@ export default function TablesPage() {
                 </div>
               </div>
               <div className="mt-3 pt-2.5 border-t border-[var(--border-subtle)] flex items-center justify-between text-[11px] text-[var(--text-muted)]">
-                <span>Cuenta activa</span>
-                {table.kitchenStatus === 'READY' || table.balance === 0 ? (
+                <span>{table.balance === 0 ? 'Cuenta pagada' : 'Cuenta activa'}</span>
+                {table.balance === 0 ? (
+                  table.kitchenStatus === 'READY' ? (
+                    <span className="font-black text-emerald-600 dark:text-emerald-400 group-hover:underline flex items-center gap-1">
+                      <CheckCircle2 className="h-3.5 w-3.5" /> ✅ Cobrada · ¡Listo para Servir! 🏃 →
+                    </span>
+                  ) : (
+                    <span className="font-black text-emerald-600 dark:text-emerald-400 group-hover:underline flex items-center gap-1">
+                      <CheckCircle2 className="h-3.5 w-3.5" /> ✅ Cobrada · En Cocina 👨‍🍳 →
+                    </span>
+                  )
+                ) : table.kitchenStatus === 'READY' ? (
                   <span className="font-black text-emerald-600 dark:text-emerald-400 group-hover:underline flex items-center gap-1">
                     <CheckCircle2 className="h-3.5 w-3.5" /> ¡Listo! Cobrar / Ver →
                   </span>
                 ) : (
-                  <span className="font-bold text-amber-600 dark:text-amber-400 group-hover:underline flex items-center gap-1">
-                    <Clock className="h-3.5 w-3.5" /> En Cocina · Ver mesa →
+                  <span className="font-bold text-[var(--accent)] group-hover:underline flex items-center gap-1">
+                    <Wallet className="h-3.5 w-3.5" /> 💵 Cobrar / Ver mesa →
                   </span>
                 )}
               </div>

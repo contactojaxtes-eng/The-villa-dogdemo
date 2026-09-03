@@ -297,20 +297,71 @@ export class TablesService {
     });
     const users = (station?.users || []).filter(u => u.active);
     if (users.length === 0) return null;
+    if (users.length === 1) return users[0].id;
 
-    // Priorizar cocineros que están actualmente CONECTADOS / LOGUEADOS en el sistema
-    const connectedUsers = users.filter(u => this.socketGateway.isUserConnected(u.id));
-    const candidateUsers = connectedUsers.length > 0 ? connectedUsers : users;
+    // Calculamos el inicio del turno / día actual (hoy a las 00:00)
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
 
-    const loads = await Promise.all(candidateUsers.map(async user => {
-      const tickets = await db.kitchenTicket.findMany({
+    const loads = await Promise.all(users.map(async user => {
+      // 1. Unidades pendientes activas en cocina en este momento (NEW o PREPARING)
+      const activeTickets = await db.kitchenTicket.findMany({
         where: { stationId, assignedToId: user.id, status: { in: ACTIVE_KITCHEN } },
         include: { items: true },
       });
-      const pendingUnits = tickets.reduce((acc, t) => acc + (t.items || []).reduce((sum, i) => sum + (i.changeType !== 'REMOVED' ? i.quantity : 0), 0), 0);
-      return { user, pendingUnits, ticketCount: tickets.length };
+      const pendingUnits = activeTickets.reduce(
+        (acc, t) => acc + (t.items || []).reduce((sum, i) => sum + (i.changeType !== 'REMOVED' ? i.quantity : 0), 0),
+        0,
+      );
+
+      // 2. Historial de tickets del turno de hoy para equidad estricta 50/50
+      const todayTickets = await db.kitchenTicket.findMany({
+        where: {
+          stationId,
+          assignedToId: user.id,
+          createdAt: { gte: todayStart },
+          status: { not: 'CANCELLED' },
+        },
+        select: { id: true, createdAt: true },
+        orderBy: { createdAt: 'desc' },
+      });
+
+      const totalShiftTickets = todayTickets.length;
+      const lastAssignedAt = todayTickets.length > 0 ? todayTickets[0].createdAt.getTime() : 0;
+
+      return {
+        user,
+        pendingUnits,
+        activeCount: activeTickets.length,
+        totalShiftTickets,
+        lastAssignedAt,
+      };
     }));
-    loads.sort((a, b) => a.pendingUnits - b.pendingUnits || a.ticketCount - b.ticketCount || a.user.name.localeCompare(b.user.name));
+
+    loads.sort((a, b) => {
+      // 1. Carga inmediata desproporcionada: si un cocinero tiene 2 o más unidades pendientes en preparación que el otro,
+      // se asigna al que tiene menos para no saturar al que está cocinando activamente en ese momento.
+      const unitDiff = a.pendingUnits - b.pendingUnits;
+      if (Math.abs(unitDiff) >= 2) {
+        return unitDiff;
+      }
+
+      // 2. EQUIDAD 50/50: Si la carga actual está equilibrada (diferencia < 2, e.g. 0 vs 0),
+      // se asigna al cocinero que lleva MENOS tickets asignados en el turno de hoy.
+      if (a.totalShiftTickets !== b.totalShiftTickets) {
+        return a.totalShiftTickets - b.totalShiftTickets;
+      }
+
+      // 3. ALTERNANCIA TEMPORAL: Si tienen la misma cantidad de tickets hoy,
+      // se asigna al que lleve MÁS TIEMPO sin recibir pedido (ticket más antiguo).
+      if (a.lastAssignedAt !== b.lastAssignedAt) {
+        return a.lastAssignedAt - b.lastAssignedAt;
+      }
+
+      // 4. Desempate final determinista
+      return a.user.id.localeCompare(b.user.id);
+    });
+
     return loads[0].user.id;
   }
 
