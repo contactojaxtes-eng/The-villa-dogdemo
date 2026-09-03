@@ -112,17 +112,15 @@ export default function TablesPage() {
                   <div>
                     <p className="text-lg font-black text-[var(--text-primary)] group-hover:text-[var(--accent)] transition-colors">{table.label}</p>
                     <div className="mt-1 flex items-center gap-1.5 flex-wrap">
-                      <span className="text-[11px] font-bold text-amber-700 dark:text-amber-300 bg-amber-500/10 px-2 py-0.5 rounded-md flex items-center gap-1">
-                        👤 Tomado por: <strong>{table.openedBy?.name || 'Mesero'}</strong>
+                      <span className="text-[11px] font-medium text-[var(--text-secondary)] bg-[var(--bg-elevated)] border border-[var(--border-subtle)] px-2 py-0.5 rounded-md flex items-center gap-1">
+                        👤 Tomado por: <strong className="text-[var(--text-primary)]">{table.openedBy?.name || 'Mesero'}</strong>
                       </span>
-                      {table.openedBy?.id === user?.id ? (
-                        <span className="text-[10px] font-bold text-blue-600 bg-blue-500/10 px-1.5 py-0.5 rounded">Tú</span>
-                      ) : (
-                        <span className="text-[10px] font-bold text-emerald-600 bg-emerald-500/10 px-1.5 py-0.5 rounded">Puedes cobrar</span>
+                      {table.openedBy?.id === user?.id && (
+                        <span className="text-[10px] font-bold text-[var(--accent)] bg-[var(--accent)]/10 px-1.5 py-0.5 rounded">Tú</span>
                       )}
                     </div>
                   </div>
-                  <span className="rounded-full bg-emerald-500/10 px-2.5 py-1 text-[10px] font-black text-emerald-600 tracking-wider">ABIERTA</span>
+                  <span className="rounded-full bg-[var(--accent)]/10 border border-[var(--accent)]/25 px-2.5 py-0.5 text-[10px] font-bold text-[var(--accent)] tracking-wider">ABIERTA</span>
                 </div>
                 <div className="mt-3.5 grid grid-cols-3 gap-2 text-xs">
                   <div className="rounded-xl bg-[var(--bg-elevated)] p-2"><Wallet className="mb-1 h-4 w-4 text-[var(--accent)]" /><b>{formatCurrency(table.total || 0)}</b><span className="block text-[var(--text-muted)]">Total</span></div>
@@ -131,7 +129,7 @@ export default function TablesPage() {
                 </div>
               </div>
               <div className="mt-3 pt-2.5 border-t border-[var(--border-subtle)] flex items-center justify-between text-[11px] text-[var(--text-muted)]">
-                <span>Cualquier mesera puede cobrar</span>
+                <span>Cuenta activa</span>
                 <span className="font-bold text-[var(--accent)] group-hover:underline">Cobrar / Ver →</span>
               </div>
             </Link>

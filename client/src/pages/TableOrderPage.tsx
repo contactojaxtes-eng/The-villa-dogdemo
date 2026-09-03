@@ -48,7 +48,6 @@ type CartItem = {
 }
 
 const QUICK_CHIPS = ['Sin cebolla', 'Salsas aparte', 'Sin ripio', 'Bien dorado', 'Sin salsas', 'Poco picante']
-const QUICK_MESAS = ['Mesa 1', 'Mesa 2', 'Mesa 3', 'Mesa 4', 'Mesa 5', 'Mesa 6', 'Mesa 7', 'Mesa 8']
 
 function genKey(prefix = 'item'): string {
   if (typeof crypto !== 'undefined' && crypto.randomUUID) {
@@ -624,28 +623,9 @@ export default function TableOrderPage() {
           <div className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-3.5 shadow-xs">
             <div className="flex items-center justify-between gap-2 mb-2">
               <label htmlFor="table-label-input" className="text-xs font-black text-[var(--text-primary)] flex items-center gap-1.5 tracking-wider uppercase">
-                <span>MESA / CLIENTE / REFERENCIA:</span>
-                <span className="text-rose-600 font-black text-xs">* Obligatorio</span>
+                <span>Mesa / Nombre del Cliente / Pedido:</span>
+                <span className="text-rose-600 font-bold text-xs">* Obligatorio</span>
               </label>
-
-              {!existingTableId && (
-                <div className="flex items-center gap-1 flex-wrap">
-                  {QUICK_MESAS.slice(0, 6).map(quickMesa => (
-                    <button
-                      key={quickMesa}
-                      type="button"
-                      onClick={() => setTableLabel(quickMesa)}
-                      className={`px-2 py-0.5 rounded-md text-[10px] font-black transition cursor-pointer ${
-                        tableLabel === quickMesa
-                          ? 'bg-[var(--accent)] text-white shadow-xs'
-                          : 'bg-[var(--bg-elevated)] text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] border border-[var(--border-subtle)]'
-                      }`}
-                    >
-                      {quickMesa.replace('Mesa ', 'M')}
-                    </button>
-                  ))}
-                </div>
-              )}
             </div>
 
             <Input
@@ -744,12 +724,12 @@ export default function TableOrderPage() {
                             {inCartTotal} en cuenta
                           </span>
                           {inCartTakeaway > 0 && (
-                            <span className="rounded-md bg-amber-500 text-slate-950 text-[10px] font-black px-1.5 py-0.5">
+                            <span className="rounded-md bg-[var(--bg-elevated)] text-[var(--text-secondary)] border border-[var(--border-subtle)] text-[10px] font-bold px-1.5 py-0.5">
                               {inCartTakeaway} llevar
                             </span>
                           )}
                           {inCartDineIn > 0 && inCartTakeaway > 0 && (
-                            <span className="rounded-md bg-blue-500/15 text-blue-700 text-[10px] font-bold px-1.5 py-0.5">
+                            <span className="rounded-md bg-[var(--bg-elevated)] text-[var(--text-secondary)] border border-[var(--border-subtle)] text-[10px] font-bold px-1.5 py-0.5">
                               {inCartDineIn} mesa
                             </span>
                           )}
@@ -776,7 +756,7 @@ export default function TableOrderPage() {
                           <button
                             type="button"
                             onClick={() => addItem(item, true)}
-                            className="h-9 px-2.5 rounded-xl bg-amber-500/15 text-amber-800 dark:text-amber-300 font-bold text-xs border border-amber-500/30 hover:bg-amber-500/25 active:scale-90 transition cursor-pointer flex items-center gap-1"
+                            className="h-9 px-2.5 rounded-xl bg-[var(--bg-elevated)] hover:bg-[var(--bg-hover)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] font-bold text-xs border border-[var(--border-subtle)] active:scale-90 transition cursor-pointer flex items-center gap-1"
                             title="Agregar para llevar"
                           >
                             🥡 Llevar
@@ -811,7 +791,7 @@ export default function TableOrderPage() {
                           <button
                             type="button"
                             onClick={() => addItem(item, true)}
-                            className="h-9 px-2 rounded-xl bg-amber-500/20 text-amber-900 dark:text-amber-200 font-black text-xs border border-amber-500/40 hover:bg-amber-500/30 active:scale-90 transition cursor-pointer flex items-center gap-0.5"
+                            className="h-9 px-2 rounded-xl bg-[var(--bg-elevated)] hover:bg-[var(--bg-hover)] text-[var(--text-secondary)] font-bold text-xs border border-[var(--border-subtle)] active:scale-90 transition cursor-pointer flex items-center gap-0.5"
                             title="Sumar una unidad para llevar"
                           >
                             +🥡
@@ -821,7 +801,7 @@ export default function TableOrderPage() {
                           <button
                             type="button"
                             onClick={() => setShowMobileCart(true)}
-                            className="h-9 px-2.5 rounded-xl bg-purple-500/15 text-purple-700 dark:text-purple-300 hover:bg-purple-500/25 font-black text-xs border border-purple-500/30 active:scale-90 transition cursor-pointer flex items-center gap-1"
+                            className="h-9 px-2.5 rounded-xl bg-[var(--bg-elevated)] hover:bg-[var(--bg-hover)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] font-bold text-xs border border-[var(--border-subtle)] active:scale-90 transition cursor-pointer flex items-center gap-1"
                             title="Poner notas o adiciones a este producto"
                           >
                             📝 Notas
@@ -837,14 +817,14 @@ export default function TableOrderPage() {
                       className="mt-2.5 pt-2 border-t border-[var(--border-subtle)]/70 flex items-center gap-1.5 flex-wrap"
                       onClick={e => e.stopPropagation()}
                     >
-                      <span className="text-[10px] font-black text-[var(--text-muted)] uppercase tracking-wider">
+                      <span className="text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-wider">
                         + Adición:
                       </span>
                       {quesoAddition && (
                         <button
                           type="button"
                           onClick={() => addItemWithAddition(item, { id: quesoAddition.id, name: quesoAddition.name, price: quesoAddition.price })}
-                          className="px-2 py-0.5 rounded-md text-[10px] font-black bg-amber-500/15 text-amber-800 dark:text-amber-300 hover:bg-amber-500/25 border border-amber-500/30 transition active:scale-95 cursor-pointer flex items-center gap-0.5"
+                          className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-[var(--bg-elevated)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:border-[var(--border-default)] border border-[var(--border-subtle)] transition active:scale-95 cursor-pointer flex items-center gap-0.5"
                           title="Agregar 1 con Adición de Queso"
                         >
                           🧀 Queso ({formatCurrency(quesoAddition.price)})
@@ -854,7 +834,7 @@ export default function TableOrderPage() {
                         <button
                           type="button"
                           onClick={() => addItemWithAddition(item, { id: tocinetaAddition.id, name: tocinetaAddition.name, price: tocinetaAddition.price })}
-                          className="px-2 py-0.5 rounded-md text-[10px] font-black bg-rose-500/15 text-rose-800 dark:text-rose-300 hover:bg-rose-500/25 border border-rose-500/30 transition active:scale-95 cursor-pointer flex items-center gap-0.5"
+                          className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-[var(--bg-elevated)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:border-[var(--border-default)] border border-[var(--border-subtle)] transition active:scale-95 cursor-pointer flex items-center gap-0.5"
                           title="Agregar 1 con Adición de Tocineta"
                         >
                           🥓 Tocineta ({formatCurrency(tocinetaAddition.price)})

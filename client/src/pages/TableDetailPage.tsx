@@ -184,25 +184,25 @@ export default function TableDetailPage() {
           <div>
             <div className="flex items-center gap-2">
               <h1 className="text-2xl font-black text-[var(--text-primary)]">{table.label}</h1>
-              <span className={`rounded-full px-2.5 py-0.5 text-[10px] font-black tracking-wider ${
-                table.status === 'OPEN' ? 'bg-emerald-500/10 text-emerald-600' : 'bg-zinc-500/10 text-zinc-600'
+              <span className={`rounded-full px-2.5 py-0.5 text-[10px] font-bold tracking-wider ${
+                table.status === 'OPEN' ? 'bg-[var(--accent)]/10 text-[var(--accent)] border border-[var(--accent)]/25' : 'bg-[var(--bg-elevated)] text-[var(--text-muted)] border border-[var(--border-subtle)]'
               }`}>
                 {table.status === 'OPEN' ? 'MESA ABIERTA' : 'CERRADA'}
               </span>
             </div>
             <div className="flex flex-wrap items-center gap-2 mt-1 text-xs text-[var(--text-secondary)]">
-              <span className="flex items-center gap-1 font-bold text-amber-700 dark:text-amber-300 bg-amber-500/10 px-2 py-0.5 rounded-md">
-                👤 Tomado por: {table.openedBy?.name || 'Mesero'}
+              <span className="flex items-center gap-1 font-medium text-[var(--text-secondary)] bg-[var(--bg-elevated)] border border-[var(--border-subtle)] px-2 py-0.5 rounded-md">
+                👤 Tomado por: <strong className="text-[var(--text-primary)]">{table.openedBy?.name || 'Mesero'}</strong>
               </span>
               <span>•</span>
-              <span className="text-xs text-emerald-600 dark:text-emerald-400 font-bold bg-emerald-500/10 px-2 py-0.5 rounded-md">
-                Atendiendo: {user?.name} (puedes cobrar libremente)
+              <span className="text-xs text-[var(--text-secondary)] font-medium bg-[var(--bg-elevated)] border border-[var(--border-subtle)] px-2 py-0.5 rounded-md">
+                Atendiendo: <strong className="text-[var(--text-primary)]">{user?.name}</strong>
               </span>
             </div>
           </div>
         </div>
         <div className="flex gap-2">
-          <Button asChild variant="outline" className="gap-2">
+          <Button asChild variant="outline" className="gap-2 border-[var(--border-default)]">
             <Link to={`/tables/new?tableId=${table.id}`}>
               <PlusCircle className="h-4 w-4 text-[var(--accent)]" />Agregar productos
             </Link>
@@ -211,7 +211,7 @@ export default function TableDetailPage() {
             <Button
               onClick={closeTable}
               disabled={table.balance > 0 || table.kitchenStatus === 'ACTIVE'}
-              className={`font-black ${table.balance > 0 ? 'bg-zinc-300 text-zinc-500 cursor-not-allowed' : 'bg-emerald-600 hover:bg-emerald-700 text-white'}`}
+              className={`font-black ${table.balance > 0 ? 'bg-zinc-300 text-zinc-500 cursor-not-allowed' : 'bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-white'}`}
             >
               Cerrar mesa
             </Button>
@@ -298,24 +298,24 @@ export default function TableDetailPage() {
             </div>
             <div className="mt-2 pt-2 border-t border-[var(--border-subtle)] flex justify-between items-end">
               <div>
-                <p className="text-xs text-[var(--text-muted)] uppercase tracking-wider font-black">Saldo Pendiente</p>
-                <p className={`text-3xl font-black ${table.balance > 0 ? 'text-rose-600' : 'text-emerald-600'}`}>
+                <p className="text-xs text-[var(--text-muted)] uppercase tracking-wider font-bold">Saldo Pendiente</p>
+                <p className={`text-3xl font-black ${table.balance > 0 ? 'text-[var(--accent)]' : 'text-[var(--text-primary)]'}`}>
                   {formatCurrency(table.balance || 0)}
                 </p>
               </div>
-              <span className={`rounded-full px-2.5 py-1 text-xs font-black ${table.balance === 0 ? 'bg-emerald-500/10 text-emerald-600' : 'bg-amber-500/10 text-amber-600'}`}>
+              <span className={`rounded-full px-2.5 py-1 text-xs font-bold border ${table.balance === 0 ? 'bg-[var(--bg-elevated)] border-[var(--border-subtle)] text-[var(--text-primary)]' : 'bg-[var(--accent)]/10 border-[var(--accent)]/30 text-[var(--accent)]'}`}>
                 {table.balance === 0 ? 'PAGADO COMPLETO' : 'POR COBRAR'}
               </span>
             </div>
           </div>
 
           {/* Payment Box */}
-          {pendingReview && <div role="status" className="rounded-2xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900">Comprobante enviado. Falta la validación de caja.</div>}
+          {pendingReview && <div role="status" className="rounded-2xl border border-[var(--border-default)] bg-[var(--bg-elevated)] p-4 text-sm text-[var(--text-primary)] font-bold flex items-center gap-2">⏳ Pago enviado a caja. Pendiente de validación.</div>}
           {table.status === 'OPEN' && table.balance > 0 && !pendingReview && (
             <div className="space-y-3 rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-4 shadow-sm">
               <div className="flex items-center justify-between">
                 <h2 className="font-black text-sm uppercase tracking-wider text-[var(--text-primary)]">Registrar Cobro</h2>
-                <span className="text-[11px] font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-md">Cualquier mesera puede cobrar</span>
+                <span className="text-[11px] text-[var(--text-muted)] font-medium">Cobro de cuenta</span>
               </div>
 
               {/* Method Tabs - EXACTAMENTE 2 MÉTODOS */}
@@ -442,26 +442,33 @@ export default function TableDetailPage() {
                   <div key={p.id} className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-3 text-xs space-y-2">
                     <div className="flex items-center justify-between gap-2">
                       <div>
-                        <span className="font-black text-sm text-[var(--text-primary)]">{p.method} - {formatCurrency(p.amount)}</span>
+                        <span className="font-black text-sm text-[var(--text-primary)]">{p.method === 'CASH' ? '💵 EFECTIVO' : '📲 TRANSFERENCIA'} - {formatCurrency(p.amount)}</span>
                         <p className="text-[11px] text-[var(--text-muted)]">Subido por: <b className="text-[var(--text-secondary)]">{p.submittedBy?.name || 'Mesero'}</b></p>
                       </div>
-                      <span className={`rounded-full px-2 py-0.5 text-[10px] font-black ${
-                        p.status === 'CONFIRMED' ? 'bg-emerald-500/10 text-emerald-600' :
-                        p.status === 'REJECTED' ? 'bg-rose-500/10 text-rose-600' : 'bg-amber-500/10 text-amber-600'
+                      <span className={`rounded-full px-2.5 py-0.5 text-[10px] font-bold border ${
+                        p.status === 'CONFIRMED' ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-700 dark:text-emerald-300' :
+                        p.status === 'REJECTED' ? 'bg-rose-500/10 border-rose-500/30 text-rose-700 dark:text-rose-300' : 'bg-amber-500/10 border-amber-500/30 text-amber-700 dark:text-amber-300'
                       }`}>
                         {p.status === 'CONFIRMED' ? 'APROBADO' : p.status === 'REJECTED' ? 'RECHAZADO' : 'POR VALIDAR'}
                       </span>
                     </div>
 
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => setZoomUrl(proofImageUrl)}
-                        className="flex items-center gap-1.5 rounded-lg bg-[var(--bg-panel)] px-2.5 py-1 text-xs font-black text-[var(--accent)] border border-[var(--border-subtle)] hover:bg-[var(--bg-hover)] transition"
-                      >
-                        <Eye className="h-3.5 w-3.5" /> Ver foto en grande
-                      </button>
-                    </div>
+                    {p.method !== 'CASH' && (p.fileBase64 || p.filePath) ? (
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setZoomUrl(proofImageUrl)}
+                          className="flex items-center gap-1.5 rounded-lg bg-[var(--bg-panel)] px-2.5 py-1 text-xs font-bold text-[var(--accent)] border border-[var(--border-subtle)] hover:bg-[var(--bg-hover)] transition cursor-pointer"
+                        >
+                          <Eye className="h-3.5 w-3.5" /> Ver comprobante
+                        </button>
+                      </div>
+                    ) : p.method === 'CASH' ? (
+                      <div className="text-[11px] text-[var(--text-muted)] font-medium flex items-center gap-1.5 bg-[var(--bg-panel)] p-2 rounded-lg border border-[var(--border-subtle)]">
+                        <span>💵</span>
+                        <span>Cobro en efectivo entregado a la mesera. Pendiente de recepción y validación en caja.</span>
+                      </div>
+                    ) : null}
 
                     {p.rejectionReason && (
                       <p className="text-rose-600 bg-rose-500/10 p-2 rounded-lg font-medium">Motivo rechazo: {p.rejectionReason}</p>
@@ -474,16 +481,16 @@ export default function TableDetailPage() {
                           size="sm"
                           disabled={actionLoading === p.paymentId}
                           onClick={() => validatePayment(p.paymentId)}
-                          className="h-8 flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs gap-1"
+                          className="h-8 flex-1 bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-white font-bold text-xs gap-1 cursor-pointer"
                         >
-                          <CheckCircle2 className="h-3.5 w-3.5" /> Aceptar Pago
+                          <CheckCircle2 className="h-3.5 w-3.5" /> Validar Pago
                         </Button>
                         <Button
                           size="sm"
                           variant="outline"
                           disabled={actionLoading === p.paymentId}
                           onClick={() => rejectPayment(p.paymentId)}
-                          className="h-8 flex-1 border-rose-300 text-rose-600 hover:bg-rose-50 font-black text-xs gap-1"
+                          className="h-8 flex-1 border-rose-300 text-rose-600 hover:bg-rose-50 font-bold text-xs gap-1 cursor-pointer"
                         >
                           <XCircle className="h-3.5 w-3.5" /> Rechazar
                         </Button>

@@ -111,15 +111,16 @@ export default function PaymentValidationPage() {
   }
 
   const review = async (payment: any, action: 'validate' | 'reject') => {
-    if (action === 'validate' && payment.method === 'CASH' && !hasPermission('payment_validation.cash')) {
+    const isPrivileged = user?.role === 'ADMIN' || user?.role === 'SUPERADMIN' || user?.role === 'CASHIER'
+    if (action === 'validate' && payment.method === 'CASH' && !hasPermission('payment_validation.cash') && !isPrivileged) {
       alerts.error('Sin permiso', 'No tienes permiso para validar pagos en efectivo.')
       return
     }
-    if (action === 'validate' && payment.method !== 'CASH' && !hasPermission('payment_validation.transfer')) {
+    if (action === 'validate' && payment.method !== 'CASH' && !hasPermission('payment_validation.transfer') && !isPrivileged) {
       alerts.error('Sin permiso', 'No tienes permiso para validar transferencias.')
       return
     }
-    if (action === 'reject' && !hasPermission('payment_validation.reject')) {
+    if (action === 'reject' && !hasPermission('payment_validation.reject') && !isPrivileged) {
       alerts.error('Sin permiso', 'No tienes permiso para rechazar pagos.')
       return
     }
@@ -236,7 +237,7 @@ export default function PaymentValidationPage() {
                     </div>
                   </div>
                 ) : isCash ? (
-                  <div className="w-10 h-10 shrink-0 rounded-lg bg-emerald-500/10 text-emerald-600 flex items-center justify-center" title="Pago en Efectivo">
+                  <div className="w-10 h-10 shrink-0 rounded-lg bg-[var(--bg-elevated)] border border-[var(--border-subtle)] text-[var(--accent)] flex items-center justify-center" title="Pago en Efectivo">
                     <Banknote className="h-5 w-5" />
                   </div>
                 ) : null}
@@ -247,9 +248,7 @@ export default function PaymentValidationPage() {
                     <span className="font-black text-sm text-[var(--text-primary)] truncate">
                       {label} · Pedido #{payment.order?.orderNumber}
                     </span>
-                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
-                      isCash ? 'bg-emerald-500/10 text-emerald-700' : 'bg-blue-500/10 text-blue-700'
-                    }`}>
+                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-[var(--bg-elevated)] border border-[var(--border-subtle)] text-[var(--text-primary)]">
                       {methodLabels[payment.method] || payment.method}
                     </span>
                     <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-[var(--bg-elevated)] text-[var(--text-secondary)]">
@@ -304,7 +303,7 @@ export default function PaymentValidationPage() {
                     <Button
                       onClick={() => review(payment, 'validate')}
                       size="sm"
-                      className="h-8 px-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs gap-1 shadow-xs"
+                      className="h-8 px-2.5 bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-white font-bold text-xs gap-1 shadow-xs cursor-pointer"
                     >
                       <CheckCircle2 className="h-3.5 w-3.5" /> Validar
                     </Button>

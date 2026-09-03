@@ -661,14 +661,14 @@ export class TablesService {
       if (!orders.length) throw new BadRequestException('La cuenta ya está pagada');
       if (orders.some((order: any) => order.paymentStatus === 'PENDING_REVIEW')) throw new BadRequestException('Ya hay un comprobante pendiente de revisión');
       if (Math.abs(amount - table.balance) > 0.01) throw new BadRequestException('El monto debe coincidir con el saldo completo. Actualiza la cuenta y vuelve a intentar.');
-      const status = isCash ? 'CONFIRMED' : 'PENDING_REVIEW';
+      const status = 'PENDING_REVIEW';
       const payments: any[] = [];
       for (const order of orders) {
         const payment = await tx.payment.update({ where: { orderId: order.id }, data: {
           amount: order.total, method: data.method, settlementId, status,
           cashAmount: isCash ? order.total : 0, transferAmount: isCash ? 0 : order.total,
           reference: String(data.reference || '').slice(0, 300) || null,
-          confirmedBy: isCash ? user.id : null, confirmedAt: isCash ? new Date() : null,
+          confirmedBy: null, confirmedAt: null,
         } });
         payments.push(payment);
         await tx.order.update({ where: { id: order.id }, data: {
@@ -686,10 +686,19 @@ export class TablesService {
           amount, method: data.method, status: 'PENDING', filePath: null,
           fileBase64: `data:${receipt.mime};base64,${receipt.bytes.toString('base64')}`,
           mimeType: receipt.mime, fileSize: receipt.bytes.length,
-          originalName: String(file.originalname || 'comprobante.jpg').slice(0, 200),
+          originalName: String(file?.originalname || 'comprobante.jpg').slice(0, 200),
+        } });
+      } else if (isCash) {
+        // Registro de cobro en efectivo reportado por mesera para validación en caja
+        await tx.transferProof.create({ data: {
+          paymentId: payments[0].id, orderId: orders[0].id, tableId,
+          cashClosingId: table.cashClosingId, submittedById: user.id,
+          amount, method: 'CASH', status: 'PENDING', filePath: null,
+          fileBase64: null, mimeType: null, fileSize: null,
+          originalName: 'Cobro en Efectivo (Mesera)',
         } });
       }
-      return { table: await this.finishPaidTable(tableId, tx), payment: payments[0], replay: false };
+      return { table: await this.findTable(tableId, tx), payment: payments[0], replay: false };
     }, operationTransaction);
     if (!result.replay) {
       this.socketGateway.emitPaymentSubmitted(result);
