@@ -57,6 +57,12 @@ window.alert = (message: any) => {
 }
 
 
+// Capturar desactualización de assets tras nuevos despliegues y recargar limpiamente
+window.addEventListener('vite:preloadError', (event) => {
+  event.preventDefault()
+  window.location.reload()
+})
+
 import { ErrorBoundary } from './components/ErrorBoundary'
 
 ReactDOM.createRoot(document.getElementById('root')!).render(

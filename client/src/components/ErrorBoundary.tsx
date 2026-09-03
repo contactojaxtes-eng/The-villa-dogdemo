@@ -11,6 +11,20 @@ interface State {
   error: Error | null
 }
 
+function checkIsChunkError(error: Error | null): boolean {
+  if (!error) return false
+  const msg = (error.message || '').toLowerCase()
+  const name = (error.name || '').toLowerCase()
+  return (
+    msg.includes('loading chunk') ||
+    msg.includes('loading css chunk') ||
+    msg.includes('dynamically imported module') ||
+    msg.includes('failed to fetch') ||
+    msg.includes('unexpected token') ||
+    name.includes('chunkloaderror')
+  )
+}
+
 export class ErrorBoundary extends Component<Props, State> {
   public state: State = {
     hasError: false,
@@ -25,19 +39,15 @@ export class ErrorBoundary extends Component<Props, State> {
     console.error('Uncaught error in component tree:', error, errorInfo)
 
     // Auto-reload on ChunkLoadError (stale assets after deploy)
-    const msg = (error?.message || '').toLowerCase()
-    const name = (error?.name || '').toLowerCase()
-    const isChunkError = msg.includes('loading chunk') || msg.includes('loading css chunk') ||
-      msg.includes('dynamically imported module') || name.includes('chunkloaderror') ||
-      msg.includes('failed to fetch')
-
-    if (isChunkError) {
-      const reloadKey = 'niche_error_auto_reload'
+    if (checkIsChunkError(error)) {
+      const reloadKey = 'the_villa_dog_auto_reload'
       const lastReload = parseInt(sessionStorage.getItem(reloadKey) || '0', 10)
       const now = Date.now()
-      if (now - lastReload > 10000) {
+      if (now - lastReload > 4000) {
         sessionStorage.setItem(reloadKey, String(now))
-        window.location.reload()
+        setTimeout(() => {
+          window.location.reload()
+        }, 100)
         return
       }
     }
@@ -57,6 +67,26 @@ export class ErrorBoundary extends Component<Props, State> {
 
   public render() {
     if (this.state.hasError) {
+      if (checkIsChunkError(this.state.error)) {
+        return (
+          <div className="flex min-h-[70vh] flex-col items-center justify-center p-6 text-center animate-in fade-in">
+            <div className="mx-auto max-w-sm space-y-4 rounded-3xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-8 shadow-2xl">
+              <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-[var(--accent)]/10 text-[var(--accent)]">
+                <RefreshCw className="h-7 w-7 animate-spin" />
+              </div>
+              <div className="space-y-1.5">
+                <h2 className="antifont text-lg font-black text-[var(--text-primary)]">
+                  Actualizando el sistema...
+                </h2>
+                <p className="text-xs text-[var(--text-secondary)]">
+                  Hay una actualización reciente disponible. Sincronizando en un momento...
+                </p>
+              </div>
+            </div>
+          </div>
+        )
+      }
+
       return (
         <div className="flex min-h-[70vh] flex-col items-center justify-center p-6 text-center">
           <div className="mx-auto max-w-md space-y-4 rounded-3xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-8 shadow-2xl">
