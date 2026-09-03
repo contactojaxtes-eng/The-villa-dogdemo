@@ -258,13 +258,15 @@ export class TablesService {
     });
     const users = (station?.users || []).filter(u => u.active);
     if (users.length === 0) return null;
-    const loads = await Promise.all(users.map(async user => ({
-      user,
-      count: await db.kitchenTicket.count({
+    const loads = await Promise.all(users.map(async user => {
+      const tickets = await db.kitchenTicket.findMany({
         where: { stationId, assignedToId: user.id, status: { in: ACTIVE_KITCHEN } },
-      }),
-    })));
-    loads.sort((a, b) => a.count - b.count || a.user.name.localeCompare(b.user.name));
+        include: { items: true },
+      });
+      const pendingUnits = tickets.reduce((acc, t) => acc + (t.items || []).reduce((sum, i) => sum + (i.changeType !== 'REMOVED' ? i.quantity : 0), 0), 0);
+      return { user, pendingUnits, ticketCount: tickets.length };
+    }));
+    loads.sort((a, b) => a.pendingUnits - b.pendingUnits || a.ticketCount - b.ticketCount || a.user.name.localeCompare(b.user.name));
     return loads[0].user.id;
   }
 

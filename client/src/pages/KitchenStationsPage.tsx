@@ -256,69 +256,46 @@ export default function KitchenStationsPage() {
         </Button>
       </div>
 
-      {/* Reglas Inteligentes de Despacho */}
-      <div className="rounded-3xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-5 shadow-sm space-y-4">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-[var(--border-subtle)] pb-4">
-          <div className="flex items-center gap-2.5">
-            <div className="h-9 w-9 rounded-xl bg-amber-500/10 text-amber-500 flex items-center justify-center shrink-0">
-              <Sliders className="h-5 w-5" />
-            </div>
-            <div>
-              <h2 className="text-sm font-black text-[var(--text-primary)] uppercase tracking-wide">
-                Reglas Automáticas de Despacho y Bebidas
-              </h2>
-              <p className="text-xs text-[var(--text-secondary)]">
-                Control de pantalla única para bebidas y prevención total de duplicados.
-              </p>
-            </div>
+      {/* Configuración rápida de despacho */}
+      <div className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-4 shadow-sm">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-[var(--border-subtle)] pb-3">
+          <div className="flex items-center gap-2">
+            <Sliders className="h-4 w-4 text-[var(--accent)]" />
+            <h2 className="text-xs font-black text-[var(--text-primary)] uppercase tracking-wider">
+              Distribución Automática
+            </h2>
           </div>
-
           <Button
             onClick={saveRoutingSettings}
             disabled={savingSettings}
-            className="h-9 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold gap-1.5 cursor-pointer shadow-xs self-start sm:self-auto"
+            size="sm"
+            className="h-8 px-3 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold gap-1.5 self-start sm:self-auto"
           >
-            <Save className="h-3.5 w-3.5" />
-            {savingSettings ? 'Guardando...' : 'Guardar Reglas'}
+            <Save className="h-3 w-3" />
+            {savingSettings ? 'Guardando...' : 'Guardar'}
           </Button>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-1">
-          {/* Regla 1: Bebida acompañada si es solo 1 estación */}
-          <div className="p-4 rounded-2xl bg-[var(--bg-subtle)] border border-[var(--border-subtle)] flex items-start gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-3">
+          <label className="flex items-center gap-2.5 p-2.5 rounded-xl bg-[var(--bg-elevated)] border border-[var(--border-subtle)] text-xs font-bold cursor-pointer hover:border-[var(--accent)] transition">
             <input
               type="checkbox"
-              id="smartDrinkRouting"
               checked={routingSettings.smartDrinkRouting}
               onChange={e => setRoutingSettings(prev => ({ ...prev, smartDrinkRouting: e.target.checked }))}
-              className="mt-1 h-4.5 w-4.5 rounded border-[var(--border-default)] text-[var(--accent)] cursor-pointer"
+              className="rounded h-4 w-4 text-[var(--accent)] cursor-pointer"
             />
-            <label htmlFor="smartDrinkRouting" className="cursor-pointer space-y-1">
-              <span className="text-xs font-black text-[var(--text-primary)] flex items-center gap-1.5">
-                <Coffee className="h-3.5 w-3.5 text-orange-500" />
-                Vincular Bebida al Plato (1 Sola Estación)
-              </span>
-              <p className="text-[11px] text-[var(--text-secondary)] leading-relaxed">
-                Si el cliente pide <strong>1 Hamburguesa + 1 Gaseosa</strong>, la gaseosa sale en la pantalla de Hamburguesas. Si pide <strong>1 Perro + 1 Gaseosa</strong>, sale en la pantalla de Perros.
-              </p>
-            </label>
-          </div>
+            <span className="text-[var(--text-primary)]">Vincular bebida al plato de comida</span>
+          </label>
 
-          {/* Regla 2: Sin duplicados si hay varios platos */}
-          <div className="p-4 rounded-2xl bg-[var(--bg-subtle)] border border-[var(--border-subtle)] flex items-start gap-3">
-            <div className="mt-1 text-emerald-500 shrink-0">
-              <ShieldCheck className="h-4.5 w-4.5" />
-            </div>
-            <div className="space-y-1">
-              <span className="text-xs font-black text-[var(--text-primary)] flex items-center gap-1.5">
-                <Split className="h-3.5 w-3.5 text-blue-500" />
-                0 Duplicados en Platos Combinados
-              </span>
-              <p className="text-[11px] text-[var(--text-secondary)] leading-relaxed">
-                Si piden <strong>1 Perro + 1 Hamburguesa + 1 Gaseosa</strong>, la comida se divide a cada pantalla y la bebida va a un solo ticket en <strong>Cocina General</strong> para que nunca se prepare dos veces.
-              </p>
-            </div>
-          </div>
+          <label className="flex items-center gap-2.5 p-2.5 rounded-xl bg-[var(--bg-elevated)] border border-[var(--border-subtle)] text-xs font-bold cursor-pointer hover:border-[var(--accent)] transition">
+            <input
+              type="checkbox"
+              checked={routingSettings.splitByChannel}
+              onChange={e => setRoutingSettings(prev => ({ ...prev, splitByChannel: e.target.checked }))}
+              className="rounded h-4 w-4 text-[var(--accent)] cursor-pointer"
+            />
+            <span className="text-[var(--text-primary)]">Separar estaciones de Salón y Domicilio</span>
+          </label>
         </div>
       </div>
 
@@ -328,18 +305,16 @@ export default function KitchenStationsPage() {
           Cargando estaciones de cocina...
         </div>
       ) : stations.length === 0 ? (
-        <div className="p-12 rounded-3xl border border-dashed border-[var(--border-default)] text-center space-y-3 bg-[var(--bg-panel)]">
-          <ChefHat className="h-12 w-12 mx-auto text-[var(--text-muted)] opacity-50" />
+        <div className="p-10 rounded-2xl border border-dashed border-[var(--border-default)] text-center space-y-3 bg-[var(--bg-panel)]">
+          <ChefHat className="h-10 w-10 mx-auto text-[var(--text-muted)] opacity-50" />
           <h3 className="text-base font-bold text-[var(--text-primary)]">No hay estaciones configuradas</h3>
-          <p className="text-xs text-[var(--text-secondary)] max-w-sm mx-auto">
-            Crea una estación como "Perros Calientes" o "Hamburguesas" para organizar los pedidos por puesto de trabajo.
-          </p>
-          <Button onClick={openCreateModal} className="h-9 px-4 text-xs font-bold rounded-xl bg-[var(--accent)]">
+          <p className="text-xs text-[var(--text-secondary)]">Crea estaciones como "Perros Calientes" o "Hamburguesas".</p>
+          <Button onClick={openCreateModal} size="sm" className="bg-[var(--accent)] font-bold text-xs">
             Crear Primera Estación
           </Button>
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {stations.map(station => {
             const hasCategories = (station.categories || []).length > 0
             const hasUsers = (station.users || []).length > 0
@@ -347,27 +322,21 @@ export default function KitchenStationsPage() {
             return (
               <div
                 key={station.id}
-                className="rounded-3xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-5 shadow-sm hover:shadow-md hover:border-[var(--border-default)] transition-all flex flex-col justify-between relative overflow-hidden"
+                className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-4 shadow-sm hover:border-[var(--accent)] transition-all flex flex-col justify-between relative overflow-hidden"
               >
-                {/* Indicador de Color Superior */}
-                <div
-                  className="absolute top-0 left-0 right-0 h-2"
-                  style={{ backgroundColor: station.color || '#EF4444' }}
-                />
+                {/* Borde superior de color de la estación */}
+                <div className="absolute top-0 left-0 right-0 h-1.5" style={{ backgroundColor: station.color || '#EF4444' }} />
 
-                <div className="space-y-4 pt-1">
+                <div className="space-y-3 pt-1">
                   {/* Título y Estado */}
                   <div className="flex items-start justify-between gap-2">
                     <div>
-                      <h3 className="text-lg font-black text-[var(--text-primary)] flex items-center gap-2">
-                        <span
-                          className="h-3.5 w-3.5 rounded-full shrink-0"
-                          style={{ backgroundColor: station.color || '#EF4444' }}
-                        />
+                      <h3 className="text-base font-black text-[var(--text-primary)] flex items-center gap-2">
+                        <span className="h-3 w-3 rounded-full shrink-0" style={{ backgroundColor: station.color || '#EF4444' }} />
                         {station.name}
                       </h3>
-                      <span className="text-[11px] font-semibold text-[var(--text-muted)] mt-0.5 block">
-                        {station.active ? '● Estación Activa en Servicio' : '○ Estación Pausada'}
+                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full inline-block mt-1 ${station.active ? 'bg-emerald-500/10 text-emerald-600' : 'bg-zinc-500/10 text-zinc-500'}`}>
+                        {station.active ? '● Activa en Turno' : '○ Pausada'}
                       </span>
                     </div>
 
@@ -376,83 +345,69 @@ export default function KitchenStationsPage() {
                         variant="ghost"
                         size="icon"
                         onClick={() => openEditModal(station)}
-                        className="h-8 w-8 rounded-xl text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)] cursor-pointer"
+                        className="h-7 w-7 rounded-lg text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
                         title="Editar estación"
                       >
-                        <Edit2 className="h-4 w-4" />
+                        <Edit2 className="h-3.5 w-3.5" />
                       </Button>
                       <Button
                         variant="ghost"
                         size="icon"
                         onClick={() => handleDelete(station)}
-                        className="h-8 w-8 rounded-xl text-rose-500/70 hover:text-rose-600 hover:bg-rose-500/10 cursor-pointer"
-                        title="Eliminar o desactivar estación"
+                        className="h-7 w-7 rounded-lg text-rose-500 hover:bg-rose-50"
+                        title="Eliminar estación"
                       >
-                        <Trash2 className="h-4 w-4" />
+                        <Trash2 className="h-3.5 w-3.5" />
                       </Button>
                     </div>
                   </div>
 
-                  {/* 1. Categorías asignadas */}
-                  <div className="space-y-1.5 p-3 rounded-2xl bg-[var(--bg-subtle)]/70 border border-[var(--border-subtle)]/60">
-                    <div className="flex items-center gap-1.5 text-[11px] font-bold text-[var(--text-secondary)] uppercase tracking-wider">
-                      <Utensils className="h-3.5 w-3.5 text-orange-500" />
-                      <span>Platos que prepara:</span>
-                    </div>
-                    <div className="flex flex-wrap gap-1.5 pt-0.5">
+                  {/* Platos que prepara */}
+                  <div className="space-y-1 p-2.5 rounded-xl bg-[var(--bg-elevated)] text-xs">
+                    <span className="text-[10px] font-black uppercase tracking-wider text-[var(--text-muted)] flex items-center gap-1">
+                      <Utensils className="h-3 w-3 text-orange-500" /> Platos:
+                    </span>
+                    <div className="flex flex-wrap gap-1 pt-0.5">
                       {hasCategories ? (
                         station.categories.map(c => (
-                          <span
-                            key={c.id}
-                            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl text-xs font-bold bg-[var(--bg-panel)] text-[var(--text-primary)] border border-[var(--border-subtle)] shadow-2xs"
-                          >
-                            🍔 {c.name}
+                          <span key={c.id} className="px-2 py-0.5 rounded-lg text-[11px] font-bold bg-[var(--bg-panel)] text-[var(--text-primary)] border border-[var(--border-subtle)]">
+                            {c.name}
                           </span>
                         ))
                       ) : (
-                        <span className="text-xs font-semibold text-amber-600 dark:text-amber-400">
-                          Todos los platos (Cocina General)
-                        </span>
+                        <span className="text-[11px] font-bold text-amber-600">Todos los platos</span>
                       )}
                     </div>
                   </div>
 
-                  {/* 2. Cocineros asignados */}
-                  <div className="space-y-1.5 p-3 rounded-2xl bg-[var(--bg-subtle)]/70 border border-[var(--border-subtle)]/60">
-                    <div className="flex items-center gap-1.5 text-[11px] font-bold text-[var(--text-secondary)] uppercase tracking-wider">
-                      <Users className="h-3.5 w-3.5 text-blue-500" />
-                      <span>Cocineros asignados:</span>
-                    </div>
-                    <div className="flex flex-wrap gap-1.5 pt-0.5">
+                  {/* Cocineros asignados */}
+                  <div className="space-y-1 p-2.5 rounded-xl bg-[var(--bg-elevated)] text-xs">
+                    <span className="text-[10px] font-black uppercase tracking-wider text-[var(--text-muted)] flex items-center gap-1">
+                      <Users className="h-3 w-3 text-blue-500" /> Cocineros:
+                    </span>
+                    <div className="flex flex-wrap gap-1 pt-0.5">
                       {hasUsers ? (
                         station.users.map(u => (
-                          <span
-                            key={u.id}
-                            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl text-xs font-bold bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/20"
-                          >
+                          <span key={u.id} className="px-2 py-0.5 rounded-lg text-[11px] font-bold bg-blue-500/10 text-blue-700 border border-blue-500/20">
                             👨‍🍳 {u.name}
                           </span>
                         ))
                       ) : (
-                        <span className="text-xs text-[var(--text-muted)] italic">
-                          Cualquier cocinero disponible
-                        </span>
+                        <span className="text-[11px] text-[var(--text-muted)] italic">Todos los cocineros</span>
                       )}
                     </div>
                   </div>
                 </div>
 
-                {/* Botón inferior: Abrir pantalla */}
-                <div className="mt-5 pt-3 border-t border-[var(--border-subtle)] flex items-center justify-between">
-                  <span className="text-xs text-[var(--text-muted)] font-medium">
-                    Pantalla KDS
-                  </span>
+                {/* Abrir pantalla */}
+                <div className="mt-3.5 pt-2.5 border-t border-[var(--border-subtle)] flex items-center justify-between">
+                  <span className="text-[11px] text-[var(--text-muted)]">Pantalla KDS</span>
                   <Link
                     to={`/kitchen?station=${station.id}`}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold bg-[var(--bg-elevated)] hover:bg-[var(--accent)] hover:text-[var(--accent-fg)] text-[var(--text-primary)] transition-all shadow-xs"
+                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold bg-[var(--bg-elevated)] hover:bg-[var(--accent)] hover:text-white text-[var(--text-primary)] transition"
                   >
-                    <span>Ver en Cocina</span>
-                    <ExternalLink className="h-3.5 w-3.5" />
+                    <span>Abrir Cocina</span>
+                    <ExternalLink className="h-3 w-3" />
                   </Link>
                 </div>
               </div>
