@@ -62,7 +62,7 @@ export default function TablesPage() {
       <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div>
           <h1 className="text-2xl font-black text-[var(--text-primary)]">Mesas abiertas</h1>
-          <p className="text-sm text-[var(--text-secondary)]">Cuentas activas de salón. Cualquier mesera puede atender o cobrar cualquier mesa.</p>
+          <p className="text-sm text-[var(--text-secondary)]">Cuentas activas de salón. Cada pedido nuevo abre su propia mesa automáticamente.</p>
         </div>
         <div className="flex gap-2">
           <Button variant="outline" onClick={load} className="gap-2"><RefreshCw className="h-4 w-4" />Actualizar</Button>

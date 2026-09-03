@@ -114,7 +114,7 @@ export default function DashboardPage() {
       <section className="overflow-hidden rounded-3xl bg-[#242321] p-6 text-white sm:p-8">
         <div className="flex flex-wrap items-center justify-between gap-5">
           <div><p className="text-xs font-semibold uppercase tracking-[0.18em] text-orange-300">Comienza aquí</p><h2 className="mt-2 text-2xl font-semibold">Un buen turno empieza con un pedido.</h2><p className="mt-2 max-w-xl text-sm leading-relaxed text-white/65">Mesas, cocina y caja conectadas para que cada pedido llegue a tiempo.</p></div>
-          {canOpen('/tables/new') ? <Link to="/tables/new" className="inline-flex items-center gap-2 rounded-xl bg-[#F97316] px-5 py-3 text-sm font-semibold text-black hover:bg-orange-400"><Plus className="h-4 w-4" />Pedido en mesa</Link> : canOpen('/orders/new') && <Link to="/orders/new" className="inline-flex items-center gap-2 rounded-xl bg-[#F97316] px-5 py-3 text-sm font-semibold text-black"><Plus className="h-4 w-4" />Nuevo pedido</Link>}
+          {canOpen('/tables/new') ? <Link to="/tables/new" className="inline-flex items-center gap-2 rounded-xl bg-[#E30613] hover:bg-[#C40510] px-5 py-3 text-sm font-bold text-white shadow-md"><Plus className="h-4 w-4" />Pedido en mesa</Link> : canOpen('/orders/new') && <Link to="/orders/new" className="inline-flex items-center gap-2 rounded-xl bg-[#E30613] hover:bg-[#C40510] px-5 py-3 text-sm font-bold text-white shadow-md"><Plus className="h-4 w-4" />Nuevo pedido</Link>}
         </div>
       </section>
 

@@ -141,8 +141,12 @@ export class TablesService {
         if (existing.waiterId !== user.id || !existing.tableId) throw new BadRequestException('El identificador del pedido ya está en uso');
         return { table: await this.findTable(existing.tableId, tx), order: existing, replay: true };
       }
-      const label = typeof data.tableLabel === 'string' ? data.tableLabel.trim() : '';
-      if (!data.tableId && (!label || label.length > 80)) throw new BadRequestException('Escribe un nombre de cuenta de 1 a 80 caracteres');
+      let label = typeof data.tableLabel === 'string' ? data.tableLabel.trim() : '';
+      if (!data.tableId && !label) {
+        const count = await tx.diningTable.count({ where: { status: 'OPEN' } });
+        label = `Mesa ${count + 1}`;
+      }
+      if (label.length > 80) label = label.slice(0, 80);
       let table = data.tableId ? await tx.diningTable.findUnique({ where: { id: data.tableId } }) : null;
       if (data.tableId && !table) throw new NotFoundException('Cuenta no encontrada');
       if (table && table.status !== 'OPEN') throw new BadRequestException('La cuenta ya está cerrada');

@@ -21,7 +21,7 @@ const getSwalAlertConfig = (title: string, text: string, icon: 'success' | 'erro
     returnFocus: false,
     background: isDark ? '#1b1b1f' : '#ffffff',
     color: isDark ? '#ffffff' : '#1c1c1e',
-    confirmButtonColor: '#F97316', // THE VILLA DOG brand orange
+    confirmButtonColor: '#E30613', // THE VILLA DOG brand red
     confirmButtonText: 'Aceptar',
     buttonsStyling: true,
     customClass: {

@@ -25,7 +25,6 @@ type CartItem = {
 }
 
 const QUICK_CHIPS = ['Sin cebolla', 'Salsas aparte', 'Sin ripio', 'Bien dorado', 'Sin salsas', 'Poco picante']
-const QUICK_TABLES = ['Mesa 1', 'Mesa 2', 'Mesa 3', 'Mesa 4', 'Mesa 5', 'Mesa 6', 'Mesa 7', 'Mesa 8', 'Barra', 'Para Llevar']
 
 export default function TableOrderPage() {
   const navigate = useNavigate()
@@ -169,16 +168,13 @@ export default function TableOrderPage() {
 
   const submit = async () => {
     if (saving) return
-    const effectiveTableLabel = tableLabel.trim()
-    if (!effectiveTableLabel) {
-      alerts.warning('Selecciona una mesa', 'Elige un botón de mesa arriba o escribe un nombre para la cuenta.')
-      document.getElementById('account-name')?.focus()
-      return
-    }
     if (cart.length === 0) {
       alerts.warning('Pedido vacío', 'Agrega al menos un producto a la cuenta tocando "+ Agregar".')
       return
     }
+
+    const effectiveTableLabel = tableLabel.trim() || 'Nueva Mesa'
+    const displayLabel = tableLabel.trim() || 'Nueva Mesa (Automática)'
 
     const takeawayCount = cart.filter(i => i.takeaway || i.notes?.includes('[PARA LLEVAR]')).reduce((s, i) => s + i.quantity, 0)
     const dineInCount = totalCount - takeawayCount
@@ -192,7 +188,7 @@ export default function TableOrderPage() {
 
     const confirmed = await alerts.confirm(
       '¿Enviar pedido a cocina?',
-      `${effectiveTableLabel}: ${summaryText} • Total: ${formatCurrency(total)}\nMesera: ${user?.name || 'Mesero'}`,
+      `${displayLabel}: ${summaryText} • Total: ${formatCurrency(total)}\nMesera: ${user?.name || 'Mesero'}`,
       '🚀 Enviar a cocina',
       'Revisar pedido',
       'question'
@@ -205,7 +201,7 @@ export default function TableOrderPage() {
     const payload: OfflineTableOrderPayload = {
       clientMutationId,
       tableId: existingTableId || undefined,
-      tableLabel: effectiveTableLabel,
+      tableLabel: tableLabel.trim() || undefined,
       notes,
       items: cart.map(i => {
         let noteText = i.notes?.trim() || ''
@@ -230,7 +226,7 @@ export default function TableOrderPage() {
       const res = editOrderId
         ? await api.put<{ table?: { id?: string; label?: string } }>(`/tables/orders/${editOrderId}`, payload)
         : await api.post<{ table?: { id?: string; label?: string } }>('/tables/orders', payload)
-      alerts.toast(`Pedido enviado a cocina para ${res?.table?.label || tableLabel}`)
+      alerts.toast(`Pedido enviado a cocina para ${res?.table?.label || displayLabel}`)
       setCart([])
       setNotes('')
       if (!existingTableId) setTableLabel('')
@@ -283,51 +279,29 @@ export default function TableOrderPage() {
           </div>
         )}
 
-        {/* Selector Rápido de Mesas en 1 Toque */}
+        {/* Identificador de Mesa o Pedido Dinámico */}
         {!existingTableId ? (
-          <div className="space-y-2 rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-3 shadow-xs">
+          <div className="space-y-1.5 rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-3 shadow-xs">
             <div className="flex items-center justify-between">
-              <label htmlFor="account-name" className="text-xs font-black uppercase tracking-wider text-[var(--text-secondary)]">
-                1. Elige la Mesa o Cliente:
+              <label htmlFor="account-name" className="text-xs font-black uppercase tracking-wider text-[var(--text-primary)]">
+                Mesa / Cliente / Referencia:
               </label>
-              {tableLabel && (
-                <span className="text-xs font-black text-[var(--accent)] bg-[var(--accent)]/10 px-2 py-0.5 rounded-md">
-                  ✓ {tableLabel}
-                </span>
-              )}
+              <span className="text-[11px] font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-md">
+                ✨ Nueva mesa automática
+              </span>
             </div>
-
-            {/* Botones de Mesas Frecuentes (1 Toque en Celular) */}
-            <div className="flex items-center gap-1.5 overflow-x-auto pb-1 no-scrollbar">
-              {QUICK_TABLES.map(quick => {
-                const isSelected = tableLabel.trim().toLowerCase() === quick.toLowerCase()
-                return (
-                  <button
-                    key={quick}
-                    type="button"
-                    onClick={() => setTableLabel(quick)}
-                    className={`rounded-xl px-3 py-1.5 text-xs font-black whitespace-nowrap transition-all active:scale-95 cursor-pointer ${
-                      isSelected
-                        ? 'bg-[var(--accent)] text-white shadow-xs scale-105 ring-2 ring-[var(--accent)]/30'
-                        : 'bg-[var(--bg-elevated)] text-[var(--text-primary)] border border-[var(--border-subtle)] hover:border-[var(--accent)]'
-                    }`}
-                  >
-                    {quick}
-                  </button>
-                )
-              })}
-            </div>
-
-            {/* Input para nombre personalizado */}
             <Input
               id="account-name"
               maxLength={80}
               autoComplete="off"
               value={tableLabel}
               onChange={e => setTableLabel(e.target.value)}
-              placeholder="O escribe nombre / carro / referencia (ej: Carro rojo)..."
-              className="h-9 text-xs font-bold rounded-xl bg-[var(--bg-elevated)]"
+              placeholder="Opcional: Ej. Mesa 4, Carlos, Carro rojo (o déjalo en blanco)..."
+              className="h-10 text-xs font-bold rounded-xl bg-[var(--bg-elevated)]"
             />
+            <p className="text-[10px] text-[var(--text-muted)]">
+              💡 Cada pedido abre una nueva mesa automáticamente. No tienes que configurar mesas antes.
+            </p>
           </div>
         ) : (
           <div className="rounded-xl bg-[var(--accent)]/10 border border-[var(--accent)]/30 px-3 py-2 flex items-center justify-between">

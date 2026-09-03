@@ -244,7 +244,7 @@ export default function SuperAdminOverviewPage() {
                 <div className="pt-2">
                   <button
                     onClick={() => setShowBroadcastModal(true)}
-                    className="w-full py-3 px-4 rounded-xl font-bold text-xs bg-[#F97316] hover:bg-[#EA580C] text-[#17100D] shadow-md shadow-[#F97316]/20 flex items-center justify-center gap-2 transition-all hover:scale-[1.01]"
+                    className="w-full py-3 px-4 rounded-xl font-bold text-xs bg-[#E30613] hover:bg-[#C40510] text-white shadow-md shadow-[#E30613]/20 flex items-center justify-center gap-2 transition-all hover:scale-[1.01]"
                   >
                     <Send className="h-4 w-4" />
                     🚀 Lanzar Envío Masivo de WhatsApp

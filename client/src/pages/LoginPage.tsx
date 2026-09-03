@@ -211,7 +211,7 @@ export default function LoginPage() {
 
   return (
     <div className="login-shell relative flex min-h-screen items-center justify-center bg-[var(--bg-base)] px-5 py-16 sm:px-10">
-      <div className="pointer-events-none absolute top-0 left-0 h-1 w-full bg-[#F97316]" />
+      <div className="pointer-events-none absolute top-0 left-0 h-1 w-full bg-[#E30613]" />
 
       {/* Theme Toggle Button */}
       <motion.div
@@ -362,7 +362,7 @@ export default function LoginPage() {
                 <motion.div variants={itemVariants} className="pt-2">
                   <motion.button
                     type="submit"
-                    className="w-full h-11.5 relative overflow-hidden rounded-xl bg-gradient-to-r from-[#F97316] to-[#EA580C] font-semibold text-[#0D0D0D] transition-all duration-300 shadow-[0_4px_20px_-4px_rgba(249,115,22,0.4)] hover:shadow-[0_8px_24px_-2px_rgba(249,115,22,0.6)] disabled:opacity-50 disabled:cursor-not-allowed group cursor-pointer"
+                    className="w-full h-11.5 relative overflow-hidden rounded-xl bg-gradient-to-r from-[#E30613] to-[#C40510] font-bold text-white transition-all duration-300 shadow-[0_4px_20px_-4px_rgba(227,6,19,0.4)] hover:shadow-[0_8px_24px_-2px_rgba(227,6,19,0.6)] disabled:opacity-50 disabled:cursor-not-allowed group cursor-pointer"
                     disabled={loading}
                     whileHover={{ scale: loading ? 1 : 1.015 }}
                     whileTap={{ scale: loading ? 1 : 0.98 }}
@@ -602,7 +602,7 @@ export default function LoginPage() {
                     <Button
                       type="submit"
                       disabled={otpLoading || otpCode.length < 6 || !newOtpPassword}
-                      className="flex-1 h-11 bg-gradient-to-r from-[#F97316] to-[#EA580C] hover:opacity-95 text-[#0D0D0D] font-bold text-xs rounded-xl shadow-lg shadow-[#F97316]/20 disabled:opacity-50 cursor-pointer"
+                      className="flex-1 h-11 bg-gradient-to-r from-[#E30613] to-[#C40510] hover:opacity-95 text-white font-bold text-xs rounded-xl shadow-lg shadow-[#E30613]/20 disabled:opacity-50 cursor-pointer"
                     >
                       {otpLoading ? (
                         <span className="flex items-center gap-2">
@@ -659,7 +659,7 @@ export default function LoginPage() {
                     <Button
                       type="submit"
                       disabled={forgotLoading || !forgotEmail.trim()}
-                      className="flex-1 h-11 bg-gradient-to-r from-[#F97316] to-[#EA580C] hover:opacity-95 text-[#0D0D0D] font-bold text-xs rounded-xl shadow-lg shadow-[#F97316]/20 disabled:opacity-50 cursor-pointer"
+                      className="flex-1 h-11 bg-gradient-to-r from-[#E30613] to-[#C40510] hover:opacity-95 text-white font-bold text-xs rounded-xl shadow-lg shadow-[#E30613]/20 disabled:opacity-50 cursor-pointer"
                     >
                       {forgotLoading ? (
                         <span className="flex items-center gap-2">
