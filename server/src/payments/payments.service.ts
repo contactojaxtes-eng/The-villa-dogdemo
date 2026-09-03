@@ -349,7 +349,12 @@ export class PaymentsService {
       start.setHours(0, 0, 0, 0);
       const end = new Date(params.date);
       end.setHours(23, 59, 59, 999);
-      where.createdAt = { gte: start, lte: end };
+      // Permite encontrar el cierre tanto si se busca el día que inició el turno como si se busca el día que cerró (después de medianoche)
+      where.OR = [
+        { createdAt: { gte: start, lte: end } },
+        { shiftStart: { gte: start, lte: end } },
+        { shiftEnd: { gte: start, lte: end } },
+      ];
     }
     return this.prisma.cashClosing.findMany({
       where,
