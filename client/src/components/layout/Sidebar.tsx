@@ -124,9 +124,10 @@ export function Sidebar({ onClose, isCollapsed = false, onToggleCollapse }: Side
   return (
     <aside
       className={cn(
-        "niche-sidebar flex h-screen shrink-0 flex-col border-r border-[var(--border-subtle)] bg-[var(--bg-subtle)] relative transition-all duration-300 overflow-visible z-20"
+        "niche-sidebar flex shrink-0 flex-col border-r border-[var(--border-subtle)] bg-[var(--bg-panel)] relative transition-all duration-300 overflow-hidden z-20",
+        onClose ? "w-full h-full max-h-[100dvh]" : "h-screen"
       )}
-      style={{ width: isCollapsed ? '64px' : '256px' }}
+      style={{ width: isCollapsed ? '64px' : onClose ? '100%' : '256px' }}
     >
       {onClose && (
         <Button variant="ghost" size="icon" onClick={onClose} className="absolute top-4 right-4 h-8 w-8 rounded-xl text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] md:hidden z-20 cursor-pointer">
@@ -144,13 +145,13 @@ export function Sidebar({ onClose, isCollapsed = false, onToggleCollapse }: Side
         </button>
       )}
 
-      <div className="border-b border-[var(--border-subtle)] px-4 py-4 flex items-center justify-center">
-        <Link to={getFirstAllowedPath(user) || '/profile'} className={cn("flex justify-center rounded-2xl bg-white border border-slate-200/80 transition-all duration-200 hover:scale-[1.02] active:scale-[0.98]", isCollapsed ? "h-9 w-9 items-center p-1" : "py-2.5 px-3 w-full shadow-xs")}>
-          {isCollapsed ? <span className="text-sm font-black text-[#E30613]">V</span> : <BrandLogo compact imageClassName="w-28" />}
+      <div className="border-b border-[var(--border-subtle)] px-3 py-3 shrink-0 flex items-center justify-center">
+        <Link to={getFirstAllowedPath(user) || '/profile'} className={cn("flex justify-center rounded-2xl bg-white border border-slate-200/80 transition-all duration-200 hover:scale-[1.02] active:scale-[0.98]", isCollapsed ? "h-9 w-9 items-center p-1" : "py-2 px-3 w-full shadow-2xs")} onClick={onClose}>
+          {isCollapsed ? <span className="text-sm font-black text-[#E30613]">V</span> : <BrandLogo compact imageClassName="w-24" />}
         </Link>
       </div>
 
-      <nav className={cn("flex-1 overflow-y-auto py-4", isCollapsed ? "px-1.5" : "px-3")}>
+      <nav className={cn("flex-1 min-h-0 overflow-y-auto py-2", isCollapsed ? "px-1.5" : "px-3")}>
         <ul className="space-y-0.5 mt-2">
           {finalItems.map((item, index) => {
             const Icon = item.icon
@@ -267,8 +268,8 @@ export function Sidebar({ onClose, isCollapsed = false, onToggleCollapse }: Side
           </Button>
         </div>
       ) : (
-        <div className="border-t border-[var(--border-subtle)] p-3 flex items-center justify-between gap-2">
-          <Link to="/profile" className="flex items-center gap-2.5 min-w-0 group" title="Mi perfil">
+        <div className="border-t border-[var(--border-subtle)] p-3 shrink-0 bg-[var(--bg-panel)] flex items-center justify-between gap-2 shadow-xs">
+          <Link to="/profile" className="flex items-center gap-2.5 min-w-0 group" title="Mi perfil" onClick={onClose}>
             <Avatar className="h-9 w-9 shrink-0 ring-2 ring-[var(--border-default)] group-hover:ring-[var(--accent)] transition-all">
               <AvatarFallback className="bg-[var(--bg-base)] text-xs font-extrabold text-[var(--text-primary)]">{initials}</AvatarFallback>
             </Avatar>
@@ -277,12 +278,12 @@ export function Sidebar({ onClose, isCollapsed = false, onToggleCollapse }: Side
               <p className="text-[9px] text-[var(--text-muted)] font-medium uppercase tracking-wider">{roleLabels[user?.role || ''] || user?.role}</p>
             </div>
           </Link>
-          <div className="flex gap-0.5 shrink-0">
-            <Button variant="ghost" size="icon" className="h-7 w-7 text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]" onClick={toggleTheme} title="Cambiar tema">
-              {theme === 'dark' ? <Sun className="h-3.5 w-3.5" /> : <Moon className="h-3.5 w-3.5" />}
+          <div className="flex gap-1 shrink-0 items-center">
+            <Button variant="ghost" size="icon" className="h-8 w-8 text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] rounded-xl" onClick={toggleTheme} title="Cambiar tema">
+              {theme === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
             </Button>
-            <Button variant="ghost" size="icon" className="h-7 w-7 text-[var(--text-secondary)] hover:text-[var(--destructive)] hover:bg-[var(--bg-hover)]" onClick={logout} title="Cerrar sesion">
-              <LogOut className="h-3.5 w-3.5" />
+            <Button variant="ghost" size="icon" className="h-8 w-8 text-rose-500 hover:text-rose-600 hover:bg-rose-500/10 rounded-xl" onClick={logout} title="Cerrar sesion">
+              <LogOut className="h-4 w-4" />
             </Button>
           </div>
         </div>

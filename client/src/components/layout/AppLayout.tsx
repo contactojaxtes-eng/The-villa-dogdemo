@@ -85,7 +85,7 @@ export function AppLayout() {
               />
               {/* Drawer Container */}
               <motion.div
-                className="fixed inset-y-0 left-0 z-50 w-64 md:hidden"
+                className="fixed inset-y-0 left-0 z-50 w-72 max-w-[85vw] h-[100dvh] max-h-[100dvh] md:hidden flex flex-col overflow-hidden shadow-2xl"
                 initial={{ x: '-100%' }}
                 animate={{ x: 0 }}
                 exit={{ x: '-100%' }}
@@ -180,7 +180,7 @@ export function AppLayout() {
           </header>
         ) : (
           /* Mobile Top Header normal */
-          <header className="flex h-16 items-center justify-between border-b border-[var(--border-subtle)] bg-[var(--bg-panel)] px-4 md:hidden shrink-0">
+          <header className="flex h-14 items-center justify-between border-b border-[var(--border-subtle)] bg-[var(--bg-panel)] px-3 md:hidden shrink-0">
             <button
               onClick={() => setIsMobileMenuOpen(true)}
               className="rounded-xl p-2 text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] active:scale-95 transition-all cursor-pointer"
@@ -188,10 +188,29 @@ export function AppLayout() {
             >
               <Menu className="h-6 w-6" />
             </button>
-            <div className="flex rounded-2xl bg-[var(--bg-base)] py-1.5 px-3 border border-[var(--border-subtle)]">
-              <BrandLogo compact imageClassName="w-24" />
+            <div className="flex rounded-2xl bg-white py-1 px-2.5 border border-slate-200/80 shadow-2xs">
+              <BrandLogo compact imageClassName="w-20" />
             </div>
-            <div className="w-10" />
+            {/* Acciones directas en móvil: Tema y Salir sin abrir el menú */}
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={toggleTheme}
+                className="h-8 w-8 rounded-xl flex items-center justify-center text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] transition cursor-pointer"
+                title="Cambiar tema"
+              >
+                {theme === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+              </button>
+              <button
+                type="button"
+                onClick={logout}
+                className="h-8 px-2 rounded-xl flex items-center gap-1 text-xs font-bold text-rose-500 hover:bg-rose-500/10 transition cursor-pointer"
+                title="Cerrar sesión"
+              >
+                <LogOut className="h-4 w-4" />
+                <span className="text-[11px]">Salir</span>
+              </button>
+            </div>
           </header>
         )}
 
