@@ -255,7 +255,15 @@ export class TablesService {
       await this.createKitchenTickets(orderId, user.id, true, summary, changeMap, existing.items, tx, tickets);
       return { table: await this.findTable(existing.tableId, tx), order: updated, changeSummary: summary };
     }, operationTransaction);
-    tickets.forEach(event => event.created ? this.socketGateway.emitKitchenTicketCreated(event.ticket) : this.socketGateway.emitKitchenTicketUpdated(event.ticket));
+    tickets.forEach(event => {
+      if (event.isEdited) {
+        this.socketGateway.emitKitchenTicketEdited(event.ticket);
+      } else if (event.created) {
+        this.socketGateway.emitKitchenTicketCreated(event.ticket);
+      } else {
+        this.socketGateway.emitKitchenTicketUpdated(event.ticket);
+      }
+    });
     this.socketGateway.server.emit('tableOrderEdited', { orderId, changeSummary: result.changeSummary });
     this.socketGateway.emitTableUpdated(result.table);
     return result;
@@ -306,7 +314,7 @@ export class TablesService {
     return loads[0].user.id;
   }
 
-  private isDrinkOrSideCategory(categoryName: string): boolean {
+  private isDrinkCategory(categoryName: string): boolean {
     const lower = (categoryName || '').toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
     return (
       lower.includes('bebida') ||
@@ -315,8 +323,7 @@ export class TablesService {
       lower.includes('agua') ||
       lower.includes('refresco') ||
       lower.includes('soda') ||
-      lower.includes('cerveza') ||
-      lower.includes('adicion')
+      lower.includes('cerveza')
     );
   }
 
@@ -328,8 +335,8 @@ export class TablesService {
       } catch (e) {}
     }
     return {
-      smartDrinkRouting: true,
-      multiStationDrinkTarget: 'general',
+      smartDrinkRouting: false,
+      multiStationDrinkTarget: 'none',
       splitByChannel: true,
     };
   }
@@ -376,70 +383,32 @@ export class TablesService {
       || eligibleStations.find(s => s.categories.length === 0)
       || eligibleStations[eligibleStations.length - 1];
 
-    const drinkStation = eligibleStations.find(s => /bebida|jugo|bar/i.test(s.name)) || generalStation;
-
-    // 2. Clasificar items en Comida vs Bebidas/Acompañamientos
-    const foodItems: any[] = [];
-    const drinkItems: any[] = [];
-
-    for (const item of order.items) {
+    // 2. Filtrar Comida para Cocina: LAS BEBIDAS NO SALEN A NINGUNA COCINA.
+    // En The Villa Dog las meseras despachan las bebidas directamente de la nevera/barra.
+    const foodItems = order.items.filter(item => {
       const catName = item.menuItem?.category?.name || '';
-      if (this.isDrinkOrSideCategory(catName)) {
-        drinkItems.push(item);
-      } else {
-        foodItems.push(item);
-      }
-    }
+      return !this.isDrinkCategory(catName);
+    });
 
     // 3. Agrupar comida en sus estaciones respectivas
     const stationGroups = new Map<string, any[]>();
-    const foodStationsSet = new Set<string>();
-
     for (const item of foodItems) {
-      const categoryId = item.menuItem.categoryId;
-      const targetStation = eligibleStations.find(s => s.categories.some(c => c.id === categoryId)) || generalStation;
-      foodStationsSet.add(targetStation.id);
-
+      const categoryId = item.menuItem?.categoryId;
+      const targetStation = eligibleStations.find(s => s.categories?.some(c => c.id === categoryId)) || generalStation;
+      if (!targetStation) continue;
       if (!stationGroups.has(targetStation.id)) stationGroups.set(targetStation.id, []);
       stationGroups.get(targetStation.id)!.push(item);
     }
 
-    // 4. Regla inteligente de Bebidas (sin duplicaciones):
-    if (drinkItems.length > 0) {
-      if (foodStationsSet.size === 1 && settings.smartDrinkRouting !== false) {
-        // Caso A: Solo una estación de comida (ej: hamburguesa + gaseosa) -> acompañar a esa estación
-        const singleStationId = Array.from(foodStationsSet)[0];
-        if (!stationGroups.has(singleStationId)) stationGroups.set(singleStationId, []);
-        stationGroups.get(singleStationId)!.push(...drinkItems);
-      } else if (foodStationsSet.size > 1) {
-        // Caso B: Múltiples estaciones (ej: 1 hamburguesa + 1 perro + 1 gaseosa)
-        // Regla The Villa Dog: Las bebidas van primordialmente a la estación de Perros Calientes, SIN salir en Hamburguesas
-        const perroStation = eligibleStations.find(s => /perro/i.test(s.name));
-        const targetId = perroStation ? perroStation.id : Array.from(foodStationsSet)[0];
-        if (!stationGroups.has(targetId)) stationGroups.set(targetId, []);
-        stationGroups.get(targetId)!.push(...drinkItems);
-      } else {
-        // Caso C: Solo bebidas en el pedido -> estación de perros primordialmente
-        const perroStation = eligibleStations.find(s => /perro/i.test(s.name));
-        const targetId = perroStation ? perroStation.id : generalStation.id;
-        if (!stationGroups.has(targetId)) stationGroups.set(targetId, []);
-        stationGroups.get(targetId)!.push(...drinkItems);
-      }
-    }
-
-    // 5. Al editar: incorporar items cancelados/eliminados a su estación correspondiente para alertar a cocina
+    // 4. Al editar: incorporar items cancelados/eliminados de comida a su estación correspondiente
     if (isEdited && removedCandidateItems && changeMap) {
       for (const oldItem of removedCandidateItems) {
         if (changeMap.get(oldItem.menuItemId)?.changeType === 'REMOVED') {
           const catName = oldItem.menuItem?.category?.name || '';
+          // Si era una bebida eliminada, NO enviar a cocina (las bebidas nunca van a cocina)
+          if (this.isDrinkCategory(catName)) continue;
           const fallbackStation = generalStation || eligibleStations[0] || allActiveStations[0];
-          let targetStation = fallbackStation;
-          if (this.isDrinkOrSideCategory(catName)) {
-            const perroStation = eligibleStations.find(s => /perro/i.test(s.name));
-            targetStation = perroStation || fallbackStation;
-          } else {
-            targetStation = eligibleStations.find(s => s.categories?.some(c => c.id === oldItem.menuItem?.categoryId)) || fallbackStation;
-          }
+          const targetStation = eligibleStations.find(s => s.categories?.some(c => c.id === oldItem.menuItem?.categoryId)) || fallbackStation;
           if (targetStation?.id) {
             if (!stationGroups.has(targetStation.id)) stationGroups.set(targetStation.id, []);
             stationGroups.get(targetStation.id)!.push({
@@ -494,8 +463,16 @@ export class TablesService {
       });
 
       const hasActiveItems = ticketItemsData.some(i => i.changeType !== 'REMOVED');
-      // Solo consideramos editado este ticket si tiene cambios en productos de ESTA estación
+      // Solo consideramos cambios si hay productos agregados, quitados o modificados en ESTA estación
       const stationHasChanges = ticketItemsData.some(i => i.changeType !== 'UNCHANGED');
+
+      // REGLA FUNDAMENTAL: Si el pedido fue editado pero esta estación NO tuvo cambios:
+      // "solo al que se edito, lo demas se queda quieto".
+      // No se modifica la comanda, no se re-emiten eventos, no se hace sonar la campana ni se distrae al cocinero.
+      if (isEdited && !stationHasChanges) {
+        continue;
+      }
+
       const stationIsEdited = isEdited && stationHasChanges;
 
       // Generar el resumen de cambios EXCLUSIVO para esta estación (no mezclar con otras estaciones)
@@ -538,7 +515,13 @@ export class TablesService {
           include: { station: { include: { users: { select: { id: true, name: true, role: true } } } }, assignedTo: { select: { id: true, name: true } }, items: true, order: { include: { waiter: true, diningTable: true } } },
         });
         tickets.push(updatedTicket);
-        if (events) events.push({ created: false, ticket: updatedTicket }); else this.socketGateway.emitKitchenTicketUpdated(updatedTicket);
+        if (events) {
+          events.push({ created: false, ticket: updatedTicket, isEdited: stationIsEdited });
+        } else if (stationIsEdited) {
+          this.socketGateway.emitKitchenTicketEdited(updatedTicket);
+        } else {
+          this.socketGateway.emitKitchenTicketUpdated(updatedTicket);
+        }
       } else {
         // CREAR TICKET NUEVO (primera vez para esta estación)
         const assignedToId = await this.pickCook(stationId, db);
@@ -559,7 +542,13 @@ export class TablesService {
           include: { station: { include: { users: { select: { id: true, name: true, role: true } } } }, assignedTo: { select: { id: true, name: true } }, items: true, order: { include: { waiter: true, diningTable: true } } },
         });
         tickets.push(newTicket);
-        if (events) events.push({ created: true, ticket: newTicket }); else this.socketGateway.emitKitchenTicketCreated(newTicket);
+        if (events) {
+          events.push({ created: !stationIsEdited, ticket: newTicket, isEdited: stationIsEdited });
+        } else if (stationIsEdited) {
+          this.socketGateway.emitKitchenTicketEdited(newTicket);
+        } else {
+          this.socketGateway.emitKitchenTicketCreated(newTicket);
+        }
       }
     }
 

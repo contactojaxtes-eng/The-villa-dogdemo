@@ -56,9 +56,9 @@ export default function KitchenPage() {
       const assignedId = ticket.assignedToId || ticket.assignedTo?.id
       // 1. Asignado específicamente a este cocinero
       if (assignedId && assignedId === user?.id) return true
-      // 2. Si no tiene cocinero asignado directamente, pero la estación está asignada a este usuario
+      // 2. Si la estación pertenece a este cocinero
       const stationUsers = ticket.station?.users || []
-      if (!assignedId && stationUsers.some(u => u.id === user?.id)) return true
+      if (stationUsers.some(u => u.id === user?.id)) return true
       return false
     }
     return false
@@ -161,12 +161,13 @@ export default function KitchenPage() {
   const scopedTickets = useMemo(() => {
     return consolidatedTickets.filter(t => {
       if (stationFilter !== 'ALL' && t.stationId !== stationFilter && t.station?.id !== stationFilter) return false
-      // Si el usuario logueado es cocinero (KITCHEN), mostrar ÚNICAMENTE sus tickets asignados
+      // Si el usuario logueado es cocinero (KITCHEN), mostrar ÚNICAMENTE sus tickets asignados o de su estación
       if (user?.role === 'KITCHEN') {
         const assignedId = t.assignedToId || t.assignedTo?.id
-        if (assignedId && assignedId !== user.id) return false
         const stationUsers = t.station?.users || []
-        if (!assignedId && stationUsers.length > 0 && !stationUsers.some(u => u.id === user.id)) return false
+        const isMyStation = stationUsers.some(u => u.id === user.id)
+        const isAssignedToMe = assignedId === user.id
+        if (!isMyStation && !isAssignedToMe) return false
       }
       return true
     })
