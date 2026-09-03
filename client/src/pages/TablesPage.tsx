@@ -8,6 +8,7 @@ import { api } from '@/lib/api'
 import { formatCurrency } from '@/lib/utils'
 import { useAuth } from '@/hooks/useAuth'
 import type { DiningTableSummary } from '@/lib/tableTypes'
+import { syncOfflineOrders } from '@/lib/offlineTableOrders'
 
 export default function TablesPage() {
   const { user } = useAuth()
@@ -25,6 +26,17 @@ export default function TablesPage() {
 
   useEffect(() => {
     void Promise.resolve().then(load)
+
+    // Sincronizar automáticamente pedidos tomados fuera de la señal
+    const triggerSync = () => {
+      syncOfflineOrders().then(res => {
+        if (res.synced > 0) load()
+      }).catch(console.error)
+    }
+
+    triggerSync()
+    window.addEventListener('online', triggerSync)
+    return () => window.removeEventListener('online', triggerSync)
   }, [load])
 
   useEffect(() => {

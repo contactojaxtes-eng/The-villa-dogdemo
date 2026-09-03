@@ -85,7 +85,14 @@ export default function TableOrderPage() {
   const [params] = useSearchParams()
   const existingTableId = params.get('tableId') || ''
   const editOrderId = params.get('editOrderId') || ''
-  const [categories, setCategories] = useState<Category[]>([])
+  const [categories, setCategories] = useState<Category[]>(() => {
+    try {
+      const cached = localStorage.getItem('the_villa_dog_cached_menu')
+      return cached ? JSON.parse(cached) : []
+    } catch {
+      return []
+    }
+  })
   const [selectedCategory, setSelectedCategory] = useState<string>('ALL')
   const [tableLabel, setTableLabel] = useState('')
   const [notes, setNotes] = useState('')
@@ -101,7 +108,14 @@ export default function TableOrderPage() {
   const loadPending = useCallback(() => listOfflineOrders().then(setPending).catch(() => setPending([])), [])
 
   useEffect(() => {
-    api.get<Category[]>('/menu/categories').then(setCategories).catch(console.error)
+    api.get<Category[]>('/menu/categories').then(data => {
+      setCategories(data)
+      try {
+        localStorage.setItem('the_villa_dog_cached_menu', JSON.stringify(data))
+      } catch (e) {
+        console.warn('No se pudo guardar menú en caché local', e)
+      }
+    }).catch(console.error)
     loadPending()
     if (existingTableId) {
       api.get<{ label: string }>(`/tables/${existingTableId}`).then(table => {
@@ -803,10 +817,14 @@ export default function TableOrderPage() {
       if (!existingTableId) setTableLabel('')
       navigate('/tables')
     } catch (err: any) {
-      if (!navigator.onLine) {
+      const isNetworkError = !navigator.onLine || !err?.response || err?.message === 'Network Error' || err?.code === 'ECONNABORTED'
+      if (isNetworkError) {
         await saveOfflineOrder({ clientMutationId, createdAt: new Date().toISOString(), payload, status: 'PENDING' })
         await loadPending()
-        alerts.warning('Guardado sin internet', 'El pedido queda guardado y se enviará al reconectar.')
+        alerts.warning(
+          'Guardado sin internet (Modo Offline)',
+          `El pedido de "${effectiveTableLabel}" quedó guardado seguro en tu celular. En cuanto te acerques a la señal del restaurante, se enviará solito a cocina.`
+        )
         setCart([])
         navigate('/tables')
       } else {
