@@ -98,6 +98,9 @@ export default function TableOrderPage() {
   const [editOrderNumber, setEditOrderNumber] = useState<number | null>(null)
   const submission = useRef({ signature: '', id: '' })
   const [showMobileCart, setShowMobileCart] = useState(false)
+  const [noteModalItem, setNoteModalItem] = useState<MenuItem | null>(null)
+  const [customNoteInput, setCustomNoteInput] = useState('')
+  const [noteTargetTakeaway, setNoteTargetTakeaway] = useState(false)
 
   const loadPending = useCallback(() => listOfflineOrders().then(setPending).catch(() => setPending([])), [])
 
@@ -402,6 +405,83 @@ export default function TableOrderPage() {
       const newNotes = current ? `${current}, ${chipText}` : chipText
       return prev.map(i => (i.cartKey === cartKey ? { ...i, notes: newNotes } : i))
     })
+  }
+
+  // Abrir modal de notas rápidas directamente para un producto sin salir del catálogo
+  const openCardNoteModal = (item: MenuItem) => {
+    const inCart = cart.some(c => c.menuItemId === item.id)
+    if (!inCart) {
+      setCart(prev => [
+        ...prev,
+        {
+          cartKey: genKey(item.id),
+          menuItemId: item.id,
+          name: item.name,
+          price: item.price,
+          quantity: 1,
+          takeaway: false,
+          notes: '',
+          additions: [],
+        },
+      ])
+    }
+    setNoteModalItem(item)
+    setCustomNoteInput('')
+    setNoteTargetTakeaway(false)
+  }
+
+  // Aplicar nota rápida a un producto en el menú sin salir del catálogo
+  const applyNoteToProduct = (menuItemId: string, noteText: string, isTakeaway = false) => {
+    setCart(prev => {
+      // 1. Buscar si hay una línea de este producto sin notas
+      const target = prev.find(i => i.menuItemId === menuItemId && !(i.notes || '').trim())
+      if (target) {
+        if (target.quantity > 1) {
+          // Separar 1 unidad con esta nota
+          const remaining = { ...target, quantity: target.quantity - 1 }
+          const singleUnit: CartItem = {
+            ...target,
+            cartKey: genKey(`${menuItemId}_note`),
+            quantity: 1,
+            notes: noteText,
+            takeaway: isTakeaway || target.takeaway,
+          }
+          return prev.map(i => (i.cartKey === target.cartKey ? remaining : i)).concat(singleUnit)
+        } else {
+          // Asignar nota a esta unidad
+          return prev.map(i => (i.cartKey === target.cartKey ? { ...i, notes: noteText, takeaway: isTakeaway || i.takeaway } : i))
+        }
+      }
+
+      // 2. Si ya todas las líneas tienen nota, agregar 1 nueva
+      const menuItem = categories.flatMap(c => c.items).find(i => i.id === menuItemId)
+      if (menuItem) {
+        return [
+          ...prev,
+          {
+            cartKey: genKey(`${menuItemId}_note`),
+            menuItemId: menuItem.id,
+            name: menuItem.name,
+            price: menuItem.price,
+            quantity: 1,
+            takeaway: isTakeaway,
+            notes: noteText,
+            additions: [],
+          },
+        ]
+      }
+      return prev
+    })
+
+    alerts.toast(`Nota agregada: "${noteText}"`)
+    setNoteModalItem(null)
+    setCustomNoteInput('')
+  }
+
+  // Quitar nota directamente de una línea
+  const removeLineNote = (cartKey: string) => {
+    setCart(prev => prev.map(i => (i.cartKey === cartKey ? { ...i, notes: '' } : i)))
+    alerts.toast('Nota retirada')
   }
 
   // Alternar adición en una línea de la cuenta (SI TIENE > 1 UNIDAD, SEPARA 1 UNIDAD CON LA ADICIÓN)
@@ -737,24 +817,69 @@ export default function TableOrderPage() {
                         )}
                       </div>
 
-                      {/* Resumen si ya está en la cuenta */}
-                      {inCartTotal > 0 && (
-                        <div className="mt-2 flex items-center gap-1.5 flex-wrap">
-                          <span className="rounded-md bg-[var(--accent)] text-white text-[10px] font-black px-1.5 py-0.5">
-                            {inCartTotal} en cuenta
-                          </span>
-                          {inCartTakeaway > 0 && (
-                            <span className="rounded-md bg-[var(--bg-elevated)] text-[var(--text-secondary)] border border-[var(--border-subtle)] text-[10px] font-bold px-1.5 py-0.5">
-                              {inCartTakeaway} llevar
+                      {/* Resumen detallado en la tarjeta: mesa, llevar y notas específicas */}
+                      {inCartTotal > 0 && (() => {
+                        const itemCartLines = cart.filter(c => c.menuItemId === item.id)
+                        const baseDineIn = itemCartLines
+                          .filter(c => !c.takeaway && !(c.notes || '').trim() && (!c.additions || c.additions.length === 0))
+                          .reduce((s, c) => s + c.quantity, 0)
+                        const baseTakeaway = itemCartLines
+                          .filter(c => c.takeaway && !(c.notes || '').trim() && (!c.additions || c.additions.length === 0))
+                          .reduce((s, c) => s + c.quantity, 0)
+                        const customLines = itemCartLines.filter(
+                          c => (c.notes || '').trim() || (c.additions && c.additions.length > 0)
+                        )
+
+                        return (
+                          <div className="mt-2 flex items-center gap-1.5 flex-wrap">
+                            <span className="rounded-md bg-[var(--accent)] text-white text-[10px] font-black px-1.5 py-0.5 shadow-2xs">
+                              {inCartTotal} en cuenta
                             </span>
-                          )}
-                          {inCartDineIn > 0 && inCartTakeaway > 0 && (
-                            <span className="rounded-md bg-[var(--bg-elevated)] text-[var(--text-secondary)] border border-[var(--border-subtle)] text-[10px] font-bold px-1.5 py-0.5">
-                              {inCartDineIn} mesa
-                            </span>
-                          )}
-                        </div>
-                      )}
+
+                            {baseDineIn > 0 && (
+                              <span className="rounded-md bg-[var(--bg-elevated)] text-[var(--text-secondary)] border border-[var(--border-subtle)] text-[10px] font-bold px-1.5 py-0.5">
+                                {baseDineIn} mesa
+                              </span>
+                            )}
+
+                            {baseTakeaway > 0 && (
+                              <span className="rounded-md bg-amber-500/10 text-amber-800 dark:text-amber-300 border border-amber-500/30 text-[10px] font-bold px-1.5 py-0.5 flex items-center gap-1">
+                                <ShoppingBag className="h-3 w-3" />
+                                {baseTakeaway} llevar
+                              </span>
+                            )}
+
+                            {customLines.map(line => {
+                              const noteStr = line.notes?.trim()
+                              const addStr = line.additions?.map(a => a.name.replace(/^adici[oó]n\s+de\s+/i, '')).join(', ')
+                              return (
+                                <span
+                                  key={line.cartKey}
+                                  className="rounded-md bg-amber-500/15 border border-amber-500/40 text-amber-950 dark:text-amber-200 text-[10px] font-bold px-2 py-0.5 flex items-center gap-1 shadow-2xs animate-in fade-in"
+                                >
+                                  {line.takeaway && <ShoppingBag className="h-2.5 w-2.5 shrink-0" />}
+                                  <span>
+                                    {line.quantity} {noteStr ? noteStr : ''} {addStr ? `(+${addStr})` : ''}
+                                  </span>
+                                  {noteStr && (
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation()
+                                        removeLineNote(line.cartKey)
+                                      }}
+                                      className="text-rose-500 hover:text-rose-700 hover:bg-rose-500/20 rounded-full h-3.5 w-3.5 flex items-center justify-center font-black ml-0.5 cursor-pointer"
+                                      title="Quitar esta nota"
+                                    >
+                                      ×
+                                    </button>
+                                  )}
+                                </span>
+                              )
+                            })}
+                          </div>
+                        )
+                      })()}
                     </div>
 
                     {/* Acciones directas dentro de la tarjeta */}
@@ -779,7 +904,8 @@ export default function TableOrderPage() {
                             className="h-9 px-2.5 rounded-xl bg-[var(--bg-elevated)] hover:bg-[var(--bg-hover)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] font-bold text-xs border border-[var(--border-subtle)] active:scale-90 transition cursor-pointer flex items-center gap-1"
                             title="Agregar para llevar"
                           >
-                            🥡 Llevar
+                            <ShoppingBag className="h-3.5 w-3.5 text-amber-600" />
+                            <span>Llevar</span>
                           </button>
                         </div>
                       ) : (
@@ -807,22 +933,23 @@ export default function TableOrderPage() {
                             </button>
                           </div>
 
-                          {/* Botón rápido para sumar para llevar */}
+                          {/* Botón rápido para sumar para llevar con icono de bolsa */}
                           <button
                             type="button"
                             onClick={() => addItem(item, true)}
-                            className="h-9 px-2 rounded-xl bg-[var(--bg-elevated)] hover:bg-[var(--bg-hover)] text-[var(--text-secondary)] font-bold text-xs border border-[var(--border-subtle)] active:scale-90 transition cursor-pointer flex items-center gap-0.5"
+                            className="h-9 px-2.5 rounded-xl bg-[var(--bg-elevated)] hover:bg-[var(--bg-hover)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] font-bold text-xs border border-[var(--border-subtle)] active:scale-90 transition cursor-pointer flex items-center gap-1"
                             title="Sumar una unidad para llevar"
                           >
-                            +🥡
+                            <ShoppingBag className="h-3.5 w-3.5 text-amber-600" />
+                            <span>+Llevar</span>
                           </button>
 
-                          {/* Botón directo para notas y cuenta */}
+                          {/* Botón directo para notas RÁPIDAS sin salir de la pantalla */}
                           <button
                             type="button"
-                            onClick={() => setShowMobileCart(true)}
-                            className="h-9 px-2.5 rounded-xl bg-[var(--bg-elevated)] hover:bg-[var(--bg-hover)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] font-bold text-xs border border-[var(--border-subtle)] active:scale-90 transition cursor-pointer flex items-center gap-1"
-                            title="Poner notas o adiciones a este producto"
+                            onClick={() => openCardNoteModal(item)}
+                            className="h-9 px-2.5 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 text-amber-800 dark:text-amber-300 font-bold text-xs border border-amber-500/30 active:scale-90 transition cursor-pointer flex items-center gap-1"
+                            title="Agregar notas o especificaciones a este producto sin salir"
                           >
                             📝 Notas
                           </button>
@@ -977,13 +1104,14 @@ export default function TableOrderPage() {
                     <button
                       type="button"
                       onClick={() => (item.quantity === 1 ? toggleAllTakeaway(item.cartKey, true) : moveOneTakeaway(item.cartKey, true))}
-                      className={`rounded-lg px-2.5 py-1 text-[11px] font-black transition-all cursor-pointer ${
+                      className={`rounded-lg px-2.5 py-1 text-[11px] font-black transition-all cursor-pointer flex items-center gap-1 ${
                         item.takeaway
                           ? 'bg-amber-600 text-white shadow-xs'
                           : 'bg-[var(--bg-panel)] text-[var(--text-secondary)] border border-[var(--border-subtle)] hover:bg-[var(--bg-hover)]'
                       }`}
                     >
-                      🥡 {item.quantity > 1 && !item.takeaway ? 'Pasar 1 a Llevar' : 'Para Llevar'}
+                      <ShoppingBag className="h-3.5 w-3.5" />
+                      <span>{item.quantity > 1 && !item.takeaway ? 'Pasar 1 a Llevar' : 'Para Llevar'}</span>
                     </button>
                   </div>
 
@@ -1238,13 +1366,14 @@ export default function TableOrderPage() {
                     <button
                       type="button"
                       onClick={() => (item.quantity === 1 ? toggleAllTakeaway(item.cartKey, true) : moveOneTakeaway(item.cartKey, true))}
-                      className={`rounded-lg px-2.5 py-1 text-[11px] font-black transition-all cursor-pointer ${
+                      className={`rounded-lg px-2.5 py-1 text-[11px] font-black transition-all cursor-pointer flex items-center gap-1 ${
                         item.takeaway
                           ? 'bg-amber-600 text-white shadow-xs'
                           : 'bg-[var(--bg-panel)] text-[var(--text-secondary)] border border-[var(--border-subtle)]'
                       }`}
                     >
-                      🥡 {item.quantity > 1 && !item.takeaway ? 'Pasar 1 a Llevar' : 'Para Llevar'}
+                      <ShoppingBag className="h-3.5 w-3.5" />
+                      <span>{item.quantity > 1 && !item.takeaway ? 'Pasar 1 a Llevar' : 'Para Llevar'}</span>
                     </button>
                   </div>
 
@@ -1351,6 +1480,126 @@ export default function TableOrderPage() {
                 : `Enviar a cocina (${formatCurrency(total)})`}
             </Button>
           </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* MODAL DE NOTA RÁPIDA POR PRODUCTO (DIRECTO EN EL CATÁLOGO SIN SALIR DE LA PANTALLA) */}
+      <Dialog open={!!noteModalItem} onOpenChange={open => { if (!open) setNoteModalItem(null) }}>
+        <DialogContent className="max-w-md p-5 bg-[var(--bg-panel)] rounded-3xl border border-[var(--border-subtle)] shadow-2xl">
+          {noteModalItem && (
+            <div className="space-y-4">
+              <div className="flex items-start justify-between gap-2 border-b border-[var(--border-subtle)] pb-3">
+                <div>
+                  <h2 className="text-base font-black text-[var(--text-primary)] flex items-center gap-1.5">
+                    <span>📝 Nota para</span>
+                    <span className="text-[var(--accent)] truncate">{noteModalItem.name}</span>
+                  </h2>
+                  <p className="text-xs text-[var(--text-secondary)] mt-0.5">
+                    Toca una especificación rápida o escribe una indicación para cocina:
+                  </p>
+                </div>
+              </div>
+
+              {/* Selector si la nota aplica a Mesa o Para Llevar */}
+              <div className="flex items-center gap-2 p-1 bg-[var(--bg-elevated)] rounded-xl border border-[var(--border-subtle)]">
+                <button
+                  type="button"
+                  onClick={() => setNoteTargetTakeaway(false)}
+                  className={`flex-1 py-2 rounded-lg text-xs font-black transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
+                    !noteTargetTakeaway
+                      ? 'bg-white dark:bg-slate-800 text-[var(--text-primary)] shadow-xs border border-[var(--border-subtle)]'
+                      : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'
+                  }`}
+                >
+                  🍽️ En Mesa
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setNoteTargetTakeaway(true)}
+                  className={`flex-1 py-2 rounded-lg text-xs font-black transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
+                    noteTargetTakeaway
+                      ? 'bg-amber-500 text-slate-950 shadow-xs'
+                      : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'
+                  }`}
+                >
+                  <ShoppingBag className="h-3.5 w-3.5" /> Para Llevar
+                </button>
+              </div>
+
+              {/* Chips rápidos de 1 toque */}
+              <div>
+                <label className="text-[11px] font-black text-[var(--text-muted)] uppercase tracking-wider block mb-2">
+                  Especificaciones más pedidas:
+                </label>
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                  {[
+                    'Sin cebolla',
+                    'Sin salsas',
+                    'Salsas aparte',
+                    'Sin ripio',
+                    'Bien dorado',
+                    'Poco picante',
+                    'Sin ripio ni salsas',
+                    'Con bastante ripio',
+                    'Solo queso y papas',
+                  ].map(chip => (
+                    <button
+                      key={chip}
+                      type="button"
+                      onClick={() => applyNoteToProduct(noteModalItem.id, chip, noteTargetTakeaway)}
+                      className="px-2.5 py-2.5 rounded-xl text-xs font-bold bg-[var(--bg-elevated)] hover:bg-[var(--accent)] hover:text-white border border-[var(--border-subtle)] active:scale-95 transition-all text-left flex items-center justify-between cursor-pointer group"
+                    >
+                      <span className="truncate">{chip}</span>
+                      <Plus className="h-3.5 w-3.5 shrink-0 opacity-40 group-hover:opacity-100" />
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Input libre para notas personalizadas */}
+              <div className="pt-2 border-t border-[var(--border-subtle)] space-y-2">
+                <label className="text-[11px] font-black text-[var(--text-muted)] uppercase tracking-wider block">
+                  O escribe otra nota para cocina:
+                </label>
+                <div className="flex gap-2">
+                  <Input
+                    value={customNoteInput}
+                    onChange={e => setCustomNoteInput(e.target.value)}
+                    placeholder="Ej: carne término medio, salsa tártara aparte..."
+                    className="text-xs h-10 rounded-xl bg-[var(--bg-elevated)]"
+                    onKeyDown={e => {
+                      if (e.key === 'Enter' && customNoteInput.trim()) {
+                        applyNoteToProduct(noteModalItem.id, customNoteInput.trim(), noteTargetTakeaway)
+                      }
+                    }}
+                  />
+                  <Button
+                    type="button"
+                    onClick={() => {
+                      if (customNoteInput.trim()) {
+                        applyNoteToProduct(noteModalItem.id, customNoteInput.trim(), noteTargetTakeaway)
+                      }
+                    }}
+                    disabled={!customNoteInput.trim()}
+                    className="bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-white font-black text-xs px-4 h-10 rounded-xl cursor-pointer shrink-0"
+                  >
+                    Guardar
+                  </Button>
+                </div>
+              </div>
+
+              <div className="flex justify-end pt-1">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setNoteModalItem(null)}
+                  className="rounded-xl h-9 text-xs font-bold cursor-pointer"
+                >
+                  Cerrar
+                </Button>
+              </div>
+            </div>
+          )}
         </DialogContent>
       </Dialog>
     </div>

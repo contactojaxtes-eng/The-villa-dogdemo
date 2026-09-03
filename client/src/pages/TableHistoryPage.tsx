@@ -8,6 +8,8 @@ import { Dialog, DialogContent } from '@/components/ui/dialog'
 import { api } from '@/lib/api'
 import { formatCurrency } from '@/lib/utils'
 
+import { io } from '@/lib/socket'
+
 function formatTableDate(dateVal?: string | Date | null): string {
   if (!dateVal) return '—'
   try {
@@ -17,6 +19,14 @@ function formatTableDate(dateVal?: string | Date | null): string {
   } catch {
     return '—'
   }
+}
+
+function cleanStr(val: any): string {
+  return String(val || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
 }
 
 export default function TableHistoryPage() {
@@ -43,14 +53,44 @@ export default function TableHistoryPage() {
     load()
   }, [load])
 
+  useEffect(() => {
+    const socketUrl = import.meta.env.VITE_API_URL || window.location.origin
+    const socket = io(`${socketUrl}/the-villa-dog`, {
+      transports: ['websocket', 'polling'],
+    })
+    socket.on('tableUpdated', () => load())
+    socket.on('tableClosed', () => load())
+    socket.on('paymentValidated', () => load())
+    return () => { socket.disconnect() }
+  }, [load])
+
   const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase()
+    const q = cleanStr(search)
+    if (!q) return tables
+
     return tables.filter(t => {
-      if (!q) return true
-      const label = t.label?.toLowerCase() || ''
-      const waiter = t.openedBy?.name?.toLowerCase() || ''
-      const items = (t.orders || []).flatMap((o: any) => (o.items || []).map((i: any) => i.menuItem?.name || i.nameSnapshot || '')).join(' ').toLowerCase()
-      return label.includes(q) || waiter.includes(q) || items.includes(q)
+      const label = cleanStr(t.label)
+      const customer = cleanStr(t.customerName)
+      const openedBy = cleanStr(t.openedBy?.name)
+      const totalStr = String(t.total || '')
+      const balanceStr = String(t.balance || '')
+      const statusStr = t.status === 'OPEN' ? 'abierta open activo' : 'cerrada pagada closed liquidada'
+      
+      const orderWaiters = (t.orders || []).map((o: any) => cleanStr(o.waiter?.name)).join(' ')
+      const orderNumbers = (t.orders || []).map((o: any) => `#${o.orderNumber} ${o.orderNumber}`).join(' ')
+      const itemsNames = (t.orders || []).flatMap((o: any) => (o.items || []).map((i: any) => cleanStr(i.menuItem?.name || i.nameSnapshot || ''))).join(' ')
+      const paymentMethods = (t.orders || []).map((o: any) => {
+        const m = cleanStr(o.paymentMethod || o.payment?.method || '')
+        if (m.includes('cash')) return 'efectivo cash'
+        if (m.includes('transfer')) return 'transferencia nequi daviplata bancolombia'
+        if (m.includes('mixed')) return 'mixto mixed'
+        return m
+      }).join(' ')
+
+      const haystack = `${label} ${customer} ${openedBy} ${orderWaiters} ${orderNumbers} ${itemsNames} ${paymentMethods} ${totalStr} ${balanceStr} ${statusStr}`
+      
+      const searchTokens = q.split(/\s+/).filter(Boolean)
+      return searchTokens.every(tok => haystack.includes(tok))
     })
   }, [tables, search])
 
@@ -75,10 +115,7 @@ export default function TableHistoryPage() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" onClick={load} className="gap-1 text-xs">
-            <RefreshCw className="h-3.5 w-3.5" /> Actualizar
-          </Button>
-          <Button asChild size="sm" className="bg-[var(--accent)] text-[var(--accent-fg)] font-bold text-xs gap-1">
+          <Button asChild size="sm" className="bg-[var(--accent)] text-[var(--accent-fg)] font-black text-xs gap-1 shadow-sm">
             <Link to="/tables/new"><UtensilsCrossed className="h-3.5 w-3.5" /> Nuevo Pedido Mesa</Link>
           </Button>
         </div>
