@@ -273,7 +273,12 @@ export class TablesService {
     });
     const users = (station?.users || []).filter(u => u.active);
     if (users.length === 0) return null;
-    const loads = await Promise.all(users.map(async user => {
+
+    // Priorizar cocineros que están actualmente CONECTADOS / LOGUEADOS en el sistema
+    const connectedUsers = users.filter(u => this.socketGateway.isUserConnected(u.id));
+    const candidateUsers = connectedUsers.length > 0 ? connectedUsers : users;
+
+    const loads = await Promise.all(candidateUsers.map(async user => {
       const tickets = await db.kitchenTicket.findMany({
         where: { stationId, assignedToId: user.id, status: { in: ACTIVE_KITCHEN } },
         include: { items: true },

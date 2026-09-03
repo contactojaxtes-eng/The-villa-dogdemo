@@ -128,19 +128,36 @@ export function useNotifications() {
       const isCancel = data.status === 'CANCELLED'
       const isDone = data.status === 'DELIVERED'
       const isReady = data.status === 'READY'
+      
       if (isReady) {
-        playNotificationSound('urgent')
+        const order = data.order
+        const waiterId = order?.waiterId || order?.diningTable?.openedById
+        const isMyOrder = waiterId === user.id
+        // El aviso de ir a recoger a cocina es para el mesero, no para el panel del admin
+        if (isMyOrder || user.role === 'WAITER') {
+          const tableLabel = order?.diningTable?.label || order?.customerName || 'Mesa'
+          const orderNum = order?.orderNumber ? `#${order.orderNumber}` : ''
+          toast.success(isMyOrder ? `🏃 ¡Ve a recoger el pedido! (${tableLabel})` : `🍽️ Pedido listo en cocina: ${tableLabel}`, {
+            description: `${tableLabel} ${orderNum} está listo en Cocina. Pasa a recogerlo para llevarlo a la mesa.`,
+            icon: <CheckCircle2 className="h-5 w-5 text-emerald-500" />,
+            duration: 8000,
+          })
+          playNotificationSound('urgent')
+        }
+        return
       }
+
+      // No saturar al admin con cancelados o entregados si no son domicilios
+      if (['ADMIN', 'SUPERADMIN'].includes(user.role || '') && !data.order?.deliveryZone) return
+
       toast(isCancel ? 'Pedido cancelado' : label, {
-        description: `Pedido #${data.order?.orderNumber ?? ''} ${isReady ? '¡Listo en cocina!' : ''}`,
+        description: `Pedido #${data.order?.orderNumber ?? ''}`,
         icon: isCancel
           ? <XCircle className="h-4 w-4 text-[#EF4444]" />
-          : isReady
-            ? <CheckCircle2 className="h-4 w-4 text-emerald-500" />
-            : isDone
-              ? <CheckCircle2 className="h-4 w-4 text-[#F97316]" />
-              : <Bell className="h-4 w-4 text-[#F59E0B]" />,
-        duration: 6000,
+          : isDone
+            ? <CheckCircle2 className="h-4 w-4 text-[#F97316]" />
+            : <Bell className="h-4 w-4 text-[#F59E0B]" />,
+        duration: 5000,
       })
     })
 
@@ -151,18 +168,18 @@ export function useNotifications() {
       const waiterId = ticket?.order?.waiterId || ticket?.order?.diningTable?.openedById || ticket?.table?.openedById
 
       const isMyOrder = waiterId === user.id
-      const isFloorStaff = ['WAITER', 'ADMIN', 'SUPERADMIN', 'CASHIER'].includes(user.role || '')
-      if (!isMyOrder && !isFloorStaff) return
+      // El aviso de ir a recoger el pedido es exclusivamente para el mesero que tomó la orden (o meseros en turno)
+      if (!isMyOrder && user.role !== 'WAITER') return
 
-      toast.success(isMyOrder ? '🍽️ ¡Tu pedido está listo!' : '🍽️ Pedido listo en cocina', {
-        description: `${tableLabel} ${orderNum} listo en ${stationName}. Puedes pasar a recogerlo.`,
-        icon: <CheckCircle2 className="h-4 w-4 text-emerald-500" />,
-        duration: 8000,
+      toast.success(isMyOrder ? `🏃 ¡Ve a recoger el pedido! (${tableLabel})` : `🍽️ Pedido listo: ${tableLabel}`, {
+        description: `El pedido ${orderNum} de ${tableLabel} ya está listo en ${stationName}. Ve a la cocina a recogerlo para servirlo a la mesa.`,
+        icon: <CheckCircle2 className="h-5 w-5 text-emerald-500" />,
+        duration: 9000,
       })
       playNotificationSound('urgent')
       showBrowserNotification(
-        isMyOrder ? `🍽️ ¡Tu pedido de ${tableLabel} está listo!` : `🍽️ Pedido listo: ${tableLabel}`,
-        `${stationName} terminó la preparación. Pasa a recogerlo.`,
+        isMyOrder ? `🏃 ¡Ve a recoger el pedido de ${tableLabel}!` : `🍽️ Pedido listo: ${tableLabel}`,
+        `${stationName} terminó. Pasa a recogerlo a la cocina para llevarlo a la mesa.`,
         '/tables'
       )
     })

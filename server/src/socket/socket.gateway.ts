@@ -213,4 +213,9 @@ export class SocketGateway implements OnGatewayConnection, OnGatewayDisconnect, 
   getActiveOperatorsMap() {
     return this.activeOperators;
   }
+
+  isUserConnected(userId: string): boolean {
+    const sockets = this.connectedUsers.get(userId);
+    return !!(sockets && sockets.size > 0);
+  }
 }

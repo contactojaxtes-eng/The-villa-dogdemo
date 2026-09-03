@@ -23,7 +23,7 @@ const TableOrderPage = lazy(() => import('./pages/TableOrderPage'))
 const TableDetailPage = lazy(() => import('./pages/TableDetailPage'))
 import TableHistoryPage from './pages/TableHistoryPage'
 const KitchenPage = lazy(() => import('./pages/KitchenPage'))
-const PaymentValidationPage = lazy(() => import('./pages/PaymentValidationPage'))
+import PaymentValidationPage from './pages/PaymentValidationPage'
 const KitchenStationsPage = lazy(() => import('./pages/KitchenStationsPage'))
 const ModuleSettingsPage = lazy(() => import('./pages/ModuleSettingsPage'))
 const ChatPage = lazy(() => import('./pages/ChatPage'))

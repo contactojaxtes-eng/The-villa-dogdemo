@@ -84,44 +84,28 @@ export default function TableHistoryPage() {
         </div>
       </div>
 
-      {/* KPI Stats */}
-      <div className="grid grid-cols-3 gap-3">
-        <div className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-3.5 shadow-sm">
-          <p className="text-xs font-bold text-[var(--text-muted)] uppercase tracking-wider">Total Ventas Salón</p>
-          <p className="text-xl font-black text-[var(--accent)] mt-1">{formatCurrency(stats.totalSales)}</p>
-        </div>
-        <div className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-3.5 shadow-sm">
-          <p className="text-xs font-bold text-[var(--text-muted)] uppercase tracking-wider">Mesas Atendidas</p>
-          <p className="text-xl font-black text-[var(--text-primary)] mt-1">{stats.count}</p>
-        </div>
-        <div className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-3.5 shadow-sm">
-          <p className="text-xs font-bold text-[var(--text-muted)] uppercase tracking-wider">Promedio por Mesa</p>
-          <p className="text-xl font-black text-[var(--text-secondary)] mt-1">{formatCurrency(stats.avg)}</p>
-        </div>
-      </div>
-
-      {/* Filters */}
-      <div className="flex flex-col sm:flex-row gap-2 items-center justify-between">
-        <div className="relative w-full sm:max-w-md">
+      {/* Filters & Search */}
+      <div className="flex flex-col sm:flex-row gap-2.5 items-stretch sm:items-center justify-between">
+        <div className="relative flex-1">
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--text-muted)]" />
           <Input
             value={search}
             onChange={e => setSearch(e.target.value)}
             placeholder="Buscar por mesa, mesero o producto..."
-            className="pl-9 h-10 text-xs"
+            className="pl-9 h-10 text-xs rounded-xl"
           />
         </div>
 
-        <div className="flex gap-1 bg-[var(--bg-elevated)] p-1 rounded-xl w-full sm:w-auto">
+        <div className="flex gap-1 bg-[var(--bg-elevated)] p-1 rounded-xl shrink-0 overflow-x-auto">
           {[
             { id: 'CLOSED', label: 'Cerradas y Pagadas' },
-            { id: 'ALL', label: 'Todas las Mesas' },
-            { id: 'OPEN', label: 'Mesas Abiertas' },
+            { id: 'ALL', label: 'Todas' },
+            { id: 'OPEN', label: 'Abiertas' },
           ].map(f => (
             <button
               key={f.id}
               onClick={() => setFilterStatus(f.id)}
-              className={`flex-1 sm:flex-none px-3 py-1.5 text-xs font-black rounded-lg transition-all ${
+              className={`px-3 py-1.5 text-xs font-black rounded-lg transition-all whitespace-nowrap cursor-pointer ${
                 filterStatus === f.id
                   ? 'bg-[var(--accent)] text-white shadow-sm'
                   : 'text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]'
@@ -137,7 +121,7 @@ export default function TableHistoryPage() {
       {loading ? (
         <div className="p-12 text-center text-sm text-[var(--text-secondary)]">Cargando historial de mesas...</div>
       ) : (
-        <div className="space-y-3">
+        <div className="space-y-2.5">
           {filtered.map(table => {
             const allItems = (table.orders || []).flatMap((o: any) => o.items || [])
             const hasTransfer = (table.transferProofs || []).length > 0
@@ -146,40 +130,47 @@ export default function TableHistoryPage() {
             return (
               <div
                 key={table.id}
-                className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-4 shadow-sm transition hover:border-[var(--accent)]/50"
+                className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-3.5 shadow-sm transition hover:border-[var(--accent)]/50"
               >
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-[var(--border-subtle)] pb-3">
-                  <div className="flex items-center gap-3">
-                    <span className="text-lg font-black text-[var(--text-primary)]">{table.label}</span>
-                    <span className="text-xs font-medium text-[var(--text-secondary)] bg-[var(--bg-elevated)] border border-[var(--border-subtle)] px-2 py-0.5 rounded-md">
-                      👤 Atendido por: <strong className="text-[var(--text-primary)]">{table.openedBy?.name || 'Mesero'}</strong>
-                    </span>
-                    <span className={`rounded-full px-2.5 py-0.5 text-[10px] font-bold tracking-wider border ${
-                      table.status === 'CLOSED'
-                        ? 'bg-[var(--bg-elevated)] border-[var(--border-subtle)] text-[var(--text-primary)]'
-                        : 'bg-[var(--accent)]/10 border-[var(--accent)]/25 text-[var(--accent)]'
-                    }`}>
-                      {table.status === 'CLOSED' ? '✓ CERRADA Y LIBERADA' : 'ABIERTA'}
-                    </span>
+                {/* Header: Mesa, Mesero, Estado y Total */}
+                <div className="flex items-start justify-between gap-2 border-b border-[var(--border-subtle)] pb-2.5">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-base font-black text-[var(--text-primary)] leading-tight">{table.label}</span>
+                      <span className={`px-2 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider ${
+                        table.status === 'CLOSED'
+                          ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border border-emerald-500/20'
+                          : 'bg-amber-500/15 text-amber-700 dark:text-amber-400 border border-amber-500/20'
+                      }`}>
+                        {table.status === 'CLOSED' ? '✓ Cerrada' : '⏳ Abierta'}
+                      </span>
+                    </div>
+                    <p className="text-xs text-[var(--text-secondary)] mt-1 flex items-center gap-1.5 flex-wrap">
+                      <span>Mesera: <strong className="text-[var(--text-primary)]">{table.openedBy?.name || 'Mesero'}</strong></span>
+                      <span className="text-[var(--text-muted)]">·</span>
+                      <span className="text-[var(--text-muted)] flex items-center gap-1">
+                        <Clock className="h-3 w-3" />
+                        {formatTableDate(table.openedAt || table.createdAt)}
+                      </span>
+                    </p>
                   </div>
 
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs text-[var(--text-muted)] flex items-center gap-1">
-                      <Clock className="h-3.5 w-3.5" />
-                      {formatTableDate(table.openedAt || table.createdAt)}
-                    </span>
-                    <span className="text-base font-black text-[var(--accent)] ml-2">
+                  <div className="text-right shrink-0">
+                    <span className="text-base font-black text-[var(--accent)] block leading-tight">
                       {formatCurrency(table.total || 0)}
+                    </span>
+                    <span className="text-[11px] font-bold text-[var(--text-secondary)] mt-0.5 block">
+                      {hasTransfer ? '📲 Transferencia' : '💵 Efectivo'}
                     </span>
                   </div>
                 </div>
 
                 {/* Items consumed */}
-                <div className="mt-3 flex flex-wrap gap-1.5">
+                <div className="mt-2.5 flex flex-wrap gap-1.5">
                   {allItems.map((item: any, idx: number) => (
                     <span
                       key={idx}
-                      className="rounded-lg bg-[var(--bg-elevated)] px-2.5 py-1 text-xs font-bold text-[var(--text-secondary)] border border-[var(--border-subtle)]"
+                      className="rounded-lg bg-[var(--bg-elevated)] px-2 py-0.5 text-xs font-bold text-[var(--text-secondary)] border border-[var(--border-subtle)]"
                     >
                       <b className="text-[var(--accent)] mr-1">{item.quantity}x</b>
                       {item.menuItem?.name || item.nameSnapshot}
@@ -190,35 +181,25 @@ export default function TableHistoryPage() {
                   )}
                 </div>
 
-                {/* Footer with Payment info & link */}
-                <div className="mt-3 pt-2.5 border-t border-[var(--border-subtle)] flex items-center justify-between text-xs">
-                  <div className="flex items-center gap-2">
-                    <span className="text-[var(--text-muted)]">Método de pago:</span>
-                    {hasTransfer ? (
-                      <span className="inline-flex items-center gap-1 font-bold text-[var(--text-primary)] bg-[var(--bg-elevated)] border border-[var(--border-subtle)] px-2 py-0.5 rounded">
-                        📲 Transferencia
-                        {proofId && (
-                          <button
-                            type="button"
-                            onClick={() => setZoomUrl(`/payment-validation/proofs/${proofId}/image`)}
-                            className="ml-1 text-[var(--accent)] hover:underline inline-flex items-center gap-0.5 cursor-pointer"
-                          >
-                            <Eye className="h-3 w-3" /> Ver comprobante
-                          </button>
-                        )}
-                      </span>
-                    ) : (
-                      <span className="font-bold text-[var(--text-primary)] bg-[var(--bg-elevated)] border border-[var(--border-subtle)] px-2 py-0.5 rounded">
-                        💵 Efectivo
-                      </span>
-                    )}
-                  </div>
+                {/* Footer with actions */}
+                <div className="mt-2.5 pt-2 border-t border-[var(--border-subtle)] flex items-center justify-between text-xs">
+                  {hasTransfer && proofId ? (
+                    <button
+                      type="button"
+                      onClick={() => setZoomUrl(`/payment-validation/proofs/${proofId}/image`)}
+                      className="text-[var(--accent)] hover:underline inline-flex items-center gap-1 font-bold cursor-pointer"
+                    >
+                      <Eye className="h-3.5 w-3.5" /> Ver comprobante
+                    </button>
+                  ) : (
+                    <span className="text-[var(--text-muted)] text-[11px]">Cuenta liquidada</span>
+                  )}
 
                   <Link
                     to={`/tables/${table.id}`}
                     className="font-bold text-[var(--accent)] hover:underline"
                   >
-                    Ver detalle completo →
+                    Ver detalle →
                   </Link>
                 </div>
               </div>

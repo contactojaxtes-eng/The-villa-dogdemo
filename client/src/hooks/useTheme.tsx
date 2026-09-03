@@ -18,12 +18,18 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     localStorage.setItem('niche-theme', theme)
-    if (theme === 'light') {
-      document.documentElement.classList.add('light')
-      document.body.classList.add('light')
+    const root = document.documentElement
+    const body = document.body
+    if (theme === 'dark') {
+      root.classList.add('dark')
+      body.classList.add('dark')
+      root.classList.remove('light')
+      body.classList.remove('light')
     } else {
-      document.documentElement.classList.remove('light')
-      document.body.classList.remove('light')
+      root.classList.add('light')
+      body.classList.add('light')
+      root.classList.remove('dark')
+      body.classList.remove('dark')
     }
   }, [theme])
 

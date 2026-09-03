@@ -42,9 +42,15 @@ export default function PaymentValidationPage() {
   // Cargar todos los pagos para filtrado reactivo e instantáneo (0ms) en memoria
   const load = useCallback(() => {
     setLoading(true)
-    api.get<any[]>('/payment-validation?status=ALL&method=ALL')
-      .then(setPayments)
-      .catch(console.error)
+    api.get<any>('/payment-validation?status=ALL&method=ALL')
+      .then(res => {
+        const rows = Array.isArray(res) ? res : (res?.data || res?.items || [])
+        setPayments(Array.isArray(rows) ? rows : [])
+      })
+      .catch(err => {
+        console.error(err)
+        setPayments([])
+      })
       .finally(() => setLoading(false))
   }, [])
 
@@ -65,8 +71,10 @@ export default function PaymentValidationPage() {
   useEffect(() => () => { if (imageUrl && !imageUrl.startsWith('data:')) URL.revokeObjectURL(imageUrl) }, [imageUrl])
 
   // Filtrado instantáneo en cliente (0ms)
+  const safePayments = useMemo(() => Array.isArray(payments) ? payments : [], [payments])
+
   const filteredPayments = useMemo(() => {
-    let list = payments
+    let list = safePayments
     if (activeTab === 'PENDING_REVIEW') {
       list = list.filter(p => p.status === 'PENDING_REVIEW')
     } else if (activeTab === 'CASH') {
@@ -93,15 +101,15 @@ export default function PaymentValidationPage() {
       })
     }
     return list
-  }, [payments, activeTab, search])
+  }, [safePayments, activeTab, search])
 
   const tabCounts = useMemo(() => {
     return {
-      PENDING_REVIEW: payments.filter(p => p.status === 'PENDING_REVIEW').length,
-      CASH: payments.filter(p => p.method === 'CASH' && p.status === 'PENDING_REVIEW').length,
-      TRANSFER: payments.filter(p => p.method !== 'CASH' && p.status === 'PENDING_REVIEW').length,
+      PENDING_REVIEW: safePayments.filter(p => p.status === 'PENDING_REVIEW').length,
+      CASH: safePayments.filter(p => p.method === 'CASH' && p.status === 'PENDING_REVIEW').length,
+      TRANSFER: safePayments.filter(p => p.method !== 'CASH' && p.status === 'PENDING_REVIEW').length,
     }
-  }, [payments])
+  }, [safePayments])
 
   const openProof = async (proofId: string, directBase64?: string) => {
     if (directBase64) {
