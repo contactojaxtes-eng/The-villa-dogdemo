@@ -817,8 +817,11 @@ export default function TableOrderPage() {
       if (!existingTableId) setTableLabel('')
       navigate('/tables')
     } catch (err: any) {
-      const isNetworkError = !navigator.onLine || !err?.response || err?.message === 'Network Error' || err?.code === 'ECONNABORTED'
-      if (isNetworkError) {
+      // Solo entra en Modo Offline si el dispositivo está realmente desconectado (navigator.onLine === false)
+      // o si la petición falló por pérdida total de conexión (status === 0 / isNetworkError).
+      // Si el servidor respondió (ej: 400 "Abre una caja antes de enviar pedidos"), se muestra el error real al usuario.
+      const isActualNetworkError = !navigator.onLine || (err?.isNetworkError === true && (!err?.status || err?.status === 0))
+      if (isActualNetworkError) {
         await saveOfflineOrder({ clientMutationId, createdAt: new Date().toISOString(), payload, status: 'PENDING' })
         await loadPending()
         alerts.warning(
@@ -828,8 +831,8 @@ export default function TableOrderPage() {
         setCart([])
         navigate('/tables')
       } else {
-        const msg = err?.response?.data?.message || err?.message || 'Error al enviar pedido a cocina'
-        alerts.error('Error al enviar pedido', msg)
+        const msg = err?.data?.message || err?.message || 'Error al enviar pedido a cocina'
+        alerts.error('No se pudo enviar el pedido', msg)
       }
     } finally {
       setSaving(false)

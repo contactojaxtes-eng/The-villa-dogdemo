@@ -1,6 +1,20 @@
 const rawApiUrl = import.meta.env.VITE_API_URL || ''
 const API_URL = (rawApiUrl.endsWith('/') ? rawApiUrl.slice(0, -1) : rawApiUrl) + '/api'
 
+export class ApiError extends Error {
+  status: number
+  data: any
+  isNetworkError: boolean
+
+  constructor(message: string, status = 500, data: any = null, isNetworkError = false) {
+    super(message)
+    this.name = 'ApiError'
+    this.status = status
+    this.data = data
+    this.isNetworkError = isNetworkError
+  }
+}
+
 class ApiClient {
   private token: string | null = null
   private refreshToken: string | null = null
@@ -105,8 +119,8 @@ class ApiClient {
         ...options,
         headers,
       })
-    } catch (netErr) {
-      throw new Error('Error de conexión con el servidor. Verifica tu internet.')
+    } catch (netErr: any) {
+      throw new ApiError('Error de conexión con el servidor. Verifica tu internet.', 0, null, true)
     }
 
     if (response.status === 401 && endpoint !== '/auth/login' && endpoint !== '/auth/refresh') {
@@ -118,21 +132,22 @@ class ApiClient {
             ...options,
             headers,
           })
-        } catch (netErr) {
-          throw new Error('Error de conexión con el servidor.')
+        } catch (netErr: any) {
+          throw new ApiError('Error de conexión con el servidor.', 0, null, true)
         }
       } else {
         this.clearToken()
         if (window.location.pathname !== '/login') {
           window.location.href = '/login'
         }
-        throw new Error('Sesión expirada')
+        throw new ApiError('Sesión expirada', 401, null, false)
       }
     }
 
     if (!response.ok) {
-      const error = await response.json().catch(() => ({ message: 'Error de conexión' }))
-      throw new Error(error.message || 'Error del servidor')
+      const error = await response.json().catch(() => ({ message: 'Error en la respuesta del servidor' }))
+      const message = Array.isArray(error.message) ? error.message.join(', ') : (error.message || 'Error del servidor')
+      throw new ApiError(message, response.status, error, false)
     }
 
     if (responseType === 'blob') return response.blob() as Promise<T>

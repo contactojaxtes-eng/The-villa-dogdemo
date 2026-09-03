@@ -80,14 +80,14 @@ export async function syncOfflineOrders(): Promise<{ synced: number; failed: num
         await deleteOfflineOrder(row.clientMutationId)
         synced++
       } catch (err: any) {
-        if (!err?.response) {
+        if (err?.isNetworkError || !err?.status || err?.status === 0) {
           failed++
           break
         }
         await saveOfflineOrder({
           ...row,
           status: 'FAILED',
-          error: err?.response?.data?.message || err?.message || 'Error de sincronización',
+          error: err?.data?.message || err?.message || 'Error de sincronización',
         })
         failed++
       }
