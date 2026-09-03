@@ -494,6 +494,24 @@ export class TablesService {
       });
 
       const hasActiveItems = ticketItemsData.some(i => i.changeType !== 'REMOVED');
+      // Solo consideramos editado este ticket si tiene cambios en productos de ESTA estación
+      const stationHasChanges = ticketItemsData.some(i => i.changeType !== 'UNCHANGED');
+      const stationIsEdited = isEdited && stationHasChanges;
+
+      // Generar el resumen de cambios EXCLUSIVO para esta estación (no mezclar con otras estaciones)
+      const stationSummaryParts: string[] = [];
+      for (const i of ticketItemsData) {
+        if (i.changeType === 'ADDED') {
+          stationSummaryParts.push(`✨ Agregado: +${i.quantity}x ${i.nameSnapshot}${i.notes ? ` (${i.notes})` : ''}`);
+        } else if (i.changeType === 'REMOVED') {
+          stationSummaryParts.push(`❌ Quitado: -${i.quantity}x ${i.nameSnapshot}`);
+        } else if (i.changeType === 'MODIFIED') {
+          const diff = i.previousQty !== null && i.previousQty !== undefined ? (i.quantity - i.previousQty) : 0;
+          const diffTxt = diff > 0 ? `+${diff} un.` : `-${Math.abs(diff)} un.`;
+          stationSummaryParts.push(`✏️ Modificado: ${i.nameSnapshot} [${diffTxt}]${i.notes ? ` (${i.notes})` : ''}`);
+        }
+      }
+      const stationChangeSummary = stationIsEdited ? (stationSummaryParts.join(' | ') || null) : null;
 
       if (existingTicket) {
         // ACTUALIZAR LA TARJETA EXISTENTE (no crear duplicados)
@@ -502,15 +520,16 @@ export class TablesService {
         let newStatus = existingTicket.status;
         if (!hasActiveItems) {
           newStatus = 'CANCELLED';
-        } else if (existingTicket.status === 'READY') {
+        } else if (existingTicket.status === 'READY' && stationIsEdited) {
+          // Solo si esta estación tuvo cambios vuelve a preparación; si sus productos no cambiaron, se conserva
           newStatus = 'PREPARING';
         }
 
         const updatedTicket = await db.kitchenTicket.update({
           where: { id: existingTicket.id },
           data: {
-            isEdited: true,
-            changeSummary: changeSummary || 'Pedido editado',
+            isEdited: stationIsEdited,
+            changeSummary: stationChangeSummary,
             status: newStatus,
             items: {
               create: ticketItemsData,
@@ -530,8 +549,8 @@ export class TablesService {
             tableId: order.tableId,
             stationId,
             assignedToId,
-            isEdited,
-            changeSummary: changeSummary || (isEdited ? 'Pedido editado' : null),
+            isEdited: stationIsEdited,
+            changeSummary: stationChangeSummary,
             status: newStatus,
             items: {
               create: ticketItemsData,
