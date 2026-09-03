@@ -34,6 +34,21 @@ export default function TableDetailPage() {
     setAmount(String(Math.max(t.balance ?? t.total ?? 0, 0)))
   }).catch(console.error)
 
+  const handleCancelOrder = async (orderId: string, orderNumber: number) => {
+    const ok = await alerts.confirm(
+      `¿Cancelar Pedido #${orderNumber}?`,
+      'Esta acción avisará a cocina para no preparar estos productos y los retirará de la cuenta de la mesa.'
+    )
+    if (!ok) return
+    try {
+      await api.put(`/orders/${orderId}/cancel`, { reason: 'Cancelado por mesero desde mesa' })
+      alerts.success('Pedido cancelado', `El pedido #${orderNumber} fue cancelado y retirado de la cuenta.`)
+      load()
+    } catch (err: any) {
+      alerts.error('No se pudo cancelar', err?.response?.data?.message || err?.message || 'Error al cancelar')
+    }
+  }
+
   useEffect(() => { load() }, [id])
 
   useEffect(() => {
@@ -176,7 +191,7 @@ export default function TableDetailPage() {
   const isStaff = ['ADMIN', 'SUPERADMIN', 'CASHIER'].includes(user?.role || '')
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-4 pb-32">
       {/* Header */}
       <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div className="flex items-center gap-3">
@@ -220,8 +235,8 @@ export default function TableDetailPage() {
       </div>
 
       <div className="grid gap-4 items-start lg:grid-cols-[1fr_380px]">
-        {/* Orders Column: on mobile goes below payment box so waitresses can charge immediately */}
-        <section className="min-w-0 space-y-3 order-2 lg:order-1">
+        {/* Orders Column: order-1 on mobile so waitresses can immediately view, edit, or cancel orders */}
+        <section className="min-w-0 space-y-3 order-1 lg:order-1">
           <h2 className="font-black text-sm uppercase tracking-wider text-[var(--text-muted)]">Envíos y Comida en Mesa</h2>
           {table.orders?.map((order: any) => (
             <div key={order.id} className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-4 shadow-sm">
@@ -236,9 +251,13 @@ export default function TableDetailPage() {
                   <p className="text-[11px] text-[var(--text-secondary)] mt-0.5">{new Date(order.createdAt).toLocaleTimeString()} - Cocina: <b className="text-[var(--accent)]">{order.kitchenStatus}</b></p>
                 </div>
                 <span className={`rounded-full px-2 py-0.5 text-[10px] font-black ${
-                  order.paymentStatus === 'CONFIRMED' ? 'bg-emerald-500/10 text-emerald-600' : 'bg-amber-500/10 text-amber-600'
+                  order.status === 'CANCELLED'
+                    ? 'bg-rose-500/15 text-rose-700 dark:text-rose-400'
+                    : order.paymentStatus === 'CONFIRMED'
+                    ? 'bg-emerald-500/10 text-emerald-600'
+                    : 'bg-amber-500/10 text-amber-600'
                 }`}>
-                  {order.paymentStatus === 'CONFIRMED' ? 'PAGADO' : 'PENDIENTE'}
+                  {order.status === 'CANCELLED' ? 'CANCELADO' : order.paymentStatus === 'CONFIRMED' ? 'PAGADO' : 'PENDIENTE'}
                 </span>
               </div>
 
@@ -267,17 +286,35 @@ export default function TableDetailPage() {
               <div className="mt-3 flex flex-wrap gap-1.5">
                 {order.kitchenTickets?.map((ticket: any) => (
                   <span key={ticket.id} className="rounded-lg bg-[var(--accent)]/10 border border-[var(--accent)]/30 px-2 py-0.5 text-[10px] font-black text-[var(--accent)]">
-                    {ticket.station?.name}: {ticket.status === 'READY' ? 'LISTO' : ticket.status === 'PREPARING' ? 'EN PREPARACIÓN' : 'NUEVO'}
+                    {ticket.station?.name}: {ticket.status === 'READY' ? 'LISTO' : ticket.status === 'PREPARING' ? 'EN PREPARACIÓN' : ticket.status === 'CANCELLED' ? 'CANCELADO' : 'NUEVO'}
                   </span>
                 ))}
               </div>
 
               {!['DELIVERED', 'CANCELLED'].includes(order.status) && table.status === 'OPEN' && (
-                <Button asChild variant="outline" size="sm" className="mt-3 w-full border-[var(--border-subtle)] hover:border-[var(--accent)] text-xs font-bold">
-                  <Link to={`/tables/new?tableId=${table.id}&editOrderId=${order.id}`}>
-                    ✏️ Modificar o agregar a este pedido
-                  </Link>
-                </Button>
+                <div className="mt-3 flex items-center gap-2">
+                  <Button asChild variant="outline" size="sm" className="flex-1 border-[var(--border-subtle)] hover:border-[var(--accent)] text-xs font-black">
+                    <Link to={`/tables/new?tableId=${table.id}&editOrderId=${order.id}`}>
+                      ✏️ Modificar pedido #{order.orderNumber}
+                    </Link>
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => handleCancelOrder(order.id, order.orderNumber)}
+                    className="border-rose-300 text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/20 text-xs font-black gap-1 cursor-pointer shrink-0"
+                    title="Cancelar este pedido y avisar a cocina"
+                  >
+                    <XCircle className="h-3.5 w-3.5" /> Cancelar
+                  </Button>
+                </div>
+              )}
+              {order.status === 'CANCELLED' && (
+                <div className="mt-2.5 rounded-xl border border-rose-300 bg-rose-500/10 p-2.5 text-xs text-rose-700 dark:text-rose-400 font-bold flex items-center gap-1.5">
+                  <XCircle className="h-4 w-4 shrink-0" />
+                  <span>Pedido cancelado{order.cancellationReason ? `: ${order.cancellationReason}` : ''}</span>
+                </div>
               )}
             </div>
           ))}
@@ -288,8 +325,8 @@ export default function TableDetailPage() {
           )}
         </section>
 
-        {/* Payment and Billing Column: order-1 on mobile so waitresses can charge immediately */}
-        <aside className="min-w-0 space-y-4 order-1 lg:order-2">
+        {/* Payment and Billing Column: order-2 on mobile */}
+        <aside className="min-w-0 space-y-4 order-2 lg:order-2">
           {/* Balance card */}
           <div className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-4 shadow-sm">
             <div className="flex justify-between items-center text-sm text-[var(--text-secondary)]">

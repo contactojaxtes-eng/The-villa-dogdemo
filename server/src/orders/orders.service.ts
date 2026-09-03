@@ -1209,6 +1209,26 @@ export class OrdersService implements OnModuleInit {
       where: { orderId: id },
       data: { status: 'REJECTED' },
     });
+    if (order.tableId) {
+      await this.prisma.kitchenTicket.updateMany({
+        where: { orderId: id },
+        data: { status: 'CANCELLED', changeSummary: `Cancelado: ${reason || 'Por mesero'}` },
+      });
+      const tickets = await this.prisma.kitchenTicket.findMany({
+        where: { orderId: id },
+        include: { station: { include: { users: { select: { id: true, name: true, role: true } } } }, assignedTo: { select: { id: true, name: true } }, items: true, order: { include: { waiter: true, diningTable: true } } },
+      });
+      for (const t of tickets) {
+        this.socketGateway.emitKitchenTicketUpdated(t);
+      }
+      const table = await this.prisma.diningTable.findUnique({
+        where: { id: order.tableId },
+        include: { openedBy: true, orders: { include: { items: true, kitchenTickets: true } } },
+      });
+      if (table) {
+        this.socketGateway.emitTableUpdated(table);
+      }
+    }
 
     this.socketGateway.emitOrderStatusChange(id, 'CANCELLED', updated);
 

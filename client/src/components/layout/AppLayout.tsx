@@ -195,8 +195,8 @@ export function AppLayout() {
           </header>
         )}
 
-        <main className={cn("flex-1 overflow-y-auto", isKitchen ? "p-2 sm:p-3" : "p-3 md:p-6", user?.role === 'WAITER' && "pb-24 md:pb-6")}>
-          <div className={cn("h-full", isKitchen ? "w-full max-w-none" : "mx-auto max-w-7xl")}>
+        <main className={cn("flex-1 overflow-y-auto", isKitchen ? "p-2 sm:p-3" : "p-3 md:p-6 pb-32 md:pb-8")}>
+          <div className={cn(isKitchen ? "w-full max-w-none" : "mx-auto max-w-7xl min-h-full")}>
             <ErrorBoundary key={location.pathname}>
               <Outlet />
             </ErrorBoundary>

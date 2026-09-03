@@ -58,7 +58,7 @@ export default function TablesPage() {
   }, [tables, filterMode, user?.id, search])
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-4 pb-32">
       <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div>
           <h1 className="text-2xl font-black text-[var(--text-primary)]">Mesas abiertas</h1>
