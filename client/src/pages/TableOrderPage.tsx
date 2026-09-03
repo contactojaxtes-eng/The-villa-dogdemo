@@ -10,7 +10,6 @@ import {
   Scissors,
   Search,
   Send,
-  ShoppingBag,
   Trash2,
   User,
   UtensilsCrossed,
@@ -47,7 +46,7 @@ type CartItem = {
   additions?: CartAddition[]
 }
 
-const QUICK_CHIPS = ['Sin cebolla', 'Salsas aparte', 'Sin ripio', 'Bien dorado', 'Sin salsas', 'Poco picante']
+const QUICK_CHIPS = ['Sin cebolla', 'Con cebolla', 'Sin ripio', 'Sin salsas', 'Salsas aparte', 'Bien dorado']
 
 function genKey(prefix = 'item'): string {
   if (typeof crypto !== 'undefined' && crypto.randomUUID) {
@@ -98,9 +97,6 @@ export default function TableOrderPage() {
   const [editOrderNumber, setEditOrderNumber] = useState<number | null>(null)
   const submission = useRef({ signature: '', id: '' })
   const [showMobileCart, setShowMobileCart] = useState(false)
-  const [noteModalItem, setNoteModalItem] = useState<MenuItem | null>(null)
-  const [customNoteInput, setCustomNoteInput] = useState('')
-  const [noteTargetTakeaway, setNoteTargetTakeaway] = useState(false)
 
   const loadPending = useCallback(() => listOfflineOrders().then(setPending).catch(() => setPending([])), [])
 
@@ -407,53 +403,57 @@ export default function TableOrderPage() {
     })
   }
 
-  // Abrir modal de notas rápidas directamente para un producto sin salir del catálogo
-  const openCardNoteModal = (item: MenuItem) => {
-    const inCart = cart.some(c => c.menuItemId === item.id)
-    if (!inCart) {
-      setCart(prev => [
-        ...prev,
-        {
-          cartKey: genKey(item.id),
-          menuItemId: item.id,
-          name: item.name,
-          price: item.price,
-          quantity: 1,
-          takeaway: false,
-          notes: '',
-          additions: [],
-        },
-      ])
-    }
-    setNoteModalItem(item)
-    setCustomNoteInput('')
-    setNoteTargetTakeaway(false)
-  }
-
-  // Aplicar nota rápida a un producto en el menú sin salir del catálogo
+  // Aplicar o incrementar una nota directamente en un producto sin modal ni redirección
   const applyNoteToProduct = (menuItemId: string, noteText: string, isTakeaway = false) => {
     setCart(prev => {
-      // 1. Buscar si hay una línea de este producto sin notas
-      const target = prev.find(i => i.menuItemId === menuItemId && !(i.notes || '').trim())
-      if (target) {
-        if (target.quantity > 1) {
-          // Separar 1 unidad con esta nota
-          const remaining = { ...target, quantity: target.quantity - 1 }
-          const singleUnit: CartItem = {
-            ...target,
-            cartKey: genKey(`${menuItemId}_note`),
-            quantity: 1,
-            notes: noteText,
-            takeaway: isTakeaway || target.takeaway,
+      // 1. Buscar si ya existe una línea con esta misma nota
+      const existingNoteLine = prev.find(
+        i => i.menuItemId === menuItemId && 
+             (i.notes || '').trim().toLowerCase() === noteText.trim().toLowerCase() && 
+             i.takeaway === isTakeaway &&
+             (!i.additions || i.additions.length === 0)
+      )
+
+      // 2. Buscar si hay una línea base (sin notas) de la cual tomar 1 unidad
+      const baseLine = prev.find(
+        i => i.menuItemId === menuItemId && 
+             !(i.notes || '').trim() && 
+             i.takeaway === isTakeaway &&
+             (!i.additions || i.additions.length === 0)
+      )
+
+      if (baseLine && baseLine.quantity > 0) {
+        const updated = prev.map(item => {
+          if (item.cartKey === baseLine.cartKey) {
+            return { ...item, quantity: item.quantity - 1 }
           }
-          return prev.map(i => (i.cartKey === target.cartKey ? remaining : i)).concat(singleUnit)
-        } else {
-          // Asignar nota a esta unidad
-          return prev.map(i => (i.cartKey === target.cartKey ? { ...i, notes: noteText, takeaway: isTakeaway || i.takeaway } : i))
+          if (existingNoteLine && item.cartKey === existingNoteLine.cartKey) {
+            return { ...item, quantity: item.quantity + 1 }
+          }
+          return item
+        }).filter(item => item.quantity > 0)
+
+        if (!existingNoteLine) {
+          updated.push({
+            cartKey: genKey(`${menuItemId}_note`),
+            menuItemId,
+            name: baseLine.name,
+            price: baseLine.price,
+            quantity: 1,
+            takeaway: isTakeaway,
+            notes: noteText,
+            additions: [],
+          })
         }
+        return updated
       }
 
-      // 2. Si ya todas las líneas tienen nota, agregar 1 nueva
+      // Si no hay línea base, pero ya existe la línea con esta nota, sumar 1 más
+      if (existingNoteLine) {
+        return prev.map(i => i.cartKey === existingNoteLine.cartKey ? { ...i, quantity: i.quantity + 1 } : i)
+      }
+
+      // Si el producto no estaba en carrito o todas las líneas ya tienen otras notas, agregar 1 nuevo con esta nota
       const menuItem = categories.flatMap(c => c.items).find(i => i.id === menuItemId)
       if (menuItem) {
         return [
@@ -473,15 +473,176 @@ export default function TableOrderPage() {
       return prev
     })
 
-    alerts.toast(`Nota agregada: "${noteText}"`)
-    setNoteModalItem(null)
-    setCustomNoteInput('')
+    alerts.toast(`1 con "${noteText}"`)
   }
 
-  // Quitar nota directamente de una línea
+  // Reducir o devolver 1 unidad con nota a la línea base
+  const decrementNoteLine = (cartKey: string) => {
+    setCart(prev => {
+      const line = prev.find(i => i.cartKey === cartKey)
+      if (!line) return prev
+
+      const baseLine = prev.find(
+        i => i.menuItemId === line.menuItemId && 
+             !(i.notes || '').trim() && 
+             i.takeaway === line.takeaway &&
+             (!i.additions || i.additions.length === 0)
+      )
+
+      let updated = prev.map(item => {
+        if (item.cartKey === cartKey) {
+          return { ...item, quantity: item.quantity - 1 }
+        }
+        if (baseLine && item.cartKey === baseLine.cartKey) {
+          return { ...item, quantity: item.quantity + 1 }
+        }
+        return item
+      }).filter(item => item.quantity > 0)
+
+      if (!baseLine) {
+        updated.push({
+          cartKey: genKey(line.menuItemId),
+          menuItemId: line.menuItemId,
+          name: line.name,
+          price: line.price,
+          quantity: 1,
+          takeaway: line.takeaway,
+          notes: '',
+          additions: [],
+        })
+      }
+      return updated
+    })
+  }
+
+  // Incrementar 1 unidad con nota específica
+  const incrementNoteLine = (cartKey: string) => {
+    setCart(prev => {
+      const line = prev.find(i => i.cartKey === cartKey)
+      if (!line) return prev
+
+      const baseLine = prev.find(
+        i => i.menuItemId === line.menuItemId && 
+             !(i.notes || '').trim() && 
+             i.takeaway === line.takeaway &&
+             (!i.additions || i.additions.length === 0)
+      )
+
+      if (baseLine && baseLine.quantity > 0) {
+        return prev.map(item => {
+          if (item.cartKey === baseLine.cartKey) {
+            return { ...item, quantity: item.quantity - 1 }
+          }
+          if (item.cartKey === cartKey) {
+            return { ...item, quantity: item.quantity + 1 }
+          }
+          return item
+        }).filter(item => item.quantity > 0)
+      }
+
+      return prev.map(item => item.cartKey === cartKey ? { ...item, quantity: item.quantity + 1 } : item)
+    })
+  }
+
+  // Quitar nota directamente de una línea y devolverla a la línea base
   const removeLineNote = (cartKey: string) => {
-    setCart(prev => prev.map(i => (i.cartKey === cartKey ? { ...i, notes: '' } : i)))
-    alerts.toast('Nota retirada')
+    setCart(prev => {
+      const line = prev.find(i => i.cartKey === cartKey)
+      if (!line) return prev
+
+      const baseLine = prev.find(
+        i => i.menuItemId === line.menuItemId && 
+             !(i.notes || '').trim() && 
+             i.takeaway === line.takeaway &&
+             (!i.additions || i.additions.length === 0)
+      )
+
+      let updated = prev.filter(i => i.cartKey !== cartKey)
+      if (baseLine) {
+        updated = updated.map(item => item.cartKey === baseLine.cartKey ? { ...item, quantity: item.quantity + line.quantity } : item)
+      } else {
+        updated.push({
+          cartKey: genKey(line.menuItemId),
+          menuItemId: line.menuItemId,
+          name: line.name,
+          price: line.price,
+          quantity: line.quantity,
+          takeaway: line.takeaway,
+          notes: '',
+          additions: [],
+        })
+      }
+      return updated
+    })
+    alerts.toast('Nota devuelta a normal')
+  }
+
+  // Convertir 1 unidad a llevar o sumar 1 para llevar directamente
+  const convertOrAddTakeaway = (menuItemId: string) => {
+    setCart(prev => {
+      const baseDineIn = prev.find(
+        i => i.menuItemId === menuItemId && 
+             !i.takeaway && 
+             !(i.notes || '').trim() && 
+             (!i.additions || i.additions.length === 0)
+      )
+      const existingTakeaway = prev.find(
+        i => i.menuItemId === menuItemId && 
+             i.takeaway && 
+             !(i.notes || '').trim() && 
+             (!i.additions || i.additions.length === 0)
+      )
+
+      if (baseDineIn && baseDineIn.quantity > 0) {
+        const updated = prev.map(item => {
+          if (item.cartKey === baseDineIn.cartKey) {
+            return { ...item, quantity: item.quantity - 1 }
+          }
+          if (existingTakeaway && item.cartKey === existingTakeaway.cartKey) {
+            return { ...item, quantity: item.quantity + 1 }
+          }
+          return item
+        }).filter(item => item.quantity > 0)
+
+        if (!existingTakeaway) {
+          updated.push({
+            cartKey: genKey(`${menuItemId}_takeaway`),
+            menuItemId,
+            name: baseDineIn.name,
+            price: baseDineIn.price,
+            quantity: 1,
+            takeaway: true,
+            notes: '',
+            additions: [],
+          })
+        }
+        alerts.toast('1 pasada para llevar')
+        return updated
+      }
+
+      const menuItem = categories.flatMap(c => c.items).find(i => i.id === menuItemId)
+      if (menuItem) {
+        if (existingTakeaway) {
+          alerts.toast('+1 para llevar')
+          return prev.map(i => i.cartKey === existingTakeaway.cartKey ? { ...i, quantity: i.quantity + 1 } : i)
+        }
+        alerts.toast('1 para llevar')
+        return [
+          ...prev,
+          {
+            cartKey: genKey(`${menuItemId}_takeaway`),
+            menuItemId,
+            name: menuItem.name,
+            price: menuItem.price,
+            quantity: 1,
+            takeaway: true,
+            notes: '',
+            additions: [],
+          },
+        ]
+      }
+      return prev
+    })
   }
 
   // Alternar adición en una línea de la cuenta (SI TIENE > 1 UNIDAD, SEPARA 1 UNIDAD CON LA ADICIÓN)
@@ -698,7 +859,7 @@ export default function TableOrderPage() {
                   onClick={() => setShowMobileCart(true)}
                   className="lg:hidden flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[var(--accent)] text-white text-xs font-black shadow-md active:scale-95 transition-all cursor-pointer animate-in fade-in"
                 >
-                  <ShoppingBag className="h-4 w-4" />
+                  <UtensilsCrossed className="h-4 w-4" />
                   <span>Ver Cuenta ({totalCount})</span>
                 </button>
               )}
@@ -831,7 +992,7 @@ export default function TableOrderPage() {
                         )
 
                         return (
-                          <div className="mt-2 flex items-center gap-1.5 flex-wrap">
+                          <div className="mt-2 flex items-center gap-1.5 flex-wrap" onClick={e => e.stopPropagation()}>
                             <span className="rounded-md bg-[var(--accent)] text-white text-[10px] font-black px-1.5 py-0.5 shadow-2xs">
                               {inCartTotal} en cuenta
                             </span>
@@ -844,8 +1005,8 @@ export default function TableOrderPage() {
 
                             {baseTakeaway > 0 && (
                               <span className="rounded-md bg-amber-500/10 text-amber-800 dark:text-amber-300 border border-amber-500/30 text-[10px] font-bold px-1.5 py-0.5 flex items-center gap-1">
-                                <ShoppingBag className="h-3 w-3" />
-                                {baseTakeaway} llevar
+                                <span>🥡</span>
+                                <span>{baseTakeaway} llevar</span>
                               </span>
                             )}
 
@@ -855,24 +1016,41 @@ export default function TableOrderPage() {
                               return (
                                 <span
                                   key={line.cartKey}
-                                  className="rounded-md bg-amber-500/15 border border-amber-500/40 text-amber-950 dark:text-amber-200 text-[10px] font-bold px-2 py-0.5 flex items-center gap-1 shadow-2xs animate-in fade-in"
+                                  className="rounded-md bg-amber-500/15 border border-amber-500/40 text-amber-950 dark:text-amber-200 text-[10px] font-bold px-1.5 py-0.5 flex items-center gap-1 shadow-2xs"
                                 >
-                                  {line.takeaway && <ShoppingBag className="h-2.5 w-2.5 shrink-0" />}
+                                  {line.takeaway && <span className="text-[10px]">🥡</span>}
                                   <span>
                                     {line.quantity} {noteStr ? noteStr : ''} {addStr ? `(+${addStr})` : ''}
                                   </span>
+
+                                  {/* Stepper por nota: [-] y [+] para controlar cuántos van con esta nota */}
                                   {noteStr && (
-                                    <button
-                                      type="button"
-                                      onClick={(e) => {
-                                        e.stopPropagation()
-                                        removeLineNote(line.cartKey)
-                                      }}
-                                      className="text-rose-500 hover:text-rose-700 hover:bg-rose-500/20 rounded-full h-3.5 w-3.5 flex items-center justify-center font-black ml-0.5 cursor-pointer"
-                                      title="Quitar esta nota"
-                                    >
-                                      ×
-                                    </button>
+                                    <span className="inline-flex items-center gap-0.5 ml-1">
+                                      <button
+                                        type="button"
+                                        onClick={() => decrementNoteLine(line.cartKey)}
+                                        className="h-4 w-4 rounded bg-amber-500/25 hover:bg-amber-500/50 text-amber-950 dark:text-amber-100 flex items-center justify-center font-black text-[10px] cursor-pointer"
+                                        title="Restar 1 de esta nota"
+                                      >
+                                        -
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => incrementNoteLine(line.cartKey)}
+                                        className="h-4 w-4 rounded bg-amber-500/25 hover:bg-amber-500/50 text-amber-950 dark:text-amber-100 flex items-center justify-center font-black text-[10px] cursor-pointer"
+                                        title="Sumar 1 con esta nota"
+                                      >
+                                        +
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => removeLineNote(line.cartKey)}
+                                        className="text-rose-500 hover:text-rose-700 hover:bg-rose-500/20 rounded h-4 w-4 flex items-center justify-center font-black text-[11px] cursor-pointer ml-0.5"
+                                        title="Quitar esta nota y devolver a normal"
+                                      >
+                                        ×
+                                      </button>
+                                    </span>
                                   )}
                                 </span>
                               )
@@ -904,8 +1082,7 @@ export default function TableOrderPage() {
                             className="h-9 px-2.5 rounded-xl bg-[var(--bg-elevated)] hover:bg-[var(--bg-hover)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] font-bold text-xs border border-[var(--border-subtle)] active:scale-90 transition cursor-pointer flex items-center gap-1"
                             title="Agregar para llevar"
                           >
-                            <ShoppingBag className="h-3.5 w-3.5 text-amber-600" />
-                            <span>Llevar</span>
+                            <span>🥡 Llevar</span>
                           </button>
                         </div>
                       ) : (
@@ -933,32 +1110,21 @@ export default function TableOrderPage() {
                             </button>
                           </div>
 
-                          {/* Botón rápido para sumar para llevar con icono de bolsa */}
+                          {/* Botón rápido para sumar o pasar para llevar */}
                           <button
                             type="button"
-                            onClick={() => addItem(item, true)}
+                            onClick={() => convertOrAddTakeaway(item.id)}
                             className="h-9 px-2.5 rounded-xl bg-[var(--bg-elevated)] hover:bg-[var(--bg-hover)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] font-bold text-xs border border-[var(--border-subtle)] active:scale-90 transition cursor-pointer flex items-center gap-1"
-                            title="Sumar una unidad para llevar"
+                            title="Pasar 1 a llevar o sumar para llevar"
                           >
-                            <ShoppingBag className="h-3.5 w-3.5 text-amber-600" />
-                            <span>+Llevar</span>
-                          </button>
-
-                          {/* Botón directo para notas RÁPIDAS sin salir de la pantalla */}
-                          <button
-                            type="button"
-                            onClick={() => openCardNoteModal(item)}
-                            className="h-9 px-2.5 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 text-amber-800 dark:text-amber-300 font-bold text-xs border border-amber-500/30 active:scale-90 transition cursor-pointer flex items-center gap-1"
-                            title="Agregar notas o especificaciones a este producto sin salir"
-                          >
-                            📝 Notas
+                            <span>+🥡</span>
                           </button>
                         </div>
                       )}
                     </div>
                   </div>
 
-                  {/* ADICIONES RÁPIDAS EN LA TARJETA (Solo para comidas, no para bebidas) */}
+                  {/* ADICIONES RÁPIDAS EN LA TARJETA (Solo para comidas) */}
                   {allowAdditions && (
                     <div
                       className="mt-2.5 pt-2 border-t border-[var(--border-subtle)]/70 flex items-center gap-1.5 flex-wrap"
@@ -987,6 +1153,42 @@ export default function TableOrderPage() {
                           🥓 Tocineta ({formatCurrency(tocinetaAddition.price)})
                         </button>
                       )}
+                    </div>
+                  )}
+
+                  {/* NOTAS RÁPIDAS DE 1 CLIC DIRECTO EN LA TARJETA (SIN MODAL NI REDIRECCIÓN) */}
+                  {allowAdditions && (
+                    <div
+                      className="mt-1.5 pt-1.5 border-t border-[var(--border-subtle)]/70 flex items-center gap-1 flex-wrap"
+                      onClick={e => e.stopPropagation()}
+                    >
+                      <span className="text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-wider">
+                        Nota:
+                      </span>
+                      {QUICK_CHIPS.map(chip => (
+                        <button
+                          key={chip}
+                          type="button"
+                          onClick={() => applyNoteToProduct(item.id, chip, false)}
+                          className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-[var(--bg-elevated)] hover:bg-[var(--accent)] hover:text-white text-[var(--text-secondary)] border border-[var(--border-subtle)] transition active:scale-95 cursor-pointer"
+                          title={`Asignar o separar 1 con "${chip}"`}
+                        >
+                          {chip}
+                        </button>
+                      ))}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const custom = window.prompt(`Escribe una indicación para "${item.name}" (ej: término medio, sin tártara):`)
+                          if (custom && custom.trim()) {
+                            applyNoteToProduct(item.id, custom.trim(), false)
+                          }
+                        }}
+                        className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-[var(--bg-elevated)] hover:bg-[var(--bg-hover)] text-[var(--text-muted)] hover:text-[var(--text-primary)] border border-[var(--border-subtle)] transition active:scale-95 cursor-pointer"
+                        title="Escribir otra nota para cocina"
+                      >
+                        ✏️ Otra...
+                      </button>
                     </div>
                   )}
                 </div>
@@ -1110,7 +1312,7 @@ export default function TableOrderPage() {
                           : 'bg-[var(--bg-panel)] text-[var(--text-secondary)] border border-[var(--border-subtle)] hover:bg-[var(--bg-hover)]'
                       }`}
                     >
-                      <ShoppingBag className="h-3.5 w-3.5" />
+                      <span>🥡</span>
                       <span>{item.quantity > 1 && !item.takeaway ? 'Pasar 1 a Llevar' : 'Para Llevar'}</span>
                     </button>
                   </div>
@@ -1372,7 +1574,7 @@ export default function TableOrderPage() {
                           : 'bg-[var(--bg-panel)] text-[var(--text-secondary)] border border-[var(--border-subtle)]'
                       }`}
                     >
-                      <ShoppingBag className="h-3.5 w-3.5" />
+                      <span>🥡</span>
                       <span>{item.quantity > 1 && !item.takeaway ? 'Pasar 1 a Llevar' : 'Para Llevar'}</span>
                     </button>
                   </div>
@@ -1480,126 +1682,6 @@ export default function TableOrderPage() {
                 : `Enviar a cocina (${formatCurrency(total)})`}
             </Button>
           </div>
-        </DialogContent>
-      </Dialog>
-
-      {/* MODAL DE NOTA RÁPIDA POR PRODUCTO (DIRECTO EN EL CATÁLOGO SIN SALIR DE LA PANTALLA) */}
-      <Dialog open={!!noteModalItem} onOpenChange={open => { if (!open) setNoteModalItem(null) }}>
-        <DialogContent className="max-w-md p-5 bg-[var(--bg-panel)] rounded-3xl border border-[var(--border-subtle)] shadow-2xl">
-          {noteModalItem && (
-            <div className="space-y-4">
-              <div className="flex items-start justify-between gap-2 border-b border-[var(--border-subtle)] pb-3">
-                <div>
-                  <h2 className="text-base font-black text-[var(--text-primary)] flex items-center gap-1.5">
-                    <span>📝 Nota para</span>
-                    <span className="text-[var(--accent)] truncate">{noteModalItem.name}</span>
-                  </h2>
-                  <p className="text-xs text-[var(--text-secondary)] mt-0.5">
-                    Toca una especificación rápida o escribe una indicación para cocina:
-                  </p>
-                </div>
-              </div>
-
-              {/* Selector si la nota aplica a Mesa o Para Llevar */}
-              <div className="flex items-center gap-2 p-1 bg-[var(--bg-elevated)] rounded-xl border border-[var(--border-subtle)]">
-                <button
-                  type="button"
-                  onClick={() => setNoteTargetTakeaway(false)}
-                  className={`flex-1 py-2 rounded-lg text-xs font-black transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
-                    !noteTargetTakeaway
-                      ? 'bg-white dark:bg-slate-800 text-[var(--text-primary)] shadow-xs border border-[var(--border-subtle)]'
-                      : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'
-                  }`}
-                >
-                  🍽️ En Mesa
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setNoteTargetTakeaway(true)}
-                  className={`flex-1 py-2 rounded-lg text-xs font-black transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
-                    noteTargetTakeaway
-                      ? 'bg-amber-500 text-slate-950 shadow-xs'
-                      : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'
-                  }`}
-                >
-                  <ShoppingBag className="h-3.5 w-3.5" /> Para Llevar
-                </button>
-              </div>
-
-              {/* Chips rápidos de 1 toque */}
-              <div>
-                <label className="text-[11px] font-black text-[var(--text-muted)] uppercase tracking-wider block mb-2">
-                  Especificaciones más pedidas:
-                </label>
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                  {[
-                    'Sin cebolla',
-                    'Sin salsas',
-                    'Salsas aparte',
-                    'Sin ripio',
-                    'Bien dorado',
-                    'Poco picante',
-                    'Sin ripio ni salsas',
-                    'Con bastante ripio',
-                    'Solo queso y papas',
-                  ].map(chip => (
-                    <button
-                      key={chip}
-                      type="button"
-                      onClick={() => applyNoteToProduct(noteModalItem.id, chip, noteTargetTakeaway)}
-                      className="px-2.5 py-2.5 rounded-xl text-xs font-bold bg-[var(--bg-elevated)] hover:bg-[var(--accent)] hover:text-white border border-[var(--border-subtle)] active:scale-95 transition-all text-left flex items-center justify-between cursor-pointer group"
-                    >
-                      <span className="truncate">{chip}</span>
-                      <Plus className="h-3.5 w-3.5 shrink-0 opacity-40 group-hover:opacity-100" />
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* Input libre para notas personalizadas */}
-              <div className="pt-2 border-t border-[var(--border-subtle)] space-y-2">
-                <label className="text-[11px] font-black text-[var(--text-muted)] uppercase tracking-wider block">
-                  O escribe otra nota para cocina:
-                </label>
-                <div className="flex gap-2">
-                  <Input
-                    value={customNoteInput}
-                    onChange={e => setCustomNoteInput(e.target.value)}
-                    placeholder="Ej: carne término medio, salsa tártara aparte..."
-                    className="text-xs h-10 rounded-xl bg-[var(--bg-elevated)]"
-                    onKeyDown={e => {
-                      if (e.key === 'Enter' && customNoteInput.trim()) {
-                        applyNoteToProduct(noteModalItem.id, customNoteInput.trim(), noteTargetTakeaway)
-                      }
-                    }}
-                  />
-                  <Button
-                    type="button"
-                    onClick={() => {
-                      if (customNoteInput.trim()) {
-                        applyNoteToProduct(noteModalItem.id, customNoteInput.trim(), noteTargetTakeaway)
-                      }
-                    }}
-                    disabled={!customNoteInput.trim()}
-                    className="bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-white font-black text-xs px-4 h-10 rounded-xl cursor-pointer shrink-0"
-                  >
-                    Guardar
-                  </Button>
-                </div>
-              </div>
-
-              <div className="flex justify-end pt-1">
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => setNoteModalItem(null)}
-                  className="rounded-xl h-9 text-xs font-bold cursor-pointer"
-                >
-                  Cerrar
-                </Button>
-              </div>
-            </div>
-          )}
         </DialogContent>
       </Dialog>
     </div>
