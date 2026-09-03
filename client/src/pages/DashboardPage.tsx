@@ -111,10 +111,10 @@ export default function DashboardPage() {
 
       {error && <div role="alert" className="flex flex-wrap items-center gap-3 rounded-2xl border border-red-500/25 bg-red-500/5 p-4 text-sm"><CircleAlert className="h-5 w-5 shrink-0 text-[var(--destructive)]" /><div className="flex-1"><p>{error}</p>{updated && <p className="mt-1 text-xs text-[var(--text-muted)]">Los datos visibles corresponden a la última consulta correcta.</p>}</div><button className="font-semibold underline" onClick={() => refresh.current()}>Reintentar</button></div>}
 
-      <section className="overflow-hidden rounded-3xl bg-[#242321] p-6 text-white sm:p-8">
+      <section className="overflow-hidden rounded-3xl bg-[var(--bg-panel)] border border-[var(--border-subtle)] p-6 text-[var(--text-primary)] sm:p-8 shadow-sm">
         <div className="flex flex-wrap items-center justify-between gap-5">
-          <div><p className="text-xs font-semibold uppercase tracking-[0.18em] text-orange-300">Comienza aquí</p><h2 className="mt-2 text-2xl font-semibold">Un buen turno empieza con un pedido.</h2><p className="mt-2 max-w-xl text-sm leading-relaxed text-white/65">Mesas, cocina y caja conectadas para que cada pedido llegue a tiempo.</p></div>
-          {canOpen('/tables/new') ? <Link to="/tables/new" className="inline-flex items-center gap-2 rounded-xl bg-[#E30613] hover:bg-[#C40510] px-5 py-3 text-sm font-bold text-white shadow-md"><Plus className="h-4 w-4" />Pedido en mesa</Link> : canOpen('/orders/new') && <Link to="/orders/new" className="inline-flex items-center gap-2 rounded-xl bg-[#E30613] hover:bg-[#C40510] px-5 py-3 text-sm font-bold text-white shadow-md"><Plus className="h-4 w-4" />Nuevo pedido</Link>}
+          <div><p className="text-xs font-black uppercase tracking-[0.18em] text-[var(--accent)]">Comienza aquí</p><h2 className="mt-2 text-2xl font-bold">Un buen turno empieza con un pedido.</h2><p className="mt-2 max-w-xl text-sm leading-relaxed text-[var(--text-secondary)]">Mesas, cocina y caja conectadas para que cada pedido llegue a tiempo.</p></div>
+          {canOpen('/tables/new') ? <Link to="/tables/new" className="inline-flex items-center gap-2 rounded-xl bg-[var(--accent)] hover:bg-[var(--accent-hover)] px-5 py-3 text-sm font-bold text-white shadow-md transition-all"><Plus className="h-4 w-4" />Pedido en mesa</Link> : canOpen('/orders/new') && <Link to="/orders/new" className="inline-flex items-center gap-2 rounded-xl bg-[var(--accent)] hover:bg-[var(--accent-hover)] px-5 py-3 text-sm font-bold text-white shadow-md transition-all"><Plus className="h-4 w-4" />Nuevo pedido</Link>}
         </div>
       </section>
 

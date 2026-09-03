@@ -145,8 +145,8 @@ export function Sidebar({ onClose, isCollapsed = false, onToggleCollapse }: Side
       )}
 
       <div className="border-b border-[var(--border-subtle)] px-4 py-4 flex items-center justify-center">
-        <Link to={getFirstAllowedPath(user) || '/profile'} className={cn("flex justify-center rounded-2xl bg-[var(--bg-base)] border border-[var(--border-subtle)] transition-all duration-200 hover:scale-[1.02] active:scale-[0.98]", isCollapsed ? "h-9 w-9 items-center p-0" : "py-3.5 px-4 w-full shadow-md")}>
-          {isCollapsed ? <span className="text-sm font-black text-[var(--accent)]">V</span> : <BrandLogo compact imageClassName="w-32" />}
+        <Link to={getFirstAllowedPath(user) || '/profile'} className={cn("flex justify-center rounded-2xl bg-white border border-slate-200/80 transition-all duration-200 hover:scale-[1.02] active:scale-[0.98]", isCollapsed ? "h-9 w-9 items-center p-1" : "py-2.5 px-3 w-full shadow-xs")}>
+          {isCollapsed ? <span className="text-sm font-black text-[#E30613]">V</span> : <BrandLogo compact imageClassName="w-28" />}
         </Link>
       </div>
 
@@ -222,7 +222,7 @@ export function Sidebar({ onClose, isCollapsed = false, onToggleCollapse }: Side
                       isCollapsed ? 'justify-center px-0' : 'gap-3 px-3',
                       active && !isCollapsed && (item.section === 'SuperAdmin' ? 'font-semibold text-amber-500 pl-3' : 'font-semibold text-[var(--accent)] pl-3'),
                       active && isCollapsed && (item.section === 'SuperAdmin' ? 'text-amber-500' : 'text-[var(--accent)]'),
-                      !active && 'text-[var(--text-link)] hover:text-[var(--text-primary)]'
+                      !active && 'text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)] rounded-xl'
                     )}
                   >
                     {active && (

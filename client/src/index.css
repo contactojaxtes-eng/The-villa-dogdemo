@@ -95,22 +95,26 @@
 }
 
 :root.dark, html.dark, body.dark, .dark {
-  --bg-base: #17100D;
-  --bg-panel: #211712;
-  --bg-elevated: #2B1C15;
-  --bg-subtle: #1C130F;
-  --bg-input: #2B1C15;
-  --bg-hover: #3A2419;
+  /* Fondo principal: Negro obsidiana elegante y profundo, sin ningún tinte café ni sepia */
+  --bg-base: #090B10;
+  --bg-panel: #111520;
+  --bg-elevated: #181E2C;
+  --bg-subtle: #0D1018;
+  --bg-input: #181E2C;
+  --bg-hover: #20273A;
 
-  --text-primary: #F7F8FA;
-  --text-secondary: #DDE1E7;
-  --text-muted: #D8A47A;
-  --text-placeholder: #A8795E;
+  /* Textos nítidos con máximo contraste y legibilidad */
+  --text-primary: #F8FAFC;
+  --text-secondary: #94A3B8;
+  --text-muted: #64748B;
+  --text-placeholder: #475569;
   --text-link: #FF4D58;
 
-  --border-default: #59311F;
-  --border-subtle: #3A2419;
+  /* Bordes sutiles y definidos de cristal oscuro */
+  --border-default: #283348;
+  --border-subtle: #1A2232;
 
+  /* Brand / Accent - The Villa Dog Red */
   --rojo-villadog: #E30613;
   --accent: #E30613;
   --accent-hover: #FF2B38;
@@ -118,14 +122,21 @@
   --accent-warm: #FF4D58;
   --accent-hot: #EF4444;
   --accent-deep: #5A0006;
-  --accent-muted: rgba(227, 6, 19, 0.18);
+  --accent-muted: rgba(227, 6, 19, 0.16);
   --accent-glow-a: rgba(227, 6, 19, 0.22);
   --accent-glow-b: rgba(227, 6, 19, 0.10);
   --accent-card: rgba(227, 6, 19, 0.16);
-  --accent-border: rgba(227, 6, 19, 0.30);
+  --accent-border: rgba(227, 6, 19, 0.35);
 
-  --overlay: rgba(0, 0, 0, 0.72);
-  --shadow-color: rgba(0, 0, 0, 0.38);
+  /* Semánticos */
+  --destructive: #EF4444;
+  --warning: #F59E0B;
+  --info: #3B82F6;
+  --success: #10B981;
+  --purple: #8B5CF6;
+
+  --overlay: rgba(0, 0, 0, 0.75);
+  --shadow-color: rgba(0, 0, 0, 0.60);
 }
 
 /* ============ BASE STYLES ============ */
@@ -195,26 +206,29 @@ body {
   --bg-subtle: #FFFFFF;
   --bg-base: #F7F8FA;
   --bg-panel: #FFFFFF;
-  --bg-hover: #FFF0E6;
+  --bg-hover: #FFF0F1;
   --border-subtle: #E8EBEF;
-  --text-primary: #242321;
+  --text-primary: #17100D;
   --text-secondary: #525866;
   --text-muted: #687080;
-  --accent: #D94E0A;
-  --accent-muted: #FFF0E6;
+  --accent: #E30613;
+  --accent-muted: rgba(227, 6, 19, 0.12);
   --border-default: #DDE1E7;
   background: var(--bg-panel);
 }
 .dark .niche-sidebar {
-  --bg-panel: #211712;
-  --bg-hover: #3A2419;
-  --border-subtle: #3A2419;
-  --text-primary: #FFF7ED;
-  --text-secondary: #D8C5B5;
-  --text-muted: #B19B87;
-  --accent: #FB923C;
-  --accent-muted: #3A2419;
-  --border-default: #59311F;
+  --bg-panel: #0E121B;
+  --bg-base: #090B10;
+  --bg-subtle: #131825;
+  --bg-hover: #1C2333;
+  --border-subtle: #19202E;
+  --border-default: #283348;
+  --text-primary: #F8FAFC;
+  --text-secondary: #94A3B8;
+  --text-muted: #64748B;
+  --accent: #E30613;
+  --accent-muted: rgba(227, 6, 19, 0.16);
+  background: var(--bg-panel);
 }
 
 /* Logo container integrated with the Villa Dog sidebar */
@@ -241,6 +255,19 @@ body {
   --accent-fg: #FFFFFF;
   --accent-muted: rgba(227, 6, 19, 0.12);
 }
+.dark .superadmin-shell {
+  --bg-base: #090B10;
+  --bg-panel: #111520;
+  --bg-subtle: #0E121B;
+  --bg-hover: #1C2333;
+  --text-primary: #F8FAFC;
+  --text-secondary: #94A3B8;
+  --text-muted: #64748B;
+  --border-default: #283348;
+  --border-subtle: #19202E;
+  --accent: #E30613;
+  --accent-muted: rgba(227, 6, 19, 0.16);
+}
 
 .niche-table th,
 .niche-table td {
@@ -250,11 +277,22 @@ body {
 /* Premium micro-interactions & Glassmorphism */
 .niche-card-premium {
   border: 1px solid var(--border-subtle);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.62), transparent 46%),
-    var(--bg-panel);
-  box-shadow: 0 10px 30px -18px var(--shadow-color);
+  background: var(--bg-panel);
+  box-shadow: 0 4px 20px -6px var(--shadow-color);
   transition: all 0.3s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+}
+
+.light .niche-card-premium {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.75), transparent 46%),
+    var(--bg-panel);
+}
+
+.dark .niche-card-premium {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.03), transparent 60%),
+    var(--bg-panel);
+  border-color: var(--border-subtle);
 }
 
 .niche-card-premium:hover {
