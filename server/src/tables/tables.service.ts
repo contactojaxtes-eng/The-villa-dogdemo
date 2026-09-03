@@ -562,7 +562,10 @@ export class TablesService {
       return { updated, table: ticket.tableId ? await this.finishPaidTable(ticket.tableId, tx) : null };
     }, operationTransaction);
     this.socketGateway.emitKitchenTicketUpdated(result.updated);
-    if (status === 'READY') this.socketGateway.emitKitchenTicketReady(result.updated.order.waiterId, result.updated);
+    if (status === 'READY') {
+      const waiterId = result.updated.order?.waiterId || result.updated.order?.diningTable?.openedById || result.table?.openedById;
+      this.socketGateway.emitKitchenTicketReady(waiterId, result.updated);
+    }
     if (result.table) this.emitAccount(result.table);
     return result.updated;
   }
@@ -581,7 +584,7 @@ export class TablesService {
     const tickets = await this.prisma.kitchenTicket.findMany({
       where,
       include: { station: true, assignedTo: { select: { id: true, name: true } }, items: true, order: { include: { waiter: true, diningTable: true } } },
-      orderBy: [{ status: 'asc' }, { updatedAt: 'desc' }, { createdAt: 'desc' }],
+      orderBy: [{ status: 'asc' }, { createdAt: 'asc' }],
       take: 250,
     });
 

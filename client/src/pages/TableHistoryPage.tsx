@@ -8,6 +8,17 @@ import { Dialog, DialogContent } from '@/components/ui/dialog'
 import { api } from '@/lib/api'
 import { formatCurrency } from '@/lib/utils'
 
+function formatTableDate(dateVal?: string | Date | null): string {
+  if (!dateVal) return '—'
+  try {
+    const d = new Date(dateVal)
+    if (isNaN(d.getTime())) return '—'
+    return `${d.toLocaleDateString()} ${d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+  } catch {
+    return '—'
+  }
+}
+
 export default function TableHistoryPage() {
   const [tables, setTables] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
@@ -19,9 +30,10 @@ export default function TableHistoryPage() {
     setLoading(true)
     try {
       const res = await api.get<any[]>(`/tables?status=${filterStatus}`)
-      setTables(res || [])
+      setTables(Array.isArray(res) ? res : [])
     } catch (err) {
       console.error(err)
+      setTables([])
     } finally {
       setLoading(false)
     }
@@ -139,13 +151,13 @@ export default function TableHistoryPage() {
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-[var(--border-subtle)] pb-3">
                   <div className="flex items-center gap-3">
                     <span className="text-lg font-black text-[var(--text-primary)]">{table.label}</span>
-                    <span className="text-xs font-bold text-amber-800 bg-amber-500/10 px-2 py-0.5 rounded-md">
-                      👤 Atendido por: {table.openedBy?.name || 'Mesero'}
+                    <span className="text-xs font-medium text-[var(--text-secondary)] bg-[var(--bg-elevated)] border border-[var(--border-subtle)] px-2 py-0.5 rounded-md">
+                      👤 Atendido por: <strong className="text-[var(--text-primary)]">{table.openedBy?.name || 'Mesero'}</strong>
                     </span>
-                    <span className={`rounded-full px-2.5 py-0.5 text-[10px] font-black tracking-wider ${
+                    <span className={`rounded-full px-2.5 py-0.5 text-[10px] font-bold tracking-wider border ${
                       table.status === 'CLOSED'
-                        ? 'bg-emerald-500/10 text-emerald-600'
-                        : 'bg-amber-500/10 text-amber-600'
+                        ? 'bg-[var(--bg-elevated)] border-[var(--border-subtle)] text-[var(--text-primary)]'
+                        : 'bg-[var(--accent)]/10 border-[var(--accent)]/25 text-[var(--accent)]'
                     }`}>
                       {table.status === 'CLOSED' ? '✓ CERRADA Y LIBERADA' : 'ABIERTA'}
                     </span>
@@ -154,7 +166,7 @@ export default function TableHistoryPage() {
                   <div className="flex items-center gap-2">
                     <span className="text-xs text-[var(--text-muted)] flex items-center gap-1">
                       <Clock className="h-3.5 w-3.5" />
-                      {new Date(table.openedAt).toLocaleDateString()} {new Date(table.openedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      {formatTableDate(table.openedAt || table.createdAt)}
                     </span>
                     <span className="text-base font-black text-[var(--accent)] ml-2">
                       {formatCurrency(table.total || 0)}
@@ -183,20 +195,20 @@ export default function TableHistoryPage() {
                   <div className="flex items-center gap-2">
                     <span className="text-[var(--text-muted)]">Método de pago:</span>
                     {hasTransfer ? (
-                      <span className="inline-flex items-center gap-1 font-bold text-sky-700 bg-sky-500/10 px-2 py-0.5 rounded">
+                      <span className="inline-flex items-center gap-1 font-bold text-[var(--text-primary)] bg-[var(--bg-elevated)] border border-[var(--border-subtle)] px-2 py-0.5 rounded">
                         📲 Transferencia
                         {proofId && (
                           <button
                             type="button"
                             onClick={() => setZoomUrl(`/payment-validation/proofs/${proofId}/image`)}
-                            className="ml-1 text-[var(--accent)] hover:underline inline-flex items-center gap-0.5"
+                            className="ml-1 text-[var(--accent)] hover:underline inline-flex items-center gap-0.5 cursor-pointer"
                           >
                             <Eye className="h-3 w-3" /> Ver comprobante
                           </button>
                         )}
                       </span>
                     ) : (
-                      <span className="font-bold text-emerald-700 bg-emerald-500/10 px-2 py-0.5 rounded">
+                      <span className="font-bold text-[var(--text-primary)] bg-[var(--bg-elevated)] border border-[var(--border-subtle)] px-2 py-0.5 rounded">
                         💵 Efectivo
                       </span>
                     )}

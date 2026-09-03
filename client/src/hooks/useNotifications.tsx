@@ -134,13 +134,26 @@ export function useNotifications() {
     })
 
     socket.on('kitchenTicketReady', (ticket: any) => {
-      toast.success('Pedido listo en cocina', {
-        description: `${ticket?.order?.diningTable?.label || 'Mesa'} - ${ticket?.station?.name || 'Cocina'}`,
-        icon: <CheckCircle2 className="h-4 w-4 text-[#10B981]" />,
-        duration: 6000,
+      const tableLabel = ticket?.order?.diningTable?.label || ticket?.table?.label || 'Mesa'
+      const stationName = ticket?.station?.name || 'Cocina'
+      const orderNum = ticket?.order?.orderNumber ? `#${ticket.order.orderNumber}` : ''
+      const waiterId = ticket?.order?.waiterId || ticket?.order?.diningTable?.openedById || ticket?.table?.openedById
+
+      const isMyOrder = waiterId === user.id
+      const isFloorStaff = ['WAITER', 'ADMIN', 'SUPERADMIN', 'CASHIER'].includes(user.role || '')
+      if (!isMyOrder && !isFloorStaff) return
+
+      toast.success(isMyOrder ? '🍽️ ¡Tu pedido está listo!' : '🍽️ Pedido listo en cocina', {
+        description: `${tableLabel} ${orderNum} listo en ${stationName}. Puedes pasar a recogerlo.`,
+        icon: <CheckCircle2 className="h-4 w-4 text-emerald-500" />,
+        duration: 8000,
       })
       playNotificationSound('urgent')
-      showBrowserNotification('Pedido listo en cocina', `${ticket?.order?.diningTable?.label || 'Mesa'} - ${ticket?.station?.name || 'Cocina'}`, '/tables')
+      showBrowserNotification(
+        isMyOrder ? `🍽️ ¡Tu pedido de ${tableLabel} está listo!` : `🍽️ Pedido listo: ${tableLabel}`,
+        `${stationName} terminó la preparación. Pasa a recogerlo.`,
+        '/tables'
+      )
     })
 
     socket.on('paymentSubmitted', (payload: any) => {

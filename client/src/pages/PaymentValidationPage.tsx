@@ -10,17 +10,13 @@ import { formatCurrency } from '@/lib/utils'
 import { useAuth } from '@/hooks/useAuth'
 import { ProtectedImage } from '@/components/ProtectedImage'
 
-const statusFilters = [
+const validationTabs = [
   { value: 'PENDING_REVIEW', label: 'Pendientes' },
+  { value: 'CASH', label: 'Efectivo' },
+  { value: 'TRANSFER', label: 'Transferencias' },
   { value: 'CONFIRMED', label: 'Pagados' },
   { value: 'REJECTED', label: 'Rechazados' },
   { value: 'ALL', label: 'Todos' },
-]
-
-const methodFilters = [
-  { value: 'ALL', label: 'Todos' },
-  { value: 'CASH', label: 'Efectivo' },
-  { value: 'TRANSFER', label: 'Transferencias' },
 ]
 
 const methodLabels: Record<string, string> = {
@@ -38,8 +34,7 @@ export default function PaymentValidationPage() {
   const { user, hasPermission } = useAuth()
   const [payments, setPayments] = useState<any[]>([])
   const [loading, setLoading] = useState(false)
-  const [status, setStatus] = useState('PENDING_REVIEW')
-  const [method, setMethod] = useState('ALL')
+  const [activeTab, setActiveTab] = useState('PENDING_REVIEW')
   const [search, setSearch] = useState('')
   const [reasons, setReasons] = useState<Record<string, string>>({})
   const [imageUrl, setImageUrl] = useState<string | null>(null)
@@ -72,13 +67,16 @@ export default function PaymentValidationPage() {
   // Filtrado instantáneo en cliente (0ms)
   const filteredPayments = useMemo(() => {
     let list = payments
-    if (status !== 'ALL') {
-      list = list.filter(p => p.status === status)
-    }
-    if (method === 'CASH') {
+    if (activeTab === 'PENDING_REVIEW') {
+      list = list.filter(p => p.status === 'PENDING_REVIEW')
+    } else if (activeTab === 'CASH') {
       list = list.filter(p => p.method === 'CASH')
-    } else if (method === 'TRANSFER') {
+    } else if (activeTab === 'TRANSFER') {
       list = list.filter(p => p.method !== 'CASH')
+    } else if (activeTab === 'CONFIRMED') {
+      list = list.filter(p => p.status === 'CONFIRMED')
+    } else if (activeTab === 'REJECTED') {
+      list = list.filter(p => p.status === 'REJECTED')
     }
     const q = search.trim().toLowerCase()
     if (q) {
@@ -95,7 +93,15 @@ export default function PaymentValidationPage() {
       })
     }
     return list
-  }, [payments, status, method, search])
+  }, [payments, activeTab, search])
+
+  const tabCounts = useMemo(() => {
+    return {
+      PENDING_REVIEW: payments.filter(p => p.status === 'PENDING_REVIEW').length,
+      CASH: payments.filter(p => p.method === 'CASH' && p.status === 'PENDING_REVIEW').length,
+      TRANSFER: payments.filter(p => p.method !== 'CASH' && p.status === 'PENDING_REVIEW').length,
+    }
+  }, [payments])
 
   const openProof = async (proofId: string, directBase64?: string) => {
     if (directBase64) {
@@ -156,50 +162,46 @@ export default function PaymentValidationPage() {
         </Button>
       </div>
 
-      {/* Barra de Filtros Instantáneos */}
-      <div className="flex flex-col lg:flex-row gap-3 lg:items-center lg:justify-between bg-[var(--bg-panel)] p-3 rounded-2xl border border-[var(--border-subtle)] shadow-xs">
-        {/* Filtro de Estado */}
+      {/* Barra de Filtros Instantáneos Unificada (Una sola fila) */}
+      <div className="flex flex-col sm:flex-row gap-3 sm:items-center sm:justify-between bg-[var(--bg-panel)] p-2.5 rounded-2xl border border-[var(--border-subtle)] shadow-xs">
         <div className="flex flex-wrap gap-1.5 items-center">
-          <span className="text-xs font-bold text-[var(--text-muted)] mr-1">Estado:</span>
-          {statusFilters.map(s => (
-            <Button
-              key={s.value}
-              size="sm"
-              variant={status === s.value ? 'default' : 'ghost'}
-              onClick={() => setStatus(s.value)}
-              className={`h-8 text-xs font-bold ${status === s.value ? 'bg-[var(--accent)] text-white shadow-xs' : ''}`}
-            >
-              {s.label}
-            </Button>
-          ))}
+          {validationTabs.map(s => {
+            const isActive = activeTab === s.value
+            const count = s.value === 'PENDING_REVIEW' ? tabCounts.PENDING_REVIEW : s.value === 'CASH' ? tabCounts.CASH : s.value === 'TRANSFER' ? tabCounts.TRANSFER : null
+            return (
+              <button
+                key={s.value}
+                type="button"
+                onClick={() => setActiveTab(s.value)}
+                className={`h-8 px-3 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                  isActive
+                    ? 'bg-[var(--accent)] text-white shadow-xs'
+                    : 'bg-[var(--bg-elevated)] text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] border border-[var(--border-subtle)]'
+                }`}
+              >
+                <span>{s.label}</span>
+                {count !== null && count > 0 && (
+                  <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-black ${
+                    isActive ? 'bg-white/25 text-white' : 'bg-[var(--accent)] text-white'
+                  }`}>
+                    {count}
+                  </span>
+                )}
+              </button>
+            )
+          })}
         </div>
 
-        {/* Filtro de Método (Efectivo vs Transferencia) */}
-        <div className="flex flex-wrap gap-1.5 items-center">
-          <span className="text-xs font-bold text-[var(--text-muted)] mr-1">Método:</span>
-          {methodFilters.map(m => (
-            <Button
-              key={m.value}
-              size="sm"
-              variant={method === m.value ? 'default' : 'outline'}
-              onClick={() => setMethod(m.value)}
-              className={`h-8 text-xs font-bold ${method === m.value ? 'bg-[var(--text-primary)] text-white shadow-xs' : ''}`}
-            >
-              {m.label}
-            </Button>
-          ))}
+        {/* Buscador Rápido Integrado */}
+        <div className="relative w-full sm:max-w-xs">
+          <Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--text-muted)]" />
+          <Input
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            className="pl-8 h-8 text-xs rounded-xl bg-[var(--bg-elevated)] border-[var(--border-subtle)]"
+            placeholder="Buscar por mesa, cliente, pedido..."
+          />
         </div>
-      </div>
-
-      {/* Buscador Rápido */}
-      <div className="relative max-w-lg">
-        <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--text-muted)]" />
-        <Input
-          value={search}
-          onChange={e => setSearch(e.target.value)}
-          className="pl-9 h-9 text-xs rounded-xl bg-[var(--bg-panel)]"
-          placeholder="Buscar por mesa, cliente, pedido, mesera..."
-        />
       </div>
 
       {/* Lista de Pagos en Filas Horizontales Ultra-Compactas */}

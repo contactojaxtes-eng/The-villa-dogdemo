@@ -175,6 +175,7 @@ export class SocketGateway implements OnGatewayConnection, OnGatewayDisconnect, 
   emitKitchenTicketCreated(ticket: any) {
     this.server.to(`kitchen:${ticket.stationId}`).emit('kitchenTicketCreated', ticket);
     if (ticket.assignedToId) this.server.to(`user:${ticket.assignedToId}`).emit('kitchenTicketCreated', ticket);
+    this.server.emit('kitchenTicketCreated', ticket);
     this.server.emit('kitchenTicketUpdated', ticket);
   }
 
@@ -185,8 +186,10 @@ export class SocketGateway implements OnGatewayConnection, OnGatewayDisconnect, 
   }
 
   emitKitchenTicketReady(waiterId: string, ticket: any) {
-    this.server.to(`user:${waiterId}`).emit('kitchenTicketReady', ticket);
-
+    if (waiterId) {
+      this.server.to(`user:${waiterId}`).emit('kitchenTicketReady', ticket);
+    }
+    this.server.emit('kitchenTicketReady', ticket);
   }
 
   emitPaymentSubmitted(payload: any) {
