@@ -21,7 +21,7 @@ const CashControlPage = lazy(() => import('./pages/CashControlPage'))
 const TablesPage = lazy(() => import('./pages/TablesPage'))
 const TableOrderPage = lazy(() => import('./pages/TableOrderPage'))
 const TableDetailPage = lazy(() => import('./pages/TableDetailPage'))
-const TableHistoryPage = lazy(() => import('./pages/TableHistoryPage'))
+import TableHistoryPage from './pages/TableHistoryPage'
 const KitchenPage = lazy(() => import('./pages/KitchenPage'))
 const PaymentValidationPage = lazy(() => import('./pages/PaymentValidationPage'))
 const KitchenStationsPage = lazy(() => import('./pages/KitchenStationsPage'))

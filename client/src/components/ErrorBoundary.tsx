@@ -73,10 +73,11 @@ export class ErrorBoundary extends Component<Props, State> {
               </p>
             </div>
 
-            {import.meta.env.DEV && this.state.error && (
-              <div className="text-left bg-black/40 rounded-xl p-3 border border-red-500/20 text-[11px] text-red-400 font-mono overflow-auto max-h-28">
-                <p className="font-bold">{this.state.error.name}: {this.state.error.message}</p>
-              </div>
+            {this.state.error && (
+              <details className="text-left bg-black/5 dark:bg-black/40 rounded-xl p-2.5 border border-red-500/20 text-[11px] text-red-500 font-mono overflow-auto max-h-32">
+                <summary className="cursor-pointer font-bold select-none">Ver detalle técnico del error</summary>
+                <p className="mt-1 font-semibold">{this.state.error.name}: {this.state.error.message}</p>
+              </details>
             )}
 
             <div className="flex flex-col sm:flex-row items-center justify-center gap-3 pt-2">

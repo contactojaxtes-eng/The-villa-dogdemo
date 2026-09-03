@@ -25,12 +25,26 @@ export function parseThousandsInput(value: string | number | null | undefined): 
   return parseInt(rawDigits, 10) || 0;
 }
 
-export function formatDate(date: string | Date): string {
-  return new Intl.DateTimeFormat('es-CO', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'America/Bogota' }).format(new Date(date))
+export function formatDate(date: any): string {
+  if (!date) return '—'
+  try {
+    const d = new Date(date)
+    if (isNaN(d.getTime())) return '—'
+    return new Intl.DateTimeFormat('es-CO', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'America/Bogota' }).format(d)
+  } catch {
+    return '—'
+  }
 }
 
-export function formatDateShort(date: string | Date): string {
-  return new Intl.DateTimeFormat('es-CO', { dateStyle: 'medium', timeZone: 'America/Bogota' }).format(new Date(date))
+export function formatDateShort(date: any): string {
+  if (!date) return '—'
+  try {
+    const d = new Date(date)
+    if (isNaN(d.getTime())) return '—'
+    return new Intl.DateTimeFormat('es-CO', { dateStyle: 'medium', timeZone: 'America/Bogota' }).format(d)
+  } catch {
+    return '—'
+  }
 }
 
 export function getLocalDateString(d: Date = new Date()): string {
