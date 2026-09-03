@@ -331,17 +331,16 @@ export default function PaymentValidationPage() {
         )}
       </div>
 
-      {/* Modal Ver en grande ajustado a la foto sin espacios negros gigantes */}
+      {/* Modal Ver en grande: Pantalla completa, sin bordes toscos y sin doble X */}
       <Dialog open={Boolean(imageUrl)} onOpenChange={(open) => { if (!open) setImageUrl(null) }}>
-        <DialogContent className="max-w-md w-[92vw] bg-[var(--bg-panel)] p-3.5 border border-[var(--border-default)] text-[var(--text-primary)] rounded-2xl shadow-2xl flex flex-col items-center">
-          <div className="flex w-full justify-between items-center pb-2 border-b border-[var(--border-subtle)]">
-            <span className="text-sm font-black flex items-center gap-2 text-[var(--text-primary)]">
+        <DialogContent className="max-w-fit w-auto max-h-[96vh] p-3 bg-[var(--bg-panel)] border border-[var(--border-default)] text-[var(--text-primary)] rounded-2xl shadow-2xl overflow-hidden flex flex-col items-center [&>button.absolute]:hidden">
+          <div className="flex w-full items-center justify-between pb-2 border-b border-[var(--border-subtle)] gap-6">
+            <span className="text-xs font-black flex items-center gap-1.5 text-[var(--text-primary)]">
               <Image className="h-4 w-4 text-[var(--accent)]" /> Comprobante de Transferencia
             </span>
-            <Button
-              size="sm"
-              variant="ghost"
-              className="h-8 px-2 text-xs font-bold text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]"
+            <button
+              type="button"
+              className="rounded-xl px-2.5 py-1 text-xs font-bold bg-[var(--bg-elevated)] hover:bg-[var(--bg-hover)] text-[var(--text-primary)] transition-all cursor-pointer flex items-center gap-1 border border-[var(--border-subtle)]"
               onClick={(e) => {
                 e.preventDefault()
                 e.stopPropagation()
@@ -349,14 +348,14 @@ export default function PaymentValidationPage() {
               }}
             >
               ✕ Cerrar
-            </Button>
+            </button>
           </div>
-          <div className="max-h-[78vh] w-full flex items-center justify-center overflow-auto rounded-xl bg-[var(--bg-elevated)] p-1.5 mt-2">
+          <div className="max-h-[88vh] max-w-[94vw] sm:max-w-[85vw] flex items-center justify-center pt-2 overflow-auto">
             {imageUrl && (
               <img
                 src={imageUrl}
                 alt="Comprobante completo"
-                className="max-h-[74vh] w-auto max-w-full object-contain rounded-lg shadow-sm"
+                className="max-h-[84vh] w-auto max-w-full object-contain rounded-xl shadow-md block"
               />
             )}
           </div>

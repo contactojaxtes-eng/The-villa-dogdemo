@@ -2,9 +2,10 @@ import { useEffect, useState } from 'react'
 import { Link, Outlet, useLocation } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Sidebar } from './Sidebar'
-import { Menu, Eye, LogOut, PlusCircle, ScrollText, UtensilsCrossed } from 'lucide-react'
+import { Menu, Eye, LogOut, PlusCircle, ScrollText, UtensilsCrossed, ChefHat, Clock, Maximize, Minimize, Moon, Sun } from 'lucide-react'
 import { BrandLogo } from '@/components/brand/BrandLogo'
 import { useAuth } from '@/hooks/useAuth'
+import { useTheme } from '@/hooks/useTheme'
 import { cn } from '@/lib/utils'
 import { ErrorBoundary } from '../ErrorBoundary'
 import { autoReconnectUsbDevices } from '@/lib/useUsbPrinter'
@@ -12,9 +13,14 @@ import { ForceEmailVerificationModal } from '@/components/auth/ForceEmailVerific
 
 export function AppLayout() {
   const location = useLocation()
-  const { user, isImpersonating, stopImpersonation } = useAuth()
+  const { user, isImpersonating, stopImpersonation, logout } = useAuth()
+  const { theme, toggleTheme } = useTheme()
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false)
   const [isCollapsed, setIsCollapsed] = useState(() => localStorage.getItem('sidebar-collapsed') === 'true')
+  const isKitchen = location.pathname.startsWith('/kitchen') || user?.role === 'KITCHEN'
+
+  const [isFullscreen, setIsFullscreen] = useState(false)
+  const [timeStr, setTimeStr] = useState(() => new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }))
 
   // Auto-reconnect WebUSB printers silently on mount
   useEffect(() => {
@@ -26,45 +32,68 @@ export function AppLayout() {
     setIsMobileMenuOpen(false)
   }, [location.pathname])
 
+  // Reloj en vivo para tablet de cocina
+  useEffect(() => {
+    if (!isKitchen) return
+    const timer = setInterval(() => {
+      setTimeStr(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }))
+    }, 1000)
+    return () => clearInterval(timer)
+  }, [isKitchen])
+
+  const toggleFullScreen = () => {
+    if (!document.fullscreenElement) {
+      document.documentElement.requestFullscreen?.().catch(() => {})
+      setIsFullscreen(true)
+    } else {
+      document.exitFullscreen?.().catch(() => {})
+      setIsFullscreen(false)
+    }
+  }
+
   return (
     <div className="flex h-screen overflow-hidden bg-[var(--bg-base)]">
-      {/* Desktop Sidebar */}
-      <div className="hidden md:flex shrink-0 overflow-visible">
-        <Sidebar 
-          isCollapsed={isCollapsed} 
-          onToggleCollapse={() => {
-            const next = !isCollapsed
-            setIsCollapsed(next)
-            localStorage.setItem('sidebar-collapsed', String(next))
-          }} 
-        />
-      </div>
+      {/* Desktop Sidebar: Totalmente oculta en Cocina para aprovechar 100% la pantalla de tablet */}
+      {!isKitchen && (
+        <div className="hidden md:flex shrink-0 overflow-visible">
+          <Sidebar 
+            isCollapsed={isCollapsed} 
+            onToggleCollapse={() => {
+              const next = !isCollapsed
+              setIsCollapsed(next)
+              localStorage.setItem('sidebar-collapsed', String(next))
+            }} 
+          />
+        </div>
+      )}
 
-      {/* Mobile Drawer Sidebar */}
-      <AnimatePresence>
-        {isMobileMenuOpen && (
-          <>
-            {/* Backdrop */}
-            <motion.div
-              className="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm md:hidden"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              onClick={() => setIsMobileMenuOpen(false)}
-            />
-            {/* Drawer Container */}
-            <motion.div
-              className="fixed inset-y-0 left-0 z-50 w-64 md:hidden"
-              initial={{ x: '-100%' }}
-              animate={{ x: 0 }}
-              exit={{ x: '-100%' }}
-              transition={{ type: 'spring', damping: 25, stiffness: 220 }}
-            >
-              <Sidebar onClose={() => setIsMobileMenuOpen(false)} />
-            </motion.div>
-          </>
-        )}
-      </AnimatePresence>
+      {/* Mobile Drawer Sidebar (solo si no estamos en cocina) */}
+      {!isKitchen && (
+        <AnimatePresence>
+          {isMobileMenuOpen && (
+            <>
+              {/* Backdrop */}
+              <motion.div
+                className="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm md:hidden"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                onClick={() => setIsMobileMenuOpen(false)}
+              />
+              {/* Drawer Container */}
+              <motion.div
+                className="fixed inset-y-0 left-0 z-50 w-64 md:hidden"
+                initial={{ x: '-100%' }}
+                animate={{ x: 0 }}
+                exit={{ x: '-100%' }}
+                transition={{ type: 'spring', damping: 25, stiffness: 220 }}
+              >
+                <Sidebar onClose={() => setIsMobileMenuOpen(false)} />
+              </motion.div>
+            </>
+          )}
+        </AnimatePresence>
+      )}
 
       <div className="flex min-w-0 flex-1 flex-col">
         {/* Impersonation Banner */}
@@ -81,23 +110,90 @@ export function AppLayout() {
           </div>
         )}
 
-        {/* Mobile Top Header */}
-        <header className="flex h-16 items-center justify-between border-b border-[var(--border-subtle)] bg-[var(--bg-panel)] px-4 md:hidden shrink-0">
-          <button
-            onClick={() => setIsMobileMenuOpen(true)}
-            className="rounded-xl p-2 text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] active:scale-95 transition-all cursor-pointer"
-            aria-label="Abrir menú"
-          >
-            <Menu className="h-6 w-6" />
-          </button>
-          <div className="flex rounded-2xl bg-[var(--bg-base)] py-1.5 px-3 border border-[var(--border-subtle)]">
-            <BrandLogo compact imageClassName="w-24" />
-          </div>
-          <div className="w-10" /> {/* Spacer to center the logo */}
-        </header>
+        {/* Kitchen Top Bar (Barra superior dedicada para Tablets de Cocina) */}
+        {isKitchen ? (
+          <header className="flex h-14 items-center justify-between border-b border-[var(--border-subtle)] bg-[var(--bg-panel)] px-3 sm:px-4 shrink-0 shadow-xs">
+            <div className="flex items-center gap-2.5">
+              <div className="flex rounded-xl bg-[var(--bg-base)] py-1 px-2 border border-[var(--border-subtle)]">
+                <BrandLogo compact imageClassName="w-20 sm:w-24" />
+              </div>
+              <span className="hidden sm:inline-block h-4 w-px bg-[var(--border-subtle)]" />
+              <span className="hidden sm:flex items-center gap-1.5 text-xs font-black uppercase tracking-wider text-[var(--accent)]">
+                <ChefHat className="h-4 w-4" /> Pantalla de Cocina
+              </span>
+            </div>
 
-        <main className={cn("flex-1 overflow-y-auto p-3 md:p-6", user?.role === 'WAITER' && "pb-24 md:pb-6")}>
-          <div className="mx-auto max-w-7xl h-full">
+            {/* Reloj del Turno */}
+            <div className="flex items-center gap-1.5 text-xs font-mono font-bold text-[var(--text-secondary)] bg-[var(--bg-elevated)] px-2.5 py-1 rounded-xl border border-[var(--border-subtle)]">
+              <Clock className="h-3.5 w-3.5 text-[var(--accent)]" />
+              <span>{timeStr}</span>
+            </div>
+
+            {/* Acciones para Tablet */}
+            <div className="flex items-center gap-1.5">
+              <div className="hidden md:flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-[var(--bg-elevated)] text-xs font-bold text-[var(--text-primary)] border border-[var(--border-subtle)]">
+                <span>👨‍🍳 {user?.name}</span>
+              </div>
+
+              <button
+                type="button"
+                onClick={toggleFullScreen}
+                className="h-8 w-8 rounded-xl flex items-center justify-center text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)] transition cursor-pointer"
+                title={isFullscreen ? "Salir de pantalla completa" : "Pantalla completa para tablet"}
+              >
+                {isFullscreen ? <Minimize className="h-4 w-4" /> : <Maximize className="h-4 w-4" />}
+              </button>
+
+              <button
+                type="button"
+                onClick={toggleTheme}
+                className="h-8 w-8 rounded-xl flex items-center justify-center text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)] transition cursor-pointer"
+                title="Cambiar tema"
+              >
+                {theme === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+              </button>
+
+              {user?.role === 'KITCHEN' ? (
+                <button
+                  type="button"
+                  onClick={logout}
+                  className="h-8 px-2.5 rounded-xl text-xs font-bold text-rose-500 hover:bg-rose-500/10 flex items-center gap-1 transition cursor-pointer"
+                  title="Cerrar sesión de cocina"
+                >
+                  <LogOut className="h-3.5 w-3.5" />
+                  <span className="hidden sm:inline">Salir</span>
+                </button>
+              ) : (
+                <Link
+                  to="/"
+                  className="h-8 px-2.5 rounded-xl text-xs font-bold text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)] flex items-center gap-1 transition border border-[var(--border-subtle)]"
+                  title="Volver al menú principal"
+                >
+                  <LogOut className="h-3.5 w-3.5" />
+                  <span className="hidden sm:inline">Menú</span>
+                </Link>
+              )}
+            </div>
+          </header>
+        ) : (
+          /* Mobile Top Header normal */
+          <header className="flex h-16 items-center justify-between border-b border-[var(--border-subtle)] bg-[var(--bg-panel)] px-4 md:hidden shrink-0">
+            <button
+              onClick={() => setIsMobileMenuOpen(true)}
+              className="rounded-xl p-2 text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] active:scale-95 transition-all cursor-pointer"
+              aria-label="Abrir menú"
+            >
+              <Menu className="h-6 w-6" />
+            </button>
+            <div className="flex rounded-2xl bg-[var(--bg-base)] py-1.5 px-3 border border-[var(--border-subtle)]">
+              <BrandLogo compact imageClassName="w-24" />
+            </div>
+            <div className="w-10" />
+          </header>
+        )}
+
+        <main className={cn("flex-1 overflow-y-auto", isKitchen ? "p-2 sm:p-3" : "p-3 md:p-6", user?.role === 'WAITER' && "pb-24 md:pb-6")}>
+          <div className={cn("h-full", isKitchen ? "w-full max-w-none" : "mx-auto max-w-7xl")}>
             <ErrorBoundary key={location.pathname}>
               <Outlet />
             </ErrorBoundary>

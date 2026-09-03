@@ -121,91 +121,83 @@ export default function KitchenPage() {
   }
 
   return (
-    <div className="space-y-4">
-      {/* Cabecera limpia */}
-      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-        <div>
-          <h1 className="flex items-center gap-2 text-2xl font-black text-[var(--text-primary)]">
-            <ChefHat className="h-7 w-7 text-[var(--accent)]" /> Cocina Rápida
-          </h1>
-          <p className="text-sm text-[var(--text-secondary)]">
-            Un solo toque: marca <strong>Listo</strong> y el pedido se despacha al mesero y se guarda en el historial.
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <Button variant="outline" onClick={load} className="gap-2 font-bold h-9">
-            <RefreshCw className="h-4 w-4" /> Actualizar
-          </Button>
-        </div>
-      </div>
-
-      {/* Pestañas: Activos vs Historial + Filtro por Estación */}
-      <div className="flex flex-col sm:flex-row gap-3 sm:items-center sm:justify-between border-b border-[var(--border-subtle)] pb-3">
-        <div className="flex gap-2">
+    <div className="space-y-3">
+      {/* Barra de control compacta en una sola fila */}
+      <div className="flex flex-wrap items-center justify-between gap-2.5 bg-[var(--bg-panel)] p-2 sm:p-2.5 rounded-2xl border border-[var(--border-subtle)] shadow-xs">
+        {/* Pestañas: Activos vs Historial */}
+        <div className="flex items-center gap-1.5">
           <Button
-            variant={activeTab === 'ACTIVE' ? 'default' : 'outline'}
+            size="sm"
+            variant={activeTab === 'ACTIVE' ? 'default' : 'ghost'}
             onClick={() => setActiveTab('ACTIVE')}
-            className={`font-black gap-2 h-9 text-xs sm:text-sm ${activeTab === 'ACTIVE' ? 'bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-white shadow' : ''}`}
+            className={`font-black gap-1.5 h-8 text-xs ${activeTab === 'ACTIVE' ? 'bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-white shadow-xs' : ''}`}
           >
-            <Flame className="h-4 w-4" />
-            En Cocina
-            <span className={`ml-1 rounded-full px-2 py-0.5 text-[11px] font-black ${activeTab === 'ACTIVE' ? 'bg-white text-[var(--accent)]' : 'bg-[var(--bg-elevated)] text-[var(--text-primary)]'}`}>
+            <Flame className="h-3.5 w-3.5" />
+            <span>En Cocina</span>
+            <span className={`ml-1 rounded-full px-1.5 py-0.2 text-[10px] font-black ${activeTab === 'ACTIVE' ? 'bg-white text-[var(--accent)]' : 'bg-[var(--bg-elevated)] text-[var(--text-primary)]'}`}>
               {activeTickets.length}
             </span>
           </Button>
 
           <Button
-            variant={activeTab === 'HISTORY' ? 'default' : 'outline'}
+            size="sm"
+            variant={activeTab === 'HISTORY' ? 'default' : 'ghost'}
             onClick={() => setActiveTab('HISTORY')}
-            className={`font-bold gap-2 h-9 text-xs sm:text-sm ${activeTab === 'HISTORY' ? 'bg-[var(--text-primary)] text-white shadow' : ''}`}
+            className={`font-bold gap-1.5 h-8 text-xs ${activeTab === 'HISTORY' ? 'bg-[var(--text-primary)] text-white shadow-xs' : ''}`}
           >
-            <History className="h-4 w-4" />
-            Historial Despachados
-            <span className="ml-1 rounded-full bg-[var(--bg-elevated)] px-2 py-0.5 text-[11px] font-bold text-[var(--text-secondary)]">
+            <History className="h-3.5 w-3.5" />
+            <span>Historial</span>
+            <span className="ml-1 rounded-full bg-[var(--bg-elevated)] px-1.5 py-0.2 text-[10px] font-bold text-[var(--text-secondary)]">
               {historyTickets.length}
             </span>
           </Button>
         </div>
 
-        {/* Filtro de estaciones si hay más de 1 */}
-        {stations.length > 1 && (
-          <div className="flex items-center gap-1.5 overflow-x-auto">
-            <span className="text-xs font-bold text-[var(--text-muted)] shrink-0">Estación:</span>
-            <Button
-              size="sm"
-              variant={stationFilter === 'ALL' ? 'secondary' : 'ghost'}
-              className="h-7 text-xs font-bold"
-              onClick={() => setStationFilter('ALL')}
-            >
-              Todas
-            </Button>
-            {stations.map(st => (
+        {/* Filtro de estaciones + botón actualizar */}
+        <div className="flex items-center gap-2">
+          {stations.length > 1 && (
+            <div className="flex items-center gap-1 overflow-x-auto">
               <Button
-                key={st.id}
                 size="sm"
-                variant={stationFilter === st.id ? 'secondary' : 'ghost'}
-                className="h-7 text-xs font-bold shrink-0"
-                onClick={() => setStationFilter(st.id)}
+                variant={stationFilter === 'ALL' ? 'secondary' : 'ghost'}
+                className="h-7 px-2 text-[11px] font-bold"
+                onClick={() => setStationFilter('ALL')}
               >
-                {st.name}
+                Todas
               </Button>
-            ))}
-          </div>
-        )}
+              {stations.map(st => (
+                <Button
+                  key={st.id}
+                  size="sm"
+                  variant={stationFilter === st.id ? 'secondary' : 'ghost'}
+                  className="h-7 px-2 text-[11px] font-bold shrink-0"
+                  onClick={() => setStationFilter(st.id)}
+                >
+                  {st.name}
+                </Button>
+              ))}
+            </div>
+          )}
+
+          <Button variant="outline" size="sm" onClick={load} className="gap-1.5 font-bold h-8 text-xs">
+            <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
+            <span className="hidden sm:inline">Actualizar</span>
+          </Button>
+        </div>
       </div>
 
       {loading ? (
         <p className="text-sm text-[var(--text-secondary)] py-8 text-center">Cargando pedidos de cocina...</p>
       ) : activeTab === 'ACTIVE' ? (
-        /* VISTA PRINCIPAL: PEDIDOS ACTIVOS EN GRILLA COMPACTA */
+        /* VISTA PRINCIPAL: PEDIDOS ACTIVOS EN GRILLA COMPACTA DE HASTA 5 COLUMNAS */
         activeTickets.length === 0 ? (
-          <div className="rounded-2xl border-2 border-dashed border-[var(--border-default)] p-12 text-center">
+          <div className="rounded-2xl border-2 border-dashed border-[var(--border-default)] p-12 text-center bg-[var(--bg-panel)]">
             <UtensilsCrossed className="h-12 w-12 text-emerald-500 mx-auto mb-2 opacity-80" />
             <h3 className="text-lg font-black text-[var(--text-primary)]">¡Cocina al día!</h3>
             <p className="text-sm text-[var(--text-secondary)] mt-1">No hay pedidos pendientes en este momento.</p>
           </div>
         ) : (
-          <div className="grid gap-3.5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 items-start">
+          <div className="grid gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 items-start">
             {activeTickets.map(ticket => {
               const hasActiveItems = ticket.items?.some(item => item.changeType !== 'REMOVED')
               const isFullyCancelled = !hasActiveItems || ticket.status === 'CANCELLED'
