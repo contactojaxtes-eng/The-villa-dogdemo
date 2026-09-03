@@ -678,11 +678,31 @@ export class TablesService {
   }
 
   async submitPayment(tableId: string, data: any, user: any, file?: any) {
-    if (!['CASH', 'TRANSFER'].includes(data.method)) throw new BadRequestException('Método de pago inválido');
+    if (!['CASH', 'TRANSFER', 'MIXED'].includes(data.method)) throw new BadRequestException('Método de pago inválido');
     const isCash = data.method === 'CASH';
-    const receipt = isCash ? null : validateReceipt(file);
+    const isMixed = data.method === 'MIXED';
+    const isTransfer = data.method === 'TRANSFER';
+    const receipt = isCash ? null : (file ? validateReceipt(file) : null);
     const amount = Number(data.amount);
     if (!Number.isFinite(amount) || amount <= 0) throw new BadRequestException('Monto de pago inválido');
+
+    let cashPart = 0;
+    let transferPart = 0;
+    if (isCash) {
+      cashPart = amount;
+    } else if (isTransfer) {
+      transferPart = amount;
+    } else if (isMixed) {
+      cashPart = Number(data.cashAmount) || 0;
+      transferPart = Number(data.transferAmount) || 0;
+      if (cashPart <= 0 || transferPart <= 0) {
+        throw new BadRequestException('En pago mixto debes ingresar un monto en efectivo y un monto en transferencia');
+      }
+      if (Math.abs((cashPart + transferPart) - amount) > 0.01) {
+        throw new BadRequestException('La suma de efectivo y transferencia debe coincidir exactamente con el total');
+      }
+    }
+
     const settlementId = typeof data.clientMutationId === 'string' && data.clientMutationId.trim() && data.clientMutationId.length <= 100 ? data.clientMutationId : randomUUID();
     const result = await this.prisma.$transaction(async tx => {
       await lockOperation(tx);
@@ -703,22 +723,25 @@ export class TablesService {
       const status = 'PENDING_REVIEW';
       const payments: any[] = [];
       for (const order of orders) {
+        const orderRatio = amount > 0 ? (order.total / amount) : 1;
+        const orderCash = isCash ? order.total : isMixed ? (orders.length === 1 ? cashPart : orderRatio * cashPart) : 0;
+        const orderTransfer = isCash ? 0 : isMixed ? (orders.length === 1 ? transferPart : orderRatio * transferPart) : order.total;
+
         const payment = await tx.payment.update({ where: { orderId: order.id }, data: {
           amount: order.total, method: data.method, settlementId, status,
-          cashAmount: isCash ? order.total : 0, transferAmount: isCash ? 0 : order.total,
+          cashAmount: orderCash, transferAmount: orderTransfer,
           reference: String(data.reference || '').slice(0, 300) || null,
           confirmedBy: null, confirmedAt: null,
         } });
         payments.push(payment);
         await tx.order.update({ where: { id: order.id }, data: {
           paymentMethod: data.method, paymentStatus: status,
-          cashAmount: isCash ? order.total : 0, transferAmount: isCash ? 0 : order.total,
+          cashAmount: orderCash, transferAmount: orderTransfer,
           paymentReference: payment.reference,
         } });
       }
       if (receipt) {
         // One compressed image per account payment, stored durably in PostgreSQL.
-        // This works through Railway redeployments without duplicating ephemeral files.
         await tx.transferProof.create({ data: {
           paymentId: payments[0].id, orderId: orders[0].id, tableId,
           cashClosingId: table.cashClosingId, submittedById: user.id,
@@ -727,14 +750,14 @@ export class TablesService {
           mimeType: receipt.mime, fileSize: receipt.bytes.length,
           originalName: String(file?.originalname || 'comprobante.jpg').slice(0, 200),
         } });
-      } else if (isCash) {
-        // Registro de cobro en efectivo reportado por mesera para validación en caja
+      } else {
+        // Cobro en efectivo o mixto registrado por mesera para validación en caja
         await tx.transferProof.create({ data: {
           paymentId: payments[0].id, orderId: orders[0].id, tableId,
           cashClosingId: table.cashClosingId, submittedById: user.id,
-          amount, method: 'CASH', status: 'PENDING', filePath: null,
+          amount, method: data.method, status: 'PENDING', filePath: null,
           fileBase64: null, mimeType: null, fileSize: null,
-          originalName: 'Cobro en Efectivo (Mesera)',
+          originalName: isCash ? 'Cobro en Efectivo (Mesera)' : 'Cobro Mixto (Mesera)',
         } });
       }
       return { table: await this.findTable(tableId, tx), payment: payments[0], replay: false };
@@ -749,7 +772,7 @@ export class TablesService {
   async listPaymentValidation(status = 'PENDING_REVIEW', method = 'ALL') {
     const payments = await this.prisma.payment.findMany({
       where: { status: status === 'ALL' ? undefined : status, order: { tableId: { not: null } },
-        ...(method === 'CASH' ? { method: 'CASH' } : method === 'TRANSFER' ? { method: { not: 'CASH' } } : {}),
+        ...(method === 'CASH' ? { method: 'CASH' } : method === 'TRANSFER' ? { method: 'TRANSFER' } : method === 'MIXED' ? { method: 'MIXED' } : {}),
       },
       include: {
         order: { include: { diningTable: true, waiter: { select: { id: true, name: true } } } },
@@ -761,9 +784,12 @@ export class TablesService {
     for (const payment of payments) {
       const key = payment.settlementId || payment.id;
       const current = grouped.get(key);
-      if (!current) grouped.set(key, { ...payment, orderCount: 1 });
-      else {
+      if (!current) {
+        grouped.set(key, { ...payment, orderCount: 1 });
+      } else {
         current.amount += payment.amount;
+        current.cashAmount = (current.cashAmount || 0) + (payment.cashAmount || 0);
+        current.transferAmount = (current.transferAmount || 0) + (payment.transferAmount || 0);
         current.orderCount++;
         if (payment.transferProofs.length) {
           current.id = payment.id;
@@ -792,21 +818,20 @@ export class TablesService {
       const group = await tx.payment.findMany({ where: payment.settlementId ? { settlementId: payment.settlementId } : { id: paymentId } });
       if (group.some(p => p.status !== 'PENDING_REVIEW')) throw new BadRequestException('Actualiza la cuenta: uno de los pagos ya cambió');
       const ids = group.map(p => p.id);
-      const isTransferGroup = group.some(p => p.method !== 'CASH');
-      if (isTransferGroup) {
-        const pendingProofs = await tx.transferProof.count({ where: { paymentId: { in: ids }, status: 'PENDING' } });
-        if (!pendingProofs) throw new BadRequestException('No hay comprobante pendiente para este cobro');
-      }
+
       await tx.payment.updateMany({ where: { id: { in: ids } }, data: {
         status: action, confirmedBy: user.id, confirmedAt: action === 'CONFIRMED' ? new Date() : null,
       } });
       await tx.order.updateMany({ where: { id: { in: group.map(p => p.orderId) } }, data: { paymentStatus: action } });
-      if (isTransferGroup) {
+
+      const pendingProofs = await tx.transferProof.count({ where: { paymentId: { in: ids }, status: 'PENDING' } });
+      if (pendingProofs > 0) {
         await tx.transferProof.updateMany({ where: { paymentId: { in: ids }, status: 'PENDING' }, data: {
           status: action, reviewedById: user.id, reviewedAt: new Date(),
           rejectionReason: action === 'REJECTED' ? String(reason || 'Rechazado por caja').slice(0, 500) : null,
         } });
       }
+
       return { payment: { ...payment, status: action }, table: await this.finishPaidTable(payment.order.tableId, tx), replay: false };
     }, operationTransaction);
     if (!result.replay) {

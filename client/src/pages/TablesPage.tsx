@@ -65,8 +65,7 @@ export default function TablesPage() {
           <p className="text-sm text-[var(--text-secondary)]">Cuentas activas de salón. Cada pedido nuevo abre su propia mesa automáticamente.</p>
         </div>
         <div className="flex gap-2">
-          <Button variant="outline" onClick={load} className="gap-2"><RefreshCw className="h-4 w-4" />Actualizar</Button>
-          <Button asChild className="gap-2 bg-[var(--accent)] text-[var(--accent-fg)]"><Link to="/tables/new"><PlusCircle className="h-4 w-4" />Nuevo Pedido</Link></Button>
+          <Button asChild className="gap-2 bg-[var(--accent)] text-[var(--accent-fg)] font-black"><Link to="/tables/new"><PlusCircle className="h-4 w-4" />Nuevo Pedido</Link></Button>
         </div>
       </div>
 

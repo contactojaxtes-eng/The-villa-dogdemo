@@ -14,6 +14,7 @@ const validationTabs = [
   { value: 'PENDING_REVIEW', label: 'Pendientes' },
   { value: 'CASH', label: 'Efectivo' },
   { value: 'TRANSFER', label: 'Transferencias' },
+  { value: 'MIXED', label: 'Mixtos' },
   { value: 'CONFIRMED', label: 'Pagados' },
   { value: 'REJECTED', label: 'Rechazados' },
   { value: 'ALL', label: 'Todos' },
@@ -25,7 +26,7 @@ const methodLabels: Record<string, string> = {
   NEQUI: 'Nequi',
   BANCOLOMBIA: 'Bancolombia',
   DAVIPLATA: 'Daviplata',
-  MIXED: 'Mixto',
+  MIXED: 'Pago Mixto',
   CREDIT: 'Crédito',
   CORTESIA: 'Cortesía',
 }
@@ -42,7 +43,6 @@ export default function PaymentValidationPage() {
   const [loading, setLoading] = useState(false)
   const [activeTab, setActiveTab] = useState('PENDING_REVIEW')
   const [search, setSearch] = useState('')
-  const [reasons, setReasons] = useState<Record<string, string>>({})
   const [imageUrl, setImageUrl] = useState<string | null>(null)
 
   // Cargar todos los pagos para filtrado reactivo e instantáneo (0ms) en memoria
@@ -86,7 +86,9 @@ export default function PaymentValidationPage() {
     } else if (activeTab === 'CASH') {
       list = list.filter(p => p.method === 'CASH' && p.status === 'PENDING_REVIEW')
     } else if (activeTab === 'TRANSFER') {
-      list = list.filter(p => p.method !== 'CASH' && p.status === 'PENDING_REVIEW')
+      list = list.filter(p => p.method === 'TRANSFER' && p.status === 'PENDING_REVIEW')
+    } else if (activeTab === 'MIXED') {
+      list = list.filter(p => p.method === 'MIXED' && p.status === 'PENDING_REVIEW')
     } else if (activeTab === 'CONFIRMED') {
       list = list.filter(p => p.status === 'CONFIRMED')
     } else if (activeTab === 'REJECTED') {
@@ -110,10 +112,12 @@ export default function PaymentValidationPage() {
   }, [safePayments, activeTab, search])
 
   const tabCounts = useMemo(() => {
+    const pending = safePayments.filter(p => p.status === 'PENDING_REVIEW')
     return {
-      PENDING_REVIEW: safePayments.filter(p => p.status === 'PENDING_REVIEW').length,
-      CASH: safePayments.filter(p => p.method === 'CASH' && p.status === 'PENDING_REVIEW').length,
-      TRANSFER: safePayments.filter(p => p.method !== 'CASH' && p.status === 'PENDING_REVIEW').length,
+      PENDING_REVIEW: pending.length,
+      CASH: pending.filter(p => p.method === 'CASH').length,
+      TRANSFER: pending.filter(p => p.method === 'TRANSFER').length,
+      MIXED: pending.filter(p => p.method === 'MIXED').length,
       CONFIRMED: safePayments.filter(p => p.status === 'CONFIRMED').length,
       REJECTED: safePayments.filter(p => p.status === 'REJECTED').length,
       ALL: safePayments.length,
@@ -147,18 +151,24 @@ export default function PaymentValidationPage() {
       alerts.error('Sin permiso', 'No tienes permiso para rechazar pagos.')
       return
     }
+
+    let reasonText = ''
+    if (action === 'reject') {
+      const input = prompt('Motivo del rechazo de este pago:')
+      if (input === null) return
+      if (!input.trim()) {
+        alerts.warning('Motivo requerido', 'Debes ingresar el motivo por el cual rechazas este pago.')
+        return
+      }
+      reasonText = input.trim()
+    }
+
     try {
-      const reasonText = reasons[payment.id] || ''
       await api.put(`/payment-validation/${payment.id}/${action}`, action === 'reject' ? { reason: reasonText } : {})
       alerts.success(action === 'validate' ? 'Pago validado' : 'Pago rechazado', payment.order?.diningTable?.label || payment.order?.customerName || 'Mesa actualizada')
-      setReasons(prev => {
-        const next = { ...prev }
-        delete next[payment.id]
-        return next
-      })
       load()
     } catch (err: any) {
-      alerts.error('No se pudo actualizar', err.message)
+      alerts.error('No se pudo procesar', err?.response?.data?.message || err.message)
     }
   }
 
@@ -256,8 +266,12 @@ export default function PaymentValidationPage() {
                     </div>
                   </div>
                 ) : isCash ? (
-                  <div className="w-10 h-10 shrink-0 rounded-lg bg-[var(--bg-elevated)] border border-[var(--border-subtle)] text-[var(--accent)] flex items-center justify-center" title="Pago en Efectivo">
+                  <div className="w-10 h-10 shrink-0 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-600 flex items-center justify-center" title="Pago en Efectivo">
                     <Banknote className="h-5 w-5" />
+                  </div>
+                ) : payment.method === 'MIXED' ? (
+                  <div className="w-10 h-10 shrink-0 rounded-lg bg-[var(--accent)]/10 border border-[var(--accent)]/20 text-[var(--accent)] flex items-center justify-center font-black text-xs" title="Pago Mixto">
+                    🔀
                   </div>
                 ) : null}
 
@@ -274,6 +288,18 @@ export default function PaymentValidationPage() {
                       {statusLabels[payment.status] || payment.status}
                     </span>
                   </div>
+
+                  {/* Desglose para pagos mixtos */}
+                  {payment.method === 'MIXED' && (
+                    <div className="flex items-center gap-2 mt-1 text-[11px] font-bold flex-wrap">
+                      <span className="text-amber-700 dark:text-amber-300 bg-amber-500/10 border border-amber-500/20 px-2 py-0.5 rounded-md">
+                        💵 Efectivo: {formatCurrency(payment.cashAmount || 0)}
+                      </span>
+                      <span className="text-blue-700 dark:text-blue-300 bg-blue-500/10 border border-blue-500/20 px-2 py-0.5 rounded-md">
+                        📲 Transferencia: {formatCurrency(payment.transferAmount || 0)}
+                      </span>
+                    </div>
+                  )}
 
                   <div className="flex items-center gap-2 text-xs text-[var(--text-secondary)] mt-0.5 flex-wrap">
                     <span>Mesera: <strong>{payment.order?.waiter?.name || 'Sin asignar'}</strong></span>
@@ -307,34 +333,33 @@ export default function PaymentValidationPage() {
 
               {/* Lado derecho: Monto + Acciones en una sola fila */}
               <div className="flex items-center justify-between md:justify-end gap-3 w-full md:w-auto shrink-0 pt-2 md:pt-0 border-t md:border-t-0 border-[var(--border-subtle)]">
-                <b className="text-base sm:text-lg font-black text-[var(--accent)] whitespace-nowrap">
+                <b className="text-base sm:text-lg font-black text-rose-600 dark:text-rose-400 whitespace-nowrap">
                   {formatCurrency(payment.amount || payment.order?.total || 0)}
                 </b>
 
                 {payment.status === 'PENDING_REVIEW' && (
-                  <div className="flex items-center gap-1.5">
-                    <Input
-                      value={reasons[payment.id] || ''}
-                      onChange={e => setReasons(prev => ({ ...prev, [payment.id]: e.target.value }))}
-                      placeholder="Motivo rechazo..."
-                      className="h-8 text-xs w-28 sm:w-36 rounded-lg"
-                    />
+                  <div className="flex items-center gap-2">
                     <Button
                       onClick={() => review(payment, 'validate')}
                       size="sm"
-                      className="h-8 px-2.5 bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-white font-bold text-xs gap-1 shadow-xs cursor-pointer"
+                      className="h-9 px-4 bg-red-600 hover:bg-red-700 text-white font-black text-xs gap-1.5 shadow-sm rounded-xl cursor-pointer"
                     >
-                      <CheckCircle2 className="h-3.5 w-3.5" /> Validar
+                      <CheckCircle2 className="h-4 w-4" /> Validar
                     </Button>
                     <Button
                       onClick={() => review(payment, 'reject')}
                       size="sm"
                       variant="outline"
-                      className="h-8 px-2 text-rose-600 border-rose-200 hover:bg-rose-50 font-bold text-xs"
-                      title="Rechazar pago"
+                      className="h-9 px-3.5 border-rose-300 text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/20 font-black text-xs gap-1.5 rounded-xl cursor-pointer"
+                      title="Rechazar pago indicando motivo"
                     >
-                      <XCircle className="h-3.5 w-3.5" /> Rechazar
+                      <XCircle className="h-4 w-4" /> Rechazar
                     </Button>
+                  </div>
+                )}
+                {payment.status === 'REJECTED' && (payment.transferProofs?.[0]?.rejectionReason || payment.rejectionReason) && (
+                  <div className="text-xs text-rose-600 font-bold max-w-xs text-right">
+                    Motivo: {payment.transferProofs?.[0]?.rejectionReason || payment.rejectionReason}
                   </div>
                 )}
               </div>

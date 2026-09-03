@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react'
 import { prepareReceiptPhoto } from '@/lib/receiptPhoto'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { io } from '@/lib/socket'
-import { ArrowLeft, Camera, CheckCircle2, Clock, Eye, Image as ImageIcon, PlusCircle, Trash2, Upload, User, Wallet, X, XCircle } from 'lucide-react'
+import { ArrowLeft, Camera, CheckCircle2, Clock, Eye, Image as ImageIcon, Pencil, PlusCircle, Trash2, Upload, User, Wallet, X, XCircle } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Dialog, DialogContent } from '@/components/ui/dialog'
@@ -17,8 +17,10 @@ export default function TableDetailPage() {
   const { id = '' } = useParams()
   const { user } = useAuth()
   const [table, setTable] = useState<any>(null)
-  const [method, setMethod] = useState<'CASH' | 'TRANSFER'>('CASH')
+  const [method, setMethod] = useState<'CASH' | 'TRANSFER' | 'MIXED'>('CASH')
   const [amount, setAmount] = useState('')
+  const [mixedCash, setMixedCash] = useState('')
+  const [mixedTransfer, setMixedTransfer] = useState('')
   const [reference, setReference] = useState('')
   const [proof, setProof] = useState<File | null>(null)
   const [preview, setPreview] = useState<string | null>(null)
@@ -31,8 +33,31 @@ export default function TableDetailPage() {
 
   const load = () => api.get<any>(`/tables/${id}`).then(t => {
     setTable(t)
-    setAmount(String(Math.max(t.balance ?? t.total ?? 0, 0)))
+    const bal = Math.max(t.balance ?? t.total ?? 0, 0)
+    setAmount(String(bal))
+    if (!mixedCash && !mixedTransfer) {
+      setMixedCash(String(Math.floor(bal / 2)))
+      setMixedTransfer(String(bal - Math.floor(bal / 2)))
+    }
   }).catch(console.error)
+
+  const handleMixedCashChange = (val: string) => {
+    const raw = val.replace(/\D/g, '')
+    const num = Number(raw) || 0
+    setMixedCash(raw)
+    const bal = Number(amount) || table?.balance || table?.total || 0
+    const rem = Math.max(bal - num, 0)
+    setMixedTransfer(String(rem))
+  }
+
+  const handleMixedTransferChange = (val: string) => {
+    const raw = val.replace(/\D/g, '')
+    const num = Number(raw) || 0
+    setMixedTransfer(raw)
+    const bal = Number(amount) || table?.balance || table?.total || 0
+    const rem = Math.max(bal - num, 0)
+    setMixedCash(String(rem))
+  }
 
   const handleCancelOrder = async (orderId: string, orderNumber: number) => {
     const ok = await alerts.confirm(
@@ -78,7 +103,7 @@ export default function TableDetailPage() {
     })
     socket.on('paymentRejected', (payload: any) => {
       if (payload?.table?.id === id) {
-        alerts.warning('Pago rechazado', payload.reason || 'Caja rechazó el pago.')
+        alerts.warning('Pago rechazado', payload?.reason ? `Motivo: ${payload.reason}` : 'El comprobante no fue aceptado.')
         load()
       }
     })
@@ -110,19 +135,41 @@ export default function TableDetailPage() {
 
   const submitPayment = async () => {
     if (sending || preparingPhoto) return
-    if (method !== 'CASH' && !proof) {
+    if (method === 'TRANSFER' && !proof) {
       alerts.warning('Foto obligatoria', 'Para pagos por transferencia es obligatorio tomar o subir la foto del comprobante.')
       return
+    }
+
+    if (method === 'MIXED') {
+      const cash = Number(mixedCash) || 0
+      const transfer = Number(mixedTransfer) || 0
+      const bal = Number(amount) || table.balance || table.total || 0
+      if (cash <= 0 || transfer <= 0) {
+        alerts.warning('Montos requeridos', 'En pago mixto debes ingresar cuánto en efectivo y cuánto en transferencia.')
+        return
+      }
+      if (Math.abs((cash + transfer) - bal) > 1) {
+        alerts.warning('Montos no coinciden', `La suma de efectivo (${formatCurrency(cash)}) y transferencia (${formatCurrency(transfer)}) debe ser igual al total (${formatCurrency(bal)}).`)
+        return
+      }
+      if (!proof) {
+        alerts.warning('Foto obligatoria', 'Para pagos mixtos debes tomar o subir la foto del comprobante de transferencia.')
+        return
+      }
     }
 
     setSending(true)
     try {
       const form = new FormData()
-      const signature = `${id}:${method}:${amount}:${reference}:${proof?.name || ''}`
+      const signature = `${id}:${method}:${amount}:${mixedCash}:${mixedTransfer}:${reference}:${proof?.name || ''}`
       if (paymentAttempt.current.signature !== signature) paymentAttempt.current = { signature, id: crypto.randomUUID() }
       form.append('clientMutationId', paymentAttempt.current.id)
       form.append('method', method)
       form.append('amount', amount || String(table.balance || table.total || 0))
+      if (method === 'MIXED') {
+        form.append('cashAmount', mixedCash)
+        form.append('transferAmount', mixedTransfer)
+      }
       form.append('reference', reference)
       if (proof) form.append('proof', proof)
       const result = await api.post<any>(`/tables/${id}/payments`, form)
@@ -134,7 +181,7 @@ export default function TableDetailPage() {
         return
       }
 
-      alerts.success('Comprobante enviado', 'Comprobante enviado para validación en caja.')
+      alerts.success('Pago enviado a caja', method === 'MIXED' ? 'Pago mixto enviado para validación en caja.' : 'Comprobante enviado para validación en caja.')
       setProof(null)
       setPreview(null)
       setReference('')
@@ -216,22 +263,37 @@ export default function TableDetailPage() {
             </div>
           </div>
         </div>
-        <div className="flex gap-2">
-          <Button asChild variant="outline" className="gap-2 border-[var(--border-default)]">
-            <Link to={`/tables/new?tableId=${table.id}`}>
-              <PlusCircle className="h-4 w-4 text-[var(--accent)]" />Agregar productos
-            </Link>
-          </Button>
-          {table.status === 'OPEN' && (
-            <Button
-              onClick={closeTable}
-              disabled={table.balance > 0 || table.kitchenStatus === 'ACTIVE'}
-              className={`font-black ${table.balance > 0 ? 'bg-zinc-300 text-zinc-500 cursor-not-allowed' : 'bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-white'}`}
-            >
-              Cerrar mesa
-            </Button>
-          )}
-        </div>
+        {(() => {
+          const activeOrder = table.orders?.find((o: any) => !['DELIVERED', 'CANCELLED'].includes(o.status)) || table.orders?.[0]
+          return (
+            <div className="flex gap-2">
+              <Button asChild variant="outline" className="gap-2 border-[var(--border-default)] font-black text-xs sm:text-sm">
+                <Link to={activeOrder ? `/tables/new?tableId=${table.id}&editOrderId=${activeOrder.id}` : `/tables/new?tableId=${table.id}`}>
+                  <Pencil className="h-4 w-4 text-[var(--accent)]" />Editar productos
+                </Link>
+              </Button>
+              {table.status === 'OPEN' && (
+                table.balance === 0 && (table.orders?.length || 0) > 0 ? (
+                  <Button
+                    onClick={closeTable}
+                    className="bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs sm:text-sm gap-1.5 cursor-pointer"
+                  >
+                    <CheckCircle2 className="h-4 w-4" /> Cerrar mesa
+                  </Button>
+                ) : (
+                  <Button
+                    variant="outline"
+                    onClick={() => activeOrder && handleCancelOrder(activeOrder.id, activeOrder.orderNumber)}
+                    disabled={!activeOrder}
+                    className="border-rose-300 text-rose-600 hover:bg-rose-50 font-black text-xs sm:text-sm gap-1.5 cursor-pointer"
+                  >
+                    <XCircle className="h-4 w-4" /> Cancelar pedido
+                  </Button>
+                )
+              )}
+            </div>
+          )
+        })()}
       </div>
 
       <div className="grid gap-4 items-start lg:grid-cols-[1fr_380px]">
@@ -291,25 +353,6 @@ export default function TableDetailPage() {
                 ))}
               </div>
 
-              {!['DELIVERED', 'CANCELLED'].includes(order.status) && table.status === 'OPEN' && (
-                <div className="mt-3 flex items-center gap-2">
-                  <Button asChild variant="outline" size="sm" className="flex-1 border-[var(--border-subtle)] hover:border-[var(--accent)] text-xs font-black">
-                    <Link to={`/tables/new?tableId=${table.id}&editOrderId=${order.id}`}>
-                      ✏️ Modificar pedido #{order.orderNumber}
-                    </Link>
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={() => handleCancelOrder(order.id, order.orderNumber)}
-                    className="border-rose-300 text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/20 text-xs font-black gap-1 cursor-pointer shrink-0"
-                    title="Cancelar este pedido y avisar a cocina"
-                  >
-                    <XCircle className="h-3.5 w-3.5" /> Cancelar
-                  </Button>
-                </div>
-              )}
               {order.status === 'CANCELLED' && (
                 <div className="mt-2.5 rounded-xl border border-rose-300 bg-rose-500/10 p-2.5 text-xs text-rose-700 dark:text-rose-400 font-bold flex items-center gap-1.5">
                   <XCircle className="h-4 w-4 shrink-0" />
@@ -372,17 +415,18 @@ export default function TableDetailPage() {
                 <span className="text-[11px] text-[var(--text-muted)] font-medium">Cobro de cuenta</span>
               </div>
 
-              {/* Method Tabs - EXACTAMENTE 2 MÉTODOS */}
-              <div className="grid grid-cols-2 gap-2 rounded-xl bg-[var(--bg-elevated)] p-1.5">
+              {/* Method Tabs - 3 MÉTODOS */}
+              <div className="grid grid-cols-3 gap-1.5 rounded-xl bg-[var(--bg-elevated)] p-1.5">
                 {[
                   { id: 'CASH', label: '💵 Efectivo' },
                   { id: 'TRANSFER', label: '📲 Transferencia' },
+                  { id: 'MIXED', label: '🔀 Mixto' },
                 ].map(m => (
                   <button
                     key={m.id}
                     type="button"
-                    onClick={() => setMethod(m.id as 'CASH' | 'TRANSFER')}
-                    className={`rounded-lg py-2.5 text-xs font-black transition-all ${
+                    onClick={() => setMethod(m.id as 'CASH' | 'TRANSFER' | 'MIXED')}
+                    className={`rounded-lg py-2.5 text-xs font-black transition-all cursor-pointer ${
                       method === m.id
                         ? 'bg-[var(--accent)] text-white shadow-sm scale-[1.02]'
                         : 'text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]'
@@ -394,15 +438,54 @@ export default function TableDetailPage() {
               </div>
 
               <div className="space-y-2">
-                <label className="text-xs font-bold text-[var(--text-secondary)]">Monto a cobrar</label>
+                <label className="text-xs font-bold text-[var(--text-secondary)]">Total a cobrar</label>
                 <Input
                   value={amount}
                   readOnly
                   aria-label="Saldo completo a cobrar"
                   placeholder="Valor recibido"
-                  className="font-bold text-base h-11"
+                  className="font-bold text-base h-11 bg-[var(--bg-elevated)]"
                 />
               </div>
+
+              {/* Desglose para Pago Mixto */}
+              {method === 'MIXED' && (
+                <div className="space-y-2 rounded-xl border border-[var(--accent)]/30 bg-[var(--accent)]/5 p-3 shadow-xs">
+                  <span className="text-xs font-black text-[var(--accent)] flex items-center gap-1.5">
+                    🔀 Desglose de Pago Mixto
+                  </span>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="text-[11px] font-bold text-[var(--text-secondary)] block mb-1">
+                        💵 En Efectivo
+                      </label>
+                      <Input
+                        type="number"
+                        value={mixedCash}
+                        onChange={e => handleMixedCashChange(e.target.value)}
+                        placeholder="Ej: 5000"
+                        className="font-bold text-sm h-10 bg-[var(--bg-panel)]"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[11px] font-bold text-[var(--text-secondary)] block mb-1">
+                        📲 En Transferencia
+                      </label>
+                      <Input
+                        type="number"
+                        value={mixedTransfer}
+                        onChange={e => handleMixedTransferChange(e.target.value)}
+                        placeholder="Ej: 15000"
+                        className="font-bold text-sm h-10 bg-[var(--bg-panel)]"
+                      />
+                    </div>
+                  </div>
+                  <div className="flex justify-between text-[11px] font-bold pt-1 border-t border-[var(--border-subtle)] text-[var(--text-secondary)]">
+                    <span>Suma: <strong>{formatCurrency((Number(mixedCash) || 0) + (Number(mixedTransfer) || 0))}</strong></span>
+                    <span>Total mesa: <strong>{formatCurrency(Number(amount) || table?.balance || 0)}</strong></span>
+                  </div>
+                </div>
+              )}
 
               <Input
                 value={reference}
@@ -476,11 +559,17 @@ export default function TableDetailPage() {
 
               {/* Submit Button */}
               <Button
-                disabled={sending || preparingPhoto || (method === 'TRANSFER' && !proof)}
+                disabled={sending || preparingPhoto || (method !== 'CASH' && !proof)}
                 onClick={submitPayment}
-                className="w-full h-11 font-black text-sm gap-2 bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-white shadow-md transition-all"
+                className="w-full h-11 font-black text-sm gap-2 bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-white shadow-md transition-all cursor-pointer"
               >
-                {sending ? 'Procesando...' : method === 'CASH' ? `💵 Cobrar en Efectivo (${formatCurrency(Number(amount) || table.balance)})` : `📤 Enviar Comprobante a Caja (${formatCurrency(Number(amount) || table.balance)})`}
+                {sending
+                  ? 'Procesando...'
+                  : method === 'CASH'
+                  ? `💵 Cobrar en Efectivo (${formatCurrency(Number(amount) || table.balance)})`
+                  : method === 'TRANSFER'
+                  ? `📤 Enviar Comprobante (${formatCurrency(Number(amount) || table.balance)})`
+                  : `🔀 Enviar Pago Mixto (${formatCurrency(Number(amount) || table.balance)})`}
               </Button>
             </div>
           ))}
