@@ -27,6 +27,8 @@ export default function KitchenPage() {
   const [loading, setLoading] = useState(true)
   const [activeTab, setActiveTab] = useState<KitchenTab>('ALL_ACTIVE')
   const [stationFilter, setStationFilter] = useState<string>('ALL')
+  const [showPrevious, setShowPrevious] = useState<Record<string, boolean>>({})
+  const toggleShowPrevious = (ticketId: string) => setShowPrevious(p => ({ ...p, [ticketId]: !p[ticketId] }))
 
   // Carga inicial (silenciosa en segundo plano para no hacer parpadear la pantalla)
   const load = useCallback((showSpinner = false) => {
@@ -438,117 +440,157 @@ export default function KitchenPage() {
                     </div>
                   )}
 
-                  {/* Banner llamativo de cambios si fue editado */}
-                  {ticket.isEdited && ticket.changeSummary && !isFullyCancelled && (
-                    <div className="mt-2 rounded-xl border-2 border-amber-500 bg-amber-500/15 p-2 text-xs text-amber-950 dark:text-amber-100 shadow-xs">
-                      <div className="flex items-center gap-1.5 font-black text-amber-800 dark:text-amber-300 mb-1">
-                        <Bell className="h-3.5 w-3.5 shrink-0 animate-bounce text-amber-600 dark:text-amber-400" />
-                        <span>CAMBIOS REALIZADOS:</span>
-                      </div>
-                      <div className="font-extrabold text-[11px] leading-snug space-y-0.5">
-                        {ticket.changeSummary.split('|').map((part, pIdx) => (
-                          <div key={pIdx} className="flex items-start gap-1">
-                            <span>•</span>
-                            <span>{part.trim()}</span>
+                  {/* Lista de items: si el pedido fue editado, mostrar SOLO lo nuevo a preparar y lo quitado en letra GRANDE */}
+                  {(() => {
+                    const actionItems = ticket.isEdited
+                      ? (ticket.items || []).filter(i => i.changeType === 'ADDED' || i.changeType === 'REMOVED' || (i.changeType === 'MODIFIED' && ((i.previousQty ?? i.quantity) !== i.quantity || i.notes !== i.previousNotes)))
+                      : []
+                    const unchangedItems = ticket.isEdited
+                      ? (ticket.items || []).filter(i => !i.changeType || i.changeType === 'UNCHANGED' || (i.changeType === 'MODIFIED' && (i.previousQty ?? i.quantity) === i.quantity && i.notes === i.previousNotes))
+                      : []
+
+                    // Si fue editado y hay acciones específicas (agregados / quitados), mostrar modo enfocado en cocina
+                    if (ticket.isEdited && actionItems.length > 0 && !isFullyCancelled) {
+                      return (
+                        <div className="mt-2.5 space-y-2">
+                          {/* Banner limpio y directo */}
+                          <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-amber-500/15 border border-amber-500/30 text-amber-900 dark:text-amber-200 text-[11px] font-black uppercase tracking-wider">
+                            <Flame className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400 animate-pulse" />
+                            <span>LO NUEVO A PREPARAR:</span>
                           </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
 
-                  {/* Lista de items con estilos visuales diferenciados según cambio */}
-                  <div className="mt-2.5 space-y-1.5">
-                    {ticket.items?.map((item: KitchenTicketItemSummary) => {
-                      const isRemoved = item.changeType === 'REMOVED'
-                      const isAdded = item.changeType === 'ADDED'
-                      const isModified = item.changeType === 'MODIFIED'
-                      const isTakeaway = (item.notes || '').toLowerCase().includes('llevar')
-                      const cleanNotes = (item.notes || '').replace(/\[PARA LLEVAR\]/gi, '').replace(/\[MESA\]/gi, '').trim()
+                          {/* Items agregados o modificados con letra GRANDE y clara */}
+                          <div className="space-y-2">
+                            {actionItems.map((item: KitchenTicketItemSummary) => {
+                              const isRemoved = item.changeType === 'REMOVED' || (item.changeType === 'MODIFIED' && (item.previousQty ?? item.quantity) > item.quantity)
+                              const isAdded = item.changeType === 'ADDED' || (item.changeType === 'MODIFIED' && (item.previousQty ?? item.quantity) < item.quantity)
+                              const isTakeaway = (item.notes || '').toLowerCase().includes('llevar')
+                              const cleanNotes = (item.notes || '').replace(/\[PARA LLEVAR\]/gi, '').replace(/\[MESA\]/gi, '').trim()
 
-                      if (isRemoved) {
-                        return (
-                          <div key={item.id} className="rounded-xl border border-rose-300 bg-rose-500/15 p-2 text-xs text-rose-800 dark:text-rose-300 flex items-center justify-between">
-                            <div className="flex items-center gap-1.5 min-w-0">
-                              <span className="font-black px-1.5 py-0.5 rounded bg-rose-600 text-white text-[9px] shrink-0">QUITADO ❌</span>
-                              <span className="line-through font-bold truncate">-{item.quantity}x {item.nameSnapshot}</span>
-                            </div>
-                            <span className="text-[10px] font-black text-rose-600 dark:text-rose-400 shrink-0">¡NO PREPARAR!</span>
-                          </div>
-                        )
-                      }
+                              if (isRemoved) {
+                                const removedQty = item.changeType === 'REMOVED' ? item.quantity : ((item.previousQty ?? item.quantity) - item.quantity)
+                                return (
+                                  <div key={item.id} className="rounded-2xl border-2 border-rose-400 bg-rose-500/15 p-3 shadow-xs">
+                                    <div className="flex items-center justify-between gap-1 mb-1">
+                                      <span className="font-black px-2 py-0.5 rounded-md bg-rose-600 text-white text-[10px] tracking-wider uppercase">
+                                        SE ELIMINÓ ❌
+                                      </span>
+                                      <span className="text-[11px] font-black text-rose-600 dark:text-rose-400">
+                                        ¡NO PREPARAR!
+                                      </span>
+                                    </div>
+                                    <div className="text-base sm:text-lg font-black text-rose-800 dark:text-rose-300 line-through leading-tight">
+                                      -{removedQty}x {item.nameSnapshot}
+                                    </div>
+                                    {cleanNotes && (
+                                      <p className="text-xs text-rose-700/80 dark:text-rose-400 mt-1 line-through">
+                                        ({cleanNotes})
+                                      </p>
+                                    )}
+                                  </div>
+                                )
+                              }
 
-                      if (isAdded) {
-                        return (
-                          <div key={item.id} className="rounded-xl border-2 border-emerald-500 bg-emerald-500/15 p-2 text-xs text-emerald-950 dark:text-emerald-100 font-bold shadow-xs">
-                            <div className="flex items-start justify-between gap-1">
-                              <div className="min-w-0 flex-1">
-                                <div className="flex items-center gap-1.5 flex-wrap">
-                                  <span className="font-black px-1.5 py-0.5 rounded bg-emerald-600 text-white text-[9px] animate-pulse">¡AGREGADO! ✨</span>
-                                  <span className="text-sm font-black text-[var(--text-primary)]">+{item.quantity}x {item.nameSnapshot}</span>
-                                </div>
-                                {cleanNotes && (
-                                  <p className="text-xs font-bold text-amber-700 dark:text-amber-400 mt-1 pl-1.5 border-l-2 border-amber-500">
-                                    👉 {cleanNotes}
-                                  </p>
-                                )}
-                              </div>
-                              <span className={`shrink-0 rounded-full px-1.5 py-0.2 text-[10px] font-black tracking-wider ${isTakeaway ? 'bg-amber-500 text-slate-950' : 'bg-blue-600 text-white'}`}>
-                                {isTakeaway ? '🥡 LLEVAR' : '🍽️ MESA'}
-                              </span>
-                            </div>
-                          </div>
-                        )
-                      }
+                              const addedQty = item.changeType === 'ADDED' ? item.quantity : (item.quantity - (item.previousQty ?? 0))
 
-                      if (isModified) {
-                        return (
-                          <div key={item.id} className="rounded-xl border-2 border-amber-500 bg-amber-500/15 p-2 text-xs text-amber-950 dark:text-amber-100 font-bold shadow-xs">
-                            <div className="flex items-start justify-between gap-1">
-                              <div className="min-w-0 flex-1">
-                                <div className="flex items-center gap-1.5 flex-wrap">
-                                  <span className="font-black px-1.5 py-0.5 rounded bg-amber-600 text-white text-[9px]">EDITADO ✏️</span>
-                                  <span className="text-sm font-black text-[var(--text-primary)]">{item.quantity}x {item.nameSnapshot}</span>
-                                  {item.previousQty !== undefined && item.previousQty !== null && item.previousQty !== item.quantity && (
-                                    <span className="text-[11px] font-extrabold text-amber-800 dark:text-amber-300">
-                                      (Antes: {item.previousQty} un.)
+                              return (
+                                <div key={item.id} className="rounded-2xl border-2 border-emerald-500 bg-emerald-500/15 p-3 shadow-sm">
+                                  <div className="flex items-center justify-between gap-1 mb-1">
+                                    <span className="font-black px-2 py-0.5 rounded-md bg-emerald-600 text-white text-[10px] tracking-wider uppercase animate-pulse">
+                                      ¡SE AGREGÓ! ✨
                                     </span>
+                                    <span className={`shrink-0 rounded-full px-2.5 py-0.5 text-[10px] font-black tracking-wider ${isTakeaway ? 'bg-amber-500 text-slate-950' : 'bg-blue-600 text-white'}`}>
+                                      {isTakeaway ? '🥡 LLEVAR' : '🍽️ MESA'}
+                                    </span>
+                                  </div>
+
+                                  {/* Nombre y cantidad con letra GRANDE y destacada */}
+                                  <div className="text-base sm:text-lg font-black text-[var(--text-primary)] leading-tight mt-0.5">
+                                    +{addedQty}x {item.nameSnapshot}
+                                  </div>
+
+                                  {item.changeType === 'MODIFIED' && item.previousQty && (
+                                    <div className="text-[11px] font-extrabold text-emerald-800 dark:text-emerald-300 mt-0.5">
+                                      (Total en cuenta: {item.quantity} un.)
+                                    </div>
+                                  )}
+
+                                  {cleanNotes && (
+                                    <p className="text-xs sm:text-sm font-black text-amber-800 dark:text-amber-200 mt-1.5 pl-2 border-l-3 border-amber-500 bg-amber-500/10 py-1 rounded-r leading-tight">
+                                      👉 {cleanNotes}
+                                    </p>
                                   )}
                                 </div>
-                                {cleanNotes && (
-                                  <p className="text-xs font-bold text-amber-700 dark:text-amber-400 mt-1 pl-1.5 border-l-2 border-amber-500">
-                                    👉 {cleanNotes}
-                                  </p>
-                                )}
-                              </div>
-                              <span className={`shrink-0 rounded-full px-1.5 py-0.2 text-[10px] font-black tracking-wider ${isTakeaway ? 'bg-amber-500 text-slate-950' : 'bg-blue-600 text-white'}`}>
-                                {isTakeaway ? '🥡 LLEVAR' : '🍽️ MESA'}
-                              </span>
-                            </div>
+                              )
+                            })}
                           </div>
-                        )
-                      }
 
-                      return (
-                        <div key={item.id} className="rounded-xl p-2 text-xs border border-transparent bg-[var(--bg-elevated)]">
-                          <div className="flex items-start justify-between gap-1">
-                            <div className="min-w-0 flex-1">
-                              <span className="text-sm font-black text-[var(--text-primary)] leading-tight">
-                                {item.quantity}x {item.nameSnapshot}
-                              </span>
-                              {cleanNotes && (
-                                <p className="text-xs font-bold text-amber-700 dark:text-amber-400 mt-1 pl-1.5 border-l-2 border-amber-500 bg-amber-500/10 py-0.5 rounded-r">
-                                  👉 {cleanNotes}
-                                </p>
+                          {/* Acordeón opcional para ver lo que ya se preparó anteriormente sin estorbar */}
+                          {unchangedItems.length > 0 && (
+                            <div className="pt-2 border-t border-[var(--border-subtle)]">
+                              <button
+                                type="button"
+                                onClick={() => toggleShowPrevious(ticket.id)}
+                                className="w-full flex items-center justify-between text-[11px] font-bold text-[var(--text-secondary)] hover:text-[var(--text-primary)] py-1.5 px-2.5 rounded-xl bg-[var(--bg-elevated)] border border-[var(--border-subtle)] transition-colors cursor-pointer"
+                              >
+                                <span>📋 Pedido anterior ya preparado ({unchangedItems.length} producto{unchangedItems.length > 1 ? 's' : ''})</span>
+                                <span className="text-[10px] uppercase font-mono">{showPrevious[ticket.id] ? '▲ Ocultar' : '▼ Ver'}</span>
+                              </button>
+                              {showPrevious[ticket.id] && (
+                                <div className="mt-2 space-y-1 opacity-75">
+                                  {unchangedItems.map(item => {
+                                    const isTakeaway = (item.notes || '').toLowerCase().includes('llevar')
+                                    const cleanNotes = (item.notes || '').replace(/\[PARA LLEVAR\]/gi, '').replace(/\[MESA\]/gi, '').trim()
+                                    return (
+                                      <div key={item.id} className="rounded-xl p-2 text-xs bg-[var(--bg-elevated)] flex items-center justify-between">
+                                        <span className="font-bold text-[var(--text-primary)]">{item.quantity}x {item.nameSnapshot}</span>
+                                        <div className="flex items-center gap-1.5">
+                                          {cleanNotes && <span className="text-[10px] text-amber-600 font-semibold truncate">({cleanNotes})</span>}
+                                          <span className={`rounded-full px-1.5 py-0.2 text-[9px] font-black ${isTakeaway ? 'bg-amber-500 text-slate-950' : 'bg-blue-500/10 text-blue-700'}`}>
+                                            {isTakeaway ? '🥡 Llevar' : '🍽️ Mesa'}
+                                          </span>
+                                        </div>
+                                      </div>
+                                    )
+                                  })}
+                                </div>
                               )}
                             </div>
-                            <span className={`shrink-0 rounded-full px-1.5 py-0.2 text-[10px] font-black tracking-wider ${isTakeaway ? 'bg-amber-500 text-slate-950' : 'bg-blue-500/10 text-blue-700 dark:text-blue-300'}`}>
-                              {isTakeaway ? '🥡 LLEVAR' : '🍽️ MESA'}
-                            </span>
-                          </div>
+                          )}
                         </div>
                       )
-                    })}
-                  </div>
+                    }
+
+                    // MODO NORMAL (pedidos nuevos o sin cambios de productos): "ya lo demás normal"
+                    return (
+                      <div className="mt-2.5 space-y-1.5">
+                        {ticket.items?.map((item: KitchenTicketItemSummary) => {
+                          const isTakeaway = (item.notes || '').toLowerCase().includes('llevar')
+                          const cleanNotes = (item.notes || '').replace(/\[PARA LLEVAR\]/gi, '').replace(/\[MESA\]/gi, '').trim()
+
+                          return (
+                            <div key={item.id} className="rounded-xl p-2 text-xs border border-transparent bg-[var(--bg-elevated)]">
+                              <div className="flex items-start justify-between gap-1">
+                                <div className="min-w-0 flex-1">
+                                  <span className="text-sm font-black text-[var(--text-primary)] leading-tight">
+                                    {item.quantity}x {item.nameSnapshot}
+                                  </span>
+                                  {cleanNotes && (
+                                    <p className="text-xs font-bold text-amber-700 dark:text-amber-400 mt-1 pl-1.5 border-l-2 border-amber-500 bg-amber-500/10 py-0.5 rounded-r">
+                                      👉 {cleanNotes}
+                                    </p>
+                                  )}
+                                </div>
+                                <span className={`shrink-0 rounded-full px-1.5 py-0.2 text-[10px] font-black tracking-wider ${isTakeaway ? 'bg-amber-500 text-slate-950' : 'bg-blue-500/10 text-blue-700 dark:text-blue-300'}`}>
+                                  {isTakeaway ? '🥡 LLEVAR' : '🍽️ MESA'}
+                                </span>
+                              </div>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    )
+                  })()}
                 </div>
 
                 {/* EXACTAMENTE 2 PASOS: 1. PREPARAR -> 2. LISTO (Y YA QUEDA COMPLETO) */}
