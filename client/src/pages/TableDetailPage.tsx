@@ -12,6 +12,13 @@ import { alerts } from '@/lib/alerts'
 import { formatCurrency } from '@/lib/utils'
 import { useAuth } from '@/hooks/useAuth'
 
+interface ProofPhoto {
+  id: string
+  file: File
+  previewUrl: string
+  name: string
+}
+
 export default function TableDetailPage() {
   const navigate = useNavigate()
   const { id = '' } = useParams()
@@ -22,8 +29,7 @@ export default function TableDetailPage() {
   const [mixedCash, setMixedCash] = useState('')
   const [mixedTransfer, setMixedTransfer] = useState('')
   const [reference, setReference] = useState('')
-  const [proof, setProof] = useState<File | null>(null)
-  const [preview, setPreview] = useState<string | null>(null)
+  const [proofs, setProofs] = useState<ProofPhoto[]>([])
   const [zoomUrl, setZoomUrl] = useState<string | null>(null)
   const [sending, setSending] = useState(false)
   const [preparingPhoto, setPreparingPhoto] = useState(false)
@@ -121,32 +127,53 @@ export default function TableDetailPage() {
     return () => { socket.disconnect() }
   }, [id, user?.id, user?.name, user?.role, table?.label])
 
-  useEffect(() => () => { if (preview) URL.revokeObjectURL(preview) }, [preview])
+  useEffect(() => () => {
+    proofs.forEach(p => URL.revokeObjectURL(p.previewUrl))
+  }, [])
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0] || null
+    const rawFiles = Array.from(e.target.files || [])
     e.target.value = ''
-    if (!file) return
-    const selection = ++photoSelection.current
+    if (rawFiles.length === 0) return
+
     setPreparingPhoto(true)
-    setProof(null)
-    setPreview(null)
-    setZoomUrl(null)
     try {
-      const prepared = await prepareReceiptPhoto(file)
-      if (selection !== photoSelection.current) return
-      setProof(prepared)
-      setPreview(URL.createObjectURL(prepared))
+      const newItems: ProofPhoto[] = []
+      for (const f of rawFiles) {
+        const prepared = await prepareReceiptPhoto(f)
+        newItems.push({
+          id: crypto.randomUUID(),
+          file: prepared,
+          previewUrl: URL.createObjectURL(prepared),
+          name: prepared.name,
+        })
+      }
+      setProofs(prev => [...prev, ...newItems])
     } catch (error: any) {
-      if (selection === photoSelection.current) alerts.error('No se pudo cargar la foto', error.message)
+      alerts.error('No se pudo procesar la foto', error.message)
     } finally {
-      if (selection === photoSelection.current) setPreparingPhoto(false)
+      setPreparingPhoto(false)
     }
+  }
+
+  const removeProof = (proofId: string) => {
+    setProofs(prev => {
+      const target = prev.find(p => p.id === proofId)
+      if (target) URL.revokeObjectURL(target.previewUrl)
+      return prev.filter(p => p.id !== proofId)
+    })
+  }
+
+  const clearProofs = () => {
+    setProofs(prev => {
+      prev.forEach(p => URL.revokeObjectURL(p.previewUrl))
+      return []
+    })
   }
 
   const submitPayment = async () => {
     if (sending || preparingPhoto) return
-    if (method === 'TRANSFER' && !proof) {
+    if (method === 'TRANSFER' && proofs.length === 0) {
       alerts.warning('Foto obligatoria', 'Para pagos por transferencia es obligatorio tomar o subir la foto del comprobante.')
       return
     }
@@ -154,7 +181,7 @@ export default function TableDetailPage() {
     if (method === 'MIXED') {
       const cash = Number(mixedCash) || 0
       const transfer = Number(mixedTransfer) || 0
-      const bal = Number(amount) || table.balance || table.total || 0
+      const bal = Number(amount) || table?.balance || table?.total || 0
       if (cash <= 0 || transfer <= 0) {
         alerts.warning('Montos requeridos', 'En pago mixto debes ingresar cuánto en efectivo y cuánto en transferencia.')
         return
@@ -163,7 +190,7 @@ export default function TableDetailPage() {
         alerts.warning('Montos no coinciden', `La suma de efectivo (${formatCurrency(cash)}) y transferencia (${formatCurrency(transfer)}) debe ser igual al total (${formatCurrency(bal)}).`)
         return
       }
-      if (!proof) {
+      if (proofs.length === 0) {
         alerts.warning('Foto obligatoria', 'Para pagos mixtos debes tomar o subir la foto del comprobante de transferencia.')
         return
       }
@@ -172,17 +199,21 @@ export default function TableDetailPage() {
     setSending(true)
     try {
       const form = new FormData()
-      const signature = `${id}:${method}:${amount}:${mixedCash}:${mixedTransfer}:${reference}:${proof?.name || ''}`
+      const photoSignatures = proofs.map(p => p.name).join(',')
+      const signature = `${id}:${method}:${amount}:${mixedCash}:${mixedTransfer}:${reference}:${photoSignatures}`
       if (paymentAttempt.current.signature !== signature) paymentAttempt.current = { signature, id: crypto.randomUUID() }
       form.append('clientMutationId', paymentAttempt.current.id)
       form.append('method', method)
-      form.append('amount', amount || String(table.balance || table.total || 0))
+      form.append('amount', amount || String(table?.balance || table?.total || 0))
       if (method === 'MIXED') {
         form.append('cashAmount', mixedCash)
         form.append('transferAmount', mixedTransfer)
       }
       form.append('reference', reference)
-      if (proof) form.append('proof', proof)
+      proofs.forEach((p, idx) => {
+        form.append('proofs', p.file)
+        if (idx === 0) form.append('proof', p.file) // compatibilidad total con endpoints existentes
+      })
       const result = await api.post<any>(`/tables/${id}/payments`, form)
 
       if (method === 'CASH') {
@@ -192,9 +223,8 @@ export default function TableDetailPage() {
         return
       }
 
-      alerts.success('Pago enviado a caja', method === 'MIXED' ? 'Pago mixto enviado para validación en caja.' : 'Comprobante enviado para validación en caja.')
-      setProof(null)
-      setPreview(null)
+      alerts.success('Pago enviado a caja', method === 'MIXED' ? 'Pago mixto enviado para validación en caja.' : 'Comprobante(s) enviado(s) para validación en caja.')
+      clearProofs()
       setReference('')
       await load()
     } catch (err: any) {
@@ -539,15 +569,27 @@ export default function TableDetailPage() {
               {method !== 'CASH' && (
                 <div className="space-y-2.5 rounded-xl border border-amber-500/30 bg-amber-500/5 p-3.5">
                   <div className="flex items-center justify-between">
-                    <span className="text-xs font-black text-amber-800">📸 Foto de comprobante (Obligatoria)</span>
-                    {preparingPhoto ? <span role="status" className="text-xs">Preparando foto…</span> : proof && <span className="text-[11px] text-emerald-600 font-black">✓ Lista</span>}
+                    <span className="text-xs font-black text-amber-900 dark:text-amber-200">
+                      📸 Comprobantes de Transferencia {proofs.length > 0 ? `(${proofs.length})` : '(Obligatorio)'}
+                    </span>
+                    {preparingPhoto ? (
+                      <span role="status" className="text-xs text-amber-600 font-bold animate-pulse">Procesando foto…</span>
+                    ) : proofs.length > 0 ? (
+                      <span className="text-[11px] text-emerald-600 dark:text-emerald-400 font-black">
+                        ✓ {proofs.length} lista{proofs.length === 1 ? '' : 's'}
+                      </span>
+                    ) : (
+                      <span className="text-[11px] text-rose-500 font-bold">Mínimo 1 foto</span>
+                    )}
                   </div>
 
-                  {/* 2 Opciones en comprobante: Tomar foto o Subir comprobante */}
+                  {/* 2 Opciones en comprobante: Tomar foto o Subir comprobante(s) */}
                   <div className="grid grid-cols-2 gap-2">
-                    <label className="flex cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-[var(--accent)] bg-[var(--accent)]/10 p-3.5 text-center transition hover:bg-[var(--accent)]/20 active:scale-95 shadow-sm">
-                      <Camera className="h-6 w-6 text-[var(--accent)]" />
-                      <span className="text-xs font-black text-[var(--accent)] leading-tight">Tomar foto de comprobante</span>
+                    <label className="flex cursor-pointer flex-col items-center justify-center gap-1.5 rounded-xl border-2 border-dashed border-[var(--accent)] bg-[var(--accent)]/10 p-3 text-center transition hover:bg-[var(--accent)]/20 active:scale-95 shadow-sm">
+                      <Camera className="h-5 w-5 text-[var(--accent)]" />
+                      <span className="text-xs font-black text-[var(--accent)] leading-tight">
+                        {proofs.length > 0 ? '+ Tomar otra foto' : 'Tomar foto con cámara'}
+                      </span>
                       <input
                         type="file"
                         accept="image/*"
@@ -557,42 +599,72 @@ export default function TableDetailPage() {
                       />
                     </label>
 
-                    <label className="flex cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-[var(--border-default)] bg-[var(--bg-elevated)] p-3.5 text-center transition hover:bg-[var(--bg-hover)] active:scale-95 shadow-sm">
-                      <Upload className="h-6 w-6 text-[var(--text-secondary)]" />
-                      <span className="text-xs font-black text-[var(--text-secondary)] leading-tight">Subir comprobante</span>
+                    <label className="flex cursor-pointer flex-col items-center justify-center gap-1.5 rounded-xl border-2 border-dashed border-[var(--border-default)] bg-[var(--bg-elevated)] p-3 text-center transition hover:bg-[var(--bg-hover)] active:scale-95 shadow-sm">
+                      <Upload className="h-5 w-5 text-[var(--text-secondary)]" />
+                      <span className="text-xs font-black text-[var(--text-secondary)] leading-tight">
+                        {proofs.length > 0 ? '+ Subir de galería' : 'Subir de galería'}
+                      </span>
                       <input
                         type="file"
                         accept="image/*"
+                        multiple
                         className="hidden"
                         onChange={handleFileChange}
                       />
                     </label>
                   </div>
 
-                  {/* Preview of selected photo */}
-                  {preview && (
-                    <div className="flex items-center justify-between gap-2 rounded-xl bg-[var(--bg-panel)] p-2 border border-[var(--border-subtle)]">
-                      <div className="flex min-w-0 items-center gap-2 overflow-hidden">
-                        <img src={preview} alt="Vista previa" className="h-14 w-14 shrink-0 rounded-lg object-cover border" />
-                        <div className="min-w-0 truncate text-xs">
-                          <p className="font-bold truncate text-[var(--text-primary)]">{proof?.name}</p>
-                          <button
-                            type="button"
-                            onClick={() => setZoomUrl(preview)}
-                            className="text-[var(--accent)] font-black hover:underline flex items-center gap-1"
-                          >
-                            <Eye className="h-3 w-3" /> Ver en grande
-                          </button>
-                        </div>
+                  {/* Previews of all selected photos */}
+                  {proofs.length > 0 && (
+                    <div className="space-y-2 pt-1">
+                      <div className="flex items-center justify-between text-[11px] font-bold text-[var(--text-secondary)]">
+                        <span>Fotos preparadas para enviar:</span>
+                        <button
+                          type="button"
+                          onClick={clearProofs}
+                          className="text-rose-500 hover:underline font-black cursor-pointer text-[10px]"
+                        >
+                          Quitar todas
+                        </button>
                       </div>
-                      <Button
-                        size="icon"
-                        variant="ghost"
-                        className="h-7 w-7 text-rose-500 hover:bg-rose-50"
-                        onClick={() => { photoSelection.current++; setProof(null); setPreview(null); setZoomUrl(null); }}
-                      >
-                        <X className="h-4 w-4" />
-                      </Button>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        {proofs.map((p, idx) => (
+                          <div
+                            key={p.id}
+                            className="flex items-center justify-between gap-2 rounded-xl bg-[var(--bg-panel)] p-2 border border-[var(--border-subtle)] shadow-xs"
+                          >
+                            <div className="flex min-w-0 items-center gap-2 overflow-hidden">
+                              <img
+                                src={p.previewUrl}
+                                alt={`Comprobante ${idx + 1}`}
+                                className="h-12 w-12 shrink-0 rounded-lg object-cover border border-[var(--border-subtle)]"
+                              />
+                              <div className="min-w-0 truncate text-xs">
+                                <p className="font-black text-[var(--text-primary)] truncate">
+                                  Comprobante #{idx + 1}
+                                </p>
+                                <button
+                                  type="button"
+                                  onClick={() => setZoomUrl(p.previewUrl)}
+                                  className="text-[var(--accent)] font-bold hover:underline flex items-center gap-1 text-[11px] mt-0.5 cursor-pointer"
+                                >
+                                  <Eye className="h-3 w-3" /> Ver grande
+                                </button>
+                              </div>
+                            </div>
+                            <Button
+                              size="icon"
+                              variant="ghost"
+                              className="h-7 w-7 text-rose-500 hover:bg-rose-500/10 rounded-lg cursor-pointer shrink-0"
+                              onClick={() => removeProof(p.id)}
+                              title="Eliminar esta foto"
+                            >
+                              <X className="h-4 w-4" />
+                            </Button>
+                          </div>
+                        ))}
+                      </div>
                     </div>
                   )}
                 </div>
@@ -600,7 +672,7 @@ export default function TableDetailPage() {
 
               {/* Submit Button */}
               <Button
-                disabled={sending || preparingPhoto || (method !== 'CASH' && !proof)}
+                disabled={sending || preparingPhoto || (method !== 'CASH' && proofs.length === 0)}
                 onClick={submitPayment}
                 className="w-full h-11 font-black text-sm gap-2 bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-white shadow-md transition-all cursor-pointer"
               >
@@ -609,7 +681,7 @@ export default function TableDetailPage() {
                   : method === 'CASH'
                   ? `💵 Cobrar en Efectivo (${formatCurrency(Number(amount) || table.balance)})`
                   : method === 'TRANSFER'
-                  ? `📤 Enviar Comprobante (${formatCurrency(Number(amount) || table.balance)})`
+                  ? `📤 Enviar Comprobante${proofs.length > 1 ? `s (${proofs.length})` : ''} (${formatCurrency(Number(amount) || table.balance)})`
                   : `🔀 Enviar Pago Mixto (${formatCurrency(Number(amount) || table.balance)})`}
               </Button>
             </div>

@@ -542,25 +542,38 @@ export default function KitchenPage() {
                       ? (ticket.items || []).filter(i => !i.changeType || i.changeType === 'UNCHANGED' || (i.changeType === 'MODIFIED' && (i.previousQty ?? i.quantity) === i.quantity && i.notes === i.previousNotes))
                       : []
 
-                    // Si fue editado y hay acciones específicas (agregados / quitados), mostrar modo enfocado en cocina
-                    if (isEditedTicket && actionItems.length > 0 && !isFullyCancelled) {
+                    // Si fue editado y hay acciones específicas (agregados / modificados / quitados), mostrar EXCLUSIVAMENTE lo afectado
+                    if (isEditedTicket && !isFullyCancelled) {
+                      if (actionItems.length === 0) {
+                        return (
+                          <div className="mt-2.5 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-center text-xs font-bold text-amber-800 dark:text-amber-200">
+                            ℹ️ Pedido editado sin cambios de productos para esta estación.
+                          </div>
+                        )
+                      }
+
                       return (
                         <div className="mt-2.5 space-y-2.5">
                           {/* Banner limpio y directo */}
                           <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-500/20 border-2 border-amber-500/40 text-amber-900 dark:text-amber-200 text-xs font-black uppercase tracking-wider">
                             <Flame className="h-4 w-4 text-amber-600 dark:text-amber-400 animate-pulse" />
-                            <span>🔥 SOLO LO AGREGADO / NUEVO:</span>
+                            <span>🔥 LO NUEVO / EDITADO A PREPARAR:</span>
                           </div>
 
-                          {/* Items agregados o modificados con letra GRANDE y clara */}
+                          {/* Items agregados, modificados o eliminados con letra GRANDE y clara */}
                           <div className="space-y-2.5">
                             {actionItems.map((item: KitchenTicketItemSummary) => {
-                              const isRemoved = item.changeType === 'REMOVED' || (item.changeType === 'MODIFIED' && (item.previousQty ?? item.quantity) > item.quantity)
                               const isTakeaway = (item.notes || '').toLowerCase().includes('llevar')
                               const cleanNotes = (item.notes || '').replace(/\[PARA LLEVAR\]/gi, '').replace(/\[MESA\]/gi, '').trim()
+                              const prevQty = item.previousQty ?? item.quantity
+                              const qtyDiff = item.changeType === 'ADDED' 
+                                ? item.quantity 
+                                : item.changeType === 'REMOVED' 
+                                ? -item.quantity 
+                                : (item.quantity - prevQty)
 
-                              if (isRemoved) {
-                                const removedQty = item.changeType === 'REMOVED' ? item.quantity : ((item.previousQty ?? item.quantity) - item.quantity)
+                              // 1. ELIMINADO TOTALMENTE
+                              if (item.changeType === 'REMOVED') {
                                 return (
                                   <div key={item.id} className="rounded-2xl border-2 border-rose-500 bg-rose-500/15 p-3.5 shadow-sm">
                                     <div className="flex items-center justify-between gap-1 mb-1">
@@ -572,7 +585,7 @@ export default function KitchenPage() {
                                       </span>
                                     </div>
                                     <div className="text-lg sm:text-xl font-black text-rose-800 dark:text-rose-300 line-through leading-tight mt-1">
-                                      -{removedQty}x {item.nameSnapshot}
+                                      -{item.quantity}x {item.nameSnapshot}
                                     </div>
                                     {cleanNotes && (
                                       <p className="text-xs text-rose-700/80 dark:text-rose-400 mt-1 line-through">
@@ -583,29 +596,88 @@ export default function KitchenPage() {
                                 )
                               }
 
-                              const addedQty = item.changeType === 'ADDED' ? item.quantity : (item.quantity - (item.previousQty ?? 0))
+                              // 2. SE REDUJO CANTIDAD (ej: eran 3 y ahora son 2)
+                              if (qtyDiff < 0) {
+                                const reducedCount = Math.abs(qtyDiff)
+                                return (
+                                  <div key={item.id} className="rounded-2xl border-2 border-rose-500 bg-rose-500/15 p-3.5 shadow-sm">
+                                    <div className="flex items-center justify-between gap-1 mb-1">
+                                      <span className="font-black px-2.5 py-1 rounded-lg bg-rose-600 text-white text-xs tracking-wider uppercase">
+                                        SE REDUJO ❌
+                                      </span>
+                                      <span className="text-xs font-black text-rose-600 dark:text-rose-400">
+                                        ¡NO PREPARAR ESTAS UNIDADES!
+                                      </span>
+                                    </div>
+                                    <div className="text-lg sm:text-xl font-black text-rose-800 dark:text-rose-300 line-through leading-tight mt-1">
+                                      -{reducedCount}x {item.nameSnapshot}
+                                    </div>
+                                    <div className="text-xs font-black text-rose-700 dark:text-rose-300 mt-1">
+                                      (Quedan solo {item.quantity} un. en cuenta)
+                                    </div>
+                                    {cleanNotes && (
+                                      <p className="text-xs text-rose-700/80 dark:text-rose-400 mt-1">
+                                        Nota: {cleanNotes}
+                                      </p>
+                                    )}
+                                  </div>
+                                )
+                              }
 
+                              // 3. SOLO CAMBIO DE PREPARACIÓN / NOTA (Cantidad no cambió, qtyDiff === 0)
+                              if (qtyDiff === 0) {
+                                return (
+                                  <div key={item.id} className="rounded-2xl border-2 border-amber-500 bg-amber-500/15 p-3.5 shadow-md">
+                                    <div className="flex items-center justify-between gap-1 mb-1.5">
+                                      <span className="font-black px-2.5 py-1 rounded-lg bg-amber-600 text-white text-xs tracking-wider uppercase">
+                                        ✏️ CAMBIO DE PREPARACIÓN
+                                      </span>
+                                      <span className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-black tracking-wider ${isTakeaway ? 'bg-amber-500 text-slate-950' : 'bg-blue-600 text-white'}`}>
+                                        {isTakeaway ? '🥡 LLEVAR' : '🍽️ MESA'}
+                                      </span>
+                                    </div>
+
+                                    <div className="text-xl sm:text-2xl font-black text-[var(--text-primary)] leading-tight mt-1">
+                                      {item.quantity}x {item.nameSnapshot}
+                                    </div>
+
+                                    <div className="text-xs font-extrabold text-amber-800 dark:text-amber-300 mt-1">
+                                      (Misma cantidad: {item.quantity} un. — Cambió la forma de preparar)
+                                    </div>
+
+                                    {cleanNotes ? (
+                                      <p className="text-sm font-black text-amber-950 dark:text-amber-100 mt-2 pl-2.5 border-l-4 border-amber-500 bg-amber-500/20 py-2 rounded-r leading-tight">
+                                        👉 NUEVA INDICACIÓN: {cleanNotes}
+                                      </p>
+                                    ) : (
+                                      <p className="text-xs font-bold text-amber-800 dark:text-amber-300 mt-1 italic">
+                                        (Se retiraron las notas anteriores)
+                                      </p>
+                                    )}
+                                  </div>
+                                )
+                              }
+
+                              // 4. SE AGREGÓ NUEVO O SE INCREMENTÓ CANTIDAD (qtyDiff > 0)
                               return (
                                 <div key={item.id} className="rounded-2xl border-2 border-emerald-500 bg-emerald-500/15 p-3.5 shadow-md">
                                   <div className="flex items-center justify-between gap-1 mb-1.5">
                                     <span className="font-black px-2.5 py-1 rounded-lg bg-emerald-600 text-white text-xs tracking-wider uppercase animate-pulse">
-                                      ✨ ¡SE AGREGÓ! (NUEVO)
+                                      ✨ ¡SE AGREGÓ!
                                     </span>
                                     <span className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-black tracking-wider ${isTakeaway ? 'bg-amber-500 text-slate-950' : 'bg-blue-600 text-white'}`}>
                                       {isTakeaway ? '🥡 LLEVAR' : '🍽️ MESA'}
                                     </span>
                                   </div>
 
-                                  {/* Nombre y cantidad con letra EXTRA GRANDE y destacada para cocina */}
+                                  {/* Nombre y cantidad agregada con letra EXTRA GRANDE y destacada para cocina */}
                                   <div className="text-xl sm:text-2xl font-black text-[var(--text-primary)] leading-tight mt-1">
-                                    +{addedQty}x {item.nameSnapshot}
+                                    +{qtyDiff}x {item.nameSnapshot}
                                   </div>
 
-                                  {item.changeType === 'MODIFIED' && item.previousQty && (
-                                    <div className="text-xs font-extrabold text-emerald-800 dark:text-emerald-300 mt-1">
-                                      (Total acumulado en mesa: {item.quantity} un.)
-                                    </div>
-                                  )}
+                                  <div className="text-xs font-extrabold text-emerald-800 dark:text-emerald-300 mt-1">
+                                    (Total en cuenta: {item.quantity} un.)
+                                  </div>
 
                                   {cleanNotes && (
                                     <p className="text-sm font-black text-amber-800 dark:text-amber-200 mt-2 pl-2.5 border-l-4 border-amber-500 bg-amber-500/15 py-1.5 rounded-r leading-tight">
@@ -617,11 +689,11 @@ export default function KitchenPage() {
                             })}
                           </div>
 
-                          {/* Recordatorio discreto de que la mesa ya tenía comida anterior sin confundir al cocinero */}
+                          {/* Recordatorio discreto de que lo demás no se muestra aquí porque ya fue preparado */}
                           {unchangedItems.length > 0 && (
                             <div className="pt-2 text-center">
                               <p className="text-[11px] font-bold text-[var(--text-muted)] italic">
-                                ℹ️ {unchangedItems.length} producto(s) anteriores de esta mesa ya fueron preparados.
+                                ℹ️ Los demás {unchangedItems.length} producto(s) de esta mesa ya fueron preparados. El pedido completo se consulta en el Historial.
                               </p>
                             </div>
                           )}

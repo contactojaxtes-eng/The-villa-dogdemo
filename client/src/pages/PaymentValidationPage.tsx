@@ -13,7 +13,6 @@ import { isNotificationsMuted, toggleNotificationsMuted } from '@/lib/notificati
 
 const validationTabs = [
   { value: 'PENDING_REVIEW', label: 'Pendientes' },
-  { value: 'CANCELLATIONS', label: 'Cancelaciones' },
   { value: 'CASH', label: 'Efectivo' },
   { value: 'TRANSFER', label: 'Transferencias' },
   { value: 'MIXED', label: 'Mixtos' },
@@ -300,13 +299,29 @@ export default function PaymentValidationPage() {
         </div>
       </div>
 
+      {/* Aviso destacado si hay cancelaciones de mesera esperando autorización */}
+      {cancellations.length > 0 && activeTab !== 'CANCELLATIONS' && (
+        <div className="flex flex-wrap items-center justify-between gap-2 p-3 rounded-2xl bg-rose-500/10 border-2 border-rose-500/30 text-rose-800 dark:text-rose-200 shadow-xs">
+          <div className="flex items-center gap-2 font-bold text-xs">
+            <XCircle className="h-4 w-4 text-rose-600 animate-pulse shrink-0" />
+            <span>Hay <strong>{cancellations.length}</strong> solicitud(es) de cancelación de mesa pendiente(s) de autorización</span>
+          </div>
+          <Button
+            size="sm"
+            onClick={() => setActiveTab('CANCELLATIONS')}
+            className="h-8 px-3.5 bg-rose-600 hover:bg-rose-700 text-white font-black text-xs rounded-xl shadow-xs cursor-pointer"
+          >
+            Revisar Cancelaciones
+          </Button>
+        </div>
+      )}
+
       {/* Barra de Filtros Instantáneos Unificada (Una sola fila) */}
       <div className="flex flex-col sm:flex-row gap-3 sm:items-center sm:justify-between bg-[var(--bg-panel)] p-2.5 rounded-2xl border border-[var(--border-subtle)] shadow-xs">
         <div className="flex flex-wrap gap-1.5 items-center">
           {validationTabs.map(s => {
             const isActive = activeTab === s.value
             const count = tabCounts[s.value as keyof typeof tabCounts]
-            const isDangerTab = s.value === 'CANCELLATIONS' && count !== undefined && count > 0
             return (
               <button
                 key={s.value}
@@ -314,9 +329,7 @@ export default function PaymentValidationPage() {
                 onClick={() => setActiveTab(s.value)}
                 className={`h-8 px-3 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
                   isActive
-                    ? isDangerTab ? 'bg-rose-600 text-white shadow-xs' : 'bg-[var(--accent)] text-white shadow-xs'
-                    : isDangerTab
-                    ? 'bg-rose-500/15 text-rose-700 dark:text-rose-400 border border-rose-500/30 hover:bg-rose-500/25'
+                    ? 'bg-[var(--accent)] text-white shadow-xs'
                     : 'bg-[var(--bg-elevated)] text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] border border-[var(--border-subtle)]'
                 }`}
               >
@@ -325,8 +338,6 @@ export default function PaymentValidationPage() {
                   <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-black ${
                     isActive
                       ? 'bg-white/25 text-white'
-                      : isDangerTab
-                      ? 'bg-rose-600 text-white animate-pulse'
                       : 'bg-[var(--accent)] text-white'
                   }`}>
                     {count}
@@ -352,6 +363,19 @@ export default function PaymentValidationPage() {
       {/* PESTAÑA: CANCELACIONES SOLICITADAS POR MESERAS */}
       {activeTab === 'CANCELLATIONS' ? (
         <div className="space-y-2.5">
+          <div className="flex items-center justify-between pb-1">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setActiveTab('PENDING_REVIEW')}
+              className="gap-1.5 font-black text-xs rounded-xl cursor-pointer"
+            >
+              ← Volver a Pagos
+            </Button>
+            <span className="text-xs font-bold text-[var(--text-secondary)]">
+              {cancellations.length} solicitud(es) de cancelación
+            </span>
+          </div>
           {filteredCancellations.map(order => (
             <article
               key={order.id}
@@ -436,25 +460,35 @@ export default function PaymentValidationPage() {
               >
                 {/* Lado izquierdo: Miniatura compacta + Datos del pedido */}
                 <div className="flex items-center gap-3 min-w-0 flex-1">
-                  {/* Miniatura si es transferencia */}
-                  {proof ? (
-                    <div
-                      className="group relative w-12 h-14 shrink-0 cursor-pointer overflow-hidden rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-elevated)] flex items-center justify-center hover:border-[var(--accent)]"
-                      onClick={(e) => {
-                        e.preventDefault()
-                        e.stopPropagation()
-                        openProof(proof.id, proof.fileBase64)
-                      }}
-                      title="Toca para ver comprobante en grande"
-                    >
-                      {proof.fileBase64 ? (
-                        <img src={proof.fileBase64} alt="Comprobante" className="h-full w-full object-cover" />
-                      ) : (
-                        <ProtectedImage endpoint={`/payment-validation/proofs/${proof.id}/image`} alt="Comprobante" className="h-full w-full object-cover" />
-                      )}
-                      <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                        <Eye className="h-4 w-4 text-white" />
-                      </div>
+                  {/* Miniaturas si es transferencia (soporta 1 o múltiples fotos) */}
+                  {payment.transferProofs && payment.transferProofs.length > 0 && payment.transferProofs.some((p: any) => p.fileBase64 || p.filePath || p.id) ? (
+                    <div className="flex items-center gap-1.5 shrink-0 flex-wrap max-w-[135px]">
+                      {payment.transferProofs.filter((p: any) => p.fileBase64 || p.filePath || p.id).map((p: any, idx: number) => (
+                        <div
+                          key={p.id || idx}
+                          className="group relative w-11 h-13 shrink-0 cursor-pointer overflow-hidden rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-elevated)] flex items-center justify-center hover:border-[var(--accent)] shadow-xs transition"
+                          onClick={(e) => {
+                            e.preventDefault()
+                            e.stopPropagation()
+                            openProof(p.id, p.fileBase64)
+                          }}
+                          title={`Comprobante #${idx + 1} de ${payment.transferProofs.length} - Clic para ver en grande`}
+                        >
+                          {p.fileBase64 ? (
+                            <img src={p.fileBase64} alt={`Comprobante ${idx + 1}`} className="h-full w-full object-cover" />
+                          ) : (
+                            <ProtectedImage endpoint={`/payment-validation/proofs/${p.id}/image`} alt={`Comprobante ${idx + 1}`} className="h-full w-full object-cover" />
+                          )}
+                          <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                            <Eye className="h-4 w-4 text-white" />
+                          </div>
+                          {payment.transferProofs.length > 1 && (
+                            <span className="absolute bottom-0 right-0 bg-slate-950/80 text-white text-[9px] font-black px-1 rounded-tl">
+                              #{idx + 1}
+                            </span>
+                          )}
+                        </div>
+                      ))}
                     </div>
                   ) : isCash ? (
                     <div className="w-10 h-10 shrink-0 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-600 flex items-center justify-center" title="Pago en Efectivo">
@@ -560,15 +594,27 @@ export default function PaymentValidationPage() {
                       <CheckCircle2 className="h-4 w-4" /> Pagado / Aprobado
                     </div>
                   ) : payment.status === 'REJECTED' ? (
-                    <div className="flex flex-col items-end gap-0.5">
-                      <div className="flex items-center gap-1 text-xs font-black text-rose-600 bg-rose-500/10 px-3 py-1 rounded-xl border border-rose-500/20">
-                        <XCircle className="h-4 w-4" /> Rechazado
+                    <div className="flex items-center gap-2">
+                      <div className="flex flex-col items-end gap-0.5">
+                        <div className="flex items-center gap-1 text-xs font-black text-rose-600 bg-rose-500/10 px-2.5 py-1 rounded-xl border border-rose-500/20">
+                          <XCircle className="h-3.5 w-3.5" /> Rechazado
+                        </div>
+                        {(payment.transferProofs?.[0]?.rejectionReason || payment.rejectionReason) && (
+                          <span className="text-[10px] text-rose-600 italic max-w-xs text-right truncate">
+                            Motivo: {payment.transferProofs?.[0]?.rejectionReason || payment.rejectionReason}
+                          </span>
+                        )}
                       </div>
-                      {(payment.transferProofs?.[0]?.rejectionReason || payment.rejectionReason) && (
-                        <span className="text-[10px] text-rose-600 italic max-w-xs text-right truncate">
-                          Motivo: {payment.transferProofs?.[0]?.rejectionReason || payment.rejectionReason}
-                        </span>
-                      )}
+
+                      {/* Botón para validar y aceptar pago previamente rechazado */}
+                      <Button
+                        onClick={() => review(payment, 'validate')}
+                        size="sm"
+                        className="h-8 px-3 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs gap-1.5 shadow-sm rounded-xl cursor-pointer"
+                        title="Aceptar y validar este pago rechazado"
+                      >
+                        <CheckCircle2 className="h-4 w-4" /> Validar / Aceptar
+                      </Button>
                     </div>
                   ) : null}
                 </div>

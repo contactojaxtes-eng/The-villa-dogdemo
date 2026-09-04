@@ -181,7 +181,7 @@ export class TablesService {
   }
 
   private async buildChangeSummary(before: any[], after: any[], db: Prisma.TransactionClient = this.prisma) {
-    const key = (item: any) => `${item.menuItemId}_${(item.notes || '').trim()}`;
+    const key = (item: any) => `${item.menuItemId}_${(item.notes || '').trim().toLowerCase()}`;
     const beforeMap = new Map(before.map(item => [key(item), item]));
     const afterMap = new Map(after.map(item => [key(item), item]));
     const changeMap = new Map<string, any>();
@@ -200,21 +200,34 @@ export class TablesService {
       const itemK = key(item);
       const prev = beforeMap.get(itemK);
       const prodName = getName(item);
+      const countInAfter = after.filter(a => a.menuItemId === item.menuItemId).length;
+      const countInBefore = before.filter(b => b.menuItemId === item.menuItemId).length;
+      const canUseMenuItemKey = countInAfter <= 1 && countInBefore <= 1;
+
       if (!prev) {
         parts.push(`✨ Agregado: +${item.quantity}x ${prodName}${item.notes ? ` (${item.notes})` : ''}`);
-        changeMap.set(itemK, { changeType: 'ADDED', quantity: item.quantity });
-        if (!changeMap.has(item.menuItemId)) changeMap.set(item.menuItemId, { changeType: 'ADDED', quantity: item.quantity });
-      } else if (Number(prev.quantity) !== Number(item.quantity) || String(prev.notes || '').trim() !== String(item.notes || '').trim()) {
-        const qtyDiff = Number(item.quantity) - Number(prev.quantity);
-        const qtyText = qtyDiff > 0 ? `+${qtyDiff} un. (${prev.quantity} -> ${item.quantity})` : `-${Math.abs(qtyDiff)} un. (${prev.quantity} -> ${item.quantity})`;
-        parts.push(`✏️ Modificado: ${prodName} [${qtyText}]${item.notes ? ` (${item.notes})` : ''}`);
-        const modInfo = { changeType: 'MODIFIED', previousQty: prev.quantity, previousNotes: prev.notes, quantity: item.quantity };
-        changeMap.set(itemK, modInfo);
-        changeMap.set(item.menuItemId, modInfo);
+        const addInfo = { changeType: 'ADDED', quantity: item.quantity, previousQty: 0, previousNotes: null };
+        changeMap.set(itemK, addInfo);
+        if (canUseMenuItemKey && !changeMap.has(item.menuItemId)) changeMap.set(item.menuItemId, addInfo);
       } else {
-        const unchInfo = { changeType: 'UNCHANGED', quantity: item.quantity };
-        changeMap.set(itemK, unchInfo);
-        if (!changeMap.has(item.menuItemId)) changeMap.set(item.menuItemId, unchInfo);
+        const qtyDiff = Number(item.quantity) - Number(prev.quantity);
+        const notesChanged = String(prev.notes || '').trim().toLowerCase() !== String(item.notes || '').trim().toLowerCase();
+
+        if (qtyDiff !== 0 || notesChanged) {
+          if (qtyDiff !== 0) {
+            const qtyText = qtyDiff > 0 ? `+${qtyDiff} un. (${prev.quantity} -> ${item.quantity})` : `-${Math.abs(qtyDiff)} un. (${prev.quantity} -> ${item.quantity})`;
+            parts.push(`✏️ Modificado: ${prodName} [${qtyText}]${item.notes ? ` (${item.notes})` : ''}`);
+          } else {
+            parts.push(`✏️ Cambio de nota: ${prodName} (${item.notes || 'sin nota'})`);
+          }
+          const modInfo = { changeType: 'MODIFIED', previousQty: prev.quantity, previousNotes: prev.notes, quantity: item.quantity };
+          changeMap.set(itemK, modInfo);
+          if (canUseMenuItemKey) changeMap.set(item.menuItemId, modInfo);
+        } else {
+          const unchInfo = { changeType: 'UNCHANGED', quantity: item.quantity, previousQty: prev.quantity, previousNotes: prev.notes };
+          changeMap.set(itemK, unchInfo);
+          if (canUseMenuItemKey && !changeMap.has(item.menuItemId)) changeMap.set(item.menuItemId, unchInfo);
+        }
       }
     }
 
@@ -737,12 +750,29 @@ export class TablesService {
     else this.socketGateway.emitTableUpdated(table);
   }
 
-  async submitPayment(tableId: string, data: any, user: any, file?: any) {
+  async submitPayment(tableId: string, data: any, user: any, fileOrFiles?: any) {
     if (!['CASH', 'TRANSFER', 'MIXED'].includes(data.method)) throw new BadRequestException('Método de pago inválido');
     const isCash = data.method === 'CASH';
     const isMixed = data.method === 'MIXED';
     const isTransfer = data.method === 'TRANSFER';
-    const receipt = isCash ? null : (file ? validateReceipt(file) : null);
+
+    const rawFiles: any[] = Array.isArray(fileOrFiles) ? fileOrFiles : (fileOrFiles ? [fileOrFiles] : []);
+    const validReceipts: { receipt: any; file: any }[] = [];
+    if (!isCash && rawFiles.length > 0) {
+      for (const f of rawFiles) {
+        if (!f) continue;
+        try {
+          const receipt = validateReceipt(f);
+          if (receipt) validReceipts.push({ receipt, file: f });
+        } catch (e: any) {
+          if (rawFiles.length === 1) throw e;
+        }
+      }
+    }
+    if ((isTransfer || (isMixed && rawFiles.length > 0)) && validReceipts.length === 0 && rawFiles.length > 0) {
+      throw new BadRequestException('El comprobante debe ser una imagen válida (JPG, PNG o WEBP)');
+    }
+
     const amount = Number(data.amount);
     if (!Number.isFinite(amount) || amount <= 0) throw new BadRequestException('Monto de pago inválido');
 
@@ -800,16 +830,18 @@ export class TablesService {
           paymentReference: payment.reference,
         } });
       }
-      if (receipt) {
-        // One compressed image per account payment, stored durably in PostgreSQL.
-        await tx.transferProof.create({ data: {
-          paymentId: payments[0].id, orderId: orders[0].id, tableId,
-          cashClosingId: table.cashClosingId, submittedById: user.id,
-          amount, method: data.method, status: 'PENDING', filePath: null,
-          fileBase64: `data:${receipt.mime};base64,${receipt.bytes.toString('base64')}`,
-          mimeType: receipt.mime, fileSize: receipt.bytes.length,
-          originalName: String(file?.originalname || 'comprobante.jpg').slice(0, 200),
-        } });
+      if (validReceipts.length > 0) {
+        // Almacenar todos los comprobantes adjuntos (una o varias fotos)
+        for (const { receipt, file } of validReceipts) {
+          await tx.transferProof.create({ data: {
+            paymentId: payments[0].id, orderId: orders[0].id, tableId,
+            cashClosingId: table.cashClosingId, submittedById: user.id,
+            amount, method: data.method, status: 'PENDING', filePath: null,
+            fileBase64: `data:${receipt.mime};base64,${receipt.bytes.toString('base64')}`,
+            mimeType: receipt.mime, fileSize: receipt.bytes.length,
+            originalName: String(file?.originalname || 'comprobante.jpg').slice(0, 200),
+          } });
+        }
       } else {
         // Cobro en efectivo o mixto registrado por mesera para validación en caja
         await tx.transferProof.create({ data: {
@@ -885,10 +917,15 @@ export class TablesService {
       const payment = await tx.payment.findUnique({ where: { id: paymentId }, include: { order: true } });
       if (!payment?.order.tableId) throw new NotFoundException('Cobro de cuenta no encontrado');
       if (payment.status === action) return { payment, table: await this.findTable(payment.order.tableId, tx), replay: true };
-      if (payment.status !== 'PENDING_REVIEW') throw new BadRequestException('Este pago ya fue revisado');
+
+      // Permitir confirmar pagos en PENDING_REVIEW o validar/aceptar pagos previamente REJECTED
+      const allowedFrom = ['PENDING_REVIEW'];
+      if (action === 'CONFIRMED') allowedFrom.push('REJECTED');
+      if (!allowedFrom.includes(payment.status)) throw new BadRequestException('Este pago ya fue validado y confirmado');
+
       if (!await this.getActiveClosing(user.id, payment.order.cashRegisterId, tx)) throw new BadRequestException('Abre la caja antes de validar');
       const group = await tx.payment.findMany({ where: payment.settlementId ? { settlementId: payment.settlementId } : { id: paymentId } });
-      if (group.some(p => p.status !== 'PENDING_REVIEW')) throw new BadRequestException('Actualiza la cuenta: uno de los pagos ya cambió');
+      if (group.some(p => !allowedFrom.includes(p.status))) throw new BadRequestException('Actualiza la cuenta: uno de los pagos ya cambió');
       const ids = group.map(p => p.id);
 
       await tx.payment.updateMany({ where: { id: { in: ids } }, data: {
@@ -896,9 +933,9 @@ export class TablesService {
       } });
       await tx.order.updateMany({ where: { id: { in: group.map(p => p.orderId) } }, data: { paymentStatus: action } });
 
-      const pendingProofs = await tx.transferProof.count({ where: { paymentId: { in: ids }, status: 'PENDING' } });
-      if (pendingProofs > 0) {
-        await tx.transferProof.updateMany({ where: { paymentId: { in: ids }, status: 'PENDING' }, data: {
+      const proofsCount = await tx.transferProof.count({ where: { paymentId: { in: ids } } });
+      if (proofsCount > 0) {
+        await tx.transferProof.updateMany({ where: { paymentId: { in: ids } }, data: {
           status: action, reviewedById: user.id, reviewedAt: new Date(),
           rejectionReason: action === 'REJECTED' ? String(reason || 'Rechazado por caja').slice(0, 500) : null,
         } });

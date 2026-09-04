@@ -1,5 +1,5 @@
-import { Body, Controller, Get, Param, Post, Put, Query, Request, UseGuards, UploadedFile, UseInterceptors } from '@nestjs/common';
-import { FileInterceptor } from '@nestjs/platform-express';
+import { Body, Controller, Get, Param, Post, Put, Query, Request, UseGuards, UploadedFiles, UseInterceptors } from '@nestjs/common';
+import { AnyFilesInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { Roles, RolesGuard } from '../auth/guards/roles.guard';
@@ -55,10 +55,10 @@ export class TablesController {
 
   @Post(':id/payments')
   @Roles('ADMIN', 'SUPERADMIN', 'CASHIER', 'WAITER')
-  @UseInterceptors(FileInterceptor('proof', { limits: { fileSize: 5 * 1024 * 1024, files: 1 } }))
-  @ApiOperation({ summary: 'Enviar cobro de mesa para validacion' })
-  submitPayment(@Param('id') id: string, @Body() body: any, @Request() req: any, @UploadedFile() file?: any) {
-    return this.tablesService.submitPayment(id, body, req.user, file);
+  @UseInterceptors(AnyFilesInterceptor({ limits: { fileSize: 10 * 1024 * 1024, files: 10 } }))
+  @ApiOperation({ summary: 'Enviar cobro de mesa para validacion (soporta múltiples comprobantes)' })
+  submitPayment(@Param('id') id: string, @Body() body: any, @Request() req: any, @UploadedFiles() files?: any[]) {
+    return this.tablesService.submitPayment(id, body, req.user, files);
   }
 
   @Put(':id/close')
