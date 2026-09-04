@@ -214,6 +214,10 @@ export default function TableDetailPage() {
         form.append('proofs', p.file)
         if (idx === 0) form.append('proof', p.file) // compatibilidad total con endpoints existentes
       })
+      if (proofs.length > 0) {
+        form.append('proofsBase64', JSON.stringify(proofs.map(p => p.previewUrl)))
+        form.append('proofBase64', proofs[0].previewUrl)
+      }
       const result = await api.post<any>(`/tables/${id}/payments`, form)
 
       if (method === 'CASH') {
@@ -629,7 +633,7 @@ export default function TableDetailPage() {
                       </span>
                       <input
                         type="file"
-                        accept="image/*,image/jpeg,image/png,image/webp"
+                        accept="image/jpeg,image/png,image/webp,image/*"
                         capture="environment"
                         className="hidden"
                         onChange={handleFileChange}
@@ -643,7 +647,7 @@ export default function TableDetailPage() {
                       </span>
                       <input
                         type="file"
-                        accept="image/*,image/jpeg,image/png,image/webp"
+                        accept="image/jpeg,image/png,image/webp,image/*"
                         multiple
                         className="hidden"
                         onChange={handleFileChange}

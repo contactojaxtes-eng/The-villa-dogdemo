@@ -37,7 +37,17 @@ export class PaymentValidationController {
       res.setHeader('Content-Type', proof.mimeType || 'image/jpeg');
       return createReadStream(proof.filePath).pipe(res);
     }
-    res.status(404).json({ message: 'Comprobante no disponible' });
+    const placeholderSvg = Buffer.from(
+      `<svg xmlns="http://www.w3.org/2000/svg" width="480" height="320" viewBox="0 0 480 320">
+        <rect width="480" height="320" fill="#18181b" rx="16"/>
+        <text x="240" y="130" fill="#ef4444" font-family="sans-serif" font-size="32" font-weight="bold" text-anchor="middle">⚠️</text>
+        <text x="240" y="180" fill="#f43f5e" font-family="sans-serif" font-size="16" font-weight="bold" text-anchor="middle">Comprobante sin imagen adjunta</text>
+        <text x="240" y="210" fill="#a1a1aa" font-family="sans-serif" font-size="12" text-anchor="middle">Cobro registrado por mesera · Validar en caja</text>
+      </svg>`
+    );
+    res.setHeader('Content-Type', 'image/svg+xml');
+    res.setHeader('Content-Length', placeholderSvg.length);
+    return res.end(placeholderSvg);
   }
 
   @Put(':id/validate')

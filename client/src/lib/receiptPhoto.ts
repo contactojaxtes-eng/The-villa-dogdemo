@@ -8,13 +8,46 @@ export interface PreparedReceiptPhoto {
   name: string
 }
 
-function readFileAsDataUrl(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = () => resolve(reader.result as string)
-    reader.onerror = () => reject(reader.error || new Error('Error al leer el archivo de imagen'))
-    reader.readAsDataURL(file)
-  })
+/**
+ * Lee de forma segura los bytes del archivo a memoria (ArrayBuffer) y genera un DataURL
+ * normalizado con MIME type de imagen garantizado (image/jpeg, image/png, image/webp).
+ * Esto evita que Android Chrome produzca 'data:;base64' o 'data:application/octet-stream',
+ * los cuales rompen las etiquetas <img> en teléfonos móviles.
+ */
+async function readFileAsNormalizedDataUrl(file: File): Promise<{ dataUrl: string; mime: string; bytes: Uint8Array }> {
+  const buffer = await file.arrayBuffer()
+  const bytes = new Uint8Array(buffer)
+
+  if (!bytes.length) {
+    throw new Error('La foto tomada está vacía. Intenta tomarla de nuevo.')
+  }
+
+  // Detectar formato por magic bytes reales
+  let mime = 'image/jpeg'
+  if (bytes.length >= 8 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) {
+    mime = 'image/png'
+  } else if (
+    bytes.length >= 12 &&
+    bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46 &&
+    bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50
+  ) {
+    mime = 'image/webp'
+  } else {
+    // Por defecto forzar JPEG para máxima compatibilidad con todos los navegadores
+    mime = 'image/jpeg'
+  }
+
+  // Conversión a Base64 por chunks seguros (evita stack overflow en archivos grandes)
+  let binary = ''
+  const len = bytes.byteLength
+  const chunkSize = 8192
+  for (let i = 0; i < len; i += chunkSize) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, Math.min(i + chunkSize, len)) as any)
+  }
+  const base64 = btoa(binary)
+  const dataUrl = `data:${mime};base64,${base64}`
+
+  return { dataUrl, mime, bytes }
 }
 
 export async function prepareReceiptPhoto(file: File): Promise<PreparedReceiptPhoto> {
@@ -25,111 +58,61 @@ export async function prepareReceiptPhoto(file: File): Promise<PreparedReceiptPh
     throw new Error('La foto es demasiado pesada (máx 25 MB).')
   }
 
-  // 1. Extraer inmediatamente los bytes del archivo a memoria como DataURL.
-  // Esto evita que en teléfonos Android Chrome/WebView se cierre el stream temporal de la cámara.
-  let rawDataUrl = ''
+  // 1. Extraer inmediatamente los bytes del archivo a memoria
+  const { dataUrl, mime, bytes } = await readFileAsNormalizedDataUrl(file)
+  const baseFileName = (file.name || `comprobante-${Date.now()}`).replace(/\.[^/.]+$/, '') + '.jpg'
+
+  // 2. Intentar redimensionar y optimizar con Canvas a max 1200px (muy ligero y rápido en celulares)
   try {
-    rawDataUrl = await readFileAsDataUrl(file)
-  } catch (readErr) {
-    console.warn('FileReader readAsDataURL failed, using objectUrl fallback:', readErr)
-  }
+    const memoryBlob = new Blob([bytes], { type: mime })
+    const objectUrl = URL.createObjectURL(memoryBlob)
+    const img = new Image()
+    img.crossOrigin = 'anonymous'
 
-  const baseFileName = file.name || `comprobante-${Date.now()}.jpg`
+    const loaded = await new Promise<boolean>((resolve) => {
+      img.onload = () => resolve(true)
+      img.onerror = () => resolve(false)
+      img.src = objectUrl
+    })
 
-  // 2. Intentar decodificar y optimizar la imagen con HTMLImageElement y Canvas
-  if (rawDataUrl) {
-    try {
-      const img = new Image()
-      const loaded = await new Promise<boolean>((resolve) => {
-        img.onload = () => resolve(true)
-        img.onerror = () => resolve(false)
-        img.src = rawDataUrl
-      })
+    if (loaded && img.naturalWidth > 0 && img.naturalHeight > 0) {
+      const maxDim = 1200
+      const scale = Math.min(1, maxDim / Math.max(img.naturalWidth, img.naturalHeight))
+      const canvas = document.createElement('canvas')
+      canvas.width = Math.max(1, Math.round(img.naturalWidth * scale))
+      canvas.height = Math.max(1, Math.round(img.naturalHeight * scale))
+      const ctx = canvas.getContext('2d')
+      if (ctx) {
+        ctx.fillStyle = '#ffffff'
+        ctx.fillRect(0, 0, canvas.width, canvas.height)
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
+        URL.revokeObjectURL(objectUrl)
 
-      if (loaded && img.naturalWidth > 0 && img.naturalHeight > 0) {
-        const maxDim = 1600
-        const scale = Math.min(1, maxDim / Math.max(img.naturalWidth, img.naturalHeight))
-        const canvas = document.createElement('canvas')
-        canvas.width = Math.max(1, Math.round(img.naturalWidth * scale))
-        canvas.height = Math.max(1, Math.round(img.naturalHeight * scale))
-        const ctx = canvas.getContext('2d')
-        if (ctx) {
-          ctx.fillStyle = '#ffffff'
-          ctx.fillRect(0, 0, canvas.width, canvas.height)
-          ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
+        const optimizedDataUrl = canvas.toDataURL('image/jpeg', 0.8)
+        const blob = await new Promise<Blob | null>((resolve) => {
+          canvas.toBlob(resolve, 'image/jpeg', 0.8)
+        })
 
-          const optimizedDataUrl = canvas.toDataURL('image/jpeg', 0.85)
-
-          const blob = await new Promise<Blob | null>((resolve) => {
-            canvas.toBlob(resolve, 'image/jpeg', 0.85)
-          })
-
-          if (blob && blob.size > 0) {
-            const optimizedFile = new File([blob], baseFileName.replace(/\.[^/.]+$/, '') + '.jpg', { type: 'image/jpeg' })
-            return {
-              file: optimizedFile,
-              previewUrl: optimizedDataUrl,
-              name: optimizedFile.name,
-            }
-          }
-        }
-      }
-    } catch (canvasErr) {
-      console.warn('Canvas optimization fallback:', canvasErr)
-    }
-  }
-
-  // 3. Fallback createImageBitmap si FileReader no obtuvo la imagen o falló el Image element
-  try {
-    if (typeof createImageBitmap === 'function') {
-      let bitmap: ImageBitmap | null = null
-      try {
-        bitmap = await createImageBitmap(file, { resizeWidth: 1600, resizeQuality: 'medium' })
-      } catch {
-        bitmap = await createImageBitmap(file)
-      }
-
-      if (bitmap && bitmap.width > 0 && bitmap.height > 0) {
-        const scale = Math.min(1, 1600 / Math.max(bitmap.width, bitmap.height))
-        const canvas = document.createElement('canvas')
-        canvas.width = Math.max(1, Math.round(bitmap.width * scale))
-        canvas.height = Math.max(1, Math.round(bitmap.height * scale))
-        const ctx = canvas.getContext('2d')
-        if (ctx) {
-          ctx.fillStyle = '#ffffff'
-          ctx.fillRect(0, 0, canvas.width, canvas.height)
-          ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height)
-          bitmap.close?.()
-
-          const optimizedDataUrl = canvas.toDataURL('image/jpeg', 0.85)
-          const blob = await new Promise<Blob | null>((resolve) => {
-            canvas.toBlob(resolve, 'image/jpeg', 0.85)
-          })
-
-          if (blob && blob.size > 0) {
-            const optimizedFile = new File([blob], baseFileName.replace(/\.[^/.]+$/, '') + '.jpg', { type: 'image/jpeg' })
-            return {
-              file: optimizedFile,
-              previewUrl: optimizedDataUrl,
-              name: optimizedFile.name,
-            }
+        if (blob && blob.size > 0) {
+          const optimizedFile = new File([blob], baseFileName, { type: 'image/jpeg' })
+          return {
+            file: optimizedFile,
+            previewUrl: optimizedDataUrl,
+            name: optimizedFile.name,
           }
         }
       }
     }
-  } catch (err) {
-    console.warn('createImageBitmap fallback:', err)
+    URL.revokeObjectURL(objectUrl)
+  } catch (canvasErr) {
+    console.warn('Canvas optimization fallback:', canvasErr)
   }
 
-  // 4. FALLBACK SUPREMO DE SEGURIDAD (Garantiza que la mesera nunca se quede bloqueada)
-  if (file.size <= 10 * 1024 * 1024) {
-    console.info('Usando archivo original con dataURL preview para compatibilidad total')
-    return {
-      file,
-      previewUrl: rawDataUrl || URL.createObjectURL(file),
-      name: file.name || 'comprobante.jpg',
-    }
+  // 3. Fallback de seguridad garantizado: usar los bytes normalizados en memoria
+  const fallbackFile = new File([bytes], baseFileName, { type: mime })
+  return {
+    file: fallbackFile,
+    previewUrl: dataUrl,
+    name: baseFileName,
   }
-
-  throw new Error('La foto tomada es demasiado pesada (más de 10 MB). Toma la foto un poco más cerca del comprobante.')
 }

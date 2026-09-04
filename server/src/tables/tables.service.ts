@@ -778,8 +778,40 @@ export class TablesService {
         }
       }
     }
-    if ((isTransfer || (isMixed && uniqueFiles.length > 0)) && validReceipts.length === 0 && uniqueFiles.length > 0) {
-      throw new BadRequestException('El comprobante debe ser una imagen válida (JPG, PNG o WEBP)');
+
+    // Fallback de ultra-seguridad: si la conexión celular no pasó los archivos multipart pero envió base64
+    if (!isCash && validReceipts.length === 0) {
+      const base64List: string[] = [];
+      if (typeof data.proofsBase64 === 'string') {
+        try {
+          const parsed = JSON.parse(data.proofsBase64);
+          if (Array.isArray(parsed)) base64List.push(...parsed);
+          else if (typeof parsed === 'string') base64List.push(parsed);
+        } catch {}
+      }
+      if (base64List.length === 0 && typeof data.proofBase64 === 'string') {
+        base64List.push(data.proofBase64);
+      }
+      for (const b64 of base64List) {
+        if (typeof b64 === 'string' && b64.startsWith('data:')) {
+          const parts = b64.split(',');
+          const mime = parts[0].split(';')[0].replace('data:', '') || 'image/jpeg';
+          const buffer = Buffer.from(parts[1], 'base64');
+          if (buffer.length > 0) {
+            try {
+              const receipt = validateReceipt({ buffer, mimetype: mime, originalname: 'comprobante.jpg' });
+              if (receipt) validReceipts.push({ receipt, file: { originalname: 'comprobante.jpg' } });
+            } catch (err) {}
+          }
+        }
+      }
+    }
+
+    if (isTransfer && validReceipts.length === 0) {
+      throw new BadRequestException('Para pagos por transferencia es obligatorio adjuntar la foto del comprobante.');
+    }
+    if (isMixed && validReceipts.length === 0) {
+      throw new BadRequestException('Para pagos mixtos es obligatorio adjuntar la foto del comprobante de transferencia.');
     }
 
     const amount = Number(data.amount);
