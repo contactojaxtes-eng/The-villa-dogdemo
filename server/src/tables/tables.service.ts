@@ -1215,11 +1215,55 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
     return result;
   }
 
-  async listPaymentValidation(status = 'PENDING_REVIEW', method = 'ALL') {
+  async listPaymentValidation(status = 'PENDING_REVIEW', method = 'ALL', allHistory = false) {
+    const activeClosing = await this.prisma.cashClosing.findFirst({
+      where: { isOpen: true },
+      orderBy: { shiftStart: 'desc' },
+    });
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const shiftStart = activeClosing?.shiftStart || today;
+
+    const methodFilter = method === 'CASH' ? { method: 'CASH' } : method === 'TRANSFER' ? { method: 'TRANSFER' } : method === 'MIXED' ? { method: 'MIXED' } : {};
+
+    const whereClause: any = {
+      order: { tableId: { not: null } },
+      ...methodFilter,
+    };
+
+    if (allHistory) {
+      if (status !== 'ALL') {
+        whereClause.status = status;
+      }
+    } else {
+      if (status === 'PENDING_REVIEW') {
+        whereClause.status = 'PENDING_REVIEW';
+      } else if (status === 'CONFIRMED' || status === 'REJECTED') {
+        whereClause.status = status;
+        whereClause.OR = [
+          { confirmedAt: { gte: shiftStart } },
+          { createdAt: { gte: shiftStart } },
+        ];
+      } else {
+        // status === 'ALL':
+        // Todos los pendientes por revisar (sin importar fecha) + los validados/rechazados del turno/día actual
+        whereClause.OR = [
+          { status: 'PENDING_REVIEW' },
+          {
+            status: { in: ['CONFIRMED', 'REJECTED'] },
+            OR: [
+              { confirmedAt: { gte: shiftStart } },
+              { createdAt: { gte: shiftStart } },
+            ],
+          },
+        ];
+      }
+    }
+
     const payments = await this.prisma.payment.findMany({
-      where: { status: status === 'ALL' ? undefined : status, order: { tableId: { not: null } },
-        ...(method === 'CASH' ? { method: 'CASH' } : method === 'TRANSFER' ? { method: 'TRANSFER' } : method === 'MIXED' ? { method: 'MIXED' } : {}),
-      },
+      where: whereClause,
       include: {
         order: {
           include: {
@@ -1236,7 +1280,8 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
           orderBy: { createdAt: 'desc' },
         },
       },
-      orderBy: { createdAt: 'desc' }, take: 250,
+      orderBy: { createdAt: 'desc' },
+      take: 250,
     });
     const grouped = new Map<string, any>();
     for (const payment of payments) {

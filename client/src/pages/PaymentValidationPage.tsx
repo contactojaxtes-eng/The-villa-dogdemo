@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { io } from '@/lib/socket'
-import { Banknote, Bell, BellOff, CheckCircle2, Eye, Image, RefreshCw, Search, Smartphone, Wallet, XCircle } from 'lucide-react'
+import { Banknote, Bell, BellOff, CheckCircle2, Eye, History, Image, RefreshCw, Search, Smartphone, Wallet, XCircle } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Dialog, DialogContent } from '@/components/ui/dialog'
@@ -293,10 +294,15 @@ export default function PaymentValidationPage() {
             <Wallet className="h-7 w-7 text-[var(--accent)]" /> Validación de Pagos y Cancelaciones
           </h1>
           <p className="text-sm text-[var(--text-secondary)]">
-            Comprobantes de mesas, historial por método y autorización de cancelaciones de meseras.
+            Validación operativa del turno actual. Los pedidos de turnos anteriores se archivan en el Historial de Ventas.
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
+          <Link to="/tables/history">
+            <Button variant="outline" className="gap-2 font-bold h-9 rounded-xl text-xs cursor-pointer text-[var(--text-secondary)] hover:text-[var(--text-primary)]">
+              <History className="h-4 w-4 text-[var(--accent)]" /> Historial Pedidos Mesa
+            </Button>
+          </Link>
           <button
             type="button"
             onClick={handleToggleMute}

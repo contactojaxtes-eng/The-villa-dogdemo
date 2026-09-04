@@ -16,8 +16,8 @@ export class PaymentValidationController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('ADMIN', 'SUPERADMIN', 'CASHIER')
   @ApiOperation({ summary: 'Cola de pagos de mesas por validar' })
-  list(@Query('status') status?: string, @Query('method') method?: string) {
-    return this.tablesService.listPaymentValidation(status || 'PENDING_REVIEW', method || 'ALL');
+  list(@Query('status') status?: string, @Query('method') method?: string, @Query('allHistory') allHistory?: string) {
+    return this.tablesService.listPaymentValidation(status || 'PENDING_REVIEW', method || 'ALL', allHistory === 'true');
   }
 
   @Get('proofs/:id/image')
