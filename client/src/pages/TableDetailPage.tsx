@@ -1,6 +1,6 @@
 import { ProtectedImage } from '@/components/ProtectedImage'
 import { useEffect, useRef, useState } from 'react'
-import { prepareReceiptPhoto, generateUUID, createSafeFile, readBlobAsDataUrl } from '@/lib/receiptPhoto'
+import { prepareReceiptPhoto, generateUUID, createSafeFile, readBlobAsDataUrl, createDirectFallback } from '@/lib/receiptPhoto'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { io } from '@/lib/socket'
 import { ArrowLeft, Camera, CheckCircle2, ChefHat, Clock, Eye, Image as ImageIcon, Pencil, PlusCircle, Receipt, Trash2, Upload, User, Wallet, X, XCircle } from 'lucide-react'
@@ -133,11 +133,35 @@ export default function TableDetailPage() {
     proofs.forEach(p => { if (p.previewUrl.startsWith('blob:')) URL.revokeObjectURL(p.previewUrl) })
   }, [])
 
+  const handleCameraClick = () => {
+    if (cameraInputRef.current) {
+      try { cameraInputRef.current.value = '' } catch {}
+    }
+    cameraInputRef.current?.click()
+  }
+
+  const handleGalleryClick = () => {
+    if (galleryInputRef.current) {
+      try { galleryInputRef.current.value = '' } catch {}
+    }
+    galleryInputRef.current?.click()
+  }
+
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const rawFiles = Array.from(e.target.files || [])
+    const input = e.target
+    const rawFiles = input.files ? Array.from(input.files) : []
+    // Resetear valor inmediatamente para permitir tomar fotos repetidas o elegir el mismo archivo
+    try { input.value = '' } catch {}
+    if (cameraInputRef.current) { try { cameraInputRef.current.value = '' } catch {} }
+    if (galleryInputRef.current) { try { galleryInputRef.current.value = '' } catch {} }
+
     if (rawFiles.length === 0) return
 
     setPreparingPhoto(true)
+    const safetyTimer = setTimeout(() => {
+      setPreparingPhoto(false)
+    }, 6000)
+
     try {
       const newItems: ProofPhoto[] = []
       for (const f of rawFiles) {
@@ -151,17 +175,13 @@ export default function TableDetailPage() {
           })
         } catch (itemErr: any) {
           console.warn('[handleFileChange] Error optimizando foto, aplicando lectura directa:', itemErr)
-          try {
-            const rawDataUrl = await readBlobAsDataUrl(f)
-            const safeName = (f.name || `comprobante-${Date.now()}`).replace(/[^a-zA-Z0-9_.-]/g, '_')
-            const mime = f.type || (rawDataUrl.startsWith('data:image/png') ? 'image/png' : 'image/jpeg')
-            newItems.push({
-              id: generateUUID(),
-              file: createSafeFile(f, safeName, mime),
-              previewUrl: rawDataUrl,
-              name: safeName,
-            })
-          } catch {}
+          const fallback = createDirectFallback(f)
+          newItems.push({
+            id: generateUUID(),
+            file: fallback.file,
+            previewUrl: fallback.previewUrl,
+            name: fallback.name,
+          })
         }
       }
       if (newItems.length > 0) {
@@ -170,7 +190,7 @@ export default function TableDetailPage() {
     } catch (error: any) {
       alerts.error('No se pudo procesar la foto', error?.message || 'Error al leer el archivo.')
     } finally {
-      e.target.value = ''
+      clearTimeout(safetyTimer)
       setPreparingPhoto(false)
     }
   }
@@ -649,7 +669,7 @@ export default function TableDetailPage() {
                   <div className="grid grid-cols-2 gap-2">
                     <button
                       type="button"
-                      onClick={() => cameraInputRef.current?.click()}
+                      onClick={handleCameraClick}
                       className="flex cursor-pointer flex-col items-center justify-center gap-1.5 rounded-xl border-2 border-dashed border-[var(--accent)] bg-[var(--accent)]/10 p-3 text-center transition hover:bg-[var(--accent)]/20 active:scale-95 shadow-sm"
                     >
                       <Camera className="h-5 w-5 text-[var(--accent)]" />
@@ -668,7 +688,7 @@ export default function TableDetailPage() {
 
                     <button
                       type="button"
-                      onClick={() => galleryInputRef.current?.click()}
+                      onClick={handleGalleryClick}
                       className="flex cursor-pointer flex-col items-center justify-center gap-1.5 rounded-xl border-2 border-dashed border-[var(--border-default)] bg-[var(--bg-elevated)] p-3 text-center transition hover:bg-[var(--bg-hover)] active:scale-95 shadow-sm"
                     >
                       <Upload className="h-5 w-5 text-[var(--text-secondary)]" />
