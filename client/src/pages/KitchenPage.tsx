@@ -13,6 +13,8 @@ import {
   Undo2,
   UtensilsCrossed,
   XCircle,
+  Coffee,
+  PauseCircle,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { api } from '@/lib/api'
@@ -33,6 +35,38 @@ export default function KitchenPage() {
   const [cookFilter, setCookFilter] = useState<string>(() => searchParams.get('cook') || 'ALL')
   const [showPrevious, setShowPrevious] = useState<Record<string, boolean>>({})
   const toggleShowPrevious = (ticketId: string) => setShowPrevious(p => ({ ...p, [ticketId]: !p[ticketId] }))
+
+  // Estado de cena / pausa para cocineros en su tablet
+  const [cookStatus, setCookStatus] = useState<{ active?: boolean; onBreak?: boolean; breakUntil?: number | null; breakReason?: string; breakMinutes?: number } | null>(null)
+  const [breakRemaining, setBreakRemaining] = useState<string>('')
+
+  // Cargar estado inicial de cena/pausa del cocinero
+  useEffect(() => {
+    if (user?.role !== 'KITCHEN' || !user?.id) return
+    api.get<Record<string, any>>('/kitchen/cooks/status').then(res => {
+      const statuses = res.data || res
+      if (statuses && statuses[user.id]) {
+        setCookStatus(statuses[user.id])
+      }
+    }).catch(() => {})
+  }, [user?.id, user?.role])
+
+  // Temporizador en vivo para la tablet del cocinero
+  useEffect(() => {
+    if (!cookStatus?.onBreak || !cookStatus?.breakUntil) {
+      setBreakRemaining('')
+      return
+    }
+    const update = () => {
+      const diff = Math.max(0, Math.floor((cookStatus.breakUntil! - Date.now()) / 1000))
+      const m = Math.floor(diff / 60)
+      const s = diff % 60
+      setBreakRemaining(`${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`)
+    }
+    update()
+    const timer = setInterval(update, 1000)
+    return () => clearInterval(timer)
+  }, [cookStatus?.onBreak, cookStatus?.breakUntil])
 
   // Sincronizar filtros si cambia la URL
   useEffect(() => {
@@ -147,6 +181,37 @@ export default function KitchenPage() {
         if (!exists) return [ticket, ...prev]
         return prev.map(t => t.id === ticket.id ? ticket : t)
       })
+    })
+
+    // CAMBIO DE ESTADO DE COCINEROS (activo/inactivo/cena)
+    socket.on('kitchenCookStatusChanged', (statuses: Record<string, any>) => {
+      if (user?.id && statuses && statuses[user.id]) {
+        setCookStatus(statuses[user.id])
+      }
+    })
+
+    socket.on('cookBreakStarted', (payload: any) => {
+      if (payload?.userId === user?.id) {
+        setCookStatus(prev => ({
+          ...(prev || {}),
+          onBreak: true,
+          breakUntil: payload.breakUntil,
+          breakReason: payload.breakReason,
+          breakMinutes: payload.breakMinutes,
+        }))
+      }
+    })
+
+    socket.on('cookBreakFinished', (payload: any) => {
+      if (payload?.userId === user?.id) {
+        setCookStatus(prev => ({ ...(prev || {}), onBreak: false, breakUntil: null }))
+      }
+    })
+
+    socket.on('cookBreakReincorporated', (payload: any) => {
+      if (payload?.userId === user?.id) {
+        setCookStatus(prev => ({ ...(prev || {}), onBreak: false, breakUntil: null }))
+      }
     })
 
     return () => { socket.disconnect() }
@@ -273,13 +338,55 @@ export default function KitchenPage() {
     <div className="space-y-3">
       {/* Banner de Cocinero Individual */}
       {user?.role === 'KITCHEN' && (
-        <div className="flex flex-wrap items-center justify-between gap-2 px-3.5 py-2 rounded-2xl bg-blue-500/10 border border-blue-500/25 text-xs text-blue-700 dark:text-blue-300 shadow-xs">
-          <span className="font-bold flex items-center gap-1.5">
-            👨‍🍳 Pantalla personal de cocinero: <strong className="font-black text-sm">{user.name}</strong>
-          </span>
-          <span className="text-[11px] opacity-80">
-            Mostrando únicamente tus comandas asignadas (división equitativa 50/50)
-          </span>
+        <div className="space-y-2">
+          {cookStatus?.onBreak && breakRemaining ? (
+            <div className="flex flex-wrap items-center justify-between gap-3 p-3.5 rounded-2xl bg-gradient-to-r from-amber-500/20 via-orange-500/15 to-amber-500/20 border-2 border-amber-500/50 text-amber-900 dark:text-amber-200 shadow-sm animate-pulse">
+              <div className="flex items-center gap-2.5">
+                <Coffee className="h-6 w-6 text-amber-600 dark:text-amber-400 shrink-0" />
+                <div>
+                  <p className="text-sm font-black uppercase tracking-wider text-amber-800 dark:text-amber-300">
+                    🍽️ En tiempo de {cookStatus.breakReason || 'cena'} — Estación en Pausa
+                  </p>
+                  <p className="text-xs text-amber-900/90 dark:text-amber-200/90 font-medium">
+                    Tu estación está en pausa. Mientras cenas no te entrarán nuevos pedidos (se reparten entre tus compañeros).
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-1.5 bg-amber-500 text-slate-950 px-3.5 py-1.5 rounded-xl font-black text-sm tracking-wider shadow-xs">
+                <Clock className="h-4 w-4" />
+                <span>Restan: {breakRemaining}</span>
+              </div>
+            </div>
+          ) : cookStatus?.active === false ? (
+            <div className="flex flex-wrap items-center justify-between gap-3 p-3.5 rounded-2xl bg-rose-500/15 border-2 border-rose-500/40 text-rose-900 dark:text-rose-200 shadow-sm">
+              <div className="flex items-center gap-2.5">
+                <PauseCircle className="h-6 w-6 text-rose-600 dark:text-rose-400 shrink-0" />
+                <div>
+                  <p className="text-sm font-black uppercase tracking-wider text-rose-700 dark:text-rose-300">
+                    ⏸️ Estación Pausada / Inactiva
+                  </p>
+                  <p className="text-xs text-rose-900/90 dark:text-rose-200/90 font-medium">
+                    El administrador te marcó como inactivo. No recibirás nuevos pedidos en esta tablet hasta que seas reactivado.
+                  </p>
+                </div>
+              </div>
+              <span className="text-xs font-black uppercase px-2.5 py-1 rounded-lg bg-rose-500 text-white shadow-xs">
+                Pausado
+              </span>
+            </div>
+          ) : (
+            <div className="flex flex-wrap items-center justify-between gap-2 px-3.5 py-2 rounded-2xl bg-blue-500/10 border border-blue-500/25 text-xs text-blue-700 dark:text-blue-300 shadow-xs">
+              <span className="font-bold flex items-center gap-1.5">
+                👨‍🍳 Pantalla personal de cocinero: <strong className="font-black text-sm">{user.name}</strong>
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 font-black text-[10px]">
+                  ● En servicio activo
+                </span>
+              </span>
+              <span className="text-[11px] opacity-80">
+                Mostrando únicamente tus comandas asignadas (división equitativa 50/50)
+              </span>
+            </div>
+          )}
         </div>
       )}
 
