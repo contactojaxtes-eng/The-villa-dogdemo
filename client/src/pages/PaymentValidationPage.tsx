@@ -185,8 +185,18 @@ export default function PaymentValidationPage() {
     }
   }, [safePayments, cancellations])
 
+  const isRealImageProof = (p: any) => {
+    if (!p) return false
+    if (p.fileBase64 || p.filePath) return true
+    if (!p.id || p.purgedAt) return false
+    if (p.originalName?.includes('Cobro en Efectivo') || p.originalName?.includes('Cobro Mixto')) {
+      return Boolean(p.fileSize && p.fileSize > 0)
+    }
+    return true
+  }
+
   const openProofViewer = (proofs: any[], initialIndex = 0, payment?: any) => {
-    const valid = (proofs || []).filter((p: any) => p && (p.fileBase64 || p.filePath))
+    const valid = (proofs || []).filter(isRealImageProof)
     if (!valid.length) {
       alerts.warning('Comprobante', 'No hay imágenes disponibles para este cobro.')
       return
@@ -460,7 +470,7 @@ export default function PaymentValidationPage() {
             const proof = payment.transferProofs?.[0]
             const isCash = payment.method === 'CASH'
             const label = payment.order?.diningTable?.label || payment.order?.customerName || 'Mesa'
-            const imageProofs = !isCash ? (payment.transferProofs || []).filter((p: any) => Boolean(p.fileBase64 || p.filePath)) : []
+            const imageProofs = !isCash ? (payment.transferProofs || []).filter(isRealImageProof) : []
             const hasImageProofs = imageProofs.length > 0
 
             return (
@@ -476,7 +486,7 @@ export default function PaymentValidationPage() {
                       {imageProofs.map((p: any, idx: number) => (
                         <div
                           key={p.id || idx}
-                          className="group relative w-11 h-13 shrink-0 cursor-pointer overflow-hidden rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-elevated)] flex items-center justify-center hover:border-[var(--accent)] shadow-xs transition"
+                          className="group relative w-12 h-14 shrink-0 cursor-pointer overflow-hidden rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] flex items-center justify-center hover:border-[var(--accent)] shadow-xs transition"
                           onClick={(e) => {
                             e.preventDefault()
                             e.stopPropagation()
