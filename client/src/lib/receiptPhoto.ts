@@ -62,33 +62,73 @@ async function isHeicFile(file: File): Promise<boolean> {
 
 let heicScriptLoadingPromise: Promise<boolean> | null = null
 
-function loadHeic2AnyScript(): Promise<boolean> {
+function loadLocalScript(src: string, checkFn: () => boolean): Promise<boolean> {
   if (typeof window === 'undefined') return Promise.resolve(false)
-  if ((window as any).heic2any) return Promise.resolve(true)
-  if (heicScriptLoadingPromise) return heicScriptLoadingPromise
+  if (checkFn()) return Promise.resolve(true)
 
-  heicScriptLoadingPromise = new Promise((resolve) => {
-    const existing = document.querySelector<HTMLScriptElement>('script[src*="heic2any"]')
+  return new Promise((resolve) => {
+    const existing = document.querySelector<HTMLScriptElement>(`script[src="${src}"]`)
     if (existing) {
-      if ((window as any).heic2any) return resolve(true)
-      existing.addEventListener('load', () => resolve(true), { once: true })
+      if (checkFn()) return resolve(true)
+      existing.addEventListener('load', () => resolve(checkFn()), { once: true })
       existing.addEventListener('error', () => resolve(false), { once: true })
-      setTimeout(() => resolve(Boolean((window as any).heic2any)), 5000)
+      setTimeout(() => resolve(checkFn()), 3000)
       return
     }
     const script = document.createElement('script')
-    script.src = 'https://cdn.jsdelivr.net/npm/heic2any@0.0.4/dist/heic2any.min.js'
+    script.src = src
     script.async = true
-    script.onload = () => resolve(true)
-    script.onerror = () => {
-      console.warn('[receiptPhoto] No se pudo cargar heic2any desde CDN')
-      resolve(false)
-    }
+    script.onload = () => resolve(checkFn())
+    script.onerror = () => resolve(false)
     document.head.appendChild(script)
-    setTimeout(() => resolve(Boolean((window as any).heic2any)), 6000)
+    setTimeout(() => resolve(checkFn()), 4000)
   })
+}
+
+async function loadHeic2AnyScript(): Promise<boolean> {
+  if (typeof window === 'undefined') return false
+  if (typeof (window as any).heic2any === 'function' || typeof (window as any).HeicTo === 'function') return true
+  if (heicScriptLoadingPromise) return heicScriptLoadingPromise
+
+  heicScriptLoadingPromise = (async () => {
+    // 1. Intentar primero heic2any local
+    let ok = await loadLocalScript('/js/heic2any.min.js', () => typeof (window as any).heic2any === 'function')
+    if (ok) return true
+
+    // 2. Intentar heic-to local (WASM libde265 autónomo de alta velocidad)
+    ok = await loadLocalScript('/js/heic-to.js', () => typeof (window as any).HeicTo === 'function' || typeof (window as any).heicTo === 'function')
+    if (ok) return true
+
+    // 3. Fallback a CDN por si acaso
+    ok = await loadLocalScript('https://cdn.jsdelivr.net/npm/heic2any@0.0.4/dist/heic2any.min.js', () => typeof (window as any).heic2any === 'function')
+    return ok
+  })()
 
   return heicScriptLoadingPromise
+}
+
+async function decodeHeicNative(file: Blob | File): Promise<Blob | null> {
+  if (typeof createImageBitmap !== 'function') return null
+  try {
+    const bmp = await createImageBitmap(file)
+    if (bmp && bmp.width > 0 && bmp.height > 0) {
+      const maxDim = 1280
+      const scale = Math.min(1, maxDim / Math.max(bmp.width, bmp.height))
+      const canvas = document.createElement('canvas')
+      canvas.width = Math.max(1, Math.round(bmp.width * scale))
+      canvas.height = Math.max(1, Math.round(bmp.height * scale))
+      const ctx = canvas.getContext('2d')
+      if (ctx) {
+        ctx.fillStyle = '#ffffff'
+        ctx.fillRect(0, 0, canvas.width, canvas.height)
+        ctx.drawImage(bmp, 0, 0, canvas.width, canvas.height)
+        bmp.close()
+        return new Promise<Blob | null>((res) => canvas.toBlob(res, 'image/jpeg', 0.82))
+      }
+      bmp.close()
+    }
+  } catch {}
+  return null
 }
 
 /**
@@ -185,28 +225,55 @@ export async function prepareReceiptPhoto(file: File): Promise<PreparedReceiptPh
   const isHeic = await isHeicFile(file)
   if (isHeic) {
     try {
-      const ready = await loadHeic2AnyScript()
-      const heic2anyFn = (window as any)?.heic2any
-      if (ready && typeof heic2anyFn === 'function') {
-        let converted: any = null
-        try {
-          // Intentar primero con multiple: false para fotos normales o de ráfaga
-          converted = await heic2anyFn({
-            blob: file,
-            toType: 'image/jpeg',
-            quality: 0.82,
-            multiple: false,
-          })
-        } catch {
-          // Si falla con multiple: false (por ej. fotos en movimiento de Samsung / Apple), extraer con multiple: true
-          converted = await heic2anyFn({
-            blob: file,
-            toType: 'image/jpeg',
-            quality: 0.82,
-            multiple: true,
-          })
+      // Paso 1: Decodificación nativa súper rápida si el navegador la soporta
+      const nativeBlob = await decodeHeicNative(file)
+      if (nativeBlob && nativeBlob.size > 0) {
+        baseFileName = baseFileName.replace(/\.(heic|heif)$/i, '')
+        workingFile = new File([nativeBlob], `${baseFileName}.jpg`, { type: 'image/jpeg' })
+      } else {
+        // Paso 2: Usar convertidores locales de la propia app (heic2any y heic-to)
+        await loadHeic2AnyScript()
+        const heic2anyFn = (window as any)?.heic2any
+        const heicToObj = (window as any)?.heicTo
+        let jpegBlob: Blob | null = null
+
+        if (typeof heic2anyFn === 'function') {
+          try {
+            const converted = await heic2anyFn({
+              blob: file,
+              toType: 'image/jpeg',
+              quality: 0.82,
+              multiple: false,
+            })
+            jpegBlob = Array.isArray(converted) ? converted[0] : converted
+          } catch {
+            try {
+              const converted = await heic2anyFn({
+                blob: file,
+                toType: 'image/jpeg',
+                quality: 0.82,
+                multiple: true,
+              })
+              jpegBlob = Array.isArray(converted) ? converted[0] : converted
+            } catch {}
+          }
         }
-        const jpegBlob = Array.isArray(converted) ? converted[0] : converted
+
+        // Paso 3: Respaldo con HeicTo si heic2any no produjo blob
+        const heicToFn = (window as any)?.HeicTo || (window as any)?.heicTo
+        if ((!jpegBlob || jpegBlob.size === 0) && typeof heicToFn === 'function') {
+          try {
+            const res = await heicToFn({
+              blob: file,
+              type: 'image/jpeg',
+              quality: 0.82,
+            })
+            jpegBlob = Array.isArray(res) ? res[0] : res
+          } catch (heicToErr) {
+            console.warn('[prepareReceiptPhoto] HeicTo error:', heicToErr)
+          }
+        }
+
         if (jpegBlob && jpegBlob.size > 0) {
           baseFileName = baseFileName.replace(/\.(heic|heif)$/i, '')
           workingFile = new File([jpegBlob], `${baseFileName}.jpg`, { type: 'image/jpeg' })

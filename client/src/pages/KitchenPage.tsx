@@ -109,40 +109,33 @@ export default function KitchenPage() {
       if (!isTicketForThisCook(ticket)) return
       playUrgentBell()
 
-      const ticketKey = (t: any) => `${t.orderId || t.order?.id}_${t.stationId || t.station?.id}`
-      const incomingKey = ticketKey(ticket)
       setTickets(prev => {
-        const without = prev.filter(t => t.id !== ticket.id && ticketKey(t) !== incomingKey)
+        const without = prev.filter(t => t.id !== ticket.id)
         return [ticket, ...without]
       })
     })
 
     // TICKET ACTUALIZADO
     socket.on('kitchenTicketUpdated', (ticket: KitchenTicketSummary) => {
-      const ticketKey = (t: any) => `${t.orderId || t.order?.id}_${t.stationId || t.station?.id}`
-      const incomingKey = ticketKey(ticket)
       setTickets(prev => {
         const belongsToMe = isTicketForThisCook(ticket)
-        const exists = prev.some(t => t.id === ticket.id || ticketKey(t) === incomingKey)
+        const exists = prev.some(t => t.id === ticket.id)
         if (!exists) {
           return belongsToMe ? [ticket, ...prev] : prev
         }
         // Si ya no me pertenece (ej: reasignado a otro cocinero), retirarlo de mi pantalla
         if (!belongsToMe) {
-          return prev.filter(t => t.id !== ticket.id && ticketKey(t) !== incomingKey)
+          return prev.filter(t => t.id !== ticket.id)
         }
-        return prev.map(t => (t.id === ticket.id || ticketKey(t) === incomingKey) ? ticket : t)
+        return prev.map(t => t.id === ticket.id ? ticket : t)
       })
     })
 
     // TICKET EDITADO (modificaciones de mesera)
     socket.on('kitchenTicketEdited', (ticket: KitchenTicketSummary) => {
-      const ticketKey = (t: any) => `${t.orderId || t.order?.id}_${t.stationId || t.station?.id}`
-      const incomingKey = ticketKey(ticket)
-
       if (!isTicketForThisCook(ticket)) {
         // Asegurar que si este cocinero tenía este ticket por error en memoria, lo retire
-        setTickets(prev => prev.filter(t => t.id !== ticket.id && ticketKey(t) !== incomingKey))
+        setTickets(prev => prev.filter(t => t.id !== ticket.id))
         return
       }
 
@@ -150,9 +143,9 @@ export default function KitchenPage() {
       playUrgentBell()
 
       setTickets(prev => {
-        const exists = prev.some(t => t.id === ticket.id || ticketKey(t) === incomingKey)
+        const exists = prev.some(t => t.id === ticket.id)
         if (!exists) return [ticket, ...prev]
-        return prev.map(t => (t.id === ticket.id || ticketKey(t) === incomingKey) ? ticket : t)
+        return prev.map(t => t.id === ticket.id ? ticket : t)
       })
     })
 
@@ -160,13 +153,12 @@ export default function KitchenPage() {
   }, [isTicketForThisCook, user?.id, user?.name, user?.role])
 
   const consolidatedTickets = useMemo(() => {
-    // Garantizar UNA SOLA TARJETA por pedido y estación con los datos más recientes
+    // Mantener cada ticket por su ID único para nunca borrar tickets previos del historial
     const map = new Map<string, KitchenTicketSummary>()
     const sorted = [...tickets].sort((a, b) => new Date(b.updatedAt || 0).getTime() - new Date(a.updatedAt || 0).getTime())
     for (const t of sorted) {
-      const key = `${t.orderId || t.order?.id}_${t.stationId || t.station?.id}`
-      if (!map.has(key)) {
-        map.set(key, t)
+      if (t?.id && !map.has(t.id)) {
+        map.set(t.id, t)
       }
     }
     return Array.from(map.values())
@@ -690,42 +682,29 @@ export default function KitchenPage() {
                             })}
                           </div>
 
-                          {/* Recordatorio y desplegable interactivo para consultar los productos que ya fueron preparados */}
+                          {/* Productos de la orden previa / ya preparados siempre visibles para tranquilidad de cocina */}
                           {unchangedItems.length > 0 && (
-                            <div className="pt-2 border-t border-[var(--border-subtle)]/60 space-y-2">
-                              <button
-                                type="button"
-                                onClick={() => toggleShowPrevious(ticket.id)}
-                                className="w-full py-1.5 px-3 rounded-xl bg-[var(--bg-elevated)] hover:bg-[var(--bg-hover)] text-xs font-bold text-[var(--text-secondary)] hover:text-[var(--text-primary)] flex items-center justify-between transition cursor-pointer border border-[var(--border-subtle)]"
-                              >
-                                <span className="flex items-center gap-1.5">
-                                  <Eye className="h-3.5 w-3.5 text-[var(--accent)]" />
-                                  {showPrevious[ticket.id]
-                                    ? 'Ocultar productos ya preparados'
-                                    : `Ver ${unchangedItems.length} producto(s) anteriores ya preparados`}
+                            <div className="pt-2 border-t border-[var(--border-subtle)] space-y-1.5">
+                              <div className="flex items-center justify-between text-[11px] font-bold text-[var(--text-secondary)]">
+                                <span className="flex items-center gap-1 font-black text-[11px] text-[var(--text-muted)]">
+                                  ✅ Ya despachados / preparados de esta mesa:
                                 </span>
-                                <span className="text-[10px] bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 px-1.5 py-0.5 rounded font-black">
-                                  {showPrevious[ticket.id] ? '▲ Ocultar' : '▼ Ver listos'}
+                                <span className="text-[10px] bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 px-1.5 py-0.2 rounded font-black">
+                                  {unchangedItems.reduce((sum: number, i: any) => sum + (i.quantity || 0), 0)} un.
                                 </span>
-                              </button>
-
-                              {showPrevious[ticket.id] && (
-                                <div className="space-y-1.5 p-2.5 rounded-xl bg-[var(--bg-elevated)] border border-[var(--border-subtle)]">
-                                  <p className="text-[10px] font-black uppercase tracking-wider text-[var(--text-muted)] mb-1">
-                                    ✅ Preparados anteriormente (siguen activos en la mesa):
-                                  </p>
-                                  {unchangedItems.map((item: any) => (
-                                    <div key={item.id} className="flex items-center justify-between text-xs py-1 px-2 rounded-lg bg-[var(--bg-panel)] border border-[var(--border-subtle)]/40">
-                                      <span className="font-extrabold text-[var(--text-primary)]">
-                                        {item.quantity}x {item.nameSnapshot}
-                                      </span>
-                                      <span className="text-[10px] font-extrabold text-emerald-700 dark:text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full">
-                                        ✓ Ya preparado
-                                      </span>
-                                    </div>
-                                  ))}
-                                </div>
-                              )}
+                              </div>
+                              <div className="space-y-1">
+                                {unchangedItems.map((item: any) => (
+                                  <div key={item.id} className="flex items-center justify-between text-xs py-1 px-2.5 rounded-xl bg-[var(--bg-elevated)] border border-[var(--border-subtle)]">
+                                    <span className="font-extrabold text-[var(--text-primary)]">
+                                      {item.quantity}x {item.nameSnapshot}
+                                    </span>
+                                    <span className="text-[10px] font-bold text-emerald-700 dark:text-emerald-400">
+                                      {item.notes ? `(${item.notes})` : '✓ Listo'}
+                                    </span>
+                                  </div>
+                                ))}
+                              </div>
                             </div>
                           )}
                         </div>

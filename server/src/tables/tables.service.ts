@@ -497,63 +497,110 @@ export class TablesService {
 
     const tickets: any[] = [];
     for (const [stationId, items] of stationGroups.entries()) {
-      // Buscar si YA EXISTE un ticket para este pedido y estación (UNA SOLA TARJETA SIEMPRE)
+      // Buscar si YA EXISTE un ticket ACTIVO en preparación para este pedido y estación.
+      // REGLA CRÍTICA: NUNCA tocar ni sobreescribir tickets completados (READY o SERVED),
+      // esos pertenecen al HISTORIAL del cocinero y deben permanecer intactos.
       let existingTicket: any = null;
       if (isEdited) {
         existingTicket = await db.kitchenTicket.findFirst({
           where: {
             orderId,
             stationId,
-            status: { not: 'CANCELLED' },
+            status: { in: ['NEW', 'PREPARING'] },
           },
           orderBy: { createdAt: 'desc' },
           include: { items: true },
         });
       }
 
-      // Preparar los items actuales con su tipo de cambio exacto
-      const ticketItemsData = items.map(item => {
-        const itemK = `${item.menuItemId}_${(item.notes || '').trim().toLowerCase()}`;
-        const itemKRaw = `${item.menuItemId}_${(item.notes || '').trim()}`;
-        const changeInfo = changeMap?.get(itemK) || changeMap?.get(itemKRaw) || changeMap?.get(item.menuItemId);
-        let changeType = 'UNCHANGED';
-        if (item.isRemovedItem || changeInfo?.changeType === 'REMOVED') {
-          changeType = 'REMOVED';
-        } else if (changeInfo?.changeType === 'ADDED') {
-          changeType = 'ADDED';
-        } else if (changeInfo?.changeType === 'MODIFIED') {
-          changeType = 'MODIFIED';
-        } else if (isEdited) {
-          // Si el pedido es editado pero este producto no cambió, se conserva UNCHANGED
-          changeType = 'UNCHANGED';
+      // Si el pedido fue editado y no hay ticket abierto (porque el anterior ya fue despachado/listo):
+      // Creamos un ticket de ADICIÓN exclusivamente con los productos nuevos o incrementos.
+      let ticketItemsData: any[] = [];
+      let isAdditionTicket = false;
+
+      if (isEdited && !existingTicket) {
+        isAdditionTicket = true;
+        // Filtrar exclusivamente los productos agregados nuevos o con incremento de cantidad (adición)
+        const additionCandidates = items.filter(item => {
+          const itemK = `${item.menuItemId}_${(item.notes || '').trim().toLowerCase()}`;
+          const itemKRaw = `${item.menuItemId}_${(item.notes || '').trim()}`;
+          const changeInfo = changeMap?.get(itemK) || changeMap?.get(itemKRaw) || changeMap?.get(item.menuItemId);
+          if (!changeInfo) return false;
+          if (changeInfo.changeType === 'ADDED') return true;
+          if (changeInfo.changeType === 'MODIFIED') {
+            const diff = Number(item.quantity) - Number(changeInfo.previousQty ?? 0);
+            return diff > 0 || (item.notes && item.notes !== changeInfo.previousNotes);
+          }
+          return false;
+        });
+
+        if (additionCandidates.length === 0) {
+          // No hubo adiciones a preparar para esta estación; el ticket completado previo queda intacto.
+          continue;
         }
 
-        return {
-          orderItemId: item.isRemovedItem ? null : (item.id || null),
-          menuItemId: item.menuItemId,
-          quantity: item.quantity,
-          nameSnapshot: item.menuItem?.name || item.nameSnapshot || 'Producto',
-          notes: item.notes || null,
-          changeType,
-          previousQty: changeInfo?.previousQty ?? null,
-          previousNotes: changeInfo?.previousNotes ?? null,
-        };
-      });
+        ticketItemsData = additionCandidates.map(item => {
+          const itemK = `${item.menuItemId}_${(item.notes || '').trim().toLowerCase()}`;
+          const itemKRaw = `${item.menuItemId}_${(item.notes || '').trim()}`;
+          const changeInfo = changeMap?.get(itemK) || changeMap?.get(itemKRaw) || changeMap?.get(item.menuItemId);
+          const prevQty = Number(changeInfo?.previousQty ?? 0);
+          const addQty = changeInfo?.changeType === 'ADDED' ? item.quantity : Math.max(1, item.quantity - prevQty);
+
+          const totalNote = prevQty > 0 ? `[Adición +${addQty} un. · Total mesa: ${item.quantity}]` : '';
+          const finalNote = [item.notes || '', totalNote].filter(Boolean).join(' ').trim() || null;
+
+          return {
+            orderItemId: item.id || null,
+            menuItemId: item.menuItemId,
+            quantity: addQty,
+            nameSnapshot: item.menuItem?.name || item.nameSnapshot || 'Producto',
+            notes: finalNote,
+            changeType: 'ADDED',
+            previousQty: prevQty > 0 ? prevQty : null,
+            previousNotes: changeInfo?.previousNotes ?? null,
+          };
+        });
+      } else {
+        // Ticket inicial o actualización de ticket activo en preparación
+        ticketItemsData = items.map(item => {
+          const itemK = `${item.menuItemId}_${(item.notes || '').trim().toLowerCase()}`;
+          const itemKRaw = `${item.menuItemId}_${(item.notes || '').trim()}`;
+          const changeInfo = changeMap?.get(itemK) || changeMap?.get(itemKRaw) || changeMap?.get(item.menuItemId);
+          let changeType = 'UNCHANGED';
+          if (item.isRemovedItem || changeInfo?.changeType === 'REMOVED') {
+            changeType = 'REMOVED';
+          } else if (changeInfo?.changeType === 'ADDED') {
+            changeType = 'ADDED';
+          } else if (changeInfo?.changeType === 'MODIFIED') {
+            changeType = 'MODIFIED';
+          } else if (isEdited) {
+            changeType = 'UNCHANGED';
+          }
+
+          return {
+            orderItemId: item.isRemovedItem ? null : (item.id || null),
+            menuItemId: item.menuItemId,
+            quantity: item.quantity,
+            nameSnapshot: item.menuItem?.name || item.nameSnapshot || 'Producto',
+            notes: item.notes || null,
+            changeType,
+            previousQty: changeInfo?.previousQty ?? null,
+            previousNotes: changeInfo?.previousNotes ?? null,
+          };
+        });
+      }
 
       const hasActiveItems = ticketItemsData.some(i => i.changeType !== 'REMOVED');
-      // Solo consideramos cambios si hay productos agregados, quitados o modificados en ESTA estación
       const stationHasChanges = ticketItemsData.some(i => i.changeType !== 'UNCHANGED');
 
-      // REGLA FUNDAMENTAL: Si el pedido fue editado pero esta estación NO tuvo cambios:
-      // "solo al que se edito, lo demas se queda quieto".
-      // No se modifica la comanda, no se re-emiten eventos, no se hace sonar la campana ni se distrae al cocinero.
-      if (isEdited && !stationHasChanges) {
+      // Si el pedido fue editado pero esta estación no tuvo cambios ni adiciones, no molestar a cocina
+      if (isEdited && !stationHasChanges && !isAdditionTicket) {
         continue;
       }
 
-      const stationIsEdited = isEdited && stationHasChanges;
+      const stationIsEdited = isEdited && (stationHasChanges || isAdditionTicket);
 
-      // Generar el resumen de cambios EXCLUSIVO para esta estación (no mezclar con otras estaciones)
+      // Generar el resumen de cambios EXCLUSIVO para esta estación
       const stationSummaryParts: string[] = [];
       for (const i of ticketItemsData) {
         if (i.changeType === 'ADDED') {
@@ -566,18 +613,17 @@ export class TablesService {
           stationSummaryParts.push(`✏️ Modificado: ${i.nameSnapshot} [${diffTxt}]${i.notes ? ` (${i.notes})` : ''}`);
         }
       }
-      const stationChangeSummary = stationIsEdited ? (stationSummaryParts.join(' | ') || null) : null;
+      const stationChangeSummary = stationIsEdited ? (stationSummaryParts.join(' | ') || (isAdditionTicket ? '✨ Nueva adición al pedido' : null)) : null;
 
       if (existingTicket) {
-        // ACTUALIZAR LA TARJETA EXISTENTE (no crear duplicados)
+        // ACTUALIZAR LA TARJETA ACTIVA EXISTENTE (no crear duplicados de tarjetas en preparación)
         await db.kitchenTicketItem.deleteMany({ where: { ticketId: existingTicket.id } });
 
         let newStatus = existingTicket.status;
         if (!hasActiveItems) {
           newStatus = 'CANCELLED';
         } else if (stationIsEdited) {
-          // Si esta estación tuvo cambios (se agregaron o modificaron productos que requieren preparación):
-          // DEBE volver a estado 'NEW' para que en cocina el cocinero vea el paso "1. Empezar a Preparar"
+          // Si hubo cambios mientras estaba en cocina, alertar al cocinero en paso inicial
           newStatus = 'NEW';
         }
 
@@ -605,7 +651,7 @@ export class TablesService {
           this.socketGateway.emitKitchenTicketUpdated(updatedTicket);
         }
       } else {
-        // CREAR TICKET NUEVO (primera vez para esta estación)
+        // CREAR TICKET NUEVO (primera vez o adición cuando el ticket previo ya fue despachado)
         const assignedToId = await this.pickCook(stationId, db);
         const newStatus = hasActiveItems ? 'NEW' : 'CANCELLED';
         const newTicket = await db.kitchenTicket.create({
@@ -625,7 +671,7 @@ export class TablesService {
         });
         tickets.push(newTicket);
         if (events) {
-          events.push({ created: !stationIsEdited, ticket: newTicket, isEdited: stationIsEdited });
+          events.push({ created: true, ticket: newTicket, isEdited: stationIsEdited });
         } else if (stationIsEdited) {
           this.socketGateway.emitKitchenTicketEdited(newTicket);
         } else {
@@ -717,17 +763,7 @@ export class TablesService {
       take: 250,
     });
 
-    // Garantizar que cada orden y estación tenga una sola tarjeta activa visible (la más reciente)
-    const seen = new Set<string>();
-    const deduped: typeof tickets = [];
-    for (const t of tickets) {
-      const key = `${t.orderId}_${t.stationId}`;
-      if (!seen.has(key)) {
-        seen.add(key);
-        deduped.push(t);
-      }
-    }
-    return deduped;
+    return tickets;
   }
 
   async listStations() {
