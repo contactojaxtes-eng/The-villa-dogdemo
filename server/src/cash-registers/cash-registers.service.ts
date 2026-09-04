@@ -263,15 +263,15 @@ export class CashRegistersService {
     }
 
     const cashSales = shiftOrders.reduce((sum, o) => {
-      const method = o.payment?.method || o.paymentMethod;
+      const method = String(o.payment?.method || o.paymentMethod || '').toUpperCase().trim();
       if (method === 'CASH') return sum + (o.total || 0);
       if (method === 'MIXED') return sum + (o.cashAmount || o.payment?.cashAmount || 0);
       return sum;
     }, 0);
 
     const transferSales = shiftOrders.reduce((sum, o) => {
-      const method = o.payment?.method || o.paymentMethod;
-      if (['TRANSFER', 'NEQUI', 'BANCOLOMBIA', 'DAVIPLATA'].includes(method || '')) return sum + (o.total || 0);
+      const method = String(o.payment?.method || o.paymentMethod || '').toUpperCase().trim();
+      if (['TRANSFER', 'NEQUI', 'BANCOLOMBIA', 'DAVIPLATA'].includes(method)) return sum + (o.total || 0);
       if (method === 'MIXED') return sum + (o.transferAmount || o.payment?.transferAmount || 0);
       return sum;
     }, 0);

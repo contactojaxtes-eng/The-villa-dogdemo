@@ -29,6 +29,111 @@ function cleanStr(val: any): string {
     .trim()
 }
 
+function parseTablePayment(t: any): {
+  cash: number
+  transfer: number
+  methodLabel: string
+  hasRealImageProof: boolean
+  proofId: string | null
+} {
+  const total = Number(t.total) || 0
+  const orders = (t.orders || []).filter((o: any) => o.status !== 'CANCELLED')
+  const proofs = t.transferProofs || []
+
+  // Buscar comprobante con foto real subida (evitar filas de auditoría en efectivo)
+  const realProof = proofs.find((p: any) =>
+    Boolean(p.fileBase64 || p.filePath || (p.method !== 'CASH' && (p.fileSize > 0 || p.filePath)))
+  )
+  const proofId = realProof?.id || null
+  const hasRealImageProof = Boolean(realProof)
+
+  let cash = 0
+  let transfer = 0
+  let ordersWithMethodCount = 0
+
+  for (const o of orders) {
+    const rawMethod = String(o.payment?.method || o.paymentMethod || '').toUpperCase().trim()
+    const oTotal = Number(o.total || 0)
+    const oCash = Number(o.cashAmount || o.payment?.cashAmount || 0)
+    const oTransfer = Number(o.transferAmount || o.payment?.transferAmount || 0)
+
+    if (rawMethod === 'CASH') {
+      cash += oTotal
+      ordersWithMethodCount++
+    } else if (['TRANSFER', 'NEQUI', 'BANCOLOMBIA', 'DAVIPLATA'].includes(rawMethod)) {
+      transfer += oTotal
+      ordersWithMethodCount++
+    } else if (rawMethod === 'MIXED') {
+      ordersWithMethodCount++
+      if (oCash > 0 || oTransfer > 0) {
+        cash += oCash
+        transfer += oTransfer
+      } else {
+        cash += oTotal / 2
+        transfer += oTotal / 2
+      }
+    }
+  }
+
+  // 1. Si los pedidos de la mesa tienen métodos explícitos
+  if (ordersWithMethodCount > 0 && (cash > 0 || transfer > 0)) {
+    const sum = cash + transfer
+    if (sum > 0 && Math.abs(sum - total) > 0.01) {
+      const ratio = total / sum
+      cash = Math.round(cash * ratio)
+      transfer = Math.round(transfer * ratio)
+    }
+  } else if (proofs.length > 0) {
+    // 2. Si no hay en pedidos, revisar proofs
+    const methods = proofs.map((p: any) => String(p.payment?.method || p.method || '').toUpperCase().trim())
+    const isMixed = methods.includes('MIXED')
+    const hasTransfer = methods.some((m: string) => ['TRANSFER', 'NEQUI', 'BANCOLOMBIA', 'DAVIPLATA'].includes(m))
+    const isOnlyCash = methods.every((m: string) => m === 'CASH')
+
+    if (isMixed) {
+      const pCash = proofs.reduce((sum: number, p: any) => sum + Number(p.payment?.cashAmount || 0), 0)
+      const pTransfer = proofs.reduce((sum: number, p: any) => sum + Number(p.payment?.transferAmount || 0), 0)
+      if (pCash > 0 || pTransfer > 0) {
+        cash = pCash
+        transfer = pTransfer
+      } else {
+        cash = total / 2
+        transfer = total / 2
+      }
+    } else if (hasTransfer) {
+      cash = 0
+      transfer = total
+    } else if (isOnlyCash) {
+      cash = total
+      transfer = 0
+    } else {
+      cash = total
+      transfer = 0
+    }
+  } else {
+    // 3. Por defecto (efectivo estándar)
+    cash = total
+    transfer = 0
+  }
+
+  let methodLabel = '💵 Efectivo'
+  if (cash > 0 && transfer > 0) {
+    methodLabel = `🔀 Mixto (💵 ${formatCurrency(cash)} · 📲 ${formatCurrency(transfer)})`
+  } else if (transfer > 0) {
+    methodLabel = '📲 Transferencia'
+  } else {
+    methodLabel = '💵 Efectivo'
+  }
+
+  return {
+    cash,
+    transfer,
+    methodLabel,
+    hasRealImageProof,
+    proofId,
+  }
+}
+
 export default function TableHistoryPage() {
   const { user } = useAuth()
   const isWaiter = user?.role === 'WAITER'
@@ -97,28 +202,7 @@ export default function TableHistoryPage() {
 
       const total = Number(t.total) || 0
       const isClosed = t.status === 'CLOSED'
-      const hasTransfer = (t.transferProofs || []).length > 0 || (t.orders || []).some((o: any) => {
-        const m = cleanStr(o.paymentMethod || o.payment?.method || '')
-        return m.includes('transfer') || m.includes('mixed')
-      })
-      const isMixed = (t.orders || []).some((o: any) => cleanStr(o.paymentMethod || o.payment?.method || '').includes('mixed'))
-
-      let cashPart = 0
-      let transferPart = 0
-      if (isMixed) {
-        for (const o of (t.orders || [])) {
-          cashPart += Number(o.cashAmount || o.payment?.cashAmount || 0)
-          transferPart += Number(o.transferAmount || o.payment?.transferAmount || 0)
-        }
-        if (cashPart === 0 && transferPart === 0) {
-          cashPart = total / 2
-          transferPart = total / 2
-        }
-      } else if (hasTransfer) {
-        transferPart = total
-      } else {
-        cashPart = total
-      }
+      const paymentInfo = parseTablePayment(t)
 
       const existing = map.get(id) || {
         id,
@@ -135,8 +219,8 @@ export default function TableHistoryPage() {
 
       existing.total += total
       existing.tablesCount += 1
-      existing.cashTotal += cashPart
-      existing.transferTotal += transferPart
+      existing.cashTotal += paymentInfo.cash
+      existing.transferTotal += paymentInfo.transfer
       if (isClosed) {
         existing.closedTotal += total
         existing.closedCount += 1
@@ -509,8 +593,7 @@ export default function TableHistoryPage() {
         <div className="space-y-2.5">
           {filtered.map(table => {
             const allItems = (table.orders || []).flatMap((o: any) => o.items || [])
-            const hasTransfer = (table.transferProofs || []).length > 0
-            const proofId = hasTransfer ? table.transferProofs[0]?.id : null
+            const paymentInfo = parseTablePayment(table)
             const cookNames = Array.from(new Set(
               (table.orders || [])
                 .flatMap((o: any) => o.kitchenTickets || [])
@@ -557,7 +640,7 @@ export default function TableHistoryPage() {
                       {formatCurrency(table.total || 0)}
                     </span>
                     <span className="text-[11px] font-bold text-[var(--text-secondary)] mt-0.5 block">
-                      {hasTransfer ? '📲 Transferencia' : '💵 Efectivo'}
+                      {paymentInfo.methodLabel}
                     </span>
                   </div>
                 </div>
@@ -580,10 +663,10 @@ export default function TableHistoryPage() {
 
                 {/* Footer with actions */}
                 <div className="mt-2.5 pt-2 border-t border-[var(--border-subtle)] flex items-center justify-between text-xs">
-                  {hasTransfer && proofId ? (
+                  {paymentInfo.hasRealImageProof && paymentInfo.proofId ? (
                     <button
                       type="button"
-                      onClick={() => setZoomUrl(`/payment-validation/proofs/${proofId}/image`)}
+                      onClick={() => setZoomUrl(`/payment-validation/proofs/${paymentInfo.proofId}/image`)}
                       className="text-[var(--accent)] hover:underline inline-flex items-center gap-1 font-bold cursor-pointer"
                     >
                       <Eye className="h-3.5 w-3.5" /> Ver comprobante
