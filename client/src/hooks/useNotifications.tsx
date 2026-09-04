@@ -218,6 +218,22 @@ export function useNotifications() {
       })
     })
 
+    socket.on('cookBreakFinished', (payload: { userId: string; userName: string; finishedAt: number; breakReason?: string; breakMinutes?: number }) => {
+      if (isMuted()) return
+      if (!['ADMIN', 'SUPERADMIN'].includes(user.role || '')) return
+      playUrgentBell()
+      toast.warning(`⏰ ¡Tiempo de ${payload.breakReason || 'cena'} terminado!`, {
+        description: `El cocinero "${payload.userName}" cumplió sus ${payload.breakMinutes || 15} minutos. Ya puedes llamarlo o reactivarlo en cocina.`,
+        icon: <Bell className="h-4 w-4 text-orange-500 animate-bounce" />,
+        duration: 10000,
+      })
+      showBrowserNotification(
+        `⏰ ¡Tiempo de ${payload.breakReason || 'cena'} terminado!`,
+        `El cocinero "${payload.userName}" finalizó sus ${payload.breakMinutes || 15} min de descanso.`,
+        '/kitchen/stations'
+      )
+    })
+
     // WhatsApp: nuevo mensaje entrante
     socket.on('whatsappMessage', (payload: {
       phone: string

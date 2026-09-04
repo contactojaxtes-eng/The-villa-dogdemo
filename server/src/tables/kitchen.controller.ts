@@ -59,4 +59,18 @@ export class KitchenController {
   updateKitchenSettings(@Body() body: any) {
     return this.tablesService.updateKitchenSettings(body);
   }
+
+  @Get('cooks/status')
+  @Roles('ADMIN', 'SUPERADMIN', 'CASHIER', 'KITCHEN')
+  @ApiOperation({ summary: 'Consultar estado de cocineros (activo, en cena, etc.)' })
+  getCookStatuses() {
+    return this.tablesService.getCookStatuses();
+  }
+
+  @Post('cooks/:userId/status')
+  @Roles('ADMIN', 'SUPERADMIN')
+  @ApiOperation({ summary: 'Actualizar disponibilidad de cocinero o activar tiempo de cena' })
+  updateCookStatus(@Param('userId') userId: string, @Body() body: any) {
+    return this.tablesService.updateCookStatus(userId, body);
+  }
 }

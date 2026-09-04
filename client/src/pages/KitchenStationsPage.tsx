@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { Link } from 'react-router-dom'
 import {
   ChefHat,
@@ -18,7 +18,11 @@ import {
   Split,
   Coffee,
   ShieldCheck,
-  Save
+  Save,
+  Clock,
+  Timer,
+  BellRing,
+  RotateCcw
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -27,6 +31,9 @@ import { Badge } from '@/components/ui/badge'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { api } from '@/lib/api'
 import { alerts } from '@/lib/alerts'
+import { io } from '@/lib/socket'
+import { playUrgentBell } from '@/lib/sound'
+import { toast } from 'sonner'
 
 interface Category {
   id: string
@@ -38,6 +45,15 @@ interface User {
   name: string
   role: string
   email?: string
+}
+
+export interface CookStatus {
+  active?: boolean
+  onBreak?: boolean
+  breakMinutes?: number
+  breakStartedAt?: number
+  breakUntil?: number | null
+  breakReason?: string
 }
 
 interface Station {
@@ -63,7 +79,17 @@ export default function KitchenStationsPage() {
   const [stations, setStations] = useState<Station[]>([])
   const [categories, setCategories] = useState<Category[]>([])
   const [users, setUsers] = useState<User[]>([])
+  const [cookStatuses, setCookStatuses] = useState<Record<string, CookStatus>>({})
+  const [now, setNow] = useState(Date.now())
   const [loading, setLoading] = useState(true)
+  const notifiedBreaks = useRef<Set<string>>(new Set())
+
+  // Modal de Tiempo de Cena / Descanso
+  const [breakModalUser, setBreakModalUser] = useState<User | null>(null)
+  const [breakMinutes, setBreakMinutes] = useState(15)
+  const [customMinutes, setCustomMinutes] = useState('')
+  const [breakReason, setBreakReason] = useState('Cena')
+  const [submittingBreak, setSubmittingBreak] = useState(false)
 
   // Routing Rules Settings
   const [routingSettings, setRoutingSettings] = useState({
@@ -73,7 +99,7 @@ export default function KitchenStationsPage() {
   })
   const [savingSettings, setSavingSettings] = useState(false)
 
-  // Modal State
+  // Modal State para Crear / Editar Estación
   const [openModal, setOpenModal] = useState(false)
   const [saving, setSaving] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
@@ -86,15 +112,17 @@ export default function KitchenStationsPage() {
   const loadData = async () => {
     try {
       setLoading(true)
-      const [sts, cats, usrs, settings] = await Promise.all([
+      const [sts, cats, usrs, settings, cooksStatus] = await Promise.all([
         api.get<Station[]>('/kitchen/stations'),
         api.get<any[]>('/menu/categories?includeInactive=true'),
         api.get<User[]>('/users'),
         api.get<any>('/kitchen/settings').catch(() => ({ smartDrinkRouting: true, splitByChannel: true })),
+        api.get<Record<string, CookStatus>>('/kitchen/cooks/status').catch(() => ({})),
       ])
       setStations(sts || [])
       setCategories((cats || []).map(c => ({ id: c.id, name: c.name })))
       setUsers(usrs || [])
+      setCookStatuses(cooksStatus || {})
       if (settings) {
         setRoutingSettings({
           smartDrinkRouting: settings.smartDrinkRouting !== false,
@@ -113,6 +141,175 @@ export default function KitchenStationsPage() {
   useEffect(() => {
     loadData()
   }, [])
+
+  // Socket en tiempo real para cambios de disponibilidad y fin de descansos
+  useEffect(() => {
+    const socketUrl = import.meta.env.VITE_API_URL || window.location.origin
+    const socket = io(`${socketUrl}/the-villa-dog`, {
+      transports: ['websocket', 'polling'],
+    })
+
+    socket.on('kitchenCookStatusChanged', (newStatuses: Record<string, CookStatus>) => {
+      setCookStatuses(newStatuses || {})
+    })
+
+    socket.on('cookBreakFinished', (payload: any) => {
+      playUrgentBell()
+      alerts.warning(
+        `⏰ ¡Tiempo de ${payload.breakReason || 'cena'} terminado!`,
+        `El cocinero "${payload.userName}" ha cumplido sus ${payload.breakMinutes || 15} minutos. Ya puedes llamarlo para que retome sus funciones.`
+      )
+      setCookStatuses(prev => ({
+        ...prev,
+        [payload.userId]: { ...(prev[payload.userId] || {}), onBreak: false }
+      }))
+    })
+
+    return () => { socket.disconnect() }
+  }, [])
+
+  // Contador regresivo en tiempo real cada 1 segundo
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const current = Date.now()
+      setNow(current)
+
+      // Comprobar si algún temporizador de cocinero llegó a 00:00 localmente
+      Object.entries(cookStatuses).forEach(([userId, status]) => {
+        if (status?.onBreak && status?.breakUntil) {
+          const key = `${userId}:${status.breakUntil}`
+          if (current >= status.breakUntil && !notifiedBreaks.current.has(key)) {
+            notifiedBreaks.current.add(key)
+            playUrgentBell()
+            const cookUser = users.find(u => u.id === userId)
+            const cookName = cookUser?.name || 'Cocinero'
+            alerts.warning(
+              `⏰ ¡Tiempo de ${status.breakReason || 'cena'} terminado!`,
+              `El cocinero "${cookName}" ha cumplido sus ${status.breakMinutes || 15} minutos. Ya puedes avisarle para que retome sus funciones en la cocina.`
+            )
+            setCookStatuses(prev => ({
+              ...prev,
+              [userId]: { ...(prev[userId] || {}), onBreak: false }
+            }))
+          }
+        }
+      })
+    }, 1000)
+    return () => clearInterval(interval)
+  }, [cookStatuses, users])
+
+  const getRemainingSeconds = (breakUntil?: number | null) => {
+    if (!breakUntil) return 0
+    return Math.max(0, Math.floor((breakUntil - now) / 1000))
+  }
+
+  const formatCountdown = (totalSec: number) => {
+    const mins = Math.floor(totalSec / 60)
+    const secs = totalSec % 60
+    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`
+  }
+
+  const toggleCookActive = async (userId: string, currentActive: boolean) => {
+    const newActive = !currentActive
+    try {
+      setCookStatuses(prev => ({
+        ...prev,
+        [userId]: { ...(prev[userId] || {}), active: newActive }
+      }))
+      await api.post(`/kitchen/cooks/${userId}/status`, { active: newActive })
+      toast.success(
+        newActive
+          ? 'Cocinero activado: recibirá pedidos equitativamente'
+          : 'Cocinero desactivado: no recibirá pedidos (se dividen en los demás)'
+      )
+    } catch (err: any) {
+      alerts.error('Error', err.message || 'No se pudo cambiar el estado del cocinero')
+      loadData()
+    }
+  }
+
+  const openBreakModal = (user: User) => {
+    setBreakModalUser(user)
+    setBreakMinutes(15)
+    setCustomMinutes('')
+    setBreakReason('Cena')
+  }
+
+  const confirmStartBreak = async () => {
+    if (!breakModalUser) return
+    const mins = customMinutes ? parseInt(customMinutes) || 15 : breakMinutes
+    if (mins <= 0) {
+      alerts.warning('Tiempo inválido', 'Por favor ingresa un número de minutos mayor a 0.')
+      return
+    }
+
+    setSubmittingBreak(true)
+    try {
+      const until = Date.now() + mins * 60 * 1000
+      setCookStatuses(prev => ({
+        ...prev,
+        [breakModalUser.id]: {
+          ...(prev[breakModalUser.id] || {}),
+          onBreak: true,
+          breakMinutes: mins,
+          breakUntil: until,
+          breakReason,
+          breakStartedAt: Date.now(),
+        }
+      }))
+      await api.post(`/kitchen/cooks/${breakModalUser.id}/status`, {
+        onBreak: true,
+        breakMinutes: mins,
+        breakReason,
+      })
+      toast.info(`🍽️ ${breakModalUser.name} inició tiempo de ${breakReason.toLowerCase()} (${mins} min)`)
+      setBreakModalUser(null)
+    } catch (err: any) {
+      alerts.error('Error', err.message || 'No se pudo iniciar el tiempo de descanso')
+    } finally {
+      setSubmittingBreak(false)
+    }
+  }
+
+  const endCookBreak = async (userId: string) => {
+    try {
+      setCookStatuses(prev => ({
+        ...prev,
+        [userId]: { ...(prev[userId] || {}), onBreak: false, breakUntil: null }
+      }))
+      await api.post(`/kitchen/cooks/${userId}/status`, { onBreak: false })
+      toast.success('Cocinero reincorporado: ya está listo para recibir pedidos nuevamente')
+    } catch (err: any) {
+      alerts.error('Error', err.message || 'No se pudo reincorporar al cocinero')
+      loadData()
+    }
+  }
+
+  const extendCookBreak = async (userId: string, additionalMinutes: number) => {
+    const currentStatus = cookStatuses[userId]
+    const remainingSec = getRemainingSeconds(currentStatus?.breakUntil)
+    const newTotalMinutes = Math.max(1, Math.round(remainingSec / 60) + additionalMinutes)
+
+    try {
+      const until = Date.now() + newTotalMinutes * 60 * 1000
+      setCookStatuses(prev => ({
+        ...prev,
+        [userId]: {
+          ...(prev[userId] || {}),
+          onBreak: true,
+          breakMinutes: newTotalMinutes,
+          breakUntil: until,
+        }
+      }))
+      await api.post(`/kitchen/cooks/${userId}/status`, {
+        onBreak: true,
+        breakMinutes: newTotalMinutes,
+      })
+      toast.success(`Tiempo extendido: +${additionalMinutes} min`)
+    } catch (err: any) {
+      alerts.error('Error', err.message || 'No se pudo extender el tiempo')
+    }
+  }
 
   const saveRoutingSettings = async () => {
     setSavingSettings(true)
@@ -381,21 +578,113 @@ export default function KitchenStationsPage() {
                   </div>
 
                   {/* Cocineros asignados */}
-                  <div className="space-y-1 p-2.5 rounded-xl bg-[var(--bg-elevated)] text-xs">
-                    <span className="text-[10px] font-black uppercase tracking-wider text-[var(--text-muted)] flex items-center gap-1">
-                      <Users className="h-3 w-3 text-blue-500" /> Cocineros:
-                    </span>
-                    <div className="flex flex-wrap gap-1 pt-0.5">
-                      {hasUsers ? (
-                        station.users.map(u => (
-                          <span key={u.id} className="px-2 py-0.5 rounded-lg text-[11px] font-bold bg-blue-500/10 text-blue-700 border border-blue-500/20">
-                            👨‍🍳 {u.name}
-                          </span>
-                        ))
-                      ) : (
-                        <span className="text-[11px] text-[var(--text-muted)] italic">Todos los cocineros</span>
-                      )}
+                  <div className="space-y-1.5 p-2.5 rounded-xl bg-[var(--bg-elevated)] text-xs">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] font-black uppercase tracking-wider text-[var(--text-muted)] flex items-center gap-1">
+                        <Users className="h-3 w-3 text-blue-500" /> Cocineros ({station.users?.length || 0}):
+                      </span>
+                      <span className="text-[9px] text-[var(--text-muted)] font-bold">
+                        Reparto automático
+                      </span>
                     </div>
+
+                    {hasUsers ? (
+                      <div className="space-y-1.5 pt-1">
+                        {station.users.map(u => {
+                          const status = cookStatuses[u.id] || { active: true, onBreak: false }
+                          const isActive = status.active !== false
+                          const remainingSec = getRemainingSeconds(status.breakUntil)
+                          const isOnBreak = Boolean(status.onBreak && remainingSec > 0)
+
+                          return (
+                            <div
+                              key={u.id}
+                              className={`p-2 rounded-xl border transition-all flex flex-col gap-1.5 ${
+                                isOnBreak
+                                  ? 'bg-amber-500/10 border-amber-500/40 text-amber-900 dark:text-amber-200 shadow-xs'
+                                  : !isActive
+                                  ? 'bg-zinc-500/10 border-zinc-500/20 text-zinc-500 opacity-75'
+                                  : 'bg-[var(--bg-panel)] border-[var(--border-subtle)] text-[var(--text-primary)]'
+                              }`}
+                            >
+                              <div className="flex items-center justify-between gap-1.5">
+                                <div className="flex items-center gap-1.5 min-w-0">
+                                  <span className="text-xs shrink-0">👨‍🍳</span>
+                                  <span className="font-bold text-xs truncate" title={u.name}>{u.name}</span>
+                                </div>
+
+                                <div className="flex items-center gap-1 shrink-0">
+                                  {isOnBreak ? (
+                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black bg-amber-500 text-white shadow-xs animate-pulse">
+                                      <span>🍽️ CENA</span>
+                                      <span className="font-mono text-[11px]">{formatCountdown(remainingSec)}</span>
+                                    </span>
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      onClick={() => toggleCookActive(u.id, isActive)}
+                                      title={isActive ? 'Clic para desactivar (no recibirá pedidos)' : 'Clic para activar (recibirá pedidos)'}
+                                      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black transition cursor-pointer ${
+                                        isActive
+                                          ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30 hover:bg-emerald-500/25'
+                                          : 'bg-rose-500/15 text-rose-600 dark:text-rose-400 border border-rose-500/30 hover:bg-rose-500/25'
+                                      }`}
+                                    >
+                                      <span className={`h-1.5 w-1.5 rounded-full ${isActive ? 'bg-emerald-500' : 'bg-rose-500'}`} />
+                                      {isActive ? 'Activo' : 'Inactivo'}
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+
+                              <div className="flex items-center justify-between gap-1 pt-1 border-t border-[var(--border-subtle)]/60 text-[10px]">
+                                {isOnBreak ? (
+                                  <>
+                                    <span className="text-[10px] text-amber-600 dark:text-amber-400 font-bold flex items-center gap-1 truncate">
+                                      ⏱️ Restan: <strong className="font-mono text-[11px]">{formatCountdown(remainingSec)}</strong>
+                                    </span>
+                                    <div className="flex items-center gap-1 shrink-0">
+                                      <button
+                                        type="button"
+                                        onClick={() => extendCookBreak(u.id, 5)}
+                                        className="px-1.5 py-0.5 rounded bg-amber-500/20 hover:bg-amber-500/30 text-amber-700 dark:text-amber-300 font-black cursor-pointer transition text-[9px]"
+                                        title="Agregar 5 minutos más"
+                                      >
+                                        +5m
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => endCookBreak(u.id)}
+                                        className="px-2 py-0.5 rounded bg-emerald-600 hover:bg-emerald-700 text-white font-bold cursor-pointer transition shadow-xs text-[10px]"
+                                        title="Terminar cena y reincorporar"
+                                      >
+                                        Reincorporar
+                                      </button>
+                                    </div>
+                                  </>
+                                ) : (
+                                  <>
+                                    <span className="text-[10px] text-[var(--text-muted)] truncate">
+                                      {isActive ? 'Recibe pedidos' : 'Pausado (no le caen pedidos)'}
+                                    </span>
+                                    <button
+                                      type="button"
+                                      onClick={() => openBreakModal(u)}
+                                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-orange-500/10 hover:bg-orange-500 hover:text-white text-orange-600 dark:text-orange-400 font-bold transition cursor-pointer shrink-0 text-[10px]"
+                                      title="Programar tiempo de cena o descanso"
+                                    >
+                                      <span>🍽️ Cena / Pausa</span>
+                                    </button>
+                                  </>
+                                )}
+                              </div>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    ) : (
+                      <span className="text-[11px] text-[var(--text-muted)] italic">Todos los cocineros</span>
+                    )}
                   </div>
                 </div>
 
@@ -584,6 +873,128 @@ export default function KitchenStationsPage() {
               </Button>
             </div>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Modal para Programar Tiempo de Cena / Descanso */}
+      <Dialog open={!!breakModalUser} onOpenChange={open => { if (!open) setBreakModalUser(null) }}>
+        <DialogContent className="border-[var(--border-subtle)] bg-[var(--bg-panel)] rounded-3xl shadow-2xl p-0 overflow-hidden max-w-md w-[95vw]">
+          <div className="h-1.5 w-full bg-gradient-to-r from-amber-500 via-orange-500 to-rose-500" />
+
+          <div className="p-5 border-b border-[var(--border-subtle)]">
+            <DialogTitle className="text-base font-black text-[var(--text-primary)] flex items-center gap-2">
+              <span className="text-lg">🍽️</span>
+              Tiempo de Cena / Pausa para {breakModalUser?.name}
+            </DialogTitle>
+            <p className="text-xs text-[var(--text-secondary)] mt-1">
+              Durante este tiempo, <strong>no se le asignarán pedidos</strong> y las comandas se repartirán automáticamente entre los otros cocineros activos.
+            </p>
+          </div>
+
+          <div className="p-5 space-y-4">
+            {/* Opciones rápidas de minutos */}
+            <div className="space-y-1.5">
+              <Label className="text-xs font-black uppercase text-[var(--text-secondary)] tracking-wider">
+                Selecciona la duración:
+              </Label>
+              <div className="grid grid-cols-3 gap-2">
+                {[15, 20, 30, 45, 60].map(mins => (
+                  <button
+                    key={mins}
+                    type="button"
+                    onClick={() => { setBreakMinutes(mins); setCustomMinutes('') }}
+                    className={`py-2.5 px-3 rounded-xl border text-xs font-black transition-all cursor-pointer ${
+                      breakMinutes === mins && !customMinutes
+                        ? 'bg-orange-500 text-white border-orange-600 shadow-md scale-102'
+                        : 'bg-[var(--bg-elevated)] border-[var(--border-subtle)] text-[var(--text-primary)] hover:border-orange-500'
+                    }`}
+                  >
+                    ⏱️ {mins} min
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* O tiempo manual */}
+            <div className="space-y-1.5">
+              <Label className="text-xs font-black uppercase text-[var(--text-secondary)] tracking-wider">
+                O escribe los minutos exactos:
+              </Label>
+              <div className="relative">
+                <Input
+                  type="number"
+                  min="1"
+                  max="180"
+                  placeholder="Ej: 10, 12, 25..."
+                  value={customMinutes}
+                  onChange={e => {
+                    setCustomMinutes(e.target.value)
+                    const val = parseInt(e.target.value)
+                    if (val > 0) setBreakMinutes(val)
+                  }}
+                  className="h-10 rounded-xl bg-[var(--bg-elevated)] border-[var(--border-default)] font-bold text-sm pr-16"
+                />
+                <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-[var(--text-muted)] font-bold">
+                  minutos
+                </span>
+              </div>
+            </div>
+
+            {/* Motivo de pausa */}
+            <div className="space-y-1.5">
+              <Label className="text-xs font-black uppercase text-[var(--text-secondary)] tracking-wider">
+                Motivo:
+              </Label>
+              <div className="flex gap-2">
+                {['Cena', 'Almuerzo', 'Descanso'].map(reason => (
+                  <button
+                    key={reason}
+                    type="button"
+                    onClick={() => setBreakReason(reason)}
+                    className={`py-1.5 px-3 rounded-lg border text-xs font-bold transition-all cursor-pointer ${
+                      breakReason === reason
+                        ? 'bg-amber-500/20 border-amber-500 text-amber-700 dark:text-amber-300 font-black'
+                        : 'bg-[var(--bg-elevated)] border-[var(--border-subtle)] text-[var(--text-muted)]'
+                    }`}
+                  >
+                    {reason}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Preview Box */}
+            <div className="p-3 rounded-xl bg-orange-500/10 border border-orange-500/20 text-xs text-orange-950 dark:text-orange-200 space-y-1">
+              <div className="font-black flex items-center gap-1.5">
+                <span>⏱️ Duración asignada:</span>
+                <span className="text-sm font-mono font-black text-orange-600 dark:text-orange-400">
+                  {customMinutes ? customMinutes : breakMinutes} minutos
+                </span>
+              </div>
+              <p className="text-[11px] opacity-85">
+                Al llegar a 00:00 se disparará una alerta sonora de campana y una notificación visual en pantalla para avisarle al cocinero.
+              </p>
+            </div>
+          </div>
+
+          <div className="p-4 bg-[var(--bg-elevated)] border-t border-[var(--border-subtle)] flex items-center justify-end gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setBreakModalUser(null)}
+              className="h-9 px-4 rounded-xl border-[var(--border-default)] text-xs font-bold"
+            >
+              Cancelar
+            </Button>
+            <Button
+              type="button"
+              onClick={confirmStartBreak}
+              disabled={submittingBreak}
+              className="h-9 px-4 rounded-xl bg-orange-600 hover:bg-orange-700 text-white text-xs font-black gap-1.5 shadow-md cursor-pointer"
+            >
+              <span>🍽️ Iniciar {breakReason} ({customMinutes ? customMinutes : breakMinutes}m)</span>
+            </Button>
+          </div>
         </DialogContent>
       </Dialog>
     </div>

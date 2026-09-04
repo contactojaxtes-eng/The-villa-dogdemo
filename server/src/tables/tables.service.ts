@@ -327,8 +327,26 @@ export class TablesService {
       where: { id: stationId },
       include: { users: true },
     });
-    const users = (station?.users || []).filter(u => u.active);
-    if (users.length === 0) return null;
+    const stationUsers = (station?.users || []).filter(u => u.active);
+    if (stationUsers.length === 0) return null;
+
+    // Obtener estados de cocineros (activo/desactivado y tiempo de cena/descanso)
+    const cookStatuses = await this.getCookStatuses(db);
+    const now = Date.now();
+
+    // Filtrar cocineros que estén activos Y no estén en cena activa
+    const availableUsers = stationUsers.filter(u => {
+      const s = cookStatuses[u.id];
+      if (s) {
+        if (s.active === false) return false; // Desactivado manualmente por el admin
+        if (s.onBreak && s.breakUntil && now < s.breakUntil) return false; // En tiempo de cena / pausa
+      }
+      return true;
+    });
+
+    // Si hay cocineros disponibles (ej: 2 de 3, o 1 de 3), se divide equitativamente entre ellos.
+    // Si todos estuvieran en pausa/desactivados, se recurre a stationUsers para que la comanda no quede huérfana.
+    const users = availableUsers.length > 0 ? availableUsers : stationUsers;
     if (users.length === 1) return users[0].id;
 
     // Ventana del turno actual (últimas 14 horas para cubrir turnos noche que cruzan medianoche)
@@ -423,6 +441,110 @@ export class TablesService {
       create: { key: 'kitchen_routing_settings', value: JSON.stringify(data) },
     });
     return JSON.parse(updated.value);
+  }
+
+  async getCookStatuses(db: Prisma.TransactionClient = this.prisma): Promise<Record<string, {
+    active: boolean;
+    onBreak: boolean;
+    breakMinutes?: number;
+    breakStartedAt?: number;
+    breakUntil?: number | null;
+    breakReason?: string;
+    notifiedFinished?: boolean;
+  }>> {
+    const setting = await db.appSetting.findUnique({ where: { key: 'kitchen_cook_status' } });
+    let statuses: Record<string, any> = {};
+    if (setting) {
+      try {
+        statuses = JSON.parse(setting.value) || {};
+      } catch (e) {}
+    }
+
+    let changed = false;
+    const now = Date.now();
+    for (const [userId, status] of Object.entries(statuses)) {
+      if (status && status.onBreak && status.breakUntil && now >= status.breakUntil) {
+        if (!status.notifiedFinished) {
+          this.prisma.user.findUnique({ where: { id: userId }, select: { name: true } }).then(u => {
+            const userName = u?.name || 'Cocinero';
+            this.socketGateway.server.emit('cookBreakFinished', {
+              userId,
+              userName,
+              finishedAt: now,
+              breakReason: status.breakReason || 'Cena',
+              breakMinutes: status.breakMinutes || 15,
+            });
+          }).catch(() => {});
+          status.notifiedFinished = true;
+          changed = true;
+        }
+        status.onBreak = false;
+        changed = true;
+      }
+    }
+
+    if (changed) {
+      await this.prisma.appSetting.upsert({
+        where: { key: 'kitchen_cook_status' },
+        update: { value: JSON.stringify(statuses) },
+        create: { key: 'kitchen_cook_status', value: JSON.stringify(statuses) },
+      });
+      this.socketGateway.server.emit('kitchenCookStatusChanged', statuses);
+    }
+
+    return statuses;
+  }
+
+  async updateCookStatus(userId: string, data: { active?: boolean; onBreak?: boolean; breakMinutes?: number; breakReason?: string }) {
+    const statuses = await this.getCookStatuses();
+    const existing = statuses[userId] || { active: true, onBreak: false };
+
+    if (data.active !== undefined) {
+      existing.active = Boolean(data.active);
+    }
+
+    if (data.onBreak === true) {
+      const minutes = Math.max(1, Math.min(240, Number(data.breakMinutes) || 15));
+      existing.onBreak = true;
+      existing.breakMinutes = minutes;
+      existing.breakStartedAt = Date.now();
+      existing.breakUntil = Date.now() + minutes * 60 * 1000;
+      existing.breakReason = (data.breakReason || 'Cena').slice(0, 50);
+      existing.notifiedFinished = false;
+    } else if (data.onBreak === false) {
+      existing.onBreak = false;
+      existing.breakUntil = null;
+      existing.notifiedFinished = true;
+    }
+
+    statuses[userId] = existing;
+
+    const updated = await this.prisma.appSetting.upsert({
+      where: { key: 'kitchen_cook_status' },
+      update: { value: JSON.stringify(statuses) },
+      create: { key: 'kitchen_cook_status', value: JSON.stringify(statuses) },
+    });
+
+    const result = JSON.parse(updated.value);
+    this.socketGateway.server.emit('kitchenCookStatusChanged', result);
+
+    const u = await this.prisma.user.findUnique({ where: { id: userId }, select: { name: true } });
+    if (data.onBreak === true) {
+      this.socketGateway.server.emit('cookBreakStarted', {
+        userId,
+        userName: u?.name || 'Cocinero',
+        breakMinutes: existing.breakMinutes,
+        breakUntil: existing.breakUntil,
+        breakReason: existing.breakReason,
+      });
+    } else if (data.onBreak === false) {
+      this.socketGateway.server.emit('cookBreakReincorporated', {
+        userId,
+        userName: u?.name || 'Cocinero',
+      });
+    }
+
+    return result;
   }
 
   async deleteStation(id: string) {
