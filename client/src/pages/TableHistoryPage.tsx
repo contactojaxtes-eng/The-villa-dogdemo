@@ -1,13 +1,13 @@
 import { ProtectedImage } from '@/components/ProtectedImage'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { ArrowLeft, CheckCircle2, Clock, Eye, RefreshCw, Search, UtensilsCrossed, Wallet } from 'lucide-react'
+import { ArrowLeft, CheckCircle2, Clock, Eye, RefreshCw, Search, UtensilsCrossed, Wallet, ChefHat } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Dialog, DialogContent } from '@/components/ui/dialog'
 import { api } from '@/lib/api'
 import { formatCurrency } from '@/lib/utils'
-
+import { useAuth } from '@/hooks/useAuth'
 import { io } from '@/lib/socket'
 
 function formatTableDate(dateVal?: string | Date | null): string {
@@ -30,10 +30,13 @@ function cleanStr(val: any): string {
 }
 
 export default function TableHistoryPage() {
+  const { user } = useAuth()
+  const isWaiter = user?.role === 'WAITER'
   const [tables, setTables] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
   const [filterStatus, setFilterStatus] = useState<string>('ALL')
+  const [scope, setScope] = useState<'MINE' | 'ALL'>(() => isWaiter ? 'MINE' : 'ALL')
   const [zoomUrl, setZoomUrl] = useState<string | null>(null)
 
   const load = useCallback(async () => {
@@ -64,11 +67,20 @@ export default function TableHistoryPage() {
     return () => { socket.disconnect() }
   }, [load])
 
-  const filtered = useMemo(() => {
-    const q = cleanStr(search)
-    if (!q) return tables
+  const myTablesCount = useMemo(() => {
+    return tables.filter(t => t.openedBy?.id === user?.id || (t.orders || []).some((o: any) => o.waiter?.id === user?.id)).length
+  }, [tables, user?.id])
 
-    return tables.filter(t => {
+  const filtered = useMemo(() => {
+    let list = tables
+    if (scope === 'MINE' && user?.id) {
+      list = list.filter(t => t.openedBy?.id === user.id || (t.orders || []).some((o: any) => o.waiter?.id === user.id))
+    }
+
+    const q = cleanStr(search)
+    if (!q) return list
+
+    return list.filter(t => {
       const label = cleanStr(t.label)
       const customer = cleanStr(t.customerName)
       const openedBy = cleanStr(t.openedBy?.name)
@@ -79,6 +91,7 @@ export default function TableHistoryPage() {
       const orderWaiters = (t.orders || []).map((o: any) => cleanStr(o.waiter?.name)).join(' ')
       const orderNumbers = (t.orders || []).map((o: any) => `#${o.orderNumber} ${o.orderNumber}`).join(' ')
       const itemsNames = (t.orders || []).flatMap((o: any) => (o.items || []).map((i: any) => cleanStr(i.menuItem?.name || i.nameSnapshot || ''))).join(' ')
+      const cooks = (t.orders || []).flatMap((o: any) => (o.kitchenTickets || []).map((k: any) => cleanStr(k.assignedTo?.name || ''))).join(' ')
       const paymentMethods = (t.orders || []).map((o: any) => {
         const m = cleanStr(o.paymentMethod || o.payment?.method || '')
         if (m.includes('cash')) return 'efectivo cash'
@@ -87,12 +100,12 @@ export default function TableHistoryPage() {
         return m
       }).join(' ')
 
-      const haystack = `${label} ${customer} ${openedBy} ${orderWaiters} ${orderNumbers} ${itemsNames} ${paymentMethods} ${totalStr} ${balanceStr} ${statusStr}`
+      const haystack = `${label} ${customer} ${openedBy} ${orderWaiters} ${cooks} ${orderNumbers} ${itemsNames} ${paymentMethods} ${totalStr} ${balanceStr} ${statusStr}`
       
       const searchTokens = q.split(/\s+/).filter(Boolean)
       return searchTokens.every(tok => haystack.includes(tok))
     })
-  }, [tables, search])
+  }, [tables, scope, user?.id, search])
 
   const stats = useMemo(() => {
     const totalSales = filtered.reduce((acc, t) => acc + (t.total || 0), 0)
@@ -102,7 +115,7 @@ export default function TableHistoryPage() {
   }, [filtered])
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-4 pb-20">
       {/* Header */}
       <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div className="flex items-center gap-2">
@@ -121,21 +134,36 @@ export default function TableHistoryPage() {
         </div>
       </div>
 
-      {/* Filters & Search */}
+      {/* Scope Buttons: Mis Mesas vs Todas las Mesas */}
       <div className="flex flex-col sm:flex-row gap-2.5 items-stretch sm:items-center justify-between">
-        <div className="relative flex-1">
-          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--text-muted)]" />
-          <Input
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-            placeholder="Buscar por mesa, mesero o producto..."
-            className="pl-9 h-10 text-xs rounded-xl"
-          />
+        <div className="flex items-center gap-1 bg-[var(--bg-panel)] p-1 rounded-xl border border-[var(--border-subtle)] w-fit">
+          <button
+            type="button"
+            onClick={() => setScope('MINE')}
+            className={`px-3 py-1.5 rounded-lg text-xs font-black transition cursor-pointer flex items-center gap-1.5 ${
+              scope === 'MINE'
+                ? 'bg-[var(--accent)] text-white shadow-xs'
+                : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+            }`}
+          >
+            <span>Mis mesas ({myTablesCount})</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setScope('ALL')}
+            className={`px-3 py-1.5 rounded-lg text-xs font-black transition cursor-pointer ${
+              scope === 'ALL'
+                ? 'bg-[var(--accent)] text-white shadow-xs'
+                : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+            }`}
+          >
+            Todas las mesas ({tables.length})
+          </button>
         </div>
 
         <div className="flex gap-1 bg-[var(--bg-elevated)] p-1 rounded-xl shrink-0 overflow-x-auto">
           {[
-            { id: 'ALL', label: 'Todas las Mesas' },
+            { id: 'ALL', label: 'Todos los Estados' },
             { id: 'OPEN', label: 'Mesas Abiertas' },
             { id: 'CLOSED', label: 'Cerradas y Pagadas' },
           ].map(f => (
@@ -154,6 +182,17 @@ export default function TableHistoryPage() {
         </div>
       </div>
 
+      {/* Search Input */}
+      <div className="relative w-full">
+        <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--text-muted)]" />
+        <Input
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+          placeholder="Buscar por mesa, mesera, cocinero o producto..."
+          className="pl-9 h-10 text-xs rounded-xl"
+        />
+      </div>
+
       {/* Tables List */}
       {loading ? (
         <div className="p-12 text-center text-sm text-[var(--text-secondary)]">Cargando historial de mesas...</div>
@@ -163,6 +202,12 @@ export default function TableHistoryPage() {
             const allItems = (table.orders || []).flatMap((o: any) => o.items || [])
             const hasTransfer = (table.transferProofs || []).length > 0
             const proofId = hasTransfer ? table.transferProofs[0]?.id : null
+            const cookNames = Array.from(new Set(
+              (table.orders || [])
+                .flatMap((o: any) => o.kitchenTickets || [])
+                .map((tk: any) => tk.assignedTo?.name)
+                .filter(Boolean)
+            )).join(', ')
 
             return (
               <div
@@ -182,14 +227,20 @@ export default function TableHistoryPage() {
                         {table.status === 'CLOSED' ? '✓ Cerrada' : '⏳ Abierta'}
                       </span>
                     </div>
-                    <p className="text-xs text-[var(--text-secondary)] mt-1 flex items-center gap-1.5 flex-wrap">
+                    <div className="text-xs text-[var(--text-secondary)] mt-1 flex items-center gap-2 flex-wrap">
                       <span>Mesera: <strong className="text-[var(--text-primary)]">{table.openedBy?.name || 'Mesero'}</strong></span>
                       <span className="text-[var(--text-muted)]">·</span>
                       <span className="text-[var(--text-muted)] flex items-center gap-1">
                         <Clock className="h-3 w-3" />
                         {formatTableDate(table.openedAt || table.createdAt)}
                       </span>
-                    </p>
+                    </div>
+                    {cookNames && (
+                      <div className="mt-1 flex items-center gap-1 text-[11px] font-bold text-amber-800 dark:text-amber-300 bg-amber-500/10 border border-amber-500/20 px-2 py-0.5 rounded-md w-fit">
+                        <ChefHat className="h-3 w-3 text-amber-600" />
+                        <span>Preparado por: <strong>{cookNames}</strong></span>
+                      </div>
+                    )}
                   </div>
 
                   <div className="text-right shrink-0">
@@ -245,7 +296,9 @@ export default function TableHistoryPage() {
 
           {filtered.length === 0 && (
             <div className="p-12 text-center text-sm text-[var(--text-muted)] border border-dashed rounded-2xl">
-              No hay ventas de mesa registradas con los filtros seleccionados.
+              {scope === 'MINE'
+                ? 'No tienes ventas de mesa registradas en este filtro.'
+                : 'No hay ventas de mesa registradas con los filtros seleccionados.'}
             </div>
           )}
         </div>
@@ -261,7 +314,7 @@ export default function TableHistoryPage() {
             </Button>
           </div>
           {zoomUrl && (
-            <div className="max-h-[80vh] w-full flex items-center justify-center overflow-auto rounded-xl bg-black/50 p-1">
+            <div className="max-h-[82vh] w-full flex items-center justify-center overflow-auto">
               <ProtectedImage endpoint={zoomUrl} alt="Comprobante" className="max-h-[78vh] max-w-full object-contain rounded-lg shadow-2xl" />
             </div>
           )}

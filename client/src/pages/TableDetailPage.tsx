@@ -217,16 +217,15 @@ export default function TableDetailPage() {
       const result = await api.post<any>(`/tables/${id}/payments`, form)
 
       if (method === 'CASH') {
-        alerts.success('Cobro registrado', result.table?.status === 'CLOSED' ? 'La cuenta quedó pagada y cerrada.' : 'La cuenta está pagada. Se cerrará cuando cocina termine el pedido.')
-        if (result.table?.status === 'CLOSED') navigate('/tables')
-        else await load()
+        alerts.success('Cobro registrado', 'La mesa ha sido cobrada exitosamente. La cuenta se trasladó a tu historial.')
+        navigate('/tables')
         return
       }
 
-      alerts.success('Pago enviado a caja', method === 'MIXED' ? 'Pago mixto enviado para validación en caja.' : 'Comprobante(s) enviado(s) para validación en caja.')
+      alerts.success('Comprobante enviado', 'Cobro enviado a validación en caja y registrado en tu historial.')
       clearProofs()
       setReference('')
-      await load()
+      navigate('/tables')
     } catch (err: any) {
       alerts.error('No se pudo enviar pago', err?.response?.data?.message || err.message)
     } finally {
@@ -309,6 +308,23 @@ export default function TableDetailPage() {
               <span className="text-xs text-[var(--text-secondary)] font-medium bg-[var(--bg-elevated)] border border-[var(--border-subtle)] px-2 py-0.5 rounded-md">
                 Atendiendo: <strong className="text-[var(--text-primary)]">{user?.name}</strong>
               </span>
+              {(() => {
+                const cooks = Array.from(new Set(
+                  (table.orders || [])
+                    .flatMap((o: any) => o.kitchenTickets || [])
+                    .map((t: any) => t.assignedTo?.name)
+                    .filter(Boolean)
+                )).join(', ')
+                if (!cooks) return null
+                return (
+                  <>
+                    <span>•</span>
+                    <span className="text-xs text-[var(--accent)] font-bold bg-[var(--accent)]/10 border border-[var(--accent)]/25 px-2 py-0.5 rounded-md flex items-center gap-1">
+                      👨‍🍳 Cocina: <strong>{cooks}</strong>
+                    </span>
+                  </>
+                )
+              })()}
             </div>
           </div>
         </div>
@@ -408,14 +424,35 @@ export default function TableDetailPage() {
                 </div>
               )}
 
-              {/* Kitchen Tickets Badges */}
-              <div className="mt-3 flex flex-wrap gap-1.5">
-                {order.kitchenTickets?.map((ticket: any) => (
-                  <span key={ticket.id} className="rounded-lg bg-[var(--accent)]/10 border border-[var(--accent)]/30 px-2 py-0.5 text-[10px] font-black text-[var(--accent)]">
-                    {ticket.station?.name}: {ticket.status === 'READY' ? 'LISTO' : ticket.status === 'PREPARING' ? 'EN PREPARACIÓN' : ticket.status === 'CANCELLED' ? 'CANCELADO' : 'NUEVO'}
-                  </span>
-                ))}
-              </div>
+              {/* Kitchen Tickets Badges con Cocinero Asignado */}
+              {order.kitchenTickets && order.kitchenTickets.length > 0 && (
+                <div className="mt-3 flex flex-wrap gap-2 pt-2 border-t border-[var(--border-subtle)]">
+                  {order.kitchenTickets.map((ticket: any) => {
+                    const cookName = ticket.assignedTo?.name || 'Cocinero por asignar'
+                    const stationName = ticket.station?.name || 'Cocina'
+                    const isReady = ticket.status === 'READY' || ticket.status === 'SERVED'
+                    const isPrep = ticket.status === 'PREPARING'
+
+                    return (
+                      <span
+                        key={ticket.id}
+                        className={`inline-flex items-center gap-1.5 rounded-xl px-2.5 py-1 text-xs font-black border shadow-xs ${
+                          isReady
+                            ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-800 dark:text-emerald-300'
+                            : isPrep
+                            ? 'bg-amber-500/15 border-amber-500/40 text-amber-900 dark:text-amber-200 animate-pulse'
+                            : 'bg-blue-500/10 border-blue-500/30 text-blue-800 dark:text-blue-300'
+                        }`}
+                      >
+                        <ChefHat className="h-3.5 w-3.5 shrink-0" />
+                        <span>
+                          {isReady ? '✅ Preparado por:' : isPrep ? '🔥 Preparando:' : '⏳ Asignado a:'} <strong>{cookName}</strong> ({stationName})
+                        </span>
+                      </span>
+                    )
+                  })}
+                </div>
+              )}
 
               {order.status === 'CANCELLATION_REQUESTED' && (
                 <div className="mt-2.5 rounded-xl border border-amber-400/40 bg-amber-500/15 p-2.5 text-xs text-amber-900 dark:text-amber-200 font-bold flex items-center gap-1.5">

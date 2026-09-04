@@ -96,7 +96,12 @@ export class TablesService {
     } else {
       where.status = { in: ACTIVE_TABLE };
     }
-    if (params.waiterId) where.openedById = params.waiterId;
+    if (params.waiterId) {
+      where.OR = [
+        { openedById: params.waiterId },
+        { orders: { some: { waiterId: params.waiterId } } },
+      ];
+    }
     if (params.search?.trim()) where.label = { contains: params.search.trim(), mode: 'insensitive' };
     const tables = await this.prisma.diningTable.findMany({
       where,
