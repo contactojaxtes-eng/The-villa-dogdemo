@@ -144,72 +144,31 @@ export class CashRegistersService {
       }
     }
 
+    // Si no hay ningún turno activo abierto para esta caja:
     if (!openClosing) {
-      const anyOpen = await this.prisma.cashClosing.findFirst({
-        where: { isOpen: true },
-        include: { user: { select: { id: true, name: true } } },
-        orderBy: { shiftStart: 'desc' },
-      });
-      if (anyOpen) {
-        openClosing = anyOpen;
-      }
-    }
-
-    // Si no hay ningún turno activo abierto:
-    if (!openClosing) {
-      const dayOrders = await this.prisma.order.findMany({
-        where: {
-          status: { not: 'CANCELLED' },
-          createdAt: { gte: today },
-          OR: [
-            { cashRegisterId: registerId },
-            { diningTable: { cashRegisterId: registerId } },
-          ],
-        },
-        include: { payment: true },
-      });
-
-      const totalSales = dayOrders.reduce((s, o) => s + o.total, 0);
-      const totalCash = dayOrders.reduce((s, o) => {
-        const m = o.payment?.method || o.paymentMethod;
-        if (m === 'CASH') return s + o.total;
-        if (m === 'MIXED') return s + (o.cashAmount || o.payment?.cashAmount || 0);
-        return s;
-      }, 0);
-      const totalTransfer = dayOrders.reduce((s, o) => {
-        const m = o.payment?.method || o.paymentMethod;
-        if (['TRANSFER', 'NEQUI', 'BANCOLOMBIA', 'DAVIPLATA'].includes(m || '')) return s + o.total;
-        if (m === 'MIXED') return s + (o.transferAmount || o.payment?.transferAmount || 0);
-        return s;
-      }, 0);
-
       return {
         registerId,
         date: today.toISOString().split('T')[0],
         isOpen: false,
-        orderCount: dayOrders.length,
-        totalSales,
-        totalCash,
-        totalTransfer,
-        totalNequi: dayOrders.filter(o => (o.payment?.method || o.paymentMethod) === 'NEQUI').reduce((s, o) => s + o.total, 0),
-        totalBancolombia: dayOrders.filter(o => (o.payment?.method || o.paymentMethod) === 'BANCOLOMBIA').reduce((s, o) => s + o.total, 0),
-        totalDaviplata: dayOrders.filter(o => (o.payment?.method || o.paymentMethod) === 'DAVIPLATA').reduce((s, o) => s + o.total, 0),
-        totalTips: dayOrders.reduce((s, o) => s + (o.tip || 0), 0),
+        orderCount: 0,
+        totalSales: 0,
+        totalCash: 0,
+        totalTransfer: 0,
+        totalNequi: 0,
+        totalBancolombia: 0,
+        totalDaviplata: 0,
+        totalTips: 0,
         initialCash: 0,
-        cashInDrawer: totalCash,
+        cashInDrawer: 0,
       };
     }
 
     // Si la caja está ABIERTA (turno activo en progreso):
-    // Reasociar pedidos y mesas sin caja desde el inicio del turno o de hoy
+    // Reasociar pedidos y mesas creados durante este turno activo que no tengan caja asignada
     await this.prisma.order.updateMany({
       where: {
         cashRegisterId: null,
-        OR: [
-          { createdAt: { gte: openClosing.shiftStart } },
-          { updatedAt: { gte: openClosing.shiftStart } },
-          { createdAt: { gte: today } },
-        ],
+        createdAt: { gte: openClosing.shiftStart },
       },
       data: {
         cashRegisterId: registerId,
@@ -220,6 +179,7 @@ export class CashRegistersService {
       where: {
         cashRegisterId: null,
         status: 'OPEN',
+        openedAt: { gte: openClosing.shiftStart },
       },
       data: {
         cashRegisterId: registerId,
@@ -227,16 +187,36 @@ export class CashRegistersService {
       },
     }).catch(err => console.warn('Error reasociando mesas a caja:', err));
 
-    // Consultar todos los pedidos del turno activo no cancelados
+    // Consultar pedidos que pertenecen estrictamente a este turno activo (a partir de shiftStart)
     const orders = await this.prisma.order.findMany({
       where: {
         status: { not: 'CANCELLED' },
         OR: [
-          { createdAt: { gte: openClosing.shiftStart } },
-          { updatedAt: { gte: openClosing.shiftStart } },
-          { payment: { confirmedAt: { gte: openClosing.shiftStart } } },
-          { diningTable: { cashClosingId: openClosing.id } },
-          { cashRegisterId: registerId, createdAt: { gte: today } },
+          // 1. Pedidos creados durante este turno
+          {
+            createdAt: { gte: openClosing.shiftStart },
+            OR: [
+              { cashRegisterId: registerId },
+              { cashRegisterId: null },
+              { diningTable: { cashRegisterId: registerId } },
+              { diningTable: { cashClosingId: openClosing.id } },
+            ],
+          },
+          // 2. Mesas de este turno activo
+          {
+            diningTable: { cashClosingId: openClosing.id },
+          },
+          // 3. Pagos confirmados durante este turno activo
+          {
+            payment: {
+              confirmedAt: { gte: openClosing.shiftStart },
+              status: 'CONFIRMED',
+            },
+            OR: [
+              { cashRegisterId: registerId },
+              { cashRegisterId: null },
+            ],
+          },
         ],
       },
       include: {

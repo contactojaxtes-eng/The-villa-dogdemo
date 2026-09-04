@@ -44,6 +44,7 @@ interface CashClosingHistory {
   totalExpenses: number
   discrepancy: number
   notes: string | null
+  isOpen?: boolean
   user: { id: string; name: string }
   cashRegister?: { id: string; name: string } | null
 }
@@ -206,10 +207,11 @@ export default function CashControlPage() {
   // Filter closings history
   const filteredClosings = useMemo(() => {
     return closings.filter(c => {
+      if (c.isOpen) return false
       if (filterRegisterId !== 'ALL' && c.cashRegister?.id !== filterRegisterId) return false
       if (filterUserId !== 'ALL' && c.user?.id !== filterUserId) return false
       if (filterDate) {
-        const cDate = new Date(c.createdAt).toISOString().split('T')[0]
+        const cDate = new Date(c.shiftEnd || c.createdAt).toISOString().split('T')[0]
         if (dateMode === 'month') {
           if (!cDate.startsWith(filterDate)) return false
         } else {
@@ -225,7 +227,7 @@ export default function CashControlPage() {
       }
       return true
     })
-  }, [closings, filterRegisterId, filterUserId, filterDate, searchQuery])
+  }, [closings, filterRegisterId, filterUserId, filterDate, searchQuery, dateMode])
 
   // Grand consolidated total across all registers today
   const globalSummary = useMemo(() => {
@@ -374,7 +376,7 @@ export default function CashControlPage() {
             const sum = summaries[reg.id]
             const openClosing = reg.closings?.find(c => c.isOpen) || (sum?.isOpen ? { id: 'active', isOpen: true, user: { id: 'cajero', name: (sum as any).operatorName || 'Cajero' }, initialCash: sum.initialCash || 0, shiftStart: (sum as any).shiftStart || new Date().toISOString() } : null)
             const isOpen = !!openClosing || !!sum?.isOpen
-            const lastClosedId = closings.find(c => c.cashRegister?.id === reg.id)?.id
+            const lastClosedId = closings.find(c => !c.isOpen && c.cashRegister?.id === reg.id)?.id
 
             return (
               <Card key={reg.id}
@@ -569,7 +571,12 @@ export default function CashControlPage() {
                     const hasDiscrepancy = Math.abs(c.discrepancy || 0) > 100
                     return (
                       <tr key={c.id} className="hover:bg-[var(--bg-hover)] transition-colors cursor-pointer" onClick={() => openClosingDetail(c.id)}>
-                        <td className="px-6 py-4 font-bold text-[var(--text-primary)] whitespace-nowrap">{new Date(c.createdAt).toLocaleString('es-CO', { dateStyle: 'short', timeStyle: 'short' })}</td>
+                        <td className="px-6 py-4 font-bold text-[var(--text-primary)] whitespace-nowrap">
+                          <div>{new Date(c.shiftEnd || c.createdAt).toLocaleString('es-CO', { dateStyle: 'short', timeStyle: 'short' })}</div>
+                          <div className="text-[10px] text-[var(--text-muted)] font-normal mt-0.5">
+                            Apertura: {new Date(c.shiftStart || c.createdAt).toLocaleString('es-CO', { dateStyle: 'short', timeStyle: 'short' })}
+                          </div>
+                        </td>
                         <td className="px-6 py-4 font-extrabold text-[var(--accent)] whitespace-nowrap">{c.cashRegister?.name || 'Caja Principal'}</td>
                         <td className="px-6 py-4 font-bold text-[var(--text-secondary)] whitespace-nowrap">{c.user?.name || 'Operador'}</td>
                         <td className="px-6 py-4 text-xs font-semibold text-[var(--text-muted)] whitespace-nowrap">{formatCurrency(c.initialCash)}</td>

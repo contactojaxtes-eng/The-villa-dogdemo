@@ -368,7 +368,9 @@ export class PaymentsService {
   }
 
   async getCashClosings(params: { date?: string; userId?: string; cashRegisterId?: string }) {
-    const where: any = {};
+    const where: any = {
+      isOpen: false,
+    };
     if (params.userId) where.userId = params.userId;
     if (params.cashRegisterId) where.cashRegisterId = params.cashRegisterId;
     if (params.date) {
@@ -389,7 +391,7 @@ export class PaymentsService {
         user: { select: { id: true, name: true } },
         cashRegister: { select: { id: true, name: true } }
       },
-      orderBy: { createdAt: 'desc' },
+      orderBy: { shiftEnd: 'desc' },
     });
   }
 
@@ -884,11 +886,15 @@ export class PaymentsService {
       expensesByCategory[catName] = (expensesByCategory[catName] || 0) + e.amount;
     }
 
-    // Find all cash closings created on this day to get sum of initialCash and actual totalCash
+    // Find all cash closings belonging to this date range
     const closings = await this.prisma.cashClosing.findMany({
       where: {
-        createdAt: { gte: start, lte: end },
         isOpen: false,
+        OR: [
+          { shiftEnd: { gte: start, lte: end } },
+          { createdAt: { gte: start, lte: end } },
+          { shiftStart: { gte: start, lte: end } },
+        ],
       },
     });
 
