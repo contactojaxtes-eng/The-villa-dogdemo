@@ -6,6 +6,7 @@ import {
   Bell,
   CheckCircle2,
   Clock,
+  Eye,
   Flame,
   History,
   RefreshCw,
@@ -542,8 +543,8 @@ export default function KitchenPage() {
                       ? (ticket.items || []).filter(i => !i.changeType || i.changeType === 'UNCHANGED' || (i.changeType === 'MODIFIED' && (i.previousQty ?? i.quantity) === i.quantity && i.notes === i.previousNotes))
                       : []
 
-                    // Si fue editado y hay acciones específicas (agregados / modificados / quitados), mostrar EXCLUSIVAMENTE lo afectado
-                    if (isEditedTicket && !isFullyCancelled) {
+                    // Si fue editado y estamos en pestañas activas (no en HISTORIAL): destacar lo nuevo y permitir expandir lo anterior
+                    if (isEditedTicket && !isFullyCancelled && activeTab !== 'HISTORY') {
                       if (actionItems.length === 0) {
                         return (
                           <div className="mt-2.5 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-center text-xs font-bold text-amber-800 dark:text-amber-200">
@@ -689,32 +690,79 @@ export default function KitchenPage() {
                             })}
                           </div>
 
-                          {/* Recordatorio discreto de que lo demás no se muestra aquí porque ya fue preparado */}
+                          {/* Recordatorio y desplegable interactivo para consultar los productos que ya fueron preparados */}
                           {unchangedItems.length > 0 && (
-                            <div className="pt-2 text-center">
-                              <p className="text-[11px] font-bold text-[var(--text-muted)] italic">
-                                ℹ️ Los demás {unchangedItems.length} producto(s) de esta mesa ya fueron preparados. El pedido completo se consulta en el Historial.
-                              </p>
+                            <div className="pt-2 border-t border-[var(--border-subtle)]/60 space-y-2">
+                              <button
+                                type="button"
+                                onClick={() => toggleShowPrevious(ticket.id)}
+                                className="w-full py-1.5 px-3 rounded-xl bg-[var(--bg-elevated)] hover:bg-[var(--bg-hover)] text-xs font-bold text-[var(--text-secondary)] hover:text-[var(--text-primary)] flex items-center justify-between transition cursor-pointer border border-[var(--border-subtle)]"
+                              >
+                                <span className="flex items-center gap-1.5">
+                                  <Eye className="h-3.5 w-3.5 text-[var(--accent)]" />
+                                  {showPrevious[ticket.id]
+                                    ? 'Ocultar productos ya preparados'
+                                    : `Ver ${unchangedItems.length} producto(s) anteriores ya preparados`}
+                                </span>
+                                <span className="text-[10px] bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 px-1.5 py-0.5 rounded font-black">
+                                  {showPrevious[ticket.id] ? '▲ Ocultar' : '▼ Ver listos'}
+                                </span>
+                              </button>
+
+                              {showPrevious[ticket.id] && (
+                                <div className="space-y-1.5 p-2.5 rounded-xl bg-[var(--bg-elevated)] border border-[var(--border-subtle)]">
+                                  <p className="text-[10px] font-black uppercase tracking-wider text-[var(--text-muted)] mb-1">
+                                    ✅ Preparados anteriormente (siguen activos en la mesa):
+                                  </p>
+                                  {unchangedItems.map((item: any) => (
+                                    <div key={item.id} className="flex items-center justify-between text-xs py-1 px-2 rounded-lg bg-[var(--bg-panel)] border border-[var(--border-subtle)]/40">
+                                      <span className="font-extrabold text-[var(--text-primary)]">
+                                        {item.quantity}x {item.nameSnapshot}
+                                      </span>
+                                      <span className="text-[10px] font-extrabold text-emerald-700 dark:text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full">
+                                        ✓ Ya preparado
+                                      </span>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
                             </div>
                           )}
                         </div>
                       )
                     }
 
-                    // MODO NORMAL (pedidos nuevos o sin cambios de productos): "ya lo demás normal"
+                    // MODO NORMAL O PESTAÑA HISTORIAL: Mostrar el pedido completo de la mesa
+                    const visibleItems = (ticket.items || []).filter((i: any) => i.changeType !== 'REMOVED')
+                    const totalProductsCount = visibleItems.reduce((acc: number, curr: any) => acc + (curr.quantity || 0), 0)
+
                     return (
                       <div className="mt-2.5 space-y-1.5">
-                        {ticket.items?.map((item: KitchenTicketItemSummary) => {
+                        {activeTab === 'HISTORY' && isEditedTicket && (
+                          <div className="flex items-center justify-between px-2.5 py-1.5 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-800 dark:text-emerald-300 text-xs font-black mb-2">
+                            <span>📋 PEDIDO COMPLETO ({totalProductsCount} productos)</span>
+                            <span className="text-[10px] font-extrabold bg-emerald-500/20 px-2 py-0.5 rounded-full">Incluye iniciales + adiciones</span>
+                          </div>
+                        )}
+                        {visibleItems.map((item: KitchenTicketItemSummary) => {
                           const isTakeaway = (item.notes || '').toLowerCase().includes('llevar')
                           const cleanNotes = (item.notes || '').replace(/\[PARA LLEVAR\]/gi, '').replace(/\[MESA\]/gi, '').trim()
+                          const isAdded = item.changeType === 'ADDED' || (item.changeType === 'MODIFIED' && (item.quantity > (item.previousQty ?? 0)))
 
                           return (
                             <div key={item.id} className="rounded-xl p-2 text-xs border border-transparent bg-[var(--bg-elevated)]">
                               <div className="flex items-start justify-between gap-1">
                                 <div className="min-w-0 flex-1">
-                                  <span className="text-sm font-black text-[var(--text-primary)] leading-tight">
-                                    {item.quantity}x {item.nameSnapshot}
-                                  </span>
+                                  <div className="flex items-center gap-1.5 flex-wrap">
+                                    <span className="text-sm font-black text-[var(--text-primary)] leading-tight">
+                                      {item.quantity}x {item.nameSnapshot}
+                                    </span>
+                                    {isAdded && isEditedTicket && (
+                                      <span className="text-[9px] font-black px-1.5 py-0.2 rounded bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30">
+                                        ✨ Adición
+                                      </span>
+                                    )}
+                                  </div>
                                   {cleanNotes && (
                                     <p className="text-xs font-bold text-amber-700 dark:text-amber-400 mt-1 pl-1.5 border-l-2 border-amber-500 bg-amber-500/10 py-0.5 rounded-r">
                                       👉 {cleanNotes}
