@@ -813,9 +813,7 @@ export class TablesService {
     const isTransfer = data.method === 'TRANSFER';
 
     const rawFiles: any[] = Array.isArray(fileOrFiles) ? fileOrFiles : (fileOrFiles ? [fileOrFiles] : []);
-    const uniqueFiles = rawFiles.filter((f, idx, arr) =>
-      arr.findIndex(x => x && (x.originalname === f.originalname && x.size === f.size)) === idx
-    );
+    const uniqueFiles = rawFiles.filter(Boolean);
     const validReceipts: { receipt: any; file: any }[] = [];
     if (!isCash && uniqueFiles.length > 0) {
       for (const f of uniqueFiles) {

@@ -1,6 +1,6 @@
 import { ProtectedImage } from '@/components/ProtectedImage'
 import { useEffect, useRef, useState } from 'react'
-import { prepareReceiptPhoto, generateUUID } from '@/lib/receiptPhoto'
+import { prepareReceiptPhoto, generateUUID, createSafeFile, readBlobAsDataUrl } from '@/lib/receiptPhoto'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { io } from '@/lib/socket'
 import { ArrowLeft, Camera, CheckCircle2, ChefHat, Clock, Eye, Image as ImageIcon, Pencil, PlusCircle, Receipt, Trash2, Upload, User, Wallet, X, XCircle } from 'lucide-react'
@@ -141,17 +141,34 @@ export default function TableDetailPage() {
     try {
       const newItems: ProofPhoto[] = []
       for (const f of rawFiles) {
-        const prepared = await prepareReceiptPhoto(f)
-        newItems.push({
-          id: generateUUID(),
-          file: prepared.file,
-          previewUrl: prepared.previewUrl,
-          name: prepared.name,
-        })
+        try {
+          const prepared = await prepareReceiptPhoto(f)
+          newItems.push({
+            id: generateUUID(),
+            file: prepared.file,
+            previewUrl: prepared.previewUrl,
+            name: prepared.name,
+          })
+        } catch (itemErr: any) {
+          console.warn('[handleFileChange] Error optimizando foto, aplicando lectura directa:', itemErr)
+          try {
+            const rawDataUrl = await readBlobAsDataUrl(f)
+            const safeName = (f.name || `comprobante-${Date.now()}`).replace(/[^a-zA-Z0-9_.-]/g, '_')
+            const mime = f.type || (rawDataUrl.startsWith('data:image/png') ? 'image/png' : 'image/jpeg')
+            newItems.push({
+              id: generateUUID(),
+              file: createSafeFile(f, safeName, mime),
+              previewUrl: rawDataUrl,
+              name: safeName,
+            })
+          } catch {}
+        }
       }
-      setProofs(prev => [...prev, ...newItems])
+      if (newItems.length > 0) {
+        setProofs(prev => [...prev, ...newItems])
+      }
     } catch (error: any) {
-      alerts.error('No se pudo procesar la foto', error.message)
+      alerts.error('No se pudo procesar la foto', error?.message || 'Error al leer el archivo.')
     } finally {
       e.target.value = ''
       setPreparingPhoto(false)
@@ -213,8 +230,9 @@ export default function TableDetailPage() {
       }
       form.append('reference', reference)
       proofs.forEach((p, idx) => {
-        form.append('proofs', p.file)
-        if (idx === 0) form.append('proof', p.file) // compatibilidad total con endpoints existentes
+        const uniqueFileName = `comprobante-${idx + 1}-${Date.now()}.jpg`
+        form.append('proofs', p.file, uniqueFileName)
+        if (idx === 0) form.append('proof', p.file, uniqueFileName)
       })
       if (proofs.length > 0) {
         form.append('proofsBase64', JSON.stringify(proofs.map(p => p.previewUrl)))
@@ -660,7 +678,7 @@ export default function TableDetailPage() {
                     <input
                       ref={galleryInputRef}
                       type="file"
-                      accept="image/*,.heic,.heif,.jpg,.jpeg,.png,.webp"
+                      accept="image/*"
                       multiple
                       className="hidden"
                       onChange={handleFileChange}

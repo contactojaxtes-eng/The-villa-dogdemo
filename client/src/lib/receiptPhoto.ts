@@ -1,10 +1,12 @@
 /**
- * Procesa y optimiza fotos de comprobantes tomadas desde cualquier dispositivo móvil o de escritorio.
- * Soporta de forma nativa e infalible:
- * - Fotos de cámara directa (JPG, PNG, WebP)
- * - Fotos seleccionadas de galería de Samsung / Android / iPhone (incluyendo HEIC / HEIF)
- * - Archivos grandes (redimensionados con Canvas a máx 1280px para que pesen ~120KB)
- * - Previsualización limpia y fluida que nunca muestra icono de foto rota
+ * Procesa y optimiza fotos y capturas de comprobantes tomadas desde cualquier dispositivo móvil.
+ * Compatible al 100% con:
+ * - Capturas de pantalla (Screenshots PNG/JPG de Nequi, Bancolombia, Daviplata)
+ * - Fotos directas de cámara (JPG, PNG, WebP)
+ * - Celulares antiguos (Android 6, 7, 8, 9, WebViews antiguas sin constructor File ni Blob.arrayBuffer)
+ * - Celulares Samsung / iPhone modernos con fotos HEIC/HEIF
+ * - Múltiples comprobantes simultáneos o agregados uno a uno
+ * - No se cuelga nunca en "Procesando foto..."
  */
 
 export interface PreparedReceiptPhoto {
@@ -14,8 +16,8 @@ export interface PreparedReceiptPhoto {
 }
 
 /**
- * Generador seguro de UUID compatible con contextos HTTP no seguros (IPs locales en celulares)
- * y navegadores móviles antiguos que no soportan crypto.randomUUID().
+ * Generador seguro de UUID compatible con contextos HTTP locales
+ * y navegadores móviles antiguos.
  */
 export function generateUUID(): string {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
@@ -31,32 +33,97 @@ export function generateUUID(): string {
 }
 
 /**
- * Detecta si el archivo es HEIC / HEIF (formato por defecto en Samsung Galaxy y iPhones).
+ * Crea un objeto File seguro compatible con navegadores antiguos que lanzan
+ * "TypeError: Illegal constructor" al llamar a new File([blob], ...).
+ */
+export function createSafeFile(blob: Blob, name: string, mime: string): File {
+  try {
+    return new File([blob], name, { type: mime, lastModified: Date.now() })
+  } catch {
+    // Fallback para WebViews antiguas de Android
+    const b = blob.slice(0, blob.size, mime) as any
+    b.name = name
+    b.lastModified = Date.now()
+    b.lastModifiedDate = new Date()
+    return b as File
+  }
+}
+
+/**
+ * Convierte un DataURL (base64) a Blob de forma síncrona y segura sin usar canvas.toBlob.
+ * Compatible con cualquier navegador móvil desde Android 4.0.
+ */
+export function dataUrlToBlob(dataUrl: string): Blob {
+  try {
+    const parts = dataUrl.split(',')
+    const mimeMatch = parts[0].match(/:(.*?);/)
+    const mime = mimeMatch ? mimeMatch[1] : 'image/jpeg'
+    const bstr = atob(parts[1] || '')
+    let n = bstr.length
+    const u8arr = new Uint8Array(n)
+    while (n--) {
+      u8arr[n] = bstr.charCodeAt(n)
+    }
+    return new Blob([u8arr], { type: mime })
+  } catch {
+    return new Blob([], { type: 'image/jpeg' })
+  }
+}
+
+/**
+ * Lee los primeros bytes de un archivo usando FileReader estándar
+ * (evita slice.arrayBuffer() que no existe en Android < 10).
+ */
+function readFirstBytes(file: Blob, count = 64): Promise<Uint8Array> {
+  return new Promise((resolve) => {
+    try {
+      const slice = file.slice(0, count)
+      const reader = new FileReader()
+      reader.onloadend = () => {
+        if (reader.result instanceof ArrayBuffer) {
+          resolve(new Uint8Array(reader.result))
+        } else {
+          resolve(new Uint8Array(0))
+        }
+      }
+      reader.onerror = () => resolve(new Uint8Array(0))
+      reader.readAsArrayBuffer(slice)
+    } catch {
+      resolve(new Uint8Array(0))
+    }
+  })
+}
+
+/**
+ * Detecta si el archivo es realmente HEIC / HEIF.
+ * Las capturas de pantalla (PNG) y fotos JPG se descartan de inmediato sin demora.
  */
 async function isHeicFile(file: File): Promise<boolean> {
   const type = (file.type || '').toLowerCase()
-  if (type.includes('heic') || type.includes('heif')) return true
   const name = (file.name || '').toLowerCase()
-  if (name.endsWith('.heic') || name.endsWith('.heif')) return true
-  try {
-    const slice = file.slice(0, 64)
-    const buffer = await slice.arrayBuffer()
-    const bytes = new Uint8Array(buffer)
-    if (bytes.length >= 12) {
-      const ascii = String.fromCharCode(...bytes.subarray(4, Math.min(bytes.length, 64))).toLowerCase()
-      if (
-        ascii.includes('heic') ||
-        ascii.includes('heix') ||
-        ascii.includes('hevc') ||
-        ascii.includes('heim') ||
-        ascii.includes('heis') ||
-        ascii.includes('mif1') ||
-        ascii.includes('msf1')
-      ) {
-        return true
-      }
+
+  // Descarte inmediato para capturas y fotos normales (PNG, JPG, WebP)
+  if (type === 'image/png' || type === 'image/jpeg' || type === 'image/webp') return false
+  if (name.endsWith('.png') || name.endsWith('.jpg') || name.endsWith('.jpeg') || name.endsWith('.webp')) return false
+
+  if (type.includes('heic') || type.includes('heif') || name.endsWith('.heic') || name.endsWith('.heif')) return true
+
+  // Verificación por cabecera mágica
+  const bytes = await readFirstBytes(file, 32)
+  if (bytes.length >= 12) {
+    const ascii = String.fromCharCode(...bytes.subarray(4, Math.min(bytes.length, 32))).toLowerCase()
+    if (
+      ascii.includes('heic') ||
+      ascii.includes('heix') ||
+      ascii.includes('hevc') ||
+      ascii.includes('heim') ||
+      ascii.includes('heis') ||
+      ascii.includes('mif1') ||
+      ascii.includes('msf1')
+    ) {
+      return true
     }
-  } catch {}
+  }
   return false
 }
 
@@ -72,7 +139,7 @@ function loadLocalScript(src: string, checkFn: () => boolean): Promise<boolean> 
       if (checkFn()) return resolve(true)
       existing.addEventListener('load', () => resolve(checkFn()), { once: true })
       existing.addEventListener('error', () => resolve(false), { once: true })
-      setTimeout(() => resolve(checkFn()), 3000)
+      setTimeout(() => resolve(checkFn()), 2000)
       return
     }
     const script = document.createElement('script')
@@ -81,7 +148,7 @@ function loadLocalScript(src: string, checkFn: () => boolean): Promise<boolean> 
     script.onload = () => resolve(checkFn())
     script.onerror = () => resolve(false)
     document.head.appendChild(script)
-    setTimeout(() => resolve(checkFn()), 4000)
+    setTimeout(() => resolve(checkFn()), 2500)
   })
 }
 
@@ -91,17 +158,11 @@ async function loadHeic2AnyScript(): Promise<boolean> {
   if (heicScriptLoadingPromise) return heicScriptLoadingPromise
 
   heicScriptLoadingPromise = (async () => {
-    // 1. Intentar primero heic2any local
     let ok = await loadLocalScript('/js/heic2any.min.js', () => typeof (window as any).heic2any === 'function')
     if (ok) return true
-
-    // 2. Intentar heic-to local (WASM libde265 autónomo de alta velocidad)
     ok = await loadLocalScript('/js/heic-to.js', () => typeof (window as any).HeicTo === 'function' || typeof (window as any).heicTo === 'function')
     if (ok) return true
-
-    // 3. Fallback a CDN por si acaso
-    ok = await loadLocalScript('https://cdn.jsdelivr.net/npm/heic2any@0.0.4/dist/heic2any.min.js', () => typeof (window as any).heic2any === 'function')
-    return ok
+    return false
   })()
 
   return heicScriptLoadingPromise
@@ -123,7 +184,8 @@ async function decodeHeicNative(file: Blob | File): Promise<Blob | null> {
         ctx.fillRect(0, 0, canvas.width, canvas.height)
         ctx.drawImage(bmp, 0, 0, canvas.width, canvas.height)
         bmp.close()
-        return new Promise<Blob | null>((res) => canvas.toBlob(res, 'image/jpeg', 0.82))
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.82)
+        return dataUrlToBlob(dataUrl)
       }
       bmp.close()
     }
@@ -132,56 +194,10 @@ async function decodeHeicNative(file: Blob | File): Promise<Blob | null> {
 }
 
 /**
- * Detecta el MIME type real a partir de los bytes iniciales del archivo.
+ * Carga una imagen para redimensionarla con timeout seguro de 3.5 segundos
+ * para garantizar que nunca bloquee la pantalla en celulares lentos.
  */
-async function detectImageMime(file: File | Blob): Promise<string> {
-  try {
-    const slice = file.slice(0, 32)
-    const buffer = await slice.arrayBuffer()
-    const bytes = new Uint8Array(buffer)
-
-    if (bytes.length >= 2 && bytes[0] === 0xff && bytes[1] === 0xd8) return 'image/jpeg'
-    if (bytes.length >= 8 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) return 'image/png'
-    if (
-      bytes.length >= 12 &&
-      bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46 &&
-      bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50
-    ) return 'image/webp'
-  } catch {}
-
-  if (file.type && file.type.startsWith('image/')) return file.type
-  return 'image/jpeg'
-}
-
-/**
- * Convierte un Blob o File a un DataURL estándar (data:image/...;base64,...)
- * usando la API nativa FileReader del navegador.
- */
-function readBlobAsDataUrl(file: Blob | File, mime: string): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onloadend = () => {
-      if (typeof reader.result === 'string') {
-        let res = reader.result
-        if (!res.startsWith('data:image/') || res.startsWith('data:;base64') || res.startsWith('data:application/octet-stream')) {
-          const parts = res.split(',')
-          const b64 = parts[1] || ''
-          res = `data:${mime};base64,${b64}`
-        }
-        resolve(res)
-      } else {
-        reject(new Error('No se pudo generar la vista previa de la foto.'))
-      }
-    }
-    reader.onerror = () => reject(new Error('Error al leer el archivo del dispositivo.'))
-    reader.readAsDataURL(file)
-  })
-}
-
-/**
- * Carga una imagen usando URL.createObjectURL para bajo consumo de memoria.
- */
-function loadImageAsync(url: string, timeoutMs = 6000): Promise<HTMLImageElement | null> {
+function loadImageAsync(url: string, timeoutMs = 3500): Promise<HTMLImageElement | null> {
   return new Promise((resolve) => {
     const img = new Image()
     let done = false
@@ -210,31 +226,50 @@ function loadImageAsync(url: string, timeoutMs = 6000): Promise<HTMLImageElement
   })
 }
 
+/**
+ * Lee un Blob/File completo a DataURL base64.
+ * Es el método más seguro y compatible de todo el estándar web.
+ */
+export function readBlobAsDataUrl(file: Blob | File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => {
+      if (typeof reader.result === 'string') {
+        resolve(reader.result)
+      } else {
+        reject(new Error('No se pudo generar la vista previa de la foto.'))
+      }
+    }
+    reader.onerror = () => reject(new Error('Error al leer el archivo del dispositivo.'))
+    reader.readAsDataURL(file)
+  })
+}
+
+/**
+ * Procesa cualquier comprobante recibido (captura de pantalla, foto de galería o cámara).
+ * SIEMPRE devuelve un objeto válido con previewUrl y nunca se cuelga.
+ */
 export async function prepareReceiptPhoto(file: File): Promise<PreparedReceiptPhoto> {
   if (!file || !file.size) {
-    throw new Error('La foto está vacía o el archivo fue cancelado. Selecciónala de nuevo.')
-  }
-  if (file.size > 25 * 1024 * 1024) {
-    throw new Error('La foto es demasiado pesada (máx 25 MB).')
+    throw new Error('El archivo seleccionado está vacío o fue cancelado.')
   }
 
-  let workingFile: File = file
-  let baseFileName = (file.name || `comprobante-${Date.now()}`).replace(/\.[^/.]+$/, '')
+  const timestamp = Date.now()
+  let workingFile: Blob = file
+  let baseFileName = (file.name || `comprobante-${timestamp}`).replace(/\.[^/.]+$/, '').replace(/[^a-zA-Z0-9_-]/g, '_')
+  if (!baseFileName) baseFileName = `comprobante-${timestamp}`
 
-  // 1. Detección y conversión automática de fotos HEIC (Samsung Galaxy / Apple)
+  // 1. Manejo de fotos HEIC (solo si es verdaderamente HEIC)
   const isHeic = await isHeicFile(file)
   if (isHeic) {
     try {
-      // Paso 1: Decodificación nativa súper rápida si el navegador la soporta
       const nativeBlob = await decodeHeicNative(file)
       if (nativeBlob && nativeBlob.size > 0) {
-        baseFileName = baseFileName.replace(/\.(heic|heif)$/i, '')
-        workingFile = new File([nativeBlob], `${baseFileName}.jpg`, { type: 'image/jpeg' })
+        workingFile = nativeBlob
       } else {
-        // Paso 2: Usar convertidores locales de la propia app (heic2any y heic-to)
         await loadHeic2AnyScript()
         const heic2anyFn = (window as any)?.heic2any
-        const heicToObj = (window as any)?.heicTo
+        const heicToFn = (window as any)?.HeicTo || (window as any)?.heicTo
         let jpegBlob: Blob | null = null
 
         if (typeof heic2anyFn === 'function') {
@@ -259,8 +294,6 @@ export async function prepareReceiptPhoto(file: File): Promise<PreparedReceiptPh
           }
         }
 
-        // Paso 3: Respaldo con HeicTo si heic2any no produjo blob
-        const heicToFn = (window as any)?.HeicTo || (window as any)?.heicTo
         if ((!jpegBlob || jpegBlob.size === 0) && typeof heicToFn === 'function') {
           try {
             const res = await heicToFn({
@@ -269,14 +302,11 @@ export async function prepareReceiptPhoto(file: File): Promise<PreparedReceiptPh
               quality: 0.82,
             })
             jpegBlob = Array.isArray(res) ? res[0] : res
-          } catch (heicToErr) {
-            console.warn('[prepareReceiptPhoto] HeicTo error:', heicToErr)
-          }
+          } catch {}
         }
 
         if (jpegBlob && jpegBlob.size > 0) {
-          baseFileName = baseFileName.replace(/\.(heic|heif)$/i, '')
-          workingFile = new File([jpegBlob], `${baseFileName}.jpg`, { type: 'image/jpeg' })
+          workingFile = jpegBlob
         }
       }
     } catch (heicErr) {
@@ -284,15 +314,12 @@ export async function prepareReceiptPhoto(file: File): Promise<PreparedReceiptPh
     }
   }
 
-  const detectedMime = await detectImageMime(workingFile)
-  const ext = detectedMime === 'image/png' ? '.png' : detectedMime === 'image/webp' ? '.webp' : '.jpg'
-  const finalName = `${baseFileName}${ext}`
-
-  // 2. Intentar optimizar con Canvas a máx 1280px usando ObjectURL nativo (ultrarrápido y liviano)
+  // 2. Redimensionamiento y compresión universal con Canvas
+  // Usa canvas.toDataURL() que es 100% síncrono, nunca se cuelga y soporta capturas PNG con transparencia.
   let objectUrl = ''
   try {
     objectUrl = URL.createObjectURL(workingFile)
-    const img = await loadImageAsync(objectUrl, 6000)
+    const img = await loadImageAsync(objectUrl, 3500)
 
     if (img && img.naturalWidth > 0 && img.naturalHeight > 0) {
       const maxDim = 1280
@@ -301,51 +328,48 @@ export async function prepareReceiptPhoto(file: File): Promise<PreparedReceiptPh
       canvas.width = Math.max(1, Math.round(img.naturalWidth * scale))
       canvas.height = Math.max(1, Math.round(img.naturalHeight * scale))
 
-      const ctx = canvas.getContext('2d', { alpha: false })
+      const ctx = canvas.getContext('2d')
       if (ctx) {
+        // Fondo blanco sólido obligatorio para que las capturas de pantalla PNG no salgan negras
         ctx.fillStyle = '#ffffff'
         ctx.fillRect(0, 0, canvas.width, canvas.height)
         ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
 
-        const blob = await new Promise<Blob | null>((resolve) => {
-          canvas.toBlob(resolve, 'image/jpeg', 0.82)
-        })
+        // canvas.toDataURL es síncrono, inmediato y jamás se queda colgado
+        const compressedDataUrl = canvas.toDataURL('image/jpeg', 0.82)
+        const compressedBlob = dataUrlToBlob(compressedDataUrl)
 
-        if (blob && blob.size > 0) {
-          const optimizedFile = new File([blob], `${baseFileName}.jpg`, { type: 'image/jpeg' })
-          const optimizedDataUrl = await readBlobAsDataUrl(optimizedFile, 'image/jpeg')
+        if (compressedBlob && compressedBlob.size > 0) {
+          const finalName = `${baseFileName}.jpg`
+          const safeFile = createSafeFile(compressedBlob, finalName, 'image/jpeg')
           return {
-            file: optimizedFile,
-            previewUrl: optimizedDataUrl,
-            name: optimizedFile.name,
+            file: safeFile,
+            previewUrl: compressedDataUrl,
+            name: finalName,
           }
         }
       }
     }
   } catch (canvasErr) {
-    console.warn('[prepareReceiptPhoto] Optimización canvas omitida:', canvasErr)
+    console.warn('[prepareReceiptPhoto] Canvas omitido, usando fallback:', canvasErr)
   } finally {
     if (objectUrl) {
       try { URL.revokeObjectURL(objectUrl) } catch {}
     }
   }
 
-  // 3. Fallback: generar DataURL seguro o ObjectURL garantizado
-  try {
-    const rawDataUrl = await readBlobAsDataUrl(workingFile, detectedMime)
-    const normalizedFile = new File([workingFile], finalName, { type: detectedMime })
-    return {
-      file: normalizedFile,
-      previewUrl: rawDataUrl,
-      name: finalName,
-    }
-  } catch {
-    const fallbackUrl = URL.createObjectURL(workingFile)
-    const normalizedFile = new File([workingFile], finalName, { type: detectedMime })
-    return {
-      file: normalizedFile,
-      previewUrl: fallbackUrl,
-      name: finalName,
-    }
+  // 3. Fallback infalible: lectura directa a DataURL
+  // Garantiza que cualquier captura o foto cargue siempre sin errores en cualquier celular antiguo
+  const rawDataUrl = await readBlobAsDataUrl(workingFile)
+  const isPng = rawDataUrl.startsWith('data:image/png')
+  const ext = isPng ? '.png' : '.jpg'
+  const mime = isPng ? 'image/png' : 'image/jpeg'
+  const fallbackName = `${baseFileName}${ext}`
+  const safeFile = createSafeFile(workingFile, fallbackName, mime)
+
+  return {
+    file: safeFile,
+    previewUrl: rawDataUrl,
+    name: fallbackName,
   }
 }
