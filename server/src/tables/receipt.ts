@@ -22,23 +22,7 @@ export async function validateReceipt(file: any) {
     throw new BadRequestException('El comprobante debe ser una imagen válida (JPG, PNG o WebP)');
   }
 
-  // Si es formato HEIC (iPhone o Samsung Galaxy), convertir automáticamente a JPEG estándar para que cualquier navegador lo vea
-  if (heic || file?.mimetype === 'image/heic' || file?.mimetype === 'image/heif') {
-    try {
-      const heicConvert = require('heic-convert');
-      const converted = await heicConvert({
-        buffer: bytes,
-        format: 'JPEG',
-        quality: 0.85,
-      });
-      bytes = Buffer.from(converted);
-      return { mime: 'image/jpeg', bytes };
-    } catch (err: any) {
-      console.warn('[validateReceipt] Conversión HEIC no aplicada en servidor, usando original:', err?.message);
-    }
-  }
-
-  const mime = jpeg ? 'image/jpeg' : png ? 'image/png' : webp ? 'image/webp' : (file?.mimetype || 'image/jpeg');
+  const mime = jpeg ? 'image/jpeg' : png ? 'image/png' : webp ? 'image/webp' : heic ? 'image/heic' : (file?.mimetype || 'image/jpeg');
   return { mime, bytes };
 }
 
