@@ -1,9 +1,23 @@
 /**
  * Procesa y optimiza fotos de comprobantes tomadas desde cualquier dispositivo móvil o de escritorio.
- * Incluye múltiples mecanismos de decodificación y fallback a prueba de fallos para garantizar compatibilidad
- * con teléfonos Android (Samsung, Xiaomi, Motorola, etc.), iPhone (iOS Safari) y WebViews.
+ * Genera tanto un File comprimido para el backend como un DataURL infalible para previsualización inmediata.
  */
-export async function prepareReceiptPhoto(file: File): Promise<File> {
+export interface PreparedReceiptPhoto {
+  file: File
+  previewUrl: string
+  name: string
+}
+
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(reader.result as string)
+    reader.onerror = () => reject(reader.error || new Error('Error al leer el archivo de imagen'))
+    reader.readAsDataURL(file)
+  })
+}
+
+export async function prepareReceiptPhoto(file: File): Promise<PreparedReceiptPhoto> {
   if (!file || !file.size) {
     throw new Error('La foto está vacía. Tómala de nuevo.')
   }
@@ -11,15 +25,67 @@ export async function prepareReceiptPhoto(file: File): Promise<File> {
     throw new Error('La foto es demasiado pesada (máx 25 MB).')
   }
 
-  // Intento 1: createImageBitmap (API nativa moderna, GPU-accelerated y no causa OOM en celulares con cámaras de 50MP-108MP)
+  // 1. Extraer inmediatamente los bytes del archivo a memoria como DataURL.
+  // Esto evita que en teléfonos Android Chrome/WebView se cierre el stream temporal de la cámara.
+  let rawDataUrl = ''
+  try {
+    rawDataUrl = await readFileAsDataUrl(file)
+  } catch (readErr) {
+    console.warn('FileReader readAsDataURL failed, using objectUrl fallback:', readErr)
+  }
+
+  const baseFileName = file.name || `comprobante-${Date.now()}.jpg`
+
+  // 2. Intentar decodificar y optimizar la imagen con HTMLImageElement y Canvas
+  if (rawDataUrl) {
+    try {
+      const img = new Image()
+      const loaded = await new Promise<boolean>((resolve) => {
+        img.onload = () => resolve(true)
+        img.onerror = () => resolve(false)
+        img.src = rawDataUrl
+      })
+
+      if (loaded && img.naturalWidth > 0 && img.naturalHeight > 0) {
+        const maxDim = 1600
+        const scale = Math.min(1, maxDim / Math.max(img.naturalWidth, img.naturalHeight))
+        const canvas = document.createElement('canvas')
+        canvas.width = Math.max(1, Math.round(img.naturalWidth * scale))
+        canvas.height = Math.max(1, Math.round(img.naturalHeight * scale))
+        const ctx = canvas.getContext('2d')
+        if (ctx) {
+          ctx.fillStyle = '#ffffff'
+          ctx.fillRect(0, 0, canvas.width, canvas.height)
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
+
+          const optimizedDataUrl = canvas.toDataURL('image/jpeg', 0.85)
+
+          const blob = await new Promise<Blob | null>((resolve) => {
+            canvas.toBlob(resolve, 'image/jpeg', 0.85)
+          })
+
+          if (blob && blob.size > 0) {
+            const optimizedFile = new File([blob], baseFileName.replace(/\.[^/.]+$/, '') + '.jpg', { type: 'image/jpeg' })
+            return {
+              file: optimizedFile,
+              previewUrl: optimizedDataUrl,
+              name: optimizedFile.name,
+            }
+          }
+        }
+      }
+    } catch (canvasErr) {
+      console.warn('Canvas optimization fallback:', canvasErr)
+    }
+  }
+
+  // 3. Fallback createImageBitmap si FileReader no obtuvo la imagen o falló el Image element
   try {
     if (typeof createImageBitmap === 'function') {
       let bitmap: ImageBitmap | null = null
       try {
-        // En navegadores que soportan resize nativo al decodificar:
         bitmap = await createImageBitmap(file, { resizeWidth: 1600, resizeQuality: 'medium' })
       } catch {
-        // Fallback si el navegador no soporta el objeto de opciones:
         bitmap = await createImageBitmap(file)
       }
 
@@ -35,11 +101,18 @@ export async function prepareReceiptPhoto(file: File): Promise<File> {
           ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height)
           bitmap.close?.()
 
-          const blob = await new Promise<Blob | null>(resolve => {
+          const optimizedDataUrl = canvas.toDataURL('image/jpeg', 0.85)
+          const blob = await new Promise<Blob | null>((resolve) => {
             canvas.toBlob(resolve, 'image/jpeg', 0.85)
           })
+
           if (blob && blob.size > 0) {
-            return new File([blob], `comprobante-${Date.now()}.jpg`, { type: 'image/jpeg' })
+            const optimizedFile = new File([blob], baseFileName.replace(/\.[^/.]+$/, '') + '.jpg', { type: 'image/jpeg' })
+            return {
+              file: optimizedFile,
+              previewUrl: optimizedDataUrl,
+              name: optimizedFile.name,
+            }
           }
         }
       }
@@ -48,87 +121,14 @@ export async function prepareReceiptPhoto(file: File): Promise<File> {
     console.warn('createImageBitmap fallback:', err)
   }
 
-  // Intento 2: HTMLImageElement con URL.createObjectURL
-  try {
-    const objectUrl = URL.createObjectURL(file)
-    const img = new Image()
-    const loaded = await new Promise<boolean>((resolve) => {
-      img.onload = () => resolve(true)
-      img.onerror = () => resolve(false)
-      img.src = objectUrl
-    })
-
-    if (loaded && img.naturalWidth > 0 && img.naturalHeight > 0) {
-      const scale = Math.min(1, 1600 / Math.max(img.naturalWidth, img.naturalHeight))
-      const canvas = document.createElement('canvas')
-      canvas.width = Math.max(1, Math.round(img.naturalWidth * scale))
-      canvas.height = Math.max(1, Math.round(img.naturalHeight * scale))
-      const ctx = canvas.getContext('2d')
-      if (ctx) {
-        ctx.fillStyle = '#ffffff'
-        ctx.fillRect(0, 0, canvas.width, canvas.height)
-        ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
-        URL.revokeObjectURL(objectUrl)
-
-        const blob = await new Promise<Blob | null>(resolve => {
-          canvas.toBlob(resolve, 'image/jpeg', 0.85)
-        })
-        if (blob && blob.size > 0) {
-          return new File([blob], `comprobante-${Date.now()}.jpg`, { type: 'image/jpeg' })
-        }
-      }
-    }
-    URL.revokeObjectURL(objectUrl)
-  } catch (err) {
-    console.warn('HTMLImageElement objectUrl fallback:', err)
-  }
-
-  // Intento 3: FileReader readAsDataURL (muchos teléfonos Android con sandbox que rechazan BlobURL funcionan con DataURL)
-  try {
-    const dataUrl = await new Promise<string>((resolve, reject) => {
-      const reader = new FileReader()
-      reader.onload = () => resolve(reader.result as string)
-      reader.onerror = () => reject(reader.error)
-      reader.readAsDataURL(file)
-    })
-
-    const img = new Image()
-    const loaded = await new Promise<boolean>((resolve) => {
-      img.onload = () => resolve(true)
-      img.onerror = () => resolve(false)
-      img.src = dataUrl
-    })
-
-    if (loaded && img.naturalWidth > 0 && img.naturalHeight > 0) {
-      const scale = Math.min(1, 1600 / Math.max(img.naturalWidth, img.naturalHeight))
-      const canvas = document.createElement('canvas')
-      canvas.width = Math.max(1, Math.round(img.naturalWidth * scale))
-      canvas.height = Math.max(1, Math.round(img.naturalHeight * scale))
-      const ctx = canvas.getContext('2d')
-      if (ctx) {
-        ctx.fillStyle = '#ffffff'
-        ctx.fillRect(0, 0, canvas.width, canvas.height)
-        ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
-
-        const blob = await new Promise<Blob | null>(resolve => {
-          canvas.toBlob(resolve, 'image/jpeg', 0.85)
-        })
-        if (blob && blob.size > 0) {
-          return new File([blob], `comprobante-${Date.now()}.jpg`, { type: 'image/jpeg' })
-        }
-      }
-    }
-  } catch (err) {
-    console.warn('FileReader dataUrl fallback:', err)
-  }
-
-  // Intento 4: FALLBACK SUPREMO DE SEGURIDAD
-  // Si el decodificador o canvas del navegador falló en el celular (por ejemplo baja memoria RAM o formato propietario de cámara),
-  // pero el archivo pesa menos de 10 MB: ¡NO BLOQUEAR A LA MESERA!
-  // Retornar el archivo original normalizado para que el backend lo reciba y valide sin problemas.
+  // 4. FALLBACK SUPREMO DE SEGURIDAD (Garantiza que la mesera nunca se quede bloqueada)
   if (file.size <= 10 * 1024 * 1024) {
-    console.info('Usando archivo original como comprobante de transferencia (compatibilidad celular)')
-    return file
+    console.info('Usando archivo original con dataURL preview para compatibilidad total')
+    return {
+      file,
+      previewUrl: rawDataUrl || URL.createObjectURL(file),
+      name: file.name || 'comprobante.jpg',
+    }
   }
 
   throw new Error('La foto tomada es demasiado pesada (más de 10 MB). Toma la foto un poco más cerca del comprobante.')

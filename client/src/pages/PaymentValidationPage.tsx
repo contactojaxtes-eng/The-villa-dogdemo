@@ -45,7 +45,11 @@ export default function PaymentValidationPage() {
   const [loading, setLoading] = useState(false)
   const [activeTab, setActiveTab] = useState('PENDING_REVIEW')
   const [search, setSearch] = useState('')
-  const [imageUrl, setImageUrl] = useState<string | null>(null)
+  const [modalViewer, setModalViewer] = useState<{
+    items: any[]
+    index: number
+    payment?: any
+  } | null>(null)
   const [isMuted, setIsMuted] = useState(() => isNotificationsMuted())
   const [actionLoading, setActionLoading] = useState<string | null>(null)
 
@@ -113,7 +117,7 @@ export default function PaymentValidationPage() {
     return () => { socket.disconnect() }
   }, [user?.id, user?.name, user?.role, load, loadCancellations])
 
-  useEffect(() => () => { if (imageUrl && !imageUrl.startsWith('data:')) URL.revokeObjectURL(imageUrl) }, [imageUrl])
+
 
   // Filtrado instantáneo en cliente (0ms)
   const safePayments = useMemo(() => Array.isArray(payments) ? payments : [], [payments])
@@ -181,17 +185,21 @@ export default function PaymentValidationPage() {
     }
   }, [safePayments, cancellations])
 
-  const openProof = async (proofId: string, directBase64?: string) => {
-    if (directBase64) {
-      setImageUrl(directBase64)
+  const openProofViewer = (proofs: any[], initialIndex = 0, payment?: any) => {
+    const valid = (proofs || []).filter((p: any) => p && (p.fileBase64 || p.filePath || p.id))
+    if (!valid.length) {
+      alerts.warning('Comprobante', 'No hay imágenes disponibles para este cobro.')
       return
     }
-    try {
-      const next = URL.createObjectURL(await api.getBlob(`/payment-validation/proofs/${proofId}/image`))
-      setImageUrl(next)
-    } catch (err: any) {
-      alerts.error('Comprobante no disponible', err.message)
-    }
+    setModalViewer({
+      items: valid,
+      index: Math.min(Math.max(initialIndex, 0), valid.length - 1),
+      payment,
+    })
+  }
+
+  const openProof = (proofId: string, directBase64?: string, payment?: any) => {
+    openProofViewer([{ id: proofId, fileBase64: directBase64 }], 0, payment)
   }
 
   const review = async (payment: any, action: 'validate' | 'reject') => {
@@ -462,7 +470,7 @@ export default function PaymentValidationPage() {
                 <div className="flex items-center gap-3 min-w-0 flex-1">
                   {/* Miniaturas si es transferencia (soporta 1 o múltiples fotos) */}
                   {payment.transferProofs && payment.transferProofs.length > 0 && payment.transferProofs.some((p: any) => p.fileBase64 || p.filePath || p.id) ? (
-                    <div className="flex items-center gap-1.5 shrink-0 flex-wrap max-w-[135px]">
+                    <div className="flex items-center gap-1.5 shrink-0 flex-wrap max-w-xs md:max-w-sm">
                       {payment.transferProofs.filter((p: any) => p.fileBase64 || p.filePath || p.id).map((p: any, idx: number) => (
                         <div
                           key={p.id || idx}
@@ -470,7 +478,7 @@ export default function PaymentValidationPage() {
                           onClick={(e) => {
                             e.preventDefault()
                             e.stopPropagation()
-                            openProof(p.id, p.fileBase64)
+                            openProofViewer(payment.transferProofs, idx, payment)
                           }}
                           title={`Comprobante #${idx + 1} de ${payment.transferProofs.length} - Clic para ver en grande`}
                         >
@@ -518,6 +526,11 @@ export default function PaymentValidationPage() {
                       }`}>
                         {statusLabels[payment.status] || payment.status}
                       </span>
+                      {payment.transferProofs && payment.transferProofs.length > 1 && (
+                        <span className="text-[10px] font-black px-2 py-0.5 rounded-md bg-blue-500/15 text-blue-700 dark:text-blue-300 border border-blue-500/30">
+                          📸 {payment.transferProofs.length} comprobantes
+                        </span>
+                      )}
                     </div>
 
                     {/* Desglose para pagos mixtos */}
@@ -552,11 +565,11 @@ export default function PaymentValidationPage() {
                             onClick={(e) => {
                               e.preventDefault()
                               e.stopPropagation()
-                              openProof(proof.id, proof.fileBase64)
+                              openProofViewer(payment.transferProofs, 0, payment)
                             }}
                             className="text-[var(--accent)] font-bold hover:underline flex items-center gap-1 cursor-pointer"
                           >
-                            <Eye className="h-3 w-3" /> Ver comprobante
+                            <Eye className="h-3 w-3" /> {payment.transferProofs.length > 1 ? `Ver comprobantes (${payment.transferProofs.length})` : 'Ver comprobante'}
                           </button>
                         </>
                       )}
@@ -630,34 +643,132 @@ export default function PaymentValidationPage() {
         </div>
       )}
 
-      {/* Modal Ver en grande: Pantalla completa, sin bordes toscos y sin doble X */}
-      <Dialog open={Boolean(imageUrl)} onOpenChange={(open) => { if (!open) setImageUrl(null) }}>
-        <DialogContent className="max-w-fit w-auto max-h-[96vh] p-3 bg-[var(--bg-panel)] border border-[var(--border-default)] text-[var(--text-primary)] rounded-2xl shadow-2xl overflow-hidden flex flex-col items-center [&>button.absolute]:hidden">
-          <div className="flex w-full items-center justify-between pb-2 border-b border-[var(--border-subtle)] gap-6">
-            <span className="text-xs font-black flex items-center gap-1.5 text-[var(--text-primary)]">
-              <Image className="h-4 w-4 text-[var(--accent)]" /> Comprobante de Transferencia
-            </span>
+      {/* Modal Multi-Comprobante: Pantalla completa, navegación fluida entre fotos y validación directa */}
+      <Dialog open={Boolean(modalViewer)} onOpenChange={(open) => { if (!open) setModalViewer(null) }}>
+        <DialogContent className="max-w-2xl w-[94vw] max-h-[96vh] p-3 bg-[var(--bg-panel)] border border-[var(--border-default)] text-[var(--text-primary)] rounded-2xl shadow-2xl overflow-hidden flex flex-col items-center [&>button.absolute]:hidden">
+          {/* Header */}
+          <div className="flex w-full items-center justify-between pb-2 border-b border-[var(--border-subtle)] gap-4">
+            <div className="flex items-center gap-2 min-w-0">
+              <Image className="h-4 w-4 text-[var(--accent)] shrink-0" />
+              <span className="text-xs font-black text-[var(--text-primary)] truncate">
+                Comprobante de Transferencia {modalViewer && modalViewer.items.length > 1 ? `(${modalViewer.index + 1} de ${modalViewer.items.length})` : ''}
+              </span>
+              {modalViewer?.payment?.order?.diningTable?.label && (
+                <span className="text-[10px] font-bold text-[var(--text-secondary)] bg-[var(--bg-elevated)] px-2 py-0.5 rounded-md">
+                  {modalViewer.payment.order.diningTable.label}
+                </span>
+              )}
+            </div>
             <button
               type="button"
-              className="rounded-xl px-2.5 py-1 text-xs font-bold bg-[var(--bg-elevated)] hover:bg-[var(--bg-hover)] text-[var(--text-primary)] transition-all cursor-pointer flex items-center gap-1 border border-[var(--border-subtle)]"
+              className="rounded-xl px-2.5 py-1 text-xs font-bold bg-[var(--bg-elevated)] hover:bg-[var(--bg-hover)] text-[var(--text-primary)] transition-all cursor-pointer flex items-center gap-1 border border-[var(--border-subtle)] shrink-0"
               onClick={(e) => {
                 e.preventDefault()
                 e.stopPropagation()
-                setImageUrl(null)
+                setModalViewer(null)
               }}
             >
               ✕ Cerrar
             </button>
           </div>
-          <div className="max-h-[88vh] max-w-[94vw] sm:max-w-[85vw] flex items-center justify-center pt-2 overflow-auto">
-            {imageUrl && (
-              <img
-                src={imageUrl}
-                alt="Comprobante completo"
-                className="max-h-[84vh] w-auto max-w-full object-contain rounded-xl shadow-md block"
-              />
-            )}
+
+          {/* Navegación y selector si hay múltiples fotos */}
+          {modalViewer && modalViewer.items.length > 1 && (
+            <div className="flex items-center justify-between w-full pt-2 px-1 text-xs gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={modalViewer.index === 0}
+                onClick={() => setModalViewer(prev => prev ? { ...prev, index: prev.index - 1 } : null)}
+                className="h-7 px-2.5 text-xs font-bold gap-1 rounded-lg cursor-pointer"
+              >
+                ◀ Anterior
+              </Button>
+              <div className="flex items-center gap-1 overflow-x-auto py-0.5">
+                {modalViewer.items.map((_, i) => (
+                  <button
+                    key={i}
+                    type="button"
+                    onClick={() => setModalViewer(prev => prev ? { ...prev, index: i } : null)}
+                    className={`w-7 h-7 rounded-lg text-xs font-black cursor-pointer transition ${
+                      modalViewer.index === i
+                        ? 'bg-[var(--accent)] text-white shadow-xs scale-105'
+                        : 'bg-[var(--bg-elevated)] text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] border border-[var(--border-subtle)]'
+                    }`}
+                  >
+                    #{i + 1}
+                  </button>
+                ))}
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={modalViewer.index === modalViewer.items.length - 1}
+                onClick={() => setModalViewer(prev => prev ? { ...prev, index: prev.index + 1 } : null)}
+                className="h-7 px-2.5 text-xs font-bold gap-1 rounded-lg cursor-pointer"
+              >
+                Siguiente ▶
+              </Button>
+            </div>
+          )}
+
+          {/* Foto Principal */}
+          <div className="max-h-[72vh] w-full flex items-center justify-center pt-2 overflow-auto">
+            {modalViewer && (() => {
+              const cur = modalViewer.items[modalViewer.index]
+              if (!cur) return null
+              if (cur.fileBase64) {
+                return (
+                  <img
+                    src={cur.fileBase64}
+                    alt={`Comprobante ${modalViewer.index + 1}`}
+                    className="max-h-[68vh] w-auto max-w-full object-contain rounded-xl shadow-md block"
+                  />
+                )
+              }
+              return (
+                <ProtectedImage
+                  endpoint={`/payment-validation/proofs/${cur.id}/image`}
+                  alt={`Comprobante ${modalViewer.index + 1}`}
+                  className="max-h-[68vh] w-auto max-w-full object-contain rounded-xl shadow-md block"
+                />
+              )
+            })()}
           </div>
+
+          {/* Acciones de Validación Directa dentro del Modal */}
+          {modalViewer?.payment && modalViewer.payment.status === 'PENDING_REVIEW' && (
+            <div className="flex items-center justify-between gap-3 w-full pt-2.5 mt-2 border-t border-[var(--border-subtle)] flex-wrap">
+              <div className="text-xs font-bold text-[var(--text-secondary)]">
+                Monto: <strong className="text-rose-600 dark:text-rose-400 text-sm font-black">{formatCurrency(modalViewer.payment.amount || modalViewer.payment.order?.total || 0)}</strong>
+              </div>
+              <div className="flex items-center gap-2">
+                <Button
+                  onClick={() => {
+                    const pay = modalViewer.payment
+                    setModalViewer(null)
+                    review(pay, 'validate')
+                  }}
+                  size="sm"
+                  className="h-8 px-3.5 bg-red-600 hover:bg-red-700 text-white font-black text-xs gap-1.5 shadow-sm rounded-xl cursor-pointer"
+                >
+                  <CheckCircle2 className="h-4 w-4" /> Validar y Aceptar Pago
+                </Button>
+                <Button
+                  onClick={() => {
+                    const pay = modalViewer.payment
+                    setModalViewer(null)
+                    review(pay, 'reject')
+                  }}
+                  size="sm"
+                  variant="outline"
+                  className="h-8 px-3 border-rose-300 text-rose-600 hover:bg-rose-50 font-black text-xs gap-1.5 rounded-xl cursor-pointer"
+                >
+                  <XCircle className="h-4 w-4" /> Rechazar
+                </Button>
+              </div>
+            </div>
+          )}
         </DialogContent>
       </Dialog>
     </div>

@@ -763,19 +763,22 @@ export class TablesService {
     const isTransfer = data.method === 'TRANSFER';
 
     const rawFiles: any[] = Array.isArray(fileOrFiles) ? fileOrFiles : (fileOrFiles ? [fileOrFiles] : []);
+    const uniqueFiles = rawFiles.filter((f, idx, arr) =>
+      arr.findIndex(x => x && (x.originalname === f.originalname && x.size === f.size)) === idx
+    );
     const validReceipts: { receipt: any; file: any }[] = [];
-    if (!isCash && rawFiles.length > 0) {
-      for (const f of rawFiles) {
+    if (!isCash && uniqueFiles.length > 0) {
+      for (const f of uniqueFiles) {
         if (!f) continue;
         try {
           const receipt = validateReceipt(f);
           if (receipt) validReceipts.push({ receipt, file: f });
         } catch (e: any) {
-          if (rawFiles.length === 1) throw e;
+          if (uniqueFiles.length === 1) throw e;
         }
       }
     }
-    if ((isTransfer || (isMixed && rawFiles.length > 0)) && validReceipts.length === 0 && rawFiles.length > 0) {
+    if ((isTransfer || (isMixed && uniqueFiles.length > 0)) && validReceipts.length === 0 && uniqueFiles.length > 0) {
       throw new BadRequestException('El comprobante debe ser una imagen válida (JPG, PNG o WEBP)');
     }
 
@@ -895,15 +898,24 @@ export class TablesService {
       const key = payment.settlementId || payment.id;
       const current = grouped.get(key);
       if (!current) {
-        grouped.set(key, { ...payment, orderCount: 1 });
+        grouped.set(key, {
+          ...payment,
+          orderCount: 1,
+          transferProofs: payment.transferProofs ? [...payment.transferProofs] : [],
+        });
       } else {
         current.amount += payment.amount;
         current.cashAmount = (current.cashAmount || 0) + (payment.cashAmount || 0);
         current.transferAmount = (current.transferAmount || 0) + (payment.transferAmount || 0);
         current.orderCount++;
-        if (payment.transferProofs.length) {
-          current.id = payment.id;
-          current.transferProofs = payment.transferProofs;
+        if (payment.transferProofs && payment.transferProofs.length) {
+          const existingIds = new Set((current.transferProofs || []).map((p: any) => p.id));
+          for (const p of payment.transferProofs) {
+            if (!existingIds.has(p.id)) {
+              existingIds.add(p.id);
+              current.transferProofs.push(p);
+            }
+          }
         }
       }
     }

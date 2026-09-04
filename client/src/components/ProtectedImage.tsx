@@ -4,7 +4,7 @@ import { api } from '@/lib/api'
 export function ProtectedImage({ endpoint, alt, className }: { endpoint: string; alt: string; className?: string }) {
   const [url, setUrl] = useState('')
   const [failed, setFailed] = useState(false)
-  const isLocalPreview = endpoint.startsWith('blob:')
+  const isLocalPreview = endpoint.startsWith('blob:') || endpoint.startsWith('data:')
   useEffect(() => {
     let active = true
     let objectUrl = ''

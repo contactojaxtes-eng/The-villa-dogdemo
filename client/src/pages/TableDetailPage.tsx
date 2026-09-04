@@ -128,12 +128,11 @@ export default function TableDetailPage() {
   }, [id, user?.id, user?.name, user?.role, table?.label])
 
   useEffect(() => () => {
-    proofs.forEach(p => URL.revokeObjectURL(p.previewUrl))
+    proofs.forEach(p => { if (p.previewUrl.startsWith('blob:')) URL.revokeObjectURL(p.previewUrl) })
   }, [])
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const rawFiles = Array.from(e.target.files || [])
-    e.target.value = ''
     if (rawFiles.length === 0) return
 
     setPreparingPhoto(true)
@@ -143,8 +142,8 @@ export default function TableDetailPage() {
         const prepared = await prepareReceiptPhoto(f)
         newItems.push({
           id: crypto.randomUUID(),
-          file: prepared,
-          previewUrl: URL.createObjectURL(prepared),
+          file: prepared.file,
+          previewUrl: prepared.previewUrl,
           name: prepared.name,
         })
       }
@@ -152,6 +151,7 @@ export default function TableDetailPage() {
     } catch (error: any) {
       alerts.error('No se pudo procesar la foto', error.message)
     } finally {
+      e.target.value = ''
       setPreparingPhoto(false)
     }
   }
@@ -159,14 +159,14 @@ export default function TableDetailPage() {
   const removeProof = (proofId: string) => {
     setProofs(prev => {
       const target = prev.find(p => p.id === proofId)
-      if (target) URL.revokeObjectURL(target.previewUrl)
+      if (target && target.previewUrl.startsWith('blob:')) URL.revokeObjectURL(target.previewUrl)
       return prev.filter(p => p.id !== proofId)
     })
   }
 
   const clearProofs = () => {
     setProofs(prev => {
-      prev.forEach(p => URL.revokeObjectURL(p.previewUrl))
+      prev.forEach(p => { if (p.previewUrl.startsWith('blob:')) URL.revokeObjectURL(p.previewUrl) })
       return []
     })
   }
@@ -672,11 +672,14 @@ export default function TableDetailPage() {
                             className="flex items-center justify-between gap-2 rounded-xl bg-[var(--bg-panel)] p-2 border border-[var(--border-subtle)] shadow-xs"
                           >
                             <div className="flex min-w-0 items-center gap-2 overflow-hidden">
-                              <img
-                                src={p.previewUrl}
-                                alt={`Comprobante ${idx + 1}`}
-                                className="h-12 w-12 shrink-0 rounded-lg object-cover border border-[var(--border-subtle)]"
-                              />
+                              <div className="relative h-12 w-12 shrink-0 rounded-lg overflow-hidden border border-[var(--border-subtle)] bg-[var(--bg-elevated)] flex items-center justify-center">
+                                <img
+                                  src={p.previewUrl}
+                                  alt={`Comprobante ${idx + 1}`}
+                                  className="h-full w-full object-cover"
+                                  loading="eager"
+                                />
+                              </div>
                               <div className="min-w-0 truncate text-xs">
                                 <p className="font-black text-[var(--text-primary)] truncate">
                                   Comprobante #{idx + 1}
@@ -760,7 +763,7 @@ export default function TableDetailPage() {
                       </span>
                     </div>
 
-                    {p.method !== 'CASH' && (p.fileBase64 || p.filePath) ? (
+                    {p.method !== 'CASH' && (p.id || p.fileBase64 || p.filePath) ? (
                       <div className="flex items-center gap-2">
                         <button
                           type="button"
