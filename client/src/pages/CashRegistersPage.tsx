@@ -232,11 +232,38 @@ export default function CashRegistersPage() {
     setCloseSuccess(false)
     try {
       const [userSummary, regSummary] = await Promise.all([
-        api.get<CashSummary>(`/payments/closing/today?cashRegisterId=${regId}`),
-        api.get<Summary>(`/cash-registers/${regId}/summary`),
+        api.get<CashSummary>(`/payments/closing/today?cashRegisterId=${regId}`).catch(err => {
+          console.warn('Error cargando userSummary:', err)
+          return null
+        }),
+        api.get<Summary>(`/cash-registers/${regId}/summary`).catch(err => {
+          console.warn('Error cargando regSummary:', err)
+          return null
+        }),
       ])
-      setCloseSummary(userSummary)
-      setCloseRegSummary(regSummary)
+
+      const fallbackSummary: CashSummary = {
+        totalCash: regSummary?.totalCash || 0,
+        totalTransfers: regSummary?.totalTransfer || 0,
+        totalNequi: regSummary?.totalNequi || 0,
+        totalBancolombia: regSummary?.totalBancolombia || 0,
+        totalDaviplata: regSummary?.totalDaviplata || 0,
+        totalSales: regSummary?.totalSales || 0,
+        totalTips: regSummary?.totalTips || 0,
+        totalExpenses: regSummary?.totalExpenses || 0,
+        orderCount: regSummary?.orderCount || 0,
+        isOpen: regSummary?.isOpen ?? true,
+        initialCash: regSummary?.initialCash || 0,
+        creditSales: 0,
+        totalCreditPayments: 0,
+      }
+
+      if (!regSummary && !userSummary) {
+        throw new Error('No se pudo obtener el resumen financiero de la caja.')
+      }
+
+      setCloseSummary(userSummary || fallbackSummary)
+      setCloseRegSummary(regSummary || (userSummary as any))
       setCloseCashDialog(true)
     } catch (err: any) {
       alerts.error('Error al cargar resumen', err.message || 'No se pudo cargar el resumen financiero.')

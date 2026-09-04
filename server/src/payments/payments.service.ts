@@ -148,26 +148,38 @@ export class PaymentsService {
       });
     }
 
-    const orders = await this.prisma.order.findMany({
-      where: { 
-        createdAt: { gte: start, lte: end }, 
-        status: { not: 'CANCELLED' },
-        OR: [
-          { status: 'DELIVERED' },
-          { paymentStatus: 'CONFIRMED' },
-          { paymentMethod: { not: null } },
-        ],
-        ...(openCash.cashRegisterId
-          ? { cashRegisterId: openCash.cashRegisterId }
-          : (targetIsCashier ? {
-              OR: [
-                { waiterId: targetUserId },
-                { payment: { confirmedBy: targetUserId } }
-              ]
-            } : {})
-        )
-      },
-    });
+    let orders: any[] = [];
+    try {
+      orders = await this.prisma.order.findMany({
+        where: { 
+          createdAt: { gte: start, lte: end }, 
+          status: { not: 'CANCELLED' },
+          OR: [
+            { status: 'DELIVERED' },
+            { paymentStatus: 'CONFIRMED' },
+            { paymentMethod: { not: '' } },
+          ],
+          ...(openCash.cashRegisterId
+            ? { cashRegisterId: openCash.cashRegisterId }
+            : (targetIsCashier ? {
+                OR: [
+                  { waiterId: targetUserId },
+                  { payment: { confirmedBy: targetUserId } }
+                ]
+              } : {})
+          )
+        },
+      });
+    } catch (err) {
+      console.warn('Error en consulta principal de órdenes en getCashClosingToday, reintentando con filtro básico:', err);
+      orders = await this.prisma.order.findMany({
+        where: {
+          createdAt: { gte: start, lte: end },
+          status: { not: 'CANCELLED' },
+          ...(openCash.cashRegisterId ? { cashRegisterId: openCash.cashRegisterId } : {})
+        },
+      }).catch(() => []);
+    }
 
     const byMethod = (method: string) => orders.filter(o => o.paymentMethod === method).reduce((sum, o) => sum + o.total, 0);
 
@@ -175,28 +187,38 @@ export class PaymentsService {
     const creditSales = byMethod('CREDIT');
 
     // Pagos de créditos confirmados durante este turno (pueden ser de pedidos creados hoy o antes)
-    const creditPayments = await this.prisma.payment.findMany({
-      where: {
-        confirmedAt: { gte: start, lte: end },
-        status: 'CONFIRMED',
-        order: {
-          paymentMethod: 'CREDIT',
-          ...(openCash.cashRegisterId ? { cashRegisterId: openCash.cashRegisterId } : {})
-        },
-        ...(!openCash.cashRegisterId && targetIsCashier ? { confirmedBy: targetUserId } : {})
-      }
-    });
+    let creditPayments: any[] = [];
+    try {
+      creditPayments = await this.prisma.payment.findMany({
+        where: {
+          confirmedAt: { gte: start, lte: end },
+          status: 'CONFIRMED',
+          order: {
+            paymentMethod: 'CREDIT',
+            ...(openCash.cashRegisterId ? { cashRegisterId: openCash.cashRegisterId } : {})
+          },
+          ...(!openCash.cashRegisterId && targetIsCashier ? { confirmedBy: targetUserId } : {})
+        }
+      });
+    } catch (err) {
+      console.warn('Error consultando creditPayments en getCashClosingToday:', err);
+    }
 
     const creditByMethod = (method: string) => creditPayments.filter(p => p.method === method).reduce((sum, p) => sum + p.amount, 0);
 
     // Abonos generales de clientes (cuentas por cobrar) realizados durante este turno
-    const customerPayments = await this.prisma.customerPayment.findMany({
-      where: {
-        createdAt: { gte: start, lte: end },
-        ...(openCash.cashRegisterId ? { cashRegisterId: openCash.cashRegisterId } : {}),
-        ...(!openCash.cashRegisterId && targetIsCashier ? { confirmedById: targetUserId } : {})
-      }
-    });
+    let customerPayments: any[] = [];
+    try {
+      customerPayments = await this.prisma.customerPayment.findMany({
+        where: {
+          createdAt: { gte: start, lte: end },
+          ...(openCash.cashRegisterId ? { cashRegisterId: openCash.cashRegisterId } : {}),
+          ...(!openCash.cashRegisterId && targetIsCashier ? { confirmedById: targetUserId } : {})
+        }
+      });
+    } catch (err) {
+      console.warn('Error consultando customerPayments en getCashClosingToday:', err);
+    }
 
     const customerPaymentsCash = customerPayments.filter(p => p.method === 'CASH').reduce((sum, p) => sum + p.amount, 0);
     const customerPaymentsTransfer = customerPayments.filter(p => p.method === 'TRANSFER').reduce((sum, p) => sum + p.amount, 0);
@@ -212,13 +234,18 @@ export class PaymentsService {
     const totalSales = orders.reduce((sum, o) => sum + o.total, 0);
     const totalTips = orders.reduce((sum, o) => sum + (o.tip || 0), 0);
 
-    const expenses = await this.prisma.expense.findMany({
-      where: { 
-        createdAt: { gte: start, lte: end },
-        ...(targetIsCashier ? { userId: targetUserId } : {})
-      },
-    });
-    const totalExpenses = expenses.reduce((sum, e) => sum + e.amount, 0);
+    let totalExpenses = 0;
+    try {
+      const expenses = await this.prisma.expense.findMany({
+        where: { 
+          createdAt: { gte: start, lte: end },
+          ...(targetIsCashier ? { userId: targetUserId } : {})
+        },
+      });
+      totalExpenses = expenses.reduce((sum, e) => sum + e.amount, 0);
+    } catch (err) {
+      console.warn('Error consultando expenses en getCashClosingToday:', err);
+    }
 
     return {
       totalCash,
@@ -534,7 +561,7 @@ export class PaymentsService {
       OR: [
         { status: 'DELIVERED' },
         { paymentStatus: 'CONFIRMED' },
-        { paymentMethod: { not: null } },
+        { paymentMethod: { not: '' } },
       ],
     };
     if (closing.cashRegisterId) {
@@ -800,7 +827,7 @@ export class PaymentsService {
         OR: [
           { status: 'DELIVERED' },
           { paymentStatus: 'CONFIRMED' },
-          { paymentMethod: { not: null } },
+          { paymentMethod: { not: '' } },
         ],
       },
     });
