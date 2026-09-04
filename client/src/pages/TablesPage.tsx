@@ -106,14 +106,16 @@ export default function TablesPage() {
           <h1 className="text-2xl font-black text-[var(--text-primary)]">Mesas de Salón</h1>
           <p className="text-sm text-[var(--text-secondary)]">Cuentas activas, pedidos y registro de mesas atendidas por mesera.</p>
         </div>
-        <div className="flex gap-2">
-          <Button asChild variant="outline" className="gap-1.5 border-[var(--border-default)] font-black text-xs">
-            <Link to="/tables/history"><History className="h-4 w-4 text-[var(--accent)]" /> Historial Completo</Link>
-          </Button>
-          <Button asChild className="gap-2 bg-[var(--accent)] text-[var(--accent-fg)] font-black">
-            <Link to="/tables/new"><PlusCircle className="h-4 w-4" />Nuevo Pedido</Link>
-          </Button>
-        </div>
+        {!isWaiter && (
+          <div className="hidden md:flex gap-2">
+            <Button asChild variant="outline" className="gap-1.5 border-[var(--border-default)] font-black text-xs">
+              <Link to="/tables/history"><History className="h-4 w-4 text-[var(--accent)]" /> Historial Completo</Link>
+            </Button>
+            <Button asChild className="gap-2 bg-[var(--accent)] text-[var(--accent-fg)] font-black">
+              <Link to="/tables/new"><PlusCircle className="h-4 w-4" />Nuevo Pedido</Link>
+            </Button>
+          </div>
+        )}
       </div>
 
       {/* Pestañas: Todas las mesas vs Mis mesas en atención vs Mis mesas cobradas (Historial que nunca se borra) */}

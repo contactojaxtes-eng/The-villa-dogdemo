@@ -22,6 +22,8 @@ export function AppLayout() {
   // Administradores y cajeros ven la barra lateral normal para navegar fluidamente.
   const isDedicatedKitchen = user?.role === 'KITCHEN'
   const isKitchen = isDedicatedKitchen || location.pathname === '/kitchen'
+  // Las meseras operan exclusivamente con la barra inferior nativa (Mesas, Nuevo Pedido, Historial)
+  const isWaiter = user?.role === 'WAITER'
 
   const [isFullscreen, setIsFullscreen] = useState(false)
   const [timeStr, setTimeStr] = useState(() => new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }))
@@ -73,8 +75,8 @@ export function AppLayout() {
 
   return (
     <div className="flex h-screen overflow-hidden bg-[var(--bg-base)]">
-      {/* Desktop Sidebar: Oculta únicamente en modo Cocinero dedicado (Tablet KITCHEN) */}
-      {!isDedicatedKitchen && (
+      {/* Desktop Sidebar: Oculta en modo Cocinero dedicado (Tablet KITCHEN) y para Meseras (WAITER) */}
+      {!isDedicatedKitchen && !isWaiter && (
         <div className="hidden md:flex shrink-0 overflow-visible">
           <Sidebar 
             isCollapsed={isCollapsed} 
@@ -87,8 +89,8 @@ export function AppLayout() {
         </div>
       )}
 
-      {/* Mobile Drawer Sidebar (solo si no es tablet de cocinero) */}
-      {!isDedicatedKitchen && (
+      {/* Mobile Drawer Sidebar (solo si no es cocina ni mesero) */}
+      {!isDedicatedKitchen && !isWaiter && (
         <AnimatePresence>
           {isMobileMenuOpen && (
             <>
@@ -198,13 +200,17 @@ export function AppLayout() {
         ) : (
           /* Mobile Top Header normal */
           <header className="flex h-14 items-center justify-between border-b border-[var(--border-subtle)] bg-[var(--bg-panel)] px-3 md:hidden shrink-0">
-            <button
-              onClick={() => setIsMobileMenuOpen(true)}
-              className="rounded-xl p-2 text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] active:scale-95 transition-all cursor-pointer"
-              aria-label="Abrir menú"
-            >
-              <Menu className="h-6 w-6" />
-            </button>
+            {!isWaiter ? (
+              <button
+                onClick={() => setIsMobileMenuOpen(true)}
+                className="rounded-xl p-2 text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] active:scale-95 transition-all cursor-pointer"
+                aria-label="Abrir menú"
+              >
+                <Menu className="h-6 w-6" />
+              </button>
+            ) : (
+              <div className="w-10" />
+            )}
             <div className="flex rounded-2xl bg-white py-1 px-2.5 border border-slate-200/80 shadow-2xs">
               <BrandLogo compact imageClassName="w-20" />
             </div>

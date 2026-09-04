@@ -316,7 +316,7 @@ export default function TableHistoryPage() {
             <p className="text-xs text-[var(--text-secondary)]">Registro exclusivo de pedidos, consumos y pagos de mesas en salón.</p>
           </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="hidden md:flex items-center gap-2">
           <Button asChild size="sm" className="bg-[var(--accent)] text-[var(--accent-fg)] font-black text-xs gap-1 shadow-sm">
             <Link to="/tables/new"><UtensilsCrossed className="h-3.5 w-3.5" /> Nuevo Pedido Mesa</Link>
           </Button>
