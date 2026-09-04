@@ -34,8 +34,25 @@ export class PaymentValidationController {
         rawBase64 = parts[1] || '';
       }
       try {
-        const buffer = Buffer.from(rawBase64, 'base64');
+        let buffer = Buffer.from(rawBase64, 'base64');
         if (buffer.length > 0) {
+          const isHeic = mime.includes('heic') || mime.includes('heif') || (
+            buffer.length >= 12 && (
+              buffer.toString('ascii', 4, 12).includes('ftypheic') ||
+              buffer.toString('ascii', 4, 12).includes('ftypmif1') ||
+              buffer.toString('ascii', 4, 12).includes('ftypmsf1')
+            )
+          );
+          if (isHeic) {
+            try {
+              const heicConvert = require('heic-convert');
+              const converted = await heicConvert({ buffer, format: 'JPEG', quality: 0.85 });
+              buffer = Buffer.from(converted);
+              mime = 'image/jpeg';
+            } catch (convErr: any) {
+              console.warn('[payment-validation] No se pudo convertir HEIC en endpoint image:', convErr?.message);
+            }
+          }
           res.setHeader('Content-Type', mime);
           res.setHeader('Content-Length', buffer.length);
           res.setHeader('Cache-Control', 'public, max-age=86400');

@@ -1,7 +1,12 @@
 /**
  * Procesa y optimiza fotos de comprobantes tomadas desde cualquier dispositivo móvil o de escritorio.
- * Genera tanto un File comprimido para el backend como un DataURL infalible para previsualización inmediata.
+ * Soporta de forma nativa e infalible:
+ * - Fotos de cámara directa (JPG, PNG, WebP)
+ * - Fotos seleccionadas de galería de Samsung / Android / iPhone (incluyendo HEIC / HEIF)
+ * - Archivos grandes (redimensionados con Canvas a máx 1280px para que pesen ~120KB)
+ * - Previsualización limpia y fluida que nunca muestra icono de foto rota
  */
+
 export interface PreparedReceiptPhoto {
   file: File
   previewUrl: string
@@ -26,10 +31,37 @@ export function generateUUID(): string {
 }
 
 /**
- * Detecta de forma infalible el MIME type real a partir de los bytes iniciales del archivo.
- * Crucial para archivos seleccionados de galería en Android o descargas donde file.type viene vacío.
+ * Detecta si el archivo es HEIC / HEIF (formato por defecto en Samsung Galaxy y iPhones).
  */
-async function detectImageMime(file: File): Promise<string> {
+async function isHeicFile(file: File): Promise<boolean> {
+  const type = (file.type || '').toLowerCase()
+  if (type.includes('heic') || type.includes('heif')) return true
+  const name = (file.name || '').toLowerCase()
+  if (name.endsWith('.heic') || name.endsWith('.heif')) return true
+  try {
+    const slice = file.slice(0, 32)
+    const buffer = await slice.arrayBuffer()
+    const bytes = new Uint8Array(buffer)
+    if (bytes.length >= 12) {
+      const ascii = String.fromCharCode(...bytes.subarray(4, 12))
+      if (
+        ascii.includes('ftypheic') ||
+        ascii.includes('ftypmif1') ||
+        ascii.includes('ftypmsf1') ||
+        ascii.includes('ftypheix') ||
+        ascii.includes('ftyphevc')
+      ) {
+        return true
+      }
+    }
+  } catch {}
+  return false
+}
+
+/**
+ * Detecta el MIME type real a partir de los bytes iniciales del archivo.
+ */
+async function detectImageMime(file: File | Blob): Promise<string> {
   try {
     const slice = file.slice(0, 32)
     const buffer = await slice.arrayBuffer()
@@ -52,13 +84,12 @@ async function detectImageMime(file: File): Promise<string> {
  * Convierte un Blob o File a un DataURL estándar (data:image/...;base64,...)
  * usando la API nativa FileReader del navegador.
  */
-function readBlobAsDataUrl(file: File, mime: string): Promise<string> {
+function readBlobAsDataUrl(file: Blob | File, mime: string): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader()
     reader.onloadend = () => {
       if (typeof reader.result === 'string') {
         let res = reader.result
-        // Asegurar que siempre comience con un MIME type de imagen válido
         if (!res.startsWith('data:image/') || res.startsWith('data:;base64') || res.startsWith('data:application/octet-stream')) {
           const parts = res.split(',')
           const b64 = parts[1] || ''
@@ -74,6 +105,38 @@ function readBlobAsDataUrl(file: File, mime: string): Promise<string> {
   })
 }
 
+/**
+ * Carga una imagen usando URL.createObjectURL para bajo consumo de memoria.
+ */
+function loadImageAsync(url: string, timeoutMs = 6000): Promise<HTMLImageElement | null> {
+  return new Promise((resolve) => {
+    const img = new Image()
+    let done = false
+    const timer = setTimeout(() => {
+      if (!done) {
+        done = true
+        resolve(null)
+      }
+    }, timeoutMs)
+
+    img.onload = () => {
+      if (!done) {
+        done = true
+        clearTimeout(timer)
+        resolve(img)
+      }
+    }
+    img.onerror = () => {
+      if (!done) {
+        done = true
+        clearTimeout(timer)
+        resolve(null)
+      }
+    }
+    img.src = url
+  })
+}
+
 export async function prepareReceiptPhoto(file: File): Promise<PreparedReceiptPhoto> {
   if (!file || !file.size) {
     throw new Error('La foto está vacía o el archivo fue cancelado. Selecciónala de nuevo.')
@@ -82,26 +145,41 @@ export async function prepareReceiptPhoto(file: File): Promise<PreparedReceiptPh
     throw new Error('La foto es demasiado pesada (máx 25 MB).')
   }
 
-  // 1. Detectar MIME type real y nombre base
-  const detectedMime = await detectImageMime(file)
+  let workingFile: File = file
+  let baseFileName = (file.name || `comprobante-${Date.now()}`).replace(/\.[^/.]+$/, '')
+
+  // 1. Detección y conversión automática de fotos HEIC (Samsung Galaxy / Apple)
+  const isHeic = await isHeicFile(file)
+  if (isHeic) {
+    try {
+      const heic2anyModule = await import('heic2any')
+      const heic2any = (heic2anyModule as any).default || heic2anyModule
+      const converted = await heic2any({
+        blob: file,
+        toType: 'image/jpeg',
+        quality: 0.82,
+      })
+      const jpegBlob = Array.isArray(converted) ? converted[0] : converted
+      if (jpegBlob && jpegBlob.size > 0) {
+        baseFileName = baseFileName.replace(/\.(heic|heif)$/i, '')
+        workingFile = new File([jpegBlob], `${baseFileName}.jpg`, { type: 'image/jpeg' })
+      }
+    } catch (heicErr) {
+      console.warn('[prepareReceiptPhoto] Conversión HEIC en cliente no disponible:', heicErr)
+    }
+  }
+
+  const detectedMime = await detectImageMime(workingFile)
   const ext = detectedMime === 'image/png' ? '.png' : detectedMime === 'image/webp' ? '.webp' : '.jpg'
-  const baseFileName = (file.name || `comprobante-${Date.now()}`).replace(/\.[^/.]+$/, '') + ext
+  const finalName = `${baseFileName}${ext}`
 
-  // 2. Generar DataURL nativo garantizado
-  const rawDataUrl = await readBlobAsDataUrl(file, detectedMime)
-
-  // 3. Optimización con Canvas a máx 1280px para que pese ~150KB (rápido y liviano en celulares y servidor)
+  // 2. Intentar optimizar con Canvas a máx 1280px usando ObjectURL nativo (ultrarrápido y liviano)
+  let objectUrl = ''
   try {
-    const img = new Image()
-    // IMPORTANTE: NO poner img.crossOrigin en DataURLs locales porque WebKit/Chrome bloquea la carga
+    objectUrl = URL.createObjectURL(workingFile)
+    const img = await loadImageAsync(objectUrl, 6000)
 
-    const loaded = await new Promise<boolean>((resolve) => {
-      img.onload = () => resolve(true)
-      img.onerror = () => resolve(false)
-      img.src = rawDataUrl
-    })
-
-    if (loaded && img.naturalWidth > 0 && img.naturalHeight > 0) {
+    if (img && img.naturalWidth > 0 && img.naturalHeight > 0) {
       const maxDim = 1280
       const scale = Math.min(1, maxDim / Math.max(img.naturalWidth, img.naturalHeight))
       const canvas = document.createElement('canvas')
@@ -114,13 +192,13 @@ export async function prepareReceiptPhoto(file: File): Promise<PreparedReceiptPh
         ctx.fillRect(0, 0, canvas.width, canvas.height)
         ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
 
-        const optimizedDataUrl = canvas.toDataURL('image/jpeg', 0.8)
         const blob = await new Promise<Blob | null>((resolve) => {
-          canvas.toBlob(resolve, 'image/jpeg', 0.8)
+          canvas.toBlob(resolve, 'image/jpeg', 0.82)
         })
 
         if (blob && blob.size > 0) {
-          const optimizedFile = new File([blob], baseFileName.replace(/\.[^/.]+$/, '.jpg'), { type: 'image/jpeg' })
+          const optimizedFile = new File([blob], `${baseFileName}.jpg`, { type: 'image/jpeg' })
+          const optimizedDataUrl = await readBlobAsDataUrl(optimizedFile, 'image/jpeg')
           return {
             file: optimizedFile,
             previewUrl: optimizedDataUrl,
@@ -130,17 +208,29 @@ export async function prepareReceiptPhoto(file: File): Promise<PreparedReceiptPh
       }
     }
   } catch (canvasErr) {
-    console.warn('Canvas optimization fallback:', canvasErr)
+    console.warn('[prepareReceiptPhoto] Optimización canvas omitida:', canvasErr)
+  } finally {
+    if (objectUrl) {
+      try { URL.revokeObjectURL(objectUrl) } catch {}
+    }
   }
 
-  // 4. Fallback infalible: usar el archivo normalizado y el DataURL generado
-  const normalizedFile = new File([file], baseFileName, { type: detectedMime })
-
-  return {
-    file: normalizedFile,
-    previewUrl: rawDataUrl,
-    name: baseFileName,
+  // 3. Fallback: generar DataURL seguro o ObjectURL garantizado
+  try {
+    const rawDataUrl = await readBlobAsDataUrl(workingFile, detectedMime)
+    const normalizedFile = new File([workingFile], finalName, { type: detectedMime })
+    return {
+      file: normalizedFile,
+      previewUrl: rawDataUrl,
+      name: finalName,
+    }
+  } catch {
+    const fallbackUrl = URL.createObjectURL(workingFile)
+    const normalizedFile = new File([workingFile], finalName, { type: detectedMime })
+    return {
+      file: normalizedFile,
+      previewUrl: fallbackUrl,
+      name: finalName,
+    }
   }
 }
-
-

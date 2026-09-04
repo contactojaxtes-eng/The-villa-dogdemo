@@ -785,7 +785,7 @@ export class TablesService {
       for (const f of uniqueFiles) {
         if (!f) continue;
         try {
-          const receipt = validateReceipt(f);
+          const receipt = await validateReceipt(f);
           if (receipt) validReceipts.push({ receipt, file: f });
         } catch (e: any) {
           if (uniqueFiles.length === 1) throw e;
@@ -813,7 +813,7 @@ export class TablesService {
           const buffer = Buffer.from(parts[1], 'base64');
           if (buffer.length > 0) {
             try {
-              const receipt = validateReceipt({ buffer, mimetype: mime, originalname: 'comprobante.jpg' });
+              const receipt = await validateReceipt({ buffer, mimetype: mime, originalname: 'comprobante.jpg' });
               if (receipt) validReceipts.push({ receipt, file: { originalname: 'comprobante.jpg' } });
             } catch (err) {}
           }

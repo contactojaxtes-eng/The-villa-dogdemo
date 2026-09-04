@@ -35,7 +35,29 @@ export function ProtectedImage({ endpoint, alt, className }: { endpoint: string;
   }, [endpoint, isLocalPreview])
 
   if (isLocalPreview) {
-    return <img src={endpoint} alt={alt} className={className} />
+    if (failed) {
+      return (
+        <div
+          className={`flex flex-col items-center justify-center bg-[var(--bg-elevated)] border border-[var(--border-subtle)] text-[var(--text-muted)] p-3 text-center select-none ${className || ''}`}
+        >
+          <FileQuestion className="h-8 w-8 text-emerald-500/80 mb-1" />
+          <span className="text-[11px] font-black uppercase text-[var(--text-primary)]">
+            Comprobante adjuntado
+          </span>
+          <span className="text-[10px] text-[var(--text-secondary)]">
+            Archivo cargado listo para enviar a validación
+          </span>
+        </div>
+      )
+    }
+    return (
+      <img
+        src={endpoint}
+        alt={alt}
+        className={className}
+        onError={() => setFailed(true)}
+      />
+    )
   }
 
   if (failed) {

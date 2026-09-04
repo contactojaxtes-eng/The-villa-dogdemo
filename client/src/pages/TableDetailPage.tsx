@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react'
 import { prepareReceiptPhoto, generateUUID } from '@/lib/receiptPhoto'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { io } from '@/lib/socket'
-import { ArrowLeft, Camera, CheckCircle2, ChefHat, Clock, Eye, Image as ImageIcon, Pencil, PlusCircle, Trash2, Upload, User, Wallet, X, XCircle } from 'lucide-react'
+import { ArrowLeft, Camera, CheckCircle2, ChefHat, Clock, Eye, Image as ImageIcon, Pencil, PlusCircle, Receipt, Trash2, Upload, User, Wallet, X, XCircle } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Dialog, DialogContent } from '@/components/ui/dialog'
@@ -660,7 +660,7 @@ export default function TableDetailPage() {
                     <input
                       ref={galleryInputRef}
                       type="file"
-                      accept="image/*"
+                      accept="image/*,.heic,.heif,.jpg,.jpeg,.png,.webp"
                       multiple
                       className="hidden"
                       onChange={handleFileChange}
@@ -688,12 +688,23 @@ export default function TableDetailPage() {
                             className="flex items-center justify-between gap-2 rounded-xl bg-[var(--bg-panel)] p-2 border border-[var(--border-subtle)] shadow-xs"
                           >
                             <div className="flex min-w-0 items-center gap-2 overflow-hidden">
-                              <div className="relative h-12 w-12 shrink-0 rounded-lg overflow-hidden border border-[var(--border-subtle)] bg-[var(--bg-elevated)] flex items-center justify-center">
+                              <div className="relative h-12 w-12 shrink-0 rounded-lg overflow-hidden border border-[var(--border-subtle)] bg-[var(--bg-elevated)] flex items-center justify-center text-[var(--accent)]">
+                                <Receipt className="absolute h-5 w-5 opacity-40 pointer-events-none" />
                                 <img
                                   src={p.previewUrl}
-                                  alt={`Comprobante ${idx + 1}`}
-                                  className="h-full w-full object-cover"
+                                  alt=""
+                                  className="relative z-10 h-full w-full object-cover"
                                   loading="eager"
+                                  onError={(e) => {
+                                    try {
+                                      const blobUrl = URL.createObjectURL(p.file)
+                                      if (e.currentTarget.src !== blobUrl) {
+                                        e.currentTarget.src = blobUrl
+                                        return
+                                      }
+                                    } catch {}
+                                    e.currentTarget.style.display = 'none'
+                                  }}
                                 />
                               </div>
                               <div className="min-w-0 truncate text-xs">
