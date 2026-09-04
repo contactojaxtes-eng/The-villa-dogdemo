@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { io } from '@/lib/socket'
 import {
   AlertTriangle,
@@ -26,9 +27,39 @@ export default function KitchenPage() {
   const [tickets, setTickets] = useState<KitchenTicketSummary[]>([])
   const [loading, setLoading] = useState(true)
   const [activeTab, setActiveTab] = useState<KitchenTab>('ALL_ACTIVE')
-  const [stationFilter, setStationFilter] = useState<string>('ALL')
+  const [searchParams, setSearchParams] = useSearchParams()
+  const [stationFilter, setStationFilter] = useState<string>(() => searchParams.get('station') || 'ALL')
+  const [cookFilter, setCookFilter] = useState<string>(() => searchParams.get('cook') || 'ALL')
   const [showPrevious, setShowPrevious] = useState<Record<string, boolean>>({})
   const toggleShowPrevious = (ticketId: string) => setShowPrevious(p => ({ ...p, [ticketId]: !p[ticketId] }))
+
+  // Sincronizar filtros si cambia la URL
+  useEffect(() => {
+    const s = searchParams.get('station')
+    if (s && s !== stationFilter) setStationFilter(s)
+    const c = searchParams.get('cook')
+    if (c && c !== cookFilter) setCookFilter(c)
+  }, [searchParams])
+
+  const handleStationFilter = (id: string) => {
+    setStationFilter(id)
+    setSearchParams(prev => {
+      const next = new URLSearchParams(prev)
+      if (id === 'ALL') next.delete('station')
+      else next.set('station', id)
+      return next
+    })
+  }
+
+  const handleCookFilter = (id: string) => {
+    setCookFilter(id)
+    setSearchParams(prev => {
+      const next = new URLSearchParams(prev)
+      if (id === 'ALL') next.delete('cook')
+      else next.set('cook', id)
+      return next
+    })
+  }
 
   // Carga inicial (silenciosa en segundo plano para no hacer parpadear la pantalla)
   const load = useCallback((showSpinner = false) => {
@@ -54,12 +85,13 @@ export default function KitchenPage() {
     // Si es cocinero (KITCHEN):
     if (user?.role === 'KITCHEN') {
       const assignedId = ticket.assignedToId || ticket.assignedTo?.id
-      // 1. Asignado específicamente a este cocinero
-      if (assignedId && assignedId === user?.id) return true
-      // 2. Si la estación pertenece a este cocinero
+      // 1. Si el ticket está asignado a un cocinero: SOLO pertenece a ese cocinero
+      if (assignedId) {
+        return assignedId === user?.id
+      }
+      // 2. Solo si el ticket NO tiene cocinero asignado aún, verificar si pertenece a su estación
       const stationUsers = ticket.station?.users || []
-      if (stationUsers.some(u => u.id === user?.id)) return true
-      return false
+      return stationUsers.some(u => u.id === user?.id)
     }
     return false
   }, [user?.id, user?.role])
@@ -89,9 +121,14 @@ export default function KitchenPage() {
       const ticketKey = (t: any) => `${t.orderId || t.order?.id}_${t.stationId || t.station?.id}`
       const incomingKey = ticketKey(ticket)
       setTickets(prev => {
+        const belongsToMe = isTicketForThisCook(ticket)
         const exists = prev.some(t => t.id === ticket.id || ticketKey(t) === incomingKey)
         if (!exists) {
-          return isTicketForThisCook(ticket) ? [ticket, ...prev] : prev
+          return belongsToMe ? [ticket, ...prev] : prev
+        }
+        // Si ya no me pertenece (ej: reasignado a otro cocinero), retirarlo de mi pantalla
+        if (!belongsToMe) {
+          return prev.filter(t => t.id !== ticket.id && ticketKey(t) !== incomingKey)
         }
         return prev.map(t => (t.id === ticket.id || ticketKey(t) === incomingKey) ? ticket : t)
       })
@@ -99,13 +136,18 @@ export default function KitchenPage() {
 
     // TICKET EDITADO (modificaciones de mesera)
     socket.on('kitchenTicketEdited', (ticket: KitchenTicketSummary) => {
-      if (!isTicketForThisCook(ticket)) return
+      const ticketKey = (t: any) => `${t.orderId || t.order?.id}_${t.stationId || t.station?.id}`
+      const incomingKey = ticketKey(ticket)
+
+      if (!isTicketForThisCook(ticket)) {
+        // Asegurar que si este cocinero tenía este ticket por error en memoria, lo retire
+        setTickets(prev => prev.filter(t => t.id !== ticket.id && ticketKey(t) !== incomingKey))
+        return
+      }
 
       alerts.toast(`✏️ Pedido editado #${ticket.order?.orderNumber || ''} (${ticket.station?.name || 'cocina'})`)
       playUrgentBell()
 
-      const ticketKey = (t: any) => `${t.orderId || t.order?.id}_${t.stationId || t.station?.id}`
-      const incomingKey = ticketKey(ticket)
       setTickets(prev => {
         const exists = prev.some(t => t.id === ticket.id || ticketKey(t) === incomingKey)
         if (!exists) return [ticket, ...prev]
@@ -141,21 +183,43 @@ export default function KitchenPage() {
     return list
   }, [consolidatedTickets])
 
-  // Tickets filtrados por usuario/rol y estación
+  const availableCooks = useMemo(() => {
+    const map = new Map<string, string>()
+    for (const t of consolidatedTickets) {
+      const cook = t.assignedTo
+      if (cook?.id && cook?.name && !map.has(cook.id)) {
+        map.set(cook.id, cook.name)
+      }
+      for (const u of t.station?.users || []) {
+        if (u.id && u.name && !map.has(u.id)) {
+          map.set(u.id, u.name)
+        }
+      }
+    }
+    return Array.from(map.entries()).map(([id, name]) => ({ id, name }))
+  }, [consolidatedTickets])
+
+  // Tickets filtrados por usuario/rol, estación y cocinero
   const scopedTickets = useMemo(() => {
     return consolidatedTickets.filter(t => {
       if (stationFilter !== 'ALL' && t.stationId !== stationFilter && t.station?.id !== stationFilter) return false
-      // Si el usuario logueado es cocinero (KITCHEN), mostrar ÚNICAMENTE sus tickets asignados o de su estación
+      // Si el usuario logueado es cocinero (KITCHEN), mostrar ÚNICAMENTE sus tickets asignados
       if (user?.role === 'KITCHEN') {
         const assignedId = t.assignedToId || t.assignedTo?.id
+        if (assignedId) {
+          return assignedId === user.id
+        }
         const stationUsers = t.station?.users || []
-        const isMyStation = stationUsers.some(u => u.id === user.id)
-        const isAssignedToMe = assignedId === user.id
-        if (!isMyStation && !isAssignedToMe) return false
+        return stationUsers.some(u => u.id === user.id)
+      }
+      // Para admin/cajero: filtro opcional por cocinero
+      if (cookFilter !== 'ALL') {
+        const assignedId = t.assignedToId || t.assignedTo?.id
+        if (assignedId !== cookFilter) return false
       }
       return true
     })
-  }, [consolidatedTickets, stationFilter, user?.id, user?.role])
+  }, [consolidatedTickets, stationFilter, cookFilter, user?.id, user?.role])
 
   // Contadores vivos precisos
   const countNew = useMemo(() => scopedTickets.filter(t => t.status === 'NEW').length, [scopedTickets])
@@ -214,6 +278,18 @@ export default function KitchenPage() {
 
   return (
     <div className="space-y-3">
+      {/* Banner de Cocinero Individual */}
+      {user?.role === 'KITCHEN' && (
+        <div className="flex flex-wrap items-center justify-between gap-2 px-3.5 py-2 rounded-2xl bg-blue-500/10 border border-blue-500/25 text-xs text-blue-700 dark:text-blue-300 shadow-xs">
+          <span className="font-bold flex items-center gap-1.5">
+            👨‍🍳 Pantalla personal de cocinero: <strong className="font-black text-sm">{user.name}</strong>
+          </span>
+          <span className="text-[11px] opacity-80">
+            Mostrando únicamente tus comandas asignadas (división equitativa 50/50)
+          </span>
+        </div>
+      )}
+
       {/* Barra de control superior con Filtros de Estado y Estación */}
       <div className="flex flex-wrap items-center justify-between gap-2.5 bg-[var(--bg-panel)] p-2.5 sm:p-3 rounded-2xl border border-[var(--border-subtle)] shadow-xs">
         {/* Pestañas de estado: Todos Activos, Nuevos, En Preparación, Listos, Historial */}
@@ -284,15 +360,16 @@ export default function KitchenPage() {
           </Button>
         </div>
 
-        {/* Filtro de estaciones + botón actualizar */}
-        <div className="flex items-center gap-2">
+        {/* Filtros de estación y cocinero + botón actualizar */}
+        <div className="flex flex-wrap items-center gap-2">
           {stations.length > 1 && (
             <div className="flex items-center gap-1 overflow-x-auto">
+              <span className="text-[11px] text-[var(--text-muted)] font-bold mr-0.5 hidden md:inline">Estación:</span>
               <Button
                 size="sm"
                 variant={stationFilter === 'ALL' ? 'secondary' : 'ghost'}
                 className="h-7 px-2 text-[11px] font-bold"
-                onClick={() => setStationFilter('ALL')}
+                onClick={() => handleStationFilter('ALL')}
               >
                 Todas
               </Button>
@@ -302,9 +379,35 @@ export default function KitchenPage() {
                   size="sm"
                   variant={stationFilter === st.id ? 'secondary' : 'ghost'}
                   className="h-7 px-2 text-[11px] font-bold shrink-0"
-                  onClick={() => setStationFilter(st.id)}
+                  onClick={() => handleStationFilter(st.id)}
                 >
                   {st.name}
+                </Button>
+              ))}
+            </div>
+          )}
+
+          {/* Filtro de cocineros para Admin / Superadmin / Cajero */}
+          {['ADMIN', 'SUPERADMIN', 'CASHIER'].includes(user?.role || '') && availableCooks.length > 1 && (
+            <div className="flex items-center gap-1 overflow-x-auto border-l border-[var(--border-subtle)] pl-2">
+              <span className="text-[11px] text-[var(--text-muted)] font-bold mr-0.5 hidden md:inline">Cocinero:</span>
+              <Button
+                size="sm"
+                variant={cookFilter === 'ALL' ? 'secondary' : 'ghost'}
+                className="h-7 px-2 text-[11px] font-bold"
+                onClick={() => handleCookFilter('ALL')}
+              >
+                Todos
+              </Button>
+              {availableCooks.map(cook => (
+                <Button
+                  key={cook.id}
+                  size="sm"
+                  variant={cookFilter === cook.id ? 'secondary' : 'ghost'}
+                  className="h-7 px-2 text-[11px] font-bold shrink-0"
+                  onClick={() => handleCookFilter(cook.id)}
+                >
+                  👨‍🍳 {cook.name}
                 </Button>
               ))}
             </div>
@@ -382,8 +485,12 @@ export default function KitchenPage() {
                       <p className="text-xs text-[var(--text-secondary)] mt-0.5 flex flex-wrap items-center gap-1.5">
                         <span>Mesera: <strong className="text-[var(--text-primary)]">{ticket.order?.waiter?.name || 'Sin asignar'}</strong></span>
                         {ticket.assignedTo?.name && (
-                          <span className="text-[10px] font-bold bg-[var(--bg-elevated)] border border-[var(--border-subtle)] px-1.5 py-0.2 rounded text-[var(--text-primary)]">
-                            👨‍🍳 {ticket.assignedTo.name}
+                          <span className={`text-[10px] font-bold px-1.5 py-0.2 rounded border ${
+                            ticket.assignedTo.id === user?.id
+                              ? 'bg-blue-500/15 border-blue-500/30 text-blue-700 dark:text-blue-300'
+                              : 'bg-[var(--bg-elevated)] border-[var(--border-subtle)] text-[var(--text-primary)]'
+                          }`}>
+                            👨‍🍳 {ticket.assignedTo.name}{ticket.assignedTo.id === user?.id ? ' (Tú)' : ''}
                           </span>
                         )}
                         {ticket.station?.name && <span className="opacity-75">· {ticket.station.name}</span>}

@@ -299,31 +299,26 @@ export class TablesService {
     if (users.length === 0) return null;
     if (users.length === 1) return users[0].id;
 
-    // Calculamos el inicio del turno / día actual (hoy a las 00:00)
-    const todayStart = new Date();
-    todayStart.setHours(0, 0, 0, 0);
+    // Ventana del turno actual (últimas 14 horas para cubrir turnos noche que cruzan medianoche)
+    const shiftWindow = new Date(Date.now() - 14 * 60 * 60 * 1000);
 
     const loads = await Promise.all(users.map(async user => {
-      // 1. Unidades pendientes activas en cocina en este momento (NEW o PREPARING)
-      const activeTickets = await db.kitchenTicket.findMany({
-        where: { stationId, assignedToId: user.id, status: { in: ACTIVE_KITCHEN } },
-        include: { items: true },
-      });
-      const pendingUnits = activeTickets.reduce(
-        (acc, t) => acc + (t.items || []).reduce((sum, i) => sum + (i.changeType !== 'REMOVED' ? i.quantity : 0), 0),
-        0,
-      );
-
-      // 2. Historial de tickets del turno de hoy para equidad estricta 50/50
+      // 1. Historial de tickets asignados en este turno para equidad estricta 50/50
       const todayTickets = await db.kitchenTicket.findMany({
         where: {
           stationId,
           assignedToId: user.id,
-          createdAt: { gte: todayStart },
+          createdAt: { gte: shiftWindow },
           status: { not: 'CANCELLED' },
         },
         select: { id: true, createdAt: true },
         orderBy: { createdAt: 'desc' },
+      });
+
+      // 2. Tickets activos inmediatos (para desempate)
+      const activeTickets = await db.kitchenTicket.findMany({
+        where: { stationId, assignedToId: user.id, status: { in: ACTIVE_KITCHEN } },
+        select: { id: true },
       });
 
       const totalShiftTickets = todayTickets.length;
@@ -331,7 +326,6 @@ export class TablesService {
 
       return {
         user,
-        pendingUnits,
         activeCount: activeTickets.length,
         totalShiftTickets,
         lastAssignedAt,
@@ -339,23 +333,21 @@ export class TablesService {
     }));
 
     loads.sort((a, b) => {
-      // 1. Carga inmediata desproporcionada: si un cocinero tiene 2 o más unidades pendientes en preparación que el otro,
-      // se asigna al que tiene menos para no saturar al que está cocinando activamente en ese momento.
-      const unitDiff = a.pendingUnits - b.pendingUnits;
-      if (Math.abs(unitDiff) >= 2) {
-        return unitDiff;
-      }
-
-      // 2. EQUIDAD 50/50: Si la carga actual está equilibrada (diferencia < 2, e.g. 0 vs 0),
-      // se asigna al cocinero que lleva MENOS tickets asignados en el turno de hoy.
+      // 1. EQUIDAD ESTRICTA 50/50: Se asigna al cocinero que lleva MENOS pedidos asignados en el turno.
+      // Si Jose lleva 2 y Juan lleva 1 -> le toca a Juan.
       if (a.totalShiftTickets !== b.totalShiftTickets) {
         return a.totalShiftTickets - b.totalShiftTickets;
       }
 
-      // 3. ALTERNANCIA TEMPORAL: Si tienen la misma cantidad de tickets hoy,
-      // se asigna al que lleve MÁS TIEMPO sin recibir pedido (ticket más antiguo).
+      // 2. ALTERNANCIA ESTRICTA ROUND-ROBIN (1 para Jose, 1 para Juan):
+      // Si ambos llevan la misma cantidad de pedidos hoy, se asigna al que lleve MÁS TIEMPO sin recibir pedido (ticket más antiguo).
       if (a.lastAssignedAt !== b.lastAssignedAt) {
         return a.lastAssignedAt - b.lastAssignedAt;
+      }
+
+      // 3. Desempate por menor carga activa inmediata
+      if (a.activeCount !== b.activeCount) {
+        return a.activeCount - b.activeCount;
       }
 
       // 4. Desempate final determinista
@@ -556,9 +548,12 @@ export class TablesService {
           newStatus = 'PREPARING';
         }
 
+        const assignedToId = existingTicket.assignedToId || await this.pickCook(stationId, db);
+
         const updatedTicket = await db.kitchenTicket.update({
           where: { id: existingTicket.id },
           data: {
+            ...(assignedToId ? { assignedToId } : {}),
             isEdited: stationIsEdited,
             changeSummary: stationChangeSummary,
             status: newStatus,
