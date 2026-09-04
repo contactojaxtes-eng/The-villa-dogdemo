@@ -21,15 +21,20 @@ export class TablesService {
   ) {}
 
   private async getActiveClosing(userId: string, cashRegisterId?: string, db: Prisma.TransactionClient = this.prisma) {
-    const where: any = cashRegisterId ? { cashRegisterId, isOpen: true } : { isOpen: true };
-    if (!cashRegisterId) {
-      const own = await db.cashClosing.findFirst({
-        where: { userId, isOpen: true },
+    if (cashRegisterId) {
+      const specific = await db.cashClosing.findFirst({
+        where: { cashRegisterId, isOpen: true },
         orderBy: { shiftStart: 'desc' },
       });
-      if (own) return own;
+      if (specific) return specific;
     }
-    return db.cashClosing.findFirst({ where, orderBy: { shiftStart: 'desc' } });
+    const own = await db.cashClosing.findFirst({
+      where: { userId, isOpen: true },
+      orderBy: { shiftStart: 'desc' },
+    });
+    if (own) return own;
+
+    return db.cashClosing.findFirst({ where: { isOpen: true }, orderBy: { shiftStart: 'desc' } });
   }
 
   private buildOrderInclude() {
@@ -121,13 +126,14 @@ export class TablesService {
   async createTable(data: { label: string; notes?: string; cashRegisterId?: string }, user: any) {
     if (!data.label?.trim()) throw new BadRequestException('El nombre de la mesa es obligatorio');
     const closing = await this.getActiveClosing(user.id, data.cashRegisterId);
-    const defaultRegister = !closing ? await this.prisma.cashRegister.findFirst() : null;
+    const defaultRegister = await this.prisma.cashRegister.findFirst({ where: { active: true } });
+    const effectiveRegisterId = closing?.cashRegisterId || data.cashRegisterId || defaultRegister?.id || null;
     const table = await this.prisma.diningTable.create({
       data: {
         label: data.label.trim(),
         notes: data.notes,
         openedById: user.id,
-        cashRegisterId: closing?.cashRegisterId || data.cashRegisterId || defaultRegister?.id || null,
+        cashRegisterId: effectiveRegisterId,
         cashClosingId: closing?.id || null,
       },
       include: this.buildTableInclude(),
@@ -157,10 +163,18 @@ export class TablesService {
       if (table && table.status !== 'OPEN') throw new BadRequestException('La cuenta ya está cerrada');
       const closing = await this.getActiveClosing(user.id, table?.cashRegisterId || data.cashRegisterId, tx);
       if (!closing) throw new BadRequestException('Abre una caja antes de enviar pedidos');
+      const defaultRegister = await tx.cashRegister.findFirst({ where: { active: true } });
+      const effectiveRegisterId = table?.cashRegisterId || closing.cashRegisterId || data.cashRegisterId || defaultRegister?.id || null;
       if (!table) {
         table = await tx.diningTable.create({ data: {
-          label, openedById: user.id, cashRegisterId: closing.cashRegisterId, cashClosingId: closing.id,
+          label, openedById: user.id, cashRegisterId: effectiveRegisterId, cashClosingId: closing.id,
         } });
+      } else if (!table.cashRegisterId && effectiveRegisterId) {
+        await tx.diningTable.update({
+          where: { id: table.id },
+          data: { cashRegisterId: effectiveRegisterId, cashClosingId: closing.id },
+        });
+        table.cashRegisterId = effectiveRegisterId;
       }
       if (await tx.payment.count({ where: { order: { tableId: table.id }, status: 'PENDING_REVIEW' } })) {
         throw new BadRequestException('Espera a que caja revise el pago antes de agregar productos');
@@ -170,7 +184,7 @@ export class TablesService {
         notes: data.notes, items: (data.items || []).map((item: any) => ({ menuItemId: item.menuItemId, quantity: item.quantity, notes: item.notes })),
         waiterId: user.id, userId: user.id, userRole: user.role, orderType: 'LOCAL',
         source: data.offline ? 'OFFLINE_TABLE' : 'TABLE', paymentMethod: 'CASH',
-        cashRegisterId: table.cashRegisterId, tableId: table.id, clientMutationId,
+        cashRegisterId: table.cashRegisterId || effectiveRegisterId, tableId: table.id, clientMutationId,
       }, tx);
       await this.createKitchenTickets(order.id, user.id, false, undefined, undefined, undefined, tx, tickets);
       return { table: await this.findTable(table.id, tx), order, replay: false };
@@ -973,7 +987,11 @@ export class TablesService {
       if (action === 'CONFIRMED') allowedFrom.push('REJECTED');
       if (!allowedFrom.includes(payment.status)) throw new BadRequestException('Este pago ya fue validado y confirmado');
 
-      if (!await this.getActiveClosing(user.id, payment.order.cashRegisterId, tx)) throw new BadRequestException('Abre la caja antes de validar');
+      const closing = await this.getActiveClosing(user.id, payment.order.cashRegisterId, tx);
+      if (!closing) throw new BadRequestException('Abre la caja antes de validar');
+      const defaultRegister = await tx.cashRegister.findFirst({ where: { active: true } });
+      const targetRegisterId = payment.order.cashRegisterId || closing.cashRegisterId || defaultRegister?.id || null;
+
       const group = await tx.payment.findMany({ where: payment.settlementId ? { settlementId: payment.settlementId } : { id: paymentId } });
       if (group.some(p => !allowedFrom.includes(p.status))) throw new BadRequestException('Actualiza la cuenta: uno de los pagos ya cambió');
       const ids = group.map(p => p.id);
@@ -981,7 +999,13 @@ export class TablesService {
       await tx.payment.updateMany({ where: { id: { in: ids } }, data: {
         status: action, confirmedBy: user.id, confirmedAt: action === 'CONFIRMED' ? new Date() : null,
       } });
-      await tx.order.updateMany({ where: { id: { in: group.map(p => p.orderId) } }, data: { paymentStatus: action } });
+      await tx.order.updateMany({
+        where: { id: { in: group.map(p => p.orderId) } },
+        data: {
+          paymentStatus: action,
+          ...(targetRegisterId ? { cashRegisterId: targetRegisterId } : {}),
+        },
+      });
 
       const proofsCount = await tx.transferProof.count({ where: { paymentId: { in: ids } } });
       if (proofsCount > 0) {
@@ -1014,21 +1038,20 @@ export class TablesService {
   }
 
   async purgeProofsForClosing(cashClosingId?: string) {
-    // Al cerrar la caja, liberamos los bytes pesados de las imágenes (fileBase64) de los
-    // comprobantes de transferencia ya confirmados/cerrados, para no saturar la base de datos
-    // de PostgreSQL ni la memoria del servidor. Todos los datos contables (montos, referencia,
-    // método, autor, hora, estado) permanecen intactos para el historial y reporte Z.
+    // Solo purgar comprobantes de más de 7 días de antigüedad para mantener los comprobantes del turno intactos
+    const sevenDaysAgo = new Date();
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
     try {
       await this.prisma.transferProof.updateMany({
         where: {
           fileBase64: { not: null },
           status: { in: ['CONFIRMED', 'REJECTED'] },
-          OR: [
-            ...(cashClosingId ? [{ cashClosingId }, { table: { cashClosingId } }] : []),
-            { table: { status: 'CLOSED' } },
-          ],
+          createdAt: { lt: sevenDaysAgo },
         },
-        data: { fileBase64: null, purgedAt: new Date() },
+        data: {
+          fileBase64: null,
+          purgedAt: new Date(),
+        },
       });
     } catch (err: any) {
       console.warn('[purgeProofsForClosing] Error al purgar imágenes de comprobantes:', err?.message);

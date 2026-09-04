@@ -9,45 +9,42 @@ export interface PreparedReceiptPhoto {
 }
 
 /**
- * Lee de forma segura los bytes del archivo a memoria (ArrayBuffer) y genera un DataURL
- * normalizado con MIME type de imagen garantizado (image/jpeg, image/png, image/webp).
- * Esto evita que Android Chrome produzca 'data:;base64' o 'data:application/octet-stream',
- * los cuales rompen las etiquetas <img> en teléfonos móviles.
+ * Generador seguro de UUID compatible con contextos HTTP no seguros (IPs locales en celulares)
+ * y navegadores móviles antiguos que no soportan crypto.randomUUID().
  */
-async function readFileAsNormalizedDataUrl(file: File): Promise<{ dataUrl: string; mime: string; bytes: Uint8Array }> {
-  const buffer = await file.arrayBuffer()
-  const bytes = new Uint8Array(buffer)
-
-  if (!bytes.length) {
-    throw new Error('La foto tomada está vacía. Intenta tomarla de nuevo.')
+export function generateUUID(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    try {
+      return crypto.randomUUID()
+    } catch {
+      // Fallback si falla
+    }
   }
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0
+    const v = c === 'x' ? r : (r & 0x3) | 0x8
+    return v.toString(16)
+  })
+}
 
-  // Detectar formato por magic bytes reales
-  let mime = 'image/jpeg'
-  if (bytes.length >= 8 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) {
-    mime = 'image/png'
-  } else if (
-    bytes.length >= 12 &&
-    bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46 &&
-    bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50
-  ) {
-    mime = 'image/webp'
-  } else {
-    // Por defecto forzar JPEG para máxima compatibilidad con todos los navegadores
-    mime = 'image/jpeg'
-  }
-
-  // Conversión a Base64 por chunks seguros (evita stack overflow en archivos grandes)
-  let binary = ''
-  const len = bytes.byteLength
-  const chunkSize = 8192
-  for (let i = 0; i < len; i += chunkSize) {
-    binary += String.fromCharCode.apply(null, bytes.subarray(i, Math.min(i + chunkSize, len)) as any)
-  }
-  const base64 = btoa(binary)
-  const dataUrl = `data:${mime};base64,${base64}`
-
-  return { dataUrl, mime, bytes }
+/**
+ * Convierte un Blob o File a DataURL utilizando el motor nativo en C++ de FileReader del navegador.
+ * Es 100% infalible, no satura la memoria ni produce desbordamiento de pila (call stack exceeded)
+ * sin importar el tamaño de la foto tomada por la cámara del celular.
+ */
+function readBlobAsDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onloadend = () => {
+      if (typeof reader.result === 'string') {
+        resolve(reader.result)
+      } else {
+        reject(new Error('No se pudo generar la vista previa de la foto.'))
+      }
+    }
+    reader.onerror = () => reject(new Error('Error al leer el archivo de la cámara.'))
+    reader.readAsDataURL(blob)
+  })
 }
 
 export async function prepareReceiptPhoto(file: File): Promise<PreparedReceiptPhoto> {
@@ -58,35 +55,41 @@ export async function prepareReceiptPhoto(file: File): Promise<PreparedReceiptPh
     throw new Error('La foto es demasiado pesada (máx 25 MB).')
   }
 
-  // 1. Extraer inmediatamente los bytes del archivo a memoria
-  const { dataUrl, mime, bytes } = await readFileAsNormalizedDataUrl(file)
   const baseFileName = (file.name || `comprobante-${Date.now()}`).replace(/\.[^/.]+$/, '') + '.jpg'
 
-  // 2. Intentar redimensionar y optimizar con Canvas a max 1200px (muy ligero y rápido en celulares)
+  // 1. Crear inmediatamente un ObjectURL nativo: 0 ms de latencia, 0 memoria JS adicional
+  let immediatePreview = ''
   try {
-    const memoryBlob = new Blob([bytes], { type: mime })
-    const objectUrl = URL.createObjectURL(memoryBlob)
+    immediatePreview = URL.createObjectURL(file)
+  } catch {
+    immediatePreview = ''
+  }
+
+  // 2. Intentar optimizar y comprimir la imagen en Canvas a máx 1280px con JPEG 80%
+  try {
     const img = new Image()
     img.crossOrigin = 'anonymous'
+
+    const imageSource = immediatePreview || await readBlobAsDataUrl(file)
 
     const loaded = await new Promise<boolean>((resolve) => {
       img.onload = () => resolve(true)
       img.onerror = () => resolve(false)
-      img.src = objectUrl
+      img.src = imageSource
     })
 
     if (loaded && img.naturalWidth > 0 && img.naturalHeight > 0) {
-      const maxDim = 1200
+      const maxDim = 1280
       const scale = Math.min(1, maxDim / Math.max(img.naturalWidth, img.naturalHeight))
       const canvas = document.createElement('canvas')
       canvas.width = Math.max(1, Math.round(img.naturalWidth * scale))
       canvas.height = Math.max(1, Math.round(img.naturalHeight * scale))
-      const ctx = canvas.getContext('2d')
+
+      const ctx = canvas.getContext('2d', { alpha: false })
       if (ctx) {
         ctx.fillStyle = '#ffffff'
         ctx.fillRect(0, 0, canvas.width, canvas.height)
         ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
-        URL.revokeObjectURL(objectUrl)
 
         const optimizedDataUrl = canvas.toDataURL('image/jpeg', 0.8)
         const blob = await new Promise<Blob | null>((resolve) => {
@@ -103,16 +106,18 @@ export async function prepareReceiptPhoto(file: File): Promise<PreparedReceiptPh
         }
       }
     }
-    URL.revokeObjectURL(objectUrl)
   } catch (canvasErr) {
-    console.warn('Canvas optimization fallback:', canvasErr)
+    console.warn('Canvas compression fallback:', canvasErr)
   }
 
-  // 3. Fallback de seguridad garantizado: usar los bytes normalizados en memoria
-  const fallbackFile = new File([bytes], baseFileName, { type: mime })
+  // 3. Fallback infalible: usar FileReader nativo
+  const fallbackDataUrl = await readBlobAsDataUrl(file)
+  const normalizedFile = new File([file], baseFileName, { type: file.type || 'image/jpeg' })
+
   return {
-    file: fallbackFile,
-    previewUrl: dataUrl,
+    file: normalizedFile,
+    previewUrl: fallbackDataUrl,
     name: baseFileName,
   }
 }
+

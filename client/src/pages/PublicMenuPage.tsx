@@ -347,7 +347,17 @@ export default function PublicMenuPage() {
     }
 
     const signature = JSON.stringify({ customerInfo, orderMode, orderItemsPayload })
-    if (publicAttempt.current.signature !== signature) publicAttempt.current = { signature, id: crypto.randomUUID() }
+    const safeUUID = () => {
+      if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+        try { return crypto.randomUUID() } catch {}
+      }
+      return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+        const r = (Math.random() * 16) | 0
+        const v = c === 'x' ? r : (r & 0x3) | 0x8
+        return v.toString(16)
+      })
+    }
+    if (publicAttempt.current.signature !== signature) publicAttempt.current = { signature, id: safeUUID() }
     try {
     const res = await api.post<any>('/public-orders', {
       clientMutationId: publicAttempt.current.id,

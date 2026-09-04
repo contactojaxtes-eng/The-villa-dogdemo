@@ -242,7 +242,7 @@ export default function CashControlPage() {
       orderCount += s.orderCount || 0
     })
 
-    const openCount = registers.filter(r => r.closings.some(c => c.isOpen)).length
+    const openCount = registers.filter(r => r.closings?.some(c => c.isOpen) || summaries[r.id]?.isOpen).length
 
     return { totalSales, totalCash, totalTransfers, totalInitial, totalCashInDrawer, totalTips, orderCount, openCount }
   }, [summaries, registers])
@@ -367,8 +367,8 @@ export default function CashControlPage() {
         <motion.div className="grid gap-6 md:grid-cols-2" variants={fadeUp}>
           {registers.map(reg => {
             const sum = summaries[reg.id]
-            const openClosing = reg.closings.find(c => c.isOpen)
-            const isOpen = !!openClosing
+            const openClosing = reg.closings?.find(c => c.isOpen) || (sum?.isOpen ? { id: 'active', isOpen: true, user: { id: 'cajero', name: (sum as any).operatorName || 'Cajero' }, initialCash: sum.initialCash || 0, shiftStart: (sum as any).shiftStart || new Date().toISOString() } : null)
+            const isOpen = !!openClosing || !!sum?.isOpen
             const lastClosedId = closings.find(c => c.cashRegister?.id === reg.id)?.id
 
             return (
@@ -413,31 +413,31 @@ export default function CashControlPage() {
                     <div className="grid grid-cols-2 gap-3 text-sm pt-2">
                       <div className="rounded-xl bg-[var(--bg-elevated)] border border-[var(--border-subtle)] p-3">
                         <p className="text-[10px] font-bold text-[var(--text-muted)] uppercase">Ventas Totales</p>
-                        <p className="text-lg font-black text-[var(--accent)] mt-0.5">{formatCurrency(isOpen ? sum.totalSales : 0)}</p>
+                        <p className="text-lg font-black text-[var(--accent)] mt-0.5">{formatCurrency(sum.totalSales || 0)}</p>
                         <p className="text-[10px] text-[var(--text-secondary)] mt-0.5">
-                          {isOpen ? `${sum.orderCount} pedidos del turno` : '0 pedidos (Caja cerrada)'}
+                          {sum.orderCount} pedidos {isOpen ? 'del turno' : 'hoy'}
                         </p>
                       </div>
                       <div className="rounded-xl bg-[var(--bg-elevated)] border border-[var(--border-subtle)] p-3">
                         <p className="text-[10px] font-bold text-[var(--text-muted)] uppercase">Efectivo en Caja</p>
                         <p className="text-lg font-black text-[var(--text-primary)] mt-0.5">
-                          {formatCurrency(isOpen ? (sum.cashInDrawer ?? (sum.totalCash + (sum.initialCash || 0))) : 0)}
+                          {formatCurrency(sum.cashInDrawer ?? ((sum.initialCash || 0) + sum.totalCash))}
                         </p>
                         <p className="text-[10px] text-[var(--text-secondary)] mt-0.5">
-                          {isOpen && sum.initialCash ? `Base ($${Math.round(sum.initialCash).toLocaleString('de-DE')}) + Efectivo` : 'Recaudado en físico'}
+                          {sum.initialCash ? `Base (${formatCurrency(sum.initialCash)}) + Efectivo` : 'Recaudado en físico'}
                         </p>
                       </div>
                       <div className="rounded-xl bg-[var(--bg-elevated)] border border-[var(--border-subtle)] p-3">
                         <p className="text-[10px] font-bold text-[var(--text-muted)] uppercase">Transferencias & Digitales</p>
                         <p className="text-base font-extrabold text-[var(--text-primary)] mt-0.5">
-                          {formatCurrency(isOpen ? (sum.totalTransfer + sum.totalNequi + sum.totalBancolombia + sum.totalDaviplata) : 0)}
+                          {formatCurrency(sum.totalTransfer + (sum.totalNequi || 0) + (sum.totalBancolombia || 0) + (sum.totalDaviplata || 0))}
                         </p>
                         <p className="text-[10px] text-[var(--text-secondary)] mt-0.5">Bancos / Nequi / Daviplata</p>
                       </div>
                       <div className="rounded-xl bg-[var(--bg-elevated)] border border-[var(--border-subtle)] p-3">
                         <p className="text-[10px] font-bold text-[var(--text-muted)] uppercase">Total General del Turno</p>
                         <p className="text-base font-extrabold text-emerald-400 mt-0.5">
-                          {formatCurrency(isOpen ? ((sum.initialCash || 0) + sum.totalSales) : 0)}
+                          {formatCurrency(((sum.initialCash || 0) + sum.totalSales))}
                         </p>
                         <p className="text-[10px] text-[var(--text-secondary)] mt-0.5">Inicial + Ventas Totales</p>
                       </div>

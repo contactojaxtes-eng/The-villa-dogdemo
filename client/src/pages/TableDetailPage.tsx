@@ -1,6 +1,6 @@
 import { ProtectedImage } from '@/components/ProtectedImage'
 import { useEffect, useRef, useState } from 'react'
-import { prepareReceiptPhoto } from '@/lib/receiptPhoto'
+import { prepareReceiptPhoto, generateUUID } from '@/lib/receiptPhoto'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { io } from '@/lib/socket'
 import { ArrowLeft, Camera, CheckCircle2, ChefHat, Clock, Eye, Image as ImageIcon, Pencil, PlusCircle, Trash2, Upload, User, Wallet, X, XCircle } from 'lucide-react'
@@ -141,7 +141,7 @@ export default function TableDetailPage() {
       for (const f of rawFiles) {
         const prepared = await prepareReceiptPhoto(f)
         newItems.push({
-          id: crypto.randomUUID(),
+          id: generateUUID(),
           file: prepared.file,
           previewUrl: prepared.previewUrl,
           name: prepared.name,
@@ -201,7 +201,7 @@ export default function TableDetailPage() {
       const form = new FormData()
       const photoSignatures = proofs.map(p => p.name).join(',')
       const signature = `${id}:${method}:${amount}:${mixedCash}:${mixedTransfer}:${reference}:${photoSignatures}`
-      if (paymentAttempt.current.signature !== signature) paymentAttempt.current = { signature, id: crypto.randomUUID() }
+      if (paymentAttempt.current.signature !== signature) paymentAttempt.current = { signature, id: generateUUID() }
       form.append('clientMutationId', paymentAttempt.current.id)
       form.append('method', method)
       form.append('amount', amount || String(table?.balance || table?.total || 0))
@@ -633,7 +633,7 @@ export default function TableDetailPage() {
                       </span>
                       <input
                         type="file"
-                        accept="image/jpeg,image/png,image/webp,image/*"
+                        accept="image/*"
                         capture="environment"
                         className="hidden"
                         onChange={handleFileChange}
@@ -647,7 +647,7 @@ export default function TableDetailPage() {
                       </span>
                       <input
                         type="file"
-                        accept="image/jpeg,image/png,image/webp,image/*"
+                        accept="image/*"
                         multiple
                         className="hidden"
                         onChange={handleFileChange}

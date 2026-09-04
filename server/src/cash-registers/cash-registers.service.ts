@@ -10,6 +10,23 @@ export class CashRegistersService {
   ) {}
 
   async findAll() {
+    const unassignedOpen = await this.prisma.cashClosing.findFirst({
+      where: { isOpen: true, cashRegisterId: null },
+      orderBy: { shiftStart: 'desc' },
+    });
+    if (unassignedOpen) {
+      const defaultRegister = await this.prisma.cashRegister.findFirst({
+        where: { active: true },
+        orderBy: { name: 'asc' },
+      });
+      if (defaultRegister) {
+        await this.prisma.cashClosing.update({
+          where: { id: unassignedOpen.id },
+          data: { cashRegisterId: defaultRegister.id },
+        });
+      }
+    }
+
     return this.prisma.cashRegister.findMany({
       where: { active: true },
       include: {
@@ -54,90 +71,201 @@ export class CashRegistersService {
 
   async getSummary(registerId: string, date?: string) {
     const isNullReg = registerId === 'null' || registerId === 'manual';
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
 
     if (isNullReg) {
-      // Ventas Fuera de Caja: solo pedidos huérfanos
-      const activeClosing = await this.prisma.cashClosing.findFirst({
-        where: { isOpen: true },
-        orderBy: { shiftStart: 'desc' },
+      // Ventas Fuera de Caja: contabilizar pedidos que no tienen caja asignada
+      const orphanOrders = await this.prisma.order.findMany({
+        where: {
+          cashRegisterId: null,
+          status: { not: 'CANCELLED' },
+          OR: [
+            { status: 'DELIVERED' },
+            { paymentStatus: 'CONFIRMED' },
+            { payment: { status: 'CONFIRMED' } },
+          ],
+          createdAt: { gte: today },
+        },
+        include: { payment: true },
       });
 
-      if (activeClosing && activeClosing.cashRegisterId) {
-        await this.prisma.order.updateMany({
-          where: {
-            createdAt: { gte: activeClosing.shiftStart },
-            cashRegisterId: null,
-          },
-          data: {
-            cashRegisterId: activeClosing.cashRegisterId,
-          },
-        });
-      }
+      const totalSales = orphanOrders.reduce((s, o) => s + o.total, 0);
+      const totalCash = orphanOrders.reduce((s, o) => {
+        const m = o.payment?.method || o.paymentMethod;
+        if (m === 'CASH') return s + o.total;
+        if (m === 'MIXED') return s + (o.cashAmount || o.payment?.cashAmount || 0);
+        return s;
+      }, 0);
+      const totalTransfer = orphanOrders.reduce((s, o) => {
+        const m = o.payment?.method || o.paymentMethod;
+        if (['TRANSFER', 'NEQUI', 'BANCOLOMBIA', 'DAVIPLATA'].includes(m || '')) return s + o.total;
+        if (m === 'MIXED') return s + (o.transferAmount || o.payment?.transferAmount || 0);
+        return s;
+      }, 0);
 
       return {
         registerId: 'null',
-        date: new Date().toISOString().split('T')[0],
+        date: today.toISOString().split('T')[0],
         isOpen: false,
-        orderCount: 0,
-        totalSales: 0,
-        totalCash: 0,
-        totalTransfer: 0,
-        totalNequi: 0,
-        totalBancolombia: 0,
-        totalDaviplata: 0,
-        totalTips: 0,
+        orderCount: orphanOrders.length,
+        totalSales,
+        totalCash,
+        totalTransfer,
+        totalNequi: orphanOrders.filter(o => (o.payment?.method || o.paymentMethod) === 'NEQUI').reduce((s, o) => s + o.total, 0),
+        totalBancolombia: orphanOrders.filter(o => (o.payment?.method || o.paymentMethod) === 'BANCOLOMBIA').reduce((s, o) => s + o.total, 0),
+        totalDaviplata: orphanOrders.filter(o => (o.payment?.method || o.paymentMethod) === 'DAVIPLATA').reduce((s, o) => s + o.total, 0),
+        totalTips: orphanOrders.reduce((s, o) => s + (o.tip || 0), 0),
         initialCash: 0,
-        cashInDrawer: 0,
+        cashInDrawer: totalCash,
       };
     }
 
     // Para una caja registrada específica:
-    const openClosing = await this.prisma.cashClosing.findFirst({
+    let openClosing = await this.prisma.cashClosing.findFirst({
       where: { cashRegisterId: registerId, isOpen: true },
       include: { user: { select: { id: true, name: true } } },
+      orderBy: { shiftStart: 'desc' },
     });
 
-    // Si la caja está CERRADA (no tiene turno activo), se muestra en $0 para el turno actual
+    // Si la caja no tiene turno explícito pero hay un turno activo en el sistema, vincularlo
     if (!openClosing) {
+      const unassignedClosing = await this.prisma.cashClosing.findFirst({
+        where: { isOpen: true, cashRegisterId: null },
+        include: { user: { select: { id: true, name: true } } },
+        orderBy: { shiftStart: 'desc' },
+      });
+      if (unassignedClosing) {
+        await this.prisma.cashClosing.update({
+          where: { id: unassignedClosing.id },
+          data: { cashRegisterId: registerId },
+        });
+        openClosing = { ...unassignedClosing, cashRegisterId: registerId };
+      }
+    }
+
+    if (!openClosing) {
+      const anyOpen = await this.prisma.cashClosing.findFirst({
+        where: { isOpen: true },
+        include: { user: { select: { id: true, name: true } } },
+        orderBy: { shiftStart: 'desc' },
+      });
+      if (anyOpen) {
+        openClosing = anyOpen;
+      }
+    }
+
+    // Si no hay ningún turno activo abierto:
+    if (!openClosing) {
+      const dayOrders = await this.prisma.order.findMany({
+        where: {
+          status: { not: 'CANCELLED' },
+          OR: [
+            { cashRegisterId: registerId },
+            { diningTable: { cashRegisterId: registerId } },
+          ],
+          AND: [
+            {
+              OR: [
+                { status: 'DELIVERED' },
+                { paymentStatus: 'CONFIRMED' },
+                { payment: { status: 'CONFIRMED' } },
+              ],
+            },
+            { createdAt: { gte: today } },
+          ],
+        },
+        include: { payment: true },
+      });
+
+      const totalSales = dayOrders.reduce((s, o) => s + o.total, 0);
+      const totalCash = dayOrders.reduce((s, o) => {
+        const m = o.payment?.method || o.paymentMethod;
+        if (m === 'CASH') return s + o.total;
+        if (m === 'MIXED') return s + (o.cashAmount || o.payment?.cashAmount || 0);
+        return s;
+      }, 0);
+      const totalTransfer = dayOrders.reduce((s, o) => {
+        const m = o.payment?.method || o.paymentMethod;
+        if (['TRANSFER', 'NEQUI', 'BANCOLOMBIA', 'DAVIPLATA'].includes(m || '')) return s + o.total;
+        if (m === 'MIXED') return s + (o.transferAmount || o.payment?.transferAmount || 0);
+        return s;
+      }, 0);
+
       return {
         registerId,
-        date: new Date().toISOString().split('T')[0],
+        date: today.toISOString().split('T')[0],
         isOpen: false,
-        orderCount: 0,
-        totalSales: 0,
-        totalCash: 0,
-        totalTransfer: 0,
-        totalNequi: 0,
-        totalBancolombia: 0,
-        totalDaviplata: 0,
-        totalTips: 0,
+        orderCount: dayOrders.length,
+        totalSales,
+        totalCash,
+        totalTransfer,
+        totalNequi: dayOrders.filter(o => (o.payment?.method || o.paymentMethod) === 'NEQUI').reduce((s, o) => s + o.total, 0),
+        totalBancolombia: dayOrders.filter(o => (o.payment?.method || o.paymentMethod) === 'BANCOLOMBIA').reduce((s, o) => s + o.total, 0),
+        totalDaviplata: dayOrders.filter(o => (o.payment?.method || o.paymentMethod) === 'DAVIPLATA').reduce((s, o) => s + o.total, 0),
+        totalTips: dayOrders.reduce((s, o) => s + (o.tip || 0), 0),
         initialCash: 0,
-        cashInDrawer: 0,
+        cashInDrawer: totalCash,
       };
     }
 
     // Si la caja está ABIERTA (turno activo en progreso):
-    // Reasociar pedidos sin caja desde el inicio del turno
+    // Reasociar pedidos y mesas sin caja desde el inicio del turno o de hoy
     await this.prisma.order.updateMany({
       where: {
-        createdAt: { gte: openClosing.shiftStart },
         cashRegisterId: null,
+        OR: [
+          { createdAt: { gte: openClosing.shiftStart } },
+          { updatedAt: { gte: openClosing.shiftStart } },
+          { createdAt: { gte: today } },
+        ],
       },
       data: {
         cashRegisterId: registerId,
       },
     });
 
+    await this.prisma.diningTable.updateMany({
+      where: {
+        cashRegisterId: null,
+        status: 'OPEN',
+      },
+      data: {
+        cashRegisterId: registerId,
+        cashClosingId: openClosing.id,
+      },
+    });
+
     const orders = await this.prisma.order.findMany({
       where: {
-        cashRegisterId: registerId,
         status: { not: 'CANCELLED' },
         OR: [
-          { status: 'DELIVERED' },
-          { paymentStatus: 'CONFIRMED' },
-          { paymentMethod: { not: null } },
+          { cashRegisterId: registerId },
+          { diningTable: { cashRegisterId: registerId } },
+          { diningTable: { cashClosingId: openClosing.id } },
+          ...(registerId ? [{ cashRegisterId: null }] : []),
         ],
-        createdAt: { gte: openClosing.shiftStart },
+        AND: [
+          {
+            OR: [
+              { status: 'DELIVERED' },
+              { paymentStatus: 'CONFIRMED' },
+              { diningTable: { status: 'CLOSED' } },
+              { payment: { status: 'CONFIRMED' } },
+            ],
+          },
+          {
+            OR: [
+              { createdAt: { gte: openClosing.shiftStart } },
+              { updatedAt: { gte: openClosing.shiftStart } },
+              { payment: { confirmedAt: { gte: openClosing.shiftStart } } },
+            ],
+          },
+        ],
+      },
+      include: {
+        payment: true,
+        diningTable: true,
       },
     });
 
@@ -150,14 +278,16 @@ export class CashRegistersService {
     const totalExpenses = expenses.reduce((s, e) => s + (e.amount || 0), 0);
 
     const cashSales = orders.reduce((sum, o) => {
-      if (o.paymentMethod === 'CASH') return sum + o.total;
-      if (o.paymentMethod === 'MIXED') return sum + (o.cashAmount || 0);
+      const method = o.payment?.method || o.paymentMethod;
+      if (method === 'CASH') return sum + o.total;
+      if (method === 'MIXED') return sum + (o.cashAmount || o.payment?.cashAmount || 0);
       return sum;
     }, 0);
 
     const transferSales = orders.reduce((sum, o) => {
-      if (['TRANSFER', 'NEQUI', 'BANCOLOMBIA', 'DAVIPLATA'].includes(o.paymentMethod || '')) return sum + o.total;
-      if (o.paymentMethod === 'MIXED') return sum + (o.transferAmount || 0);
+      const method = o.payment?.method || o.paymentMethod;
+      if (['TRANSFER', 'NEQUI', 'BANCOLOMBIA', 'DAVIPLATA'].includes(method || '')) return sum + o.total;
+      if (method === 'MIXED') return sum + (o.transferAmount || o.payment?.transferAmount || 0);
       return sum;
     }, 0);
 
@@ -178,9 +308,9 @@ export class CashRegistersService {
       cashInDrawer,
       totalExpenses,
       totalTransfer: transferSales,
-      totalNequi: orders.filter(o => o.paymentMethod === 'NEQUI').reduce((s, o) => s + o.total, 0),
-      totalBancolombia: orders.filter(o => o.paymentMethod === 'BANCOLOMBIA').reduce((s, o) => s + o.total, 0),
-      totalDaviplata: orders.filter(o => o.paymentMethod === 'DAVIPLATA').reduce((s, o) => s + o.total, 0),
+      totalNequi: orders.filter(o => (o.payment?.method || o.paymentMethod) === 'NEQUI').reduce((s, o) => s + o.total, 0),
+      totalBancolombia: orders.filter(o => (o.payment?.method || o.paymentMethod) === 'BANCOLOMBIA').reduce((s, o) => s + o.total, 0),
+      totalDaviplata: orders.filter(o => (o.payment?.method || o.paymentMethod) === 'DAVIPLATA').reduce((s, o) => s + o.total, 0),
       totalTips: orders.reduce((s, o) => s + (o.tip || 0), 0),
     };
   }
