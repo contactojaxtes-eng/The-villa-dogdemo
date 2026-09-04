@@ -135,8 +135,9 @@ function parseTablePayment(t: any): {
 }
 
 export default function TableHistoryPage() {
-  const { user } = useAuth()
-  const isWaiter = user?.role === 'WAITER'
+  const { user, hasRole } = useAuth()
+  const canViewFinancials = hasRole('SUPERADMIN', 'ADMIN', 'CASHIER')
+  const isWaiter = user?.role === 'WAITER' || !canViewFinancials
   const [tables, setTables] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
@@ -258,12 +259,6 @@ export default function TableHistoryPage() {
     }
   }, [tables, waiterStats])
 
-  // Resumen específico de la mesera conectada
-  const myStats = useMemo(() => {
-    if (!user?.id && !user?.name) return null
-    return waiterStats.find(w => w.id === user?.id || cleanStr(w.name) === cleanStr(user?.name)) || null
-  }, [waiterStats, user?.id, user?.name])
-
   const filtered = useMemo(() => {
     let list = tables
     if (scope === 'MINE' && user?.id) {
@@ -376,163 +371,124 @@ export default function TableHistoryPage() {
         </div>
       </div>
 
-      {/* Banner personal para la mesera autenticada */}
-      {isWaiter && myStats && (
-        <div className="rounded-2xl border border-amber-500/30 bg-gradient-to-r from-amber-500/15 via-orange-500/10 to-amber-500/5 p-3.5 shadow-sm">
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-            <div className="flex items-center gap-3">
-              <div className="h-10 w-10 rounded-2xl bg-amber-500 text-white flex items-center justify-center font-black text-lg shadow-md shrink-0">
-                👩‍🍳
-              </div>
+      {/* Panel General de Ventas y Rendimiento por Mesera (Exclusivo para Administradores y Cajeros) */}
+      {canViewFinancials && (
+        <div className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-3.5 shadow-xs space-y-3">
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <div className="flex items-center gap-2">
+              <Users className="h-5 w-5 text-[var(--accent)]" />
               <div>
-                <div className="flex items-center gap-2">
-                  <span className="text-[11px] font-black uppercase tracking-wider text-amber-600 dark:text-amber-400">Tu Acumulado Hoy</span>
-                  <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-amber-500/20 text-amber-700 dark:text-amber-300">
-                    {myStats.tablesCount} mesa{myStats.tablesCount === 1 ? '' : 's'}
+                <h2 className="text-sm font-black text-[var(--text-primary)] flex items-center gap-2">
+                  Ventas y Cuentas por Mesera
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-[var(--accent)]/15 text-[var(--accent)]">
+                    {waiterStats.length} mesera{waiterStats.length === 1 ? '' : 's'}
                   </span>
-                </div>
-                <p className="text-lg font-black text-[var(--text-primary)]">
-                  Llevas vendido: <span className="text-[var(--accent)]">{formatCurrency(myStats.total)}</span>
-                </p>
+                </h2>
+                <p className="text-[11px] text-[var(--text-secondary)]">Monitorea cuánto lleva vendido cada mesera, mesas atendidas y pagos recibidos.</p>
               </div>
             </div>
-            <div className="flex items-center gap-2 text-xs font-bold bg-[var(--bg-panel)]/90 p-2 rounded-xl border border-[var(--border-subtle)] flex-wrap">
-              <span className="text-emerald-600 dark:text-emerald-400 flex items-center gap-1">
-                💵 {formatCurrency(myStats.cashTotal)} Efectivo
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-black text-[var(--text-primary)] bg-[var(--bg-elevated)] px-2.5 py-1 rounded-lg border border-[var(--border-subtle)]">
+                Total Salón: <strong className="text-[var(--accent)]">{formatCurrency(globalSummary.totalSales)}</strong>
               </span>
-              <span className="text-[var(--text-muted)]">·</span>
-              <span className="text-blue-600 dark:text-blue-400 flex items-center gap-1">
-                📲 {formatCurrency(myStats.transferTotal)} Transferencia
-              </span>
-              {myStats.openTotal > 0 && (
-                <>
-                  <span className="text-[var(--text-muted)]">·</span>
-                  <span className="text-amber-600 dark:text-amber-400">
-                    ⏳ {formatCurrency(myStats.openTotal)} por cobrar ({myStats.openCount})
-                  </span>
-                </>
-              )}
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setShowWaitersDetail(prev => !prev)}
+                className="h-7 px-2 text-xs font-bold text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]"
+                title={showWaitersDetail ? 'Ocultar desglose' : 'Mostrar desglose'}
+              >
+                {showWaitersDetail ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+              </Button>
             </div>
           </div>
+
+          {showWaitersDetail && (
+            <div className="space-y-3 pt-1">
+              {/* 4 Métricas Globales Rápidas */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                <div className="bg-[var(--bg-elevated)] p-2.5 rounded-xl border border-[var(--border-subtle)]">
+                  <p className="text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-wider">Total Salón</p>
+                  <p className="text-base font-black text-[var(--accent)]">{formatCurrency(globalSummary.totalSales)}</p>
+                  <p className="text-[10px] text-[var(--text-secondary)] mt-0.5 font-bold">{globalSummary.totalTables} mesas registradas</p>
+                </div>
+                <div className="bg-[var(--bg-elevated)] p-2.5 rounded-xl border border-[var(--border-subtle)]">
+                  <p className="text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-wider">En Efectivo</p>
+                  <p className="text-base font-black text-emerald-600 dark:text-emerald-400">{formatCurrency(globalSummary.cashSales)}</p>
+                  <p className="text-[10px] text-[var(--text-secondary)] mt-0.5 font-bold">Dinero físico en caja</p>
+                </div>
+                <div className="bg-[var(--bg-elevated)] p-2.5 rounded-xl border border-[var(--border-subtle)]">
+                  <p className="text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-wider">En Transferencia</p>
+                  <p className="text-base font-black text-blue-600 dark:text-blue-400">{formatCurrency(globalSummary.transferSales)}</p>
+                  <p className="text-[10px] text-[var(--text-secondary)] mt-0.5 font-bold">Nequi / Bancolombia</p>
+                </div>
+                <div className="bg-[var(--bg-elevated)] p-2.5 rounded-xl border border-[var(--border-subtle)]">
+                  <p className="text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-wider">Abiertas vs Cerradas</p>
+                  <p className="text-base font-black text-amber-600 dark:text-amber-400">{formatCurrency(globalSummary.openSales)}</p>
+                  <p className="text-[10px] text-[var(--text-secondary)] mt-0.5 font-bold">{globalSummary.openCount} activas · {globalSummary.closedCount} liquidadas</p>
+                </div>
+              </div>
+
+              {/* Grid de Tarjetas Individuales por Mesera */}
+              {waiterStats.length > 0 ? (
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2 pt-1">
+                  {waiterStats.map((w) => {
+                    const isSelected = selectedWaiter === w.id
+                    const percent = globalSummary.totalSales > 0 ? Math.round((w.total / globalSummary.totalSales) * 100) : 0
+                    return (
+                      <button
+                        key={w.id}
+                        type="button"
+                        onClick={() => setSelectedWaiter(prev => prev === w.id ? 'ALL' : w.id)}
+                        className={`p-3 rounded-2xl border text-left transition-all cursor-pointer flex flex-col justify-between gap-2 relative overflow-hidden ${
+                          isSelected
+                            ? 'border-[var(--accent)] bg-[var(--accent)]/10 ring-2 ring-[var(--accent)] shadow-md'
+                            : 'border-[var(--border-subtle)] bg-[var(--bg-elevated)] hover:border-[var(--border-default)] hover:bg-[var(--bg-hover)] shadow-xs'
+                        }`}
+                      >
+                        <div className="flex items-start justify-between gap-2 w-full">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <div className="h-8 w-8 rounded-xl bg-[var(--accent)]/15 text-[var(--accent)] font-black text-xs flex items-center justify-center shrink-0 border border-[var(--accent)]/20 shadow-xs">
+                              {w.name.charAt(0).toUpperCase()}
+                            </div>
+                            <div className="min-w-0">
+                              <p className="font-black text-xs text-[var(--text-primary)] truncate flex items-center gap-1">
+                                {w.name}
+                                {isSelected && <span className="text-[10px] text-[var(--accent)] font-black">✓</span>}
+                              </p>
+                              <p className="text-[10px] text-[var(--text-secondary)] font-bold">
+                                {w.tablesCount} mesa{w.tablesCount === 1 ? '' : 's'} atendida{w.tablesCount === 1 ? '' : 's'}
+                              </p>
+                            </div>
+                          </div>
+                          <div className="text-right shrink-0">
+                            <span className="font-black text-sm text-[var(--accent)] block leading-tight">
+                              {formatCurrency(w.total)}
+                            </span>
+                            <span className="text-[9px] font-bold text-[var(--text-muted)] block mt-0.5">
+                              {percent}% del salón
+                            </span>
+                          </div>
+                        </div>
+
+                        <div className="pt-2 border-t border-[var(--border-subtle)] flex items-center justify-between text-[10px] font-bold text-[var(--text-secondary)] w-full">
+                          <span className="text-emerald-600 dark:text-emerald-400">💵 {formatCurrency(w.cashTotal)}</span>
+                          <span className="text-blue-600 dark:text-blue-400">📲 {formatCurrency(w.transferTotal)}</span>
+                        </div>
+                      </button>
+                    )
+                  })}
+                </div>
+              ) : (
+                <p className="text-xs text-[var(--text-muted)] text-center py-2">No hay registros de ventas asignados aún.</p>
+              )}
+            </div>
+          )}
         </div>
       )}
 
-      {/* Panel General de Ventas y Rendimiento por Mesera */}
-      <div className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-3.5 shadow-xs space-y-3">
-        <div className="flex items-center justify-between gap-2 flex-wrap">
-          <div className="flex items-center gap-2">
-            <Users className="h-5 w-5 text-[var(--accent)]" />
-            <div>
-              <h2 className="text-sm font-black text-[var(--text-primary)] flex items-center gap-2">
-                Ventas y Cuentas por Mesera
-                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-[var(--accent)]/15 text-[var(--accent)]">
-                  {waiterStats.length} mesera{waiterStats.length === 1 ? '' : 's'}
-                </span>
-              </h2>
-              <p className="text-[11px] text-[var(--text-secondary)]">Monitorea cuánto lleva vendido cada mesera, mesas atendidas y pagos recibidos.</p>
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="text-xs font-black text-[var(--text-primary)] bg-[var(--bg-elevated)] px-2.5 py-1 rounded-lg border border-[var(--border-subtle)]">
-              Total Salón: <strong className="text-[var(--accent)]">{formatCurrency(globalSummary.totalSales)}</strong>
-            </span>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setShowWaitersDetail(prev => !prev)}
-              className="h-7 px-2 text-xs font-bold text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]"
-              title={showWaitersDetail ? 'Ocultar desglose' : 'Mostrar desglose'}
-            >
-              {showWaitersDetail ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
-            </Button>
-          </div>
-        </div>
-
-        {showWaitersDetail && (
-          <div className="space-y-3 pt-1">
-            {/* 4 Métricas Globales Rápidas */}
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-              <div className="bg-[var(--bg-elevated)] p-2.5 rounded-xl border border-[var(--border-subtle)]">
-                <p className="text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-wider">Total Salón</p>
-                <p className="text-base font-black text-[var(--accent)]">{formatCurrency(globalSummary.totalSales)}</p>
-                <p className="text-[10px] text-[var(--text-secondary)] mt-0.5 font-bold">{globalSummary.totalTables} mesas registradas</p>
-              </div>
-              <div className="bg-[var(--bg-elevated)] p-2.5 rounded-xl border border-[var(--border-subtle)]">
-                <p className="text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-wider">En Efectivo</p>
-                <p className="text-base font-black text-emerald-600 dark:text-emerald-400">{formatCurrency(globalSummary.cashSales)}</p>
-                <p className="text-[10px] text-[var(--text-secondary)] mt-0.5 font-bold">Dinero físico en caja</p>
-              </div>
-              <div className="bg-[var(--bg-elevated)] p-2.5 rounded-xl border border-[var(--border-subtle)]">
-                <p className="text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-wider">En Transferencia</p>
-                <p className="text-base font-black text-blue-600 dark:text-blue-400">{formatCurrency(globalSummary.transferSales)}</p>
-                <p className="text-[10px] text-[var(--text-secondary)] mt-0.5 font-bold">Nequi / Bancolombia</p>
-              </div>
-              <div className="bg-[var(--bg-elevated)] p-2.5 rounded-xl border border-[var(--border-subtle)]">
-                <p className="text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-wider">Abiertas vs Cerradas</p>
-                <p className="text-base font-black text-amber-600 dark:text-amber-400">{formatCurrency(globalSummary.openSales)}</p>
-                <p className="text-[10px] text-[var(--text-secondary)] mt-0.5 font-bold">{globalSummary.openCount} activas · {globalSummary.closedCount} liquidadas</p>
-              </div>
-            </div>
-
-            {/* Grid de Tarjetas Individuales por Mesera */}
-            {waiterStats.length > 0 ? (
-              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2 pt-1">
-                {waiterStats.map((w) => {
-                  const isSelected = selectedWaiter === w.id
-                  const percent = globalSummary.totalSales > 0 ? Math.round((w.total / globalSummary.totalSales) * 100) : 0
-                  return (
-                    <button
-                      key={w.id}
-                      type="button"
-                      onClick={() => setSelectedWaiter(prev => prev === w.id ? 'ALL' : w.id)}
-                      className={`p-3 rounded-2xl border text-left transition-all cursor-pointer flex flex-col justify-between gap-2 relative overflow-hidden ${
-                        isSelected
-                          ? 'border-[var(--accent)] bg-[var(--accent)]/10 ring-2 ring-[var(--accent)] shadow-md'
-                          : 'border-[var(--border-subtle)] bg-[var(--bg-elevated)] hover:border-[var(--border-default)] hover:bg-[var(--bg-hover)] shadow-xs'
-                      }`}
-                    >
-                      <div className="flex items-start justify-between gap-2 w-full">
-                        <div className="flex items-center gap-2 min-w-0">
-                          <div className="h-8 w-8 rounded-xl bg-[var(--accent)]/15 text-[var(--accent)] font-black text-xs flex items-center justify-center shrink-0 border border-[var(--accent)]/20 shadow-xs">
-                            {w.name.charAt(0).toUpperCase()}
-                          </div>
-                          <div className="min-w-0">
-                            <p className="font-black text-xs text-[var(--text-primary)] truncate flex items-center gap-1">
-                              {w.name}
-                              {isSelected && <span className="text-[10px] text-[var(--accent)] font-black">✓</span>}
-                            </p>
-                            <p className="text-[10px] text-[var(--text-secondary)] font-bold">
-                              {w.tablesCount} mesa{w.tablesCount === 1 ? '' : 's'} atendida{w.tablesCount === 1 ? '' : 's'}
-                            </p>
-                          </div>
-                        </div>
-                        <div className="text-right shrink-0">
-                          <span className="font-black text-sm text-[var(--accent)] block leading-tight">
-                            {formatCurrency(w.total)}
-                          </span>
-                          <span className="text-[9px] font-bold text-[var(--text-muted)] block mt-0.5">
-                            {percent}% del salón
-                          </span>
-                        </div>
-                      </div>
-
-                      <div className="pt-2 border-t border-[var(--border-subtle)] flex items-center justify-between text-[10px] font-bold text-[var(--text-secondary)] w-full">
-                        <span className="text-emerald-600 dark:text-emerald-400">💵 {formatCurrency(w.cashTotal)}</span>
-                        <span className="text-blue-600 dark:text-blue-400">📲 {formatCurrency(w.transferTotal)}</span>
-                      </div>
-                    </button>
-                  )
-                })}
-              </div>
-            ) : (
-              <p className="text-xs text-[var(--text-muted)] text-center py-2">No hay registros de ventas asignados aún.</p>
-            )}
-          </div>
-        )}
-      </div>
-
-      {/* Chips de filtro rápido por mesera */}
-      {waiterStats.length > 1 && (
+      {/* Chips de filtro rápido por mesera (Exclusivo para Administradores y Cajeros) */}
+      {canViewFinancials && waiterStats.length > 1 && (
         <div className="flex items-center gap-1.5 overflow-x-auto pb-1 text-xs">
           <span className="text-[11px] font-black text-[var(--text-muted)] uppercase tracking-wider shrink-0 mr-1 flex items-center gap-1">
             <Users className="h-3.5 w-3.5" /> Filtrar Mesera:
