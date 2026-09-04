@@ -1038,15 +1038,24 @@ export class TablesService {
   }
 
   async purgeProofsForClosing(cashClosingId?: string) {
-    // Solo purgar comprobantes de más de 7 días de antigüedad para mantener los comprobantes del turno intactos
-    const sevenDaysAgo = new Date();
-    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+    // Al cerrar la caja (cierre de turno), liberamos inmediatamente los bytes de imágenes (fileBase64)
+    // para que la base de datos de PostgreSQL y los servidores nunca se llenen de almacenamiento.
+    // Todos los datos contables (montos, referencias, mesera, cajero, hora, reporte Z) se conservan intactos.
     try {
+      if (!cashClosingId) return;
+
+      const closing = await this.prisma.cashClosing.findUnique({
+        where: { id: cashClosingId },
+      });
+
       await this.prisma.transferProof.updateMany({
         where: {
           fileBase64: { not: null },
-          status: { in: ['CONFIRMED', 'REJECTED'] },
-          createdAt: { lt: sevenDaysAgo },
+          OR: [
+            { cashClosingId },
+            { table: { cashClosingId } },
+            ...(closing?.shiftStart ? [{ createdAt: { gte: closing.shiftStart, lte: closing.shiftEnd } }] : []),
+          ],
         },
         data: {
           fileBase64: null,
@@ -1054,7 +1063,7 @@ export class TablesService {
         },
       });
     } catch (err: any) {
-      console.warn('[purgeProofsForClosing] Error al purgar imágenes de comprobantes:', err?.message);
+      console.warn('[purgeProofsForClosing] Error al purgar imágenes al cerrar caja:', err?.message);
     }
   }
 

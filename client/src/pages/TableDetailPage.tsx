@@ -35,6 +35,8 @@ export default function TableDetailPage() {
   const [preparingPhoto, setPreparingPhoto] = useState(false)
   const photoSelection = useRef(0)
   const paymentAttempt = useRef({ signature: '', id: '' })
+  const cameraInputRef = useRef<HTMLInputElement>(null)
+  const galleryInputRef = useRef<HTMLInputElement>(null)
   const [actionLoading, setActionLoading] = useState<string | null>(null)
 
   const load = () => api.get<any>(`/tables/${id}`).then(t => {
@@ -626,33 +628,43 @@ export default function TableDetailPage() {
 
                   {/* 2 Opciones en comprobante: Tomar foto o Subir comprobante(s) */}
                   <div className="grid grid-cols-2 gap-2">
-                    <label className="flex cursor-pointer flex-col items-center justify-center gap-1.5 rounded-xl border-2 border-dashed border-[var(--accent)] bg-[var(--accent)]/10 p-3 text-center transition hover:bg-[var(--accent)]/20 active:scale-95 shadow-sm">
+                    <button
+                      type="button"
+                      onClick={() => cameraInputRef.current?.click()}
+                      className="flex cursor-pointer flex-col items-center justify-center gap-1.5 rounded-xl border-2 border-dashed border-[var(--accent)] bg-[var(--accent)]/10 p-3 text-center transition hover:bg-[var(--accent)]/20 active:scale-95 shadow-sm"
+                    >
                       <Camera className="h-5 w-5 text-[var(--accent)]" />
                       <span className="text-xs font-black text-[var(--accent)] leading-tight">
                         {proofs.length > 0 ? '+ Tomar otra foto' : 'Tomar foto con cámara'}
                       </span>
-                      <input
-                        type="file"
-                        accept="image/*"
-                        capture="environment"
-                        className="hidden"
-                        onChange={handleFileChange}
-                      />
-                    </label>
+                    </button>
+                    <input
+                      ref={cameraInputRef}
+                      type="file"
+                      accept="image/*"
+                      capture="environment"
+                      className="hidden"
+                      onChange={handleFileChange}
+                    />
 
-                    <label className="flex cursor-pointer flex-col items-center justify-center gap-1.5 rounded-xl border-2 border-dashed border-[var(--border-default)] bg-[var(--bg-elevated)] p-3 text-center transition hover:bg-[var(--bg-hover)] active:scale-95 shadow-sm">
+                    <button
+                      type="button"
+                      onClick={() => galleryInputRef.current?.click()}
+                      className="flex cursor-pointer flex-col items-center justify-center gap-1.5 rounded-xl border-2 border-dashed border-[var(--border-default)] bg-[var(--bg-elevated)] p-3 text-center transition hover:bg-[var(--bg-hover)] active:scale-95 shadow-sm"
+                    >
                       <Upload className="h-5 w-5 text-[var(--text-secondary)]" />
                       <span className="text-xs font-black text-[var(--text-secondary)] leading-tight">
                         {proofs.length > 0 ? '+ Subir de galería' : 'Subir de galería'}
                       </span>
-                      <input
-                        type="file"
-                        accept="image/*"
-                        multiple
-                        className="hidden"
-                        onChange={handleFileChange}
-                      />
-                    </label>
+                    </button>
+                    <input
+                      ref={galleryInputRef}
+                      type="file"
+                      accept="image/*"
+                      multiple
+                      className="hidden"
+                      onChange={handleFileChange}
+                    />
                   </div>
 
                   {/* Previews of all selected photos */}
