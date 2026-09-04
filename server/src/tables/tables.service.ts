@@ -435,14 +435,16 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
     }));
 
     loads.sort((a, b) => {
-      // 1. EQUIDAD ESTRICTA 50/50: Se asigna al cocinero que lleva MENOS pedidos asignados en el turno.
-      // Si Jose lleva 2 y Juan lleva 1 -> le toca a Juan.
-      if (a.totalShiftTickets !== b.totalShiftTickets) {
-        return a.totalShiftTickets - b.totalShiftTickets;
+      // 1. Protección contra sobrecarga: si un cocinero tiene 2 o más comandas activas pendientes frente a otro desocupado
+      const activeDiff = a.activeCount - b.activeCount;
+      if (Math.abs(activeDiff) >= 2) {
+        return activeDiff;
       }
 
-      // 2. ALTERNANCIA ESTRICTA ROUND-ROBIN (1 para Jose, 1 para Juan):
-      // Si ambos llevan la misma cantidad de pedidos hoy, se asigna al que lleve MÁS TIEMPO sin recibir pedido (ticket más antiguo).
+      // 2. ALTERNANCIA ESTRICTA ROUND-ROBIN (1 y 1 y 1 entre los cocineros activos):
+      // Se asigna al cocinero que lleve MÁS TIEMPO sin recibir pedido (lastAssignedAt más antiguo).
+      // Si entra un 3er cocinero a mitad de turno (aunque los otros dos lleven 10 pedidos cada uno),
+      // NO se le bombardean 10 pedidos seguidos para "igualar", sino que de inmediato empiezan a rotar 1, 1, 1.
       if (a.lastAssignedAt !== b.lastAssignedAt) {
         return a.lastAssignedAt - b.lastAssignedAt;
       }
