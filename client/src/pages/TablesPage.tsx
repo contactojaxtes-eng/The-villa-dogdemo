@@ -22,7 +22,7 @@ export default function TablesPage() {
   const load = useCallback(() => {
     setLoading(true)
     const pOpen = api.get<DiningTableSummary[]>('/tables')
-    const pHistory = user?.id ? api.get<DiningTableSummary[]>(`/tables?status=ALL&waiterId=${user.id}`) : Promise.resolve([])
+    const pHistory = user?.id ? api.get<DiningTableSummary[]>(`/tables?status=ALL&waiterId=${user.id}&currentShift=true`) : Promise.resolve([])
 
     Promise.all([pOpen, pHistory])
       .then(([openList, historyList]) => {
@@ -65,6 +65,8 @@ export default function TablesPage() {
     socket.on('tableClosed', load)
     socket.on('paymentValidated', load)
     socket.on('paymentRejected', load)
+    socket.on('cashStatusChanged', load)
+    socket.on('cashRegistersChanged', load)
     return () => { socket.disconnect() }
   }, [load, user?.id, user?.name, user?.role])
 

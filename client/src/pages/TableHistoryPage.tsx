@@ -142,13 +142,17 @@ export default function TableHistoryPage() {
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
   const [filterStatus, setFilterStatus] = useState<string>('ALL')
+  const [shiftFilter, setShiftFilter] = useState<'CURRENT' | 'ALL'>('CURRENT')
   const [scope, setScope] = useState<'MINE' | 'ALL'>(() => isWaiter ? 'MINE' : 'ALL')
   const [zoomUrl, setZoomUrl] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const res = await api.get<any[]>(`/tables?status=${filterStatus}`)
+      const q = new URLSearchParams()
+      if (filterStatus) q.set('status', filterStatus)
+      if (shiftFilter === 'CURRENT') q.set('currentShift', 'true')
+      const res = await api.get<any[]>(`/tables?${q.toString()}`)
       setTables(Array.isArray(res) ? res : [])
     } catch (err) {
       console.error(err)
@@ -156,7 +160,7 @@ export default function TableHistoryPage() {
     } finally {
       setLoading(false)
     }
-  }, [filterStatus])
+  }, [filterStatus, shiftFilter])
 
   useEffect(() => {
     load()
@@ -170,6 +174,8 @@ export default function TableHistoryPage() {
     socket.on('tableUpdated', () => load())
     socket.on('tableClosed', () => load())
     socket.on('paymentValidated', () => load())
+    socket.on('cashStatusChanged', () => load())
+    socket.on('cashRegistersChanged', () => load())
     return () => { socket.disconnect() }
   }, [load])
 
@@ -348,6 +354,25 @@ export default function TableHistoryPage() {
           >
             Todas las mesas ({tables.length})
           </button>
+        </div>
+
+        <div className="flex gap-1 bg-[var(--bg-elevated)] p-1 rounded-xl shrink-0 overflow-x-auto">
+          {[
+            { id: 'CURRENT', label: '📅 Turno Actual' },
+            { id: 'ALL', label: '🗂️ Historial Completo' },
+          ].map(sf => (
+            <button
+              key={sf.id}
+              onClick={() => setShiftFilter(sf.id as any)}
+              className={`px-3 py-1.5 text-xs font-black rounded-lg transition-all whitespace-nowrap cursor-pointer ${
+                shiftFilter === sf.id
+                  ? 'bg-amber-500 text-slate-950 shadow-sm'
+                  : 'text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]'
+              }`}
+            >
+              {sf.label}
+            </button>
+          ))}
         </div>
 
         <div className="flex gap-1 bg-[var(--bg-elevated)] p-1 rounded-xl shrink-0 overflow-x-auto">

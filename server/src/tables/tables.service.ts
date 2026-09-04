@@ -104,7 +104,25 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
     return { ...table, total, paid, balance: Math.max(total - paid, 0), kitchenStatus, paymentStatus };
   }
 
-  async listTables(params: { status?: string; search?: string; waiterId?: string }) {
+  async getShiftCutoff(db: Prisma.TransactionClient = this.prisma): Promise<Date> {
+    const activeClosing = await db.cashClosing.findFirst({
+      where: { isOpen: true },
+      orderBy: { shiftStart: 'desc' },
+    });
+    if (activeClosing?.shiftStart) {
+      return activeClosing.shiftStart;
+    }
+    const lastClosed = await db.cashClosing.findFirst({
+      where: { isOpen: false },
+      orderBy: { shiftEnd: 'desc' },
+    });
+    if (lastClosed?.shiftEnd) {
+      return lastClosed.shiftEnd;
+    }
+    return new Date(Date.now() - 14 * 60 * 60 * 1000);
+  }
+
+  async listTables(params: { status?: string; search?: string; waiterId?: string; currentShift?: string | boolean }) {
     const where: any = { orders: { some: {} } };
     if (params.status === 'ALL') {
       // no status filter, return both active and closed
@@ -120,6 +138,27 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
       ];
     }
     if (params.search?.trim()) where.label = { contains: params.search.trim(), mode: 'insensitive' };
+
+    // Filtrar únicamente mesas del turno actual (cuando se cierra caja, el historial de meseras inicia en 0)
+    if (params.currentShift === 'true' || params.currentShift === true) {
+      const shiftCutoff = await this.getShiftCutoff();
+      where.AND = [
+        ...(where.AND || []),
+        {
+          OR: [
+            { status: { in: ACTIVE_TABLE } },
+            {
+              openedAt: { gte: shiftCutoff },
+              OR: [
+                { cashClosingId: null },
+                { cashClosing: { isOpen: true } },
+              ],
+            },
+          ],
+        },
+      ];
+    }
+
     const tables = await this.prisma.diningTable.findMany({
       where,
       include: this.buildTableInclude(),
@@ -361,8 +400,9 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
     const users = availableUsers.length > 0 ? availableUsers : stationUsers;
     if (users.length === 1) return users[0].id;
 
-    // Ventana del turno actual (últimas 14 horas para cubrir turnos noche que cruzan medianoche)
-    const shiftWindow = new Date(Date.now() - 14 * 60 * 60 * 1000);
+    // Ventana del turno actual para el reparto equitativo 50/50:
+    // Inicia desde la apertura de caja actual o el último cierre de caja (para reiniciar el conteo a 0 tras cerrar caja)
+    const shiftWindow = await this.getShiftCutoff(db);
 
     const loads = await Promise.all(users.map(async user => {
       // 1. Historial de tickets asignados en este turno para equidad estricta 50/50
@@ -933,7 +973,7 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
     return result.updated;
   }
 
-  async listKitchenTickets(user: any, params: { status?: string; stationId?: string }) {
+  async listKitchenTickets(user: any, params: { status?: string; stationId?: string; currentShift?: string | boolean }) {
     const where: any = {};
     if (params.status && params.status !== 'ALL') {
       where.status = params.status;
@@ -949,6 +989,25 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
         { assignedToId: null, station: { users: { some: { id: user.id } } } },
       ];
     }
+
+    // Filtrar comandas históricas por turno actual:
+    // Los tickets activos (NEW, PREPARING) siempre se muestran para que la cocina nunca pierda una comanda viva.
+    // Los tickets terminados (SERVED, CANCELLED) solo se muestran si fueron creados dentro del turno actual,
+    // garantizando que al cerrar la caja el contador e historial de cocineros arranque en 0.
+    const isCurrentShift = params.currentShift !== 'false' && params.currentShift !== false;
+    if (isCurrentShift) {
+      const shiftCutoff = await this.getShiftCutoff();
+      where.AND = [
+        ...(where.AND || []),
+        {
+          OR: [
+            { status: { in: ['NEW', 'PREPARING'] } },
+            { createdAt: { gte: shiftCutoff } },
+          ],
+        },
+      ];
+    }
+
     const tickets = await this.prisma.kitchenTicket.findMany({
       where,
       include: { station: { include: { users: { select: { id: true, name: true, role: true } } } }, assignedTo: { select: { id: true, name: true } }, items: true, order: { include: { waiter: true, diningTable: true } } },

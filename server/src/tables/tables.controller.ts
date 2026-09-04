@@ -15,8 +15,13 @@ export class TablesController {
   @Get()
   @Roles('ADMIN', 'SUPERADMIN', 'CASHIER', 'WAITER')
   @ApiOperation({ summary: 'Listar mesas abiertas o historicas' })
-  findAll(@Query('status') status?: string, @Query('search') search?: string, @Query('waiterId') waiterId?: string) {
-    return this.tablesService.listTables({ status, search, waiterId });
+  findAll(
+    @Query('status') status?: string,
+    @Query('search') search?: string,
+    @Query('waiterId') waiterId?: string,
+    @Query('currentShift') currentShift?: string,
+  ) {
+    return this.tablesService.listTables({ status, search, waiterId, currentShift });
   }
 
   @Get(':id')

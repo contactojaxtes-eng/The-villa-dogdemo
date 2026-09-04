@@ -99,7 +99,7 @@ export default function KitchenPage() {
   // Carga inicial (silenciosa en segundo plano para no hacer parpadear la pantalla)
   const load = useCallback((showSpinner = false) => {
     if (showSpinner) setLoading(true)
-    api.get<KitchenTicketSummary[]>('/kitchen/tickets')
+    api.get<KitchenTicketSummary[]>('/kitchen/tickets?currentShift=true')
       .then(setTickets)
       .catch(console.error)
       .finally(() => {
@@ -213,6 +213,9 @@ export default function KitchenPage() {
         setCookStatus(prev => ({ ...(prev || {}), onBreak: false, breakUntil: null }))
       }
     })
+
+    // Cuando se abre o cierra la caja, recargar comandas para reiniciar contadores e historial a 0
+    socket.on('cashStatusChanged', () => load(false))
 
     return () => { socket.disconnect() }
   }, [isTicketForThisCook, user?.id, user?.name, user?.role])

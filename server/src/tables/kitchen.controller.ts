@@ -14,8 +14,13 @@ export class KitchenController {
   @Get('tickets')
   @Roles('ADMIN', 'SUPERADMIN', 'CASHIER', 'KITCHEN')
   @ApiOperation({ summary: 'Tickets de cocina por estacion/usuario' })
-  tickets(@Query('status') status: string, @Query('stationId') stationId: string, @Request() req: any) {
-    return this.tablesService.listKitchenTickets(req.user, { status, stationId });
+  tickets(
+    @Query('status') status: string,
+    @Query('stationId') stationId: string,
+    @Query('currentShift') currentShift: string,
+    @Request() req: any,
+  ) {
+    return this.tablesService.listKitchenTickets(req.user, { status, stationId, currentShift });
   }
 
   @Put('tickets/:id/status')
