@@ -1,7 +1,7 @@
 import { receiptSummary, validateReceipt } from './receipt';
 import { Prisma } from '@prisma/client';
 import { lockOperation, operationTransaction } from '../common/operation-lock';
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import { existsSync } from 'fs';
 import { randomUUID } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
@@ -13,12 +13,24 @@ const ACTIVE_TABLE = ['OPEN'];
 const PENDING_PAYMENT = ['PENDING', 'PENDING_REVIEW'];
 
 @Injectable()
-export class TablesService {
+export class TablesService implements OnModuleInit, OnModuleDestroy {
+  private cookTimerInterval?: NodeJS.Timeout;
+
   constructor(
     private prisma: PrismaService,
     private socketGateway: SocketGateway,
     private ordersService: OrdersService,
   ) {}
+
+  onModuleInit() {
+    this.cookTimerInterval = setInterval(() => {
+      this.checkExpiredCookBreaks().catch(() => {});
+    }, 2500);
+  }
+
+  onModuleDestroy() {
+    if (this.cookTimerInterval) clearInterval(this.cookTimerInterval);
+  }
 
   private async getActiveClosing(userId: string, cashRegisterId?: string, db: Prisma.TransactionClient = this.prisma) {
     if (cashRegisterId) {
@@ -443,6 +455,73 @@ export class TablesService {
     return JSON.parse(updated.value);
   }
 
+  async checkExpiredCookBreaks() {
+    const setting = await this.prisma.appSetting.findUnique({ where: { key: 'kitchen_cook_status' } }).catch(() => null);
+    if (!setting) return;
+    let statuses: Record<string, any> = {};
+    try {
+      statuses = JSON.parse(setting.value) || {};
+    } catch {
+      return;
+    }
+
+    let changed = false;
+    const now = Date.now();
+    for (const [userId, status] of Object.entries(statuses)) {
+      if (status && status.onBreak && status.breakUntil && now >= status.breakUntil) {
+        const u = await this.prisma.user.findUnique({ where: { id: userId }, select: { name: true } }).catch(() => null);
+        const userName = u?.name || 'Cocinero';
+        const breakReason = status.breakReason || 'Cena';
+        const breakMinutes = status.breakMinutes || 15;
+
+        status.onBreak = false;
+        status.notifiedFinished = true;
+        changed = true;
+
+        const payload = {
+          userId,
+          userName,
+          finishedAt: now,
+          breakReason,
+          breakMinutes,
+        };
+
+        // 1. Emitir Socket a TODOS los clientes conectados sin excepción
+        this.socketGateway.server.emit('cookBreakFinished', payload);
+
+        // 2. Emitir específicamente al canal de administradores
+        this.socketGateway.server.to('admins').emit('cookBreakFinished', payload);
+
+        // 3. Crear notificación en base de datos para administradores y cajeros
+        try {
+          const admins = await this.prisma.user.findMany({
+            where: { role: { in: ['ADMIN', 'SUPERADMIN', 'CASHIER'] }, active: true },
+            select: { id: true },
+          });
+          for (const admin of admins) {
+            await this.prisma.notification.create({
+              data: {
+                userId: admin.id,
+                title: `⏰ Tiempo de ${breakReason.toLowerCase()} terminado`,
+                type: 'KITCHEN_BREAK',
+                message: `El cocinero "${userName}" cumplió sus ${breakMinutes} minutos de descanso. Ya puedes reactivarlo en cocina.`,
+              },
+            }).catch(() => {});
+          }
+        } catch {}
+      }
+    }
+
+    if (changed) {
+      await this.prisma.appSetting.upsert({
+        where: { key: 'kitchen_cook_status' },
+        update: { value: JSON.stringify(statuses) },
+        create: { key: 'kitchen_cook_status', value: JSON.stringify(statuses) },
+      }).catch(() => {});
+      this.socketGateway.server.emit('kitchenCookStatusChanged', statuses);
+    }
+  }
+
   async getCookStatuses(db: Prisma.TransactionClient = this.prisma): Promise<Record<string, {
     active: boolean;
     onBreak: boolean;
@@ -464,21 +543,8 @@ export class TablesService {
     const now = Date.now();
     for (const [userId, status] of Object.entries(statuses)) {
       if (status && status.onBreak && status.breakUntil && now >= status.breakUntil) {
-        if (!status.notifiedFinished) {
-          this.prisma.user.findUnique({ where: { id: userId }, select: { name: true } }).then(u => {
-            const userName = u?.name || 'Cocinero';
-            this.socketGateway.server.emit('cookBreakFinished', {
-              userId,
-              userName,
-              finishedAt: now,
-              breakReason: status.breakReason || 'Cena',
-              breakMinutes: status.breakMinutes || 15,
-            });
-          }).catch(() => {});
-          status.notifiedFinished = true;
-          changed = true;
-        }
         status.onBreak = false;
+        status.notifiedFinished = true;
         changed = true;
       }
     }
@@ -488,7 +554,7 @@ export class TablesService {
         where: { key: 'kitchen_cook_status' },
         update: { value: JSON.stringify(statuses) },
         create: { key: 'kitchen_cook_status', value: JSON.stringify(statuses) },
-      });
+      }).catch(() => {});
       this.socketGateway.server.emit('kitchenCookStatusChanged', statuses);
     }
 
@@ -511,6 +577,11 @@ export class TablesService {
       existing.breakUntil = Date.now() + minutes * 60 * 1000;
       existing.breakReason = (data.breakReason || 'Cena').slice(0, 50);
       existing.notifiedFinished = false;
+
+      // Programar disparo exacto al segundo programado
+      setTimeout(() => {
+        this.checkExpiredCookBreaks().catch(() => {});
+      }, Math.max(500, minutes * 60 * 1000));
     } else if (data.onBreak === false) {
       existing.onBreak = false;
       existing.breakUntil = null;

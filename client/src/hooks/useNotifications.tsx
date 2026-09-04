@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { io } from '@/lib/socket'
+import { api } from '@/lib/api'
 import { toast } from 'sonner'
 import { useAuth } from './useAuth'
 import { Bike, Bell, CheckCircle2, XCircle, MessageCircle, UserPlus } from 'lucide-react'
@@ -218,21 +219,104 @@ export function useNotifications() {
       })
     })
 
-    socket.on('cookBreakFinished', (payload: { userId: string; userName: string; finishedAt: number; breakReason?: string; breakMinutes?: number }) => {
-      if (isMuted()) return
-      if (!['ADMIN', 'SUPERADMIN'].includes(user.role || '')) return
-      playUrgentBell()
+    // Sistema global de seguimiento de descansos y cenas de cocineros
+    const activeBreaks = new Map<string, { userName: string; breakUntil: number; breakMinutes: number; breakReason: string }>()
+    const notifiedBreaks = new Set<string>()
+
+    const triggerCookBreakAlert = (payload: { userId: string; userName: string; breakReason?: string; breakMinutes?: number }) => {
+      const key = `${payload.userId}:${payload.breakMinutes || 15}`
+      if (notifiedBreaks.has(key)) return
+      notifiedBreaks.add(key)
+
+      const isSoundMuted = isMuted() || localStorage.getItem('niche_mute_sounds') === 'true'
+      if (!isSoundMuted) {
+        playUrgentBell()
+      }
+
       toast.warning(`⏰ ¡Tiempo de ${payload.breakReason || 'cena'} terminado!`, {
         description: `El cocinero "${payload.userName}" cumplió sus ${payload.breakMinutes || 15} minutos. Ya puedes llamarlo o reactivarlo en cocina.`,
-        icon: <Bell className="h-4 w-4 text-orange-500 animate-bounce" />,
-        duration: 10000,
+        icon: <Bell className="h-5 w-5 text-orange-500 animate-bounce" />,
+        duration: 15000,
+        action: {
+          label: 'Ver Cocina',
+          onClick: () => { window.location.href = '/kitchen/stations' },
+        },
       })
+
       showBrowserNotification(
         `⏰ ¡Tiempo de ${payload.breakReason || 'cena'} terminado!`,
         `El cocinero "${payload.userName}" finalizó sus ${payload.breakMinutes || 15} min de descanso.`,
         '/kitchen/stations'
       )
+    }
+
+    socket.on('cookBreakFinished', (payload: { userId: string; userName: string; finishedAt: number; breakReason?: string; breakMinutes?: number }) => {
+      // Cocineros y meseros no gestionan las alertas de relevo de cocina
+      if (['WAITER', 'KITCHEN'].includes(user.role || '')) return
+      activeBreaks.delete(payload.userId)
+      triggerCookBreakAlert(payload)
     })
+
+    socket.on('cookBreakStarted', (payload: { userId: string; userName: string; breakUntil: number; breakMinutes: number; breakReason: string }) => {
+      if (payload.userId && payload.breakUntil) {
+        activeBreaks.set(payload.userId, payload)
+      }
+    })
+
+    socket.on('cookBreakReincorporated', (payload: { userId: string }) => {
+      activeBreaks.delete(payload.userId)
+    })
+
+    socket.on('kitchenCookStatusChanged', (statuses: Record<string, any>) => {
+      if (!statuses) return
+      const now = Date.now()
+      Object.entries(statuses).forEach(([uid, st]) => {
+        if (st && st.onBreak && st.breakUntil && now < st.breakUntil) {
+          activeBreaks.set(uid, {
+            userName: st.userName || 'Cocinero',
+            breakUntil: st.breakUntil,
+            breakMinutes: st.breakMinutes || 15,
+            breakReason: st.breakReason || 'Cena',
+          })
+        } else if (st && !st.onBreak) {
+          activeBreaks.delete(uid)
+        }
+      })
+    })
+
+    // Sincronizar descansos activos al iniciar sesión o cargar la página
+    if (user && !['WAITER', 'KITCHEN'].includes(user.role || '')) {
+      api.get<Record<string, any>>('/kitchen/cooks/status').then((res) => {
+        const statuses = res.data || res
+        if (!statuses || typeof statuses !== 'object') return
+        const now = Date.now()
+        Object.entries(statuses).forEach(([uid, st]: [string, any]) => {
+          if (st && st.onBreak && st.breakUntil && now < st.breakUntil) {
+            activeBreaks.set(uid, {
+              userName: st.userName || 'Cocinero',
+              breakUntil: st.breakUntil,
+              breakMinutes: st.breakMinutes || 15,
+              breakReason: st.breakReason || 'Cena',
+            })
+          }
+        })
+      }).catch(() => {})
+    }
+
+    const breakInterval = setInterval(() => {
+      const now = Date.now()
+      for (const [userId, brk] of activeBreaks.entries()) {
+        if (brk && brk.breakUntil && now >= brk.breakUntil) {
+          activeBreaks.delete(userId)
+          triggerCookBreakAlert({
+            userId,
+            userName: brk.userName,
+            breakReason: brk.breakReason,
+            breakMinutes: brk.breakMinutes,
+          })
+        }
+      }
+    }, 1000)
 
     // WhatsApp: nuevo mensaje entrante
     socket.on('whatsappMessage', (payload: {
@@ -338,6 +422,9 @@ export function useNotifications() {
       }, 2500)
     })
 
-    return () => { socket.disconnect() }
+    return () => {
+      clearInterval(breakInterval)
+      socket.disconnect()
+    }
   }, [isAuthenticated, user])
 }
