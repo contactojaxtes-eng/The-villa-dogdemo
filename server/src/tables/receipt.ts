@@ -3,12 +3,21 @@ import { BadRequestException } from '@nestjs/common';
 export function validateReceipt(file: any) {
   const bytes = file?.buffer;
   if (!Buffer.isBuffer(bytes) || !bytes.length) throw new BadRequestException('Adjunta la foto del comprobante');
-  if (bytes.length > 5 * 1024 * 1024) throw new BadRequestException('El comprobante debe pesar menos de 5 MB');
-  const jpeg = bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
-  const png = bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
-  const webp = bytes.toString('ascii', 0, 4) === 'RIFF' && bytes.toString('ascii', 8, 12) === 'WEBP';
-  if (!jpeg && !png && !webp) throw new BadRequestException('El comprobante debe ser una imagen JPG, PNG o WebP válida');
-  return { mime: jpeg ? 'image/jpeg' : png ? 'image/png' : 'image/webp', bytes };
+  if (bytes.length > 10 * 1024 * 1024) throw new BadRequestException('El comprobante debe pesar menos de 10 MB');
+
+  // Marcadores de formato de imagen universales
+  const jpeg = bytes.length >= 2 && bytes[0] === 0xff && bytes[1] === 0xd8;
+  const png = bytes.length >= 8 && bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+  const webp = bytes.length >= 12 && bytes.toString('ascii', 0, 4) === 'RIFF' && bytes.toString('ascii', 8, 12) === 'WEBP';
+  const heic = bytes.length >= 12 && (bytes.toString('ascii', 4, 12).includes('ftypheic') || bytes.toString('ascii', 4, 12).includes('ftypmif1') || bytes.toString('ascii', 4, 12).includes('ftypmsf1'));
+  const isImageMime = typeof file?.mimetype === 'string' && file.mimetype.startsWith('image/');
+
+  if (!jpeg && !png && !webp && !heic && !isImageMime) {
+    throw new BadRequestException('El comprobante debe ser una imagen válida (JPG, PNG o WebP)');
+  }
+
+  const mime = jpeg ? 'image/jpeg' : png ? 'image/png' : webp ? 'image/webp' : heic ? 'image/heic' : (file?.mimetype || 'image/jpeg');
+  return { mime, bytes };
 }
 
 // Never send receipt bytes in table lists or realtime broadcasts. Images load on demand.

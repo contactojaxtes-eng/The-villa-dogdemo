@@ -750,7 +750,7 @@ export default function KitchenPage() {
                       onClick={() => setStatus(ticket, 'PREPARING')}
                       className="w-full h-11 bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-xs gap-2 rounded-xl shadow-md transition-all active:scale-95 cursor-pointer"
                     >
-                      <Flame className="h-4 w-4" /> 1. Empezar a Preparar
+                      <Flame className="h-4 w-4" /> {ticket.isEdited ? '1. Empezar a Preparar lo Nuevo' : '1. Empezar a Preparar'}
                     </Button>
                   ) : ticket.status === 'PREPARING' ? (
                     /* PASO 2: EN PREPARACIÓN -> BOTÓN LISTO (ESMERALDA) + OPCIÓN REVERTIR */
@@ -769,7 +769,7 @@ export default function KitchenPage() {
                         onClick={() => setStatus(ticket, 'READY')}
                         className="flex-1 h-11 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs gap-2 rounded-xl shadow-md transition-all active:scale-95 cursor-pointer"
                       >
-                        <CheckCircle2 className="h-4 w-4" /> 2. ¡Listo para Entrega!
+                        <CheckCircle2 className="h-4 w-4" /> {ticket.isEdited ? '2. ¡Listo para Entrega! (Lo editado)' : '2. ¡Listo para Entrega!'}
                       </Button>
                     </div>
                   ) : ticket.status === 'READY' ? (

@@ -592,7 +592,7 @@ export default function TableDetailPage() {
                       </span>
                       <input
                         type="file"
-                        accept="image/*"
+                        accept="image/*,image/jpeg,image/png,image/webp"
                         capture="environment"
                         className="hidden"
                         onChange={handleFileChange}
@@ -606,7 +606,7 @@ export default function TableDetailPage() {
                       </span>
                       <input
                         type="file"
-                        accept="image/*"
+                        accept="image/*,image/jpeg,image/png,image/webp"
                         multiple
                         className="hidden"
                         onChange={handleFileChange}

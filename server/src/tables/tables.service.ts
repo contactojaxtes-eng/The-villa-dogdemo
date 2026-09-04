@@ -557,8 +557,9 @@ export class TablesService {
         if (!hasActiveItems) {
           newStatus = 'CANCELLED';
         } else if (stationIsEdited) {
-          // Si esta estación tuvo cambios, vuelve a preparación para que el cocinero lo atienda
-          newStatus = 'PREPARING';
+          // Si esta estación tuvo cambios (se agregaron o modificaron productos que requieren preparación):
+          // DEBE volver a estado 'NEW' para que en cocina el cocinero vea el paso "1. Empezar a Preparar"
+          newStatus = 'NEW';
         }
 
         const assignedToId = existingTicket.assignedToId || await this.pickCook(stationId, db);
