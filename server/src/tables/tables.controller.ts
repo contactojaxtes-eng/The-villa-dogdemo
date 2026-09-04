@@ -55,7 +55,13 @@ export class TablesController {
 
   @Post(':id/payments')
   @Roles('ADMIN', 'SUPERADMIN', 'CASHIER', 'WAITER')
-  @UseInterceptors(AnyFilesInterceptor({ limits: { fileSize: 10 * 1024 * 1024, files: 10 } }))
+  @UseInterceptors(AnyFilesInterceptor({
+    limits: {
+      fileSize: 25 * 1024 * 1024,
+      files: 20,
+      fieldSize: 50 * 1024 * 1024,
+    },
+  }))
   @ApiOperation({ summary: 'Enviar cobro de mesa para validacion (soporta múltiples comprobantes)' })
   submitPayment(@Param('id') id: string, @Body() body: any, @Request() req: any, @UploadedFiles() files?: any[]) {
     return this.tablesService.submitPayment(id, body, req.user, files);

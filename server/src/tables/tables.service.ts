@@ -813,7 +813,20 @@ export class TablesService {
     const isTransfer = data.method === 'TRANSFER';
 
     const rawFiles: any[] = Array.isArray(fileOrFiles) ? fileOrFiles : (fileOrFiles ? [fileOrFiles] : []);
-    const uniqueFiles = rawFiles.filter(Boolean);
+    const filesWithProofs = rawFiles.filter(f => f && f.fieldname === 'proofs');
+    const filesToUse = filesWithProofs.length > 0 ? filesWithProofs : rawFiles.filter(Boolean);
+
+    const seenBuffers = new Set<string>();
+    const uniqueFiles: any[] = [];
+    for (const f of filesToUse) {
+      if (!f || !f.buffer) continue;
+      const hash = `${f.size || f.buffer.length}:${f.buffer.slice(0, 64).toString('hex')}`;
+      if (!seenBuffers.has(hash)) {
+        seenBuffers.add(hash);
+        uniqueFiles.push(f);
+      }
+    }
+
     const validReceipts: { receipt: any; file: any }[] = [];
     if (!isCash && uniqueFiles.length > 0) {
       for (const f of uniqueFiles) {

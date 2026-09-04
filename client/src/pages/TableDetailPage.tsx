@@ -232,11 +232,12 @@ export default function TableDetailPage() {
       proofs.forEach((p, idx) => {
         const uniqueFileName = `comprobante-${idx + 1}-${Date.now()}.jpg`
         form.append('proofs', p.file, uniqueFileName)
-        if (idx === 0) form.append('proof', p.file, uniqueFileName)
       })
       if (proofs.length > 0) {
-        form.append('proofsBase64', JSON.stringify(proofs.map(p => p.previewUrl)))
-        form.append('proofBase64', proofs[0].previewUrl)
+        const validBase64 = proofs.map(p => p.previewUrl).filter(url => typeof url === 'string' && url.startsWith('data:'))
+        if (validBase64.length > 0) {
+          form.append('proofsBase64', JSON.stringify(validBase64))
+        }
       }
       const result = await api.post<any>(`/tables/${id}/payments`, form)
 

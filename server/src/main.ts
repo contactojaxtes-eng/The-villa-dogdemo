@@ -8,12 +8,16 @@ import { AllExceptionsFilter } from './common/all-exceptions.filter';
 import { PrismaService } from './prisma/prisma.service';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
+import { json, urlencoded } from 'express';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, {
     logger: process.env.NODE_ENV === 'production' ? ['error', 'warn'] : undefined,
   });
   app.enableShutdownHooks();
+
+  app.use(json({ limit: '50mb' }));
+  app.use(urlencoded({ limit: '50mb', extended: true }));
 
   app.setGlobalPrefix('api', {
     exclude: [
