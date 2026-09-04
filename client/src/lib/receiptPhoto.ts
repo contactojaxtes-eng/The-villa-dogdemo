@@ -152,20 +152,31 @@ export async function prepareReceiptPhoto(file: File): Promise<PreparedReceiptPh
   const isHeic = await isHeicFile(file)
   if (isHeic) {
     try {
-      const heic2anyModule = await import('heic2any')
-      const heic2any = (heic2anyModule as any).default || heic2anyModule
-      const converted = await heic2any({
-        blob: file,
-        toType: 'image/jpeg',
-        quality: 0.82,
-      })
-      const jpegBlob = Array.isArray(converted) ? converted[0] : converted
-      if (jpegBlob && jpegBlob.size > 0) {
-        baseFileName = baseFileName.replace(/\.(heic|heif)$/i, '')
-        workingFile = new File([jpegBlob], `${baseFileName}.jpg`, { type: 'image/jpeg' })
+      let heic2anyFn: any = typeof window !== 'undefined' ? (window as any).heic2any : null
+      if (!heic2anyFn && typeof document !== 'undefined') {
+        await new Promise((resolve, reject) => {
+          const script = document.createElement('script')
+          script.src = 'https://cdn.jsdelivr.net/npm/heic2any@0.0.4/dist/heic2any.min.js'
+          script.onload = () => resolve(true)
+          script.onerror = () => reject(new Error('No se pudo descargar el convertidor HEIC'))
+          document.head.appendChild(script)
+        })
+        heic2anyFn = (window as any).heic2any
+      }
+      if (typeof heic2anyFn === 'function') {
+        const converted = await heic2anyFn({
+          blob: file,
+          toType: 'image/jpeg',
+          quality: 0.82,
+        })
+        const jpegBlob = Array.isArray(converted) ? converted[0] : converted
+        if (jpegBlob && jpegBlob.size > 0) {
+          baseFileName = baseFileName.replace(/\.(heic|heif)$/i, '')
+          workingFile = new File([jpegBlob], `${baseFileName}.jpg`, { type: 'image/jpeg' })
+        }
       }
     } catch (heicErr) {
-      console.warn('[prepareReceiptPhoto] Conversión HEIC en cliente no disponible:', heicErr)
+      console.warn('[prepareReceiptPhoto] Conversión HEIC omitida:', heicErr)
     }
   }
 
