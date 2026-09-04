@@ -103,7 +103,12 @@ export default function CashRegistersPage() {
 
       const sums: Record<string, Summary> = {}
       for (const r of regs) {
-        sums[r.id] = await api.get<Summary>(`/cash-registers/${r.id}/summary`)
+        try {
+          const s = await api.get<Summary>(`/cash-registers/${r.id}/summary`)
+          if (s) sums[r.id] = s
+        } catch (err) {
+          console.error(`Error cargando sumario de caja ${r.id}:`, err)
+        }
       }
       setSummaries(sums)
     } catch (e) {

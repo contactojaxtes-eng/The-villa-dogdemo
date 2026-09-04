@@ -49,15 +49,16 @@ export class PaymentValidationController {
       res.setHeader('Content-Type', proof.mimeType || 'image/jpeg');
       return createReadStream(proof.filePath).pipe(res);
     }
+    const isCash = proof.method === 'CASH';
     const placeholderSvg = Buffer.from(
       `<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="600" height="400" viewBox="0 0 600 400">
   <rect width="100%" height="100%" fill="#0f172a" rx="20"/>
   <rect x="20" y="20" width="560" height="360" fill="none" stroke="#334155" stroke-width="2" stroke-dasharray="8 8" rx="16"/>
-  <circle cx="300" cy="150" r="44" fill="#f59e0b" fill-opacity="0.15"/>
-  <text x="300" y="166" fill="#f59e0b" font-family="system-ui, -apple-system, sans-serif" font-size="44" text-anchor="middle">🧾</text>
-  <text x="300" y="235" fill="#f8fafc" font-family="system-ui, -apple-system, sans-serif" font-size="20" font-weight="800" text-anchor="middle">Comprobante de Transferencia</text>
-  <text x="300" y="270" fill="#94a3b8" font-family="system-ui, -apple-system, sans-serif" font-size="14" text-anchor="middle">Cobro registrado por mesera · Validado en caja</text>
+  <circle cx="300" cy="150" r="44" fill="${isCash ? '#10b981' : '#f59e0b'}" fill-opacity="0.15"/>
+  <text x="300" y="166" fill="${isCash ? '#10b981' : '#f59e0b'}" font-family="system-ui, -apple-system, sans-serif" font-size="44" text-anchor="middle">${isCash ? '💵' : '🧾'}</text>
+  <text x="300" y="235" fill="#f8fafc" font-family="system-ui, -apple-system, sans-serif" font-size="20" font-weight="800" text-anchor="middle">${isCash ? 'Cobro en Efectivo' : 'Comprobante de Transferencia'}</text>
+  <text x="300" y="270" fill="#94a3b8" font-family="system-ui, -apple-system, sans-serif" font-size="14" text-anchor="middle">${isCash ? 'Registrado por mesera · Validar dinero físico en caja' : 'Cobro registrado por mesera · Validado en caja'}</text>
 </svg>`
     );
     res.setHeader('Content-Type', 'image/svg+xml; charset=utf-8');

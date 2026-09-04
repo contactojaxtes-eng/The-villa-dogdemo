@@ -186,7 +186,7 @@ export default function PaymentValidationPage() {
   }, [safePayments, cancellations])
 
   const openProofViewer = (proofs: any[], initialIndex = 0, payment?: any) => {
-    const valid = (proofs || []).filter((p: any) => p && (p.fileBase64 || p.filePath || p.id))
+    const valid = (proofs || []).filter((p: any) => p && (p.fileBase64 || p.filePath))
     if (!valid.length) {
       alerts.warning('Comprobante', 'No hay imágenes disponibles para este cobro.')
       return
@@ -460,6 +460,8 @@ export default function PaymentValidationPage() {
             const proof = payment.transferProofs?.[0]
             const isCash = payment.method === 'CASH'
             const label = payment.order?.diningTable?.label || payment.order?.customerName || 'Mesa'
+            const imageProofs = !isCash ? (payment.transferProofs || []).filter((p: any) => Boolean(p.fileBase64 || p.filePath)) : []
+            const hasImageProofs = imageProofs.length > 0
 
             return (
               <article
@@ -468,19 +470,19 @@ export default function PaymentValidationPage() {
               >
                 {/* Lado izquierdo: Miniatura compacta + Datos del pedido */}
                 <div className="flex items-center gap-3 min-w-0 flex-1">
-                  {/* Miniaturas si es transferencia (soporta 1 o múltiples fotos) */}
-                  {payment.transferProofs && payment.transferProofs.length > 0 && payment.transferProofs.some((p: any) => p.fileBase64 || p.filePath || p.id) ? (
+                  {/* Miniaturas si es transferencia con fotos reales */}
+                  {hasImageProofs ? (
                     <div className="flex items-center gap-1.5 shrink-0 flex-wrap max-w-xs md:max-w-sm">
-                      {payment.transferProofs.filter((p: any) => p.fileBase64 || p.filePath || p.id).map((p: any, idx: number) => (
+                      {imageProofs.map((p: any, idx: number) => (
                         <div
                           key={p.id || idx}
                           className="group relative w-11 h-13 shrink-0 cursor-pointer overflow-hidden rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-elevated)] flex items-center justify-center hover:border-[var(--accent)] shadow-xs transition"
                           onClick={(e) => {
                             e.preventDefault()
                             e.stopPropagation()
-                            openProofViewer(payment.transferProofs, idx, payment)
+                            openProofViewer(imageProofs, idx, payment)
                           }}
-                          title={`Comprobante #${idx + 1} de ${payment.transferProofs.length} - Clic para ver en grande`}
+                          title={`Comprobante #${idx + 1} de ${imageProofs.length} - Clic para ver en grande`}
                         >
                           {p.fileBase64 ? (
                             <img src={p.fileBase64} alt={`Comprobante ${idx + 1}`} className="h-full w-full object-cover" />
@@ -490,7 +492,7 @@ export default function PaymentValidationPage() {
                           <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
                             <Eye className="h-4 w-4 text-white" />
                           </div>
-                          {payment.transferProofs.length > 1 && (
+                          {imageProofs.length > 1 && (
                             <span className="absolute bottom-0 right-0 bg-slate-950/80 text-white text-[9px] font-black px-1 rounded-tl">
                               #{idx + 1}
                             </span>
@@ -499,14 +501,18 @@ export default function PaymentValidationPage() {
                       ))}
                     </div>
                   ) : isCash ? (
-                    <div className="w-10 h-10 shrink-0 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-600 flex items-center justify-center" title="Pago en Efectivo">
-                      <Banknote className="h-5 w-5" />
+                    <div className="w-11 h-11 shrink-0 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shadow-xs" title="Pago en Efectivo">
+                      <Banknote className="h-6 w-6" />
                     </div>
                   ) : payment.method === 'MIXED' ? (
-                    <div className="w-10 h-10 shrink-0 rounded-lg bg-[var(--accent)]/10 border border-[var(--accent)]/20 text-[var(--accent)] flex items-center justify-center font-black text-xs" title="Pago Mixto">
+                    <div className="w-11 h-11 shrink-0 rounded-xl bg-amber-500/15 border border-amber-500/30 text-amber-600 dark:text-amber-400 flex items-center justify-center font-black text-sm shadow-xs" title="Pago Mixto">
                       🔀
                     </div>
-                  ) : null}
+                  ) : (
+                    <div className="w-11 h-11 shrink-0 rounded-xl bg-blue-500/15 border border-blue-500/30 text-blue-600 dark:text-blue-400 flex items-center justify-center shadow-xs" title={methodLabels[payment.method] || 'Transferencia'}>
+                      <Smartphone className="h-6 w-6" />
+                    </div>
+                  )}
 
                   {/* Información */}
                   <div className="min-w-0 flex-1">
@@ -526,9 +532,9 @@ export default function PaymentValidationPage() {
                       }`}>
                         {statusLabels[payment.status] || payment.status}
                       </span>
-                      {payment.transferProofs && payment.transferProofs.length > 1 && (
+                      {hasImageProofs && imageProofs.length > 1 && (
                         <span className="text-[10px] font-black px-2 py-0.5 rounded-md bg-blue-500/15 text-blue-700 dark:text-blue-300 border border-blue-500/30">
-                          📸 {payment.transferProofs.length} comprobantes
+                          📸 {imageProofs.length} comprobantes
                         </span>
                       )}
                     </div>
@@ -557,7 +563,7 @@ export default function PaymentValidationPage() {
                           </span>
                         </>
                       )}
-                      {proof && (
+                      {hasImageProofs ? (
                         <>
                           <span>•</span>
                           <button
@@ -565,14 +571,28 @@ export default function PaymentValidationPage() {
                             onClick={(e) => {
                               e.preventDefault()
                               e.stopPropagation()
-                              openProofViewer(payment.transferProofs, 0, payment)
+                              openProofViewer(imageProofs, 0, payment)
                             }}
                             className="text-[var(--accent)] font-bold hover:underline flex items-center gap-1 cursor-pointer"
                           >
-                            <Eye className="h-3 w-3" /> {payment.transferProofs.length > 1 ? `Ver comprobantes (${payment.transferProofs.length})` : 'Ver comprobante'}
+                            <Eye className="h-3 w-3" /> {imageProofs.length > 1 ? `Ver comprobantes (${imageProofs.length})` : 'Ver comprobante'}
                           </button>
                         </>
-                      )}
+                      ) : isCash ? (
+                        <>
+                          <span>•</span>
+                          <span className="text-emerald-700 dark:text-emerald-400 font-bold flex items-center gap-1">
+                            💵 Cobro en efectivo
+                          </span>
+                        </>
+                      ) : payment.method === 'MIXED' ? (
+                        <>
+                          <span>•</span>
+                          <span className="text-amber-700 dark:text-amber-400 font-bold flex items-center gap-1">
+                            🔀 Pago mixto
+                          </span>
+                        </>
+                      ) : null}
                     </div>
                   </div>
                 </div>

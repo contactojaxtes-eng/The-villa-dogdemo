@@ -114,7 +114,12 @@ export default function CashControlPage() {
 
       const sums: Record<string, Summary> = {}
       for (const r of regs) {
-        sums[r.id] = await api.get<Summary>(`/cash-registers/${r.id}/summary`)
+        try {
+          const s = await api.get<Summary>(`/cash-registers/${r.id}/summary`)
+          if (s) sums[r.id] = s
+        } catch (err) {
+          console.error(`Error cargando sumario de caja ${r.id}:`, err)
+        }
       }
       
       try {
@@ -430,7 +435,7 @@ export default function CashControlPage() {
                       <div className="rounded-xl bg-[var(--bg-elevated)] border border-[var(--border-subtle)] p-3">
                         <p className="text-[10px] font-bold text-[var(--text-muted)] uppercase">Transferencias & Digitales</p>
                         <p className="text-base font-extrabold text-[var(--text-primary)] mt-0.5">
-                          {formatCurrency(sum.totalTransfer + (sum.totalNequi || 0) + (sum.totalBancolombia || 0) + (sum.totalDaviplata || 0))}
+                          {formatCurrency(sum.totalTransfer || 0)}
                         </p>
                         <p className="text-[10px] text-[var(--text-secondary)] mt-0.5">Bancos / Nequi / Daviplata</p>
                       </div>
