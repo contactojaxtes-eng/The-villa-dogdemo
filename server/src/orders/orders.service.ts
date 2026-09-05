@@ -376,7 +376,7 @@ export class OrdersService implements OnModuleInit {
       return { order: await this.createWithinTransaction(data, tx), replay: false };
     }, operationTransaction);
     if (!result.replay) await this.notifyCreated(result.order);
-    return result.order;
+    return result.replay ? { ...result.order, idempotentReplay: true } : result.order;
   }
 
   async createWithinTransaction(data: {

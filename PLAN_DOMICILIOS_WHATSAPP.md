@@ -31,6 +31,13 @@ La separación no requiere duplicar productos, clientes ni infraestructura. El c
 - Domiciliarios muestra cuánto debe entregar cada repartidor y permite liquidar juntos los pedidos de su turno, registrando esperado, recibido, diferencia, responsable y nota.
 - La Caja Domicilios muestra el efectivo que sigue en calle y bloquea el cierre mientras exista una liquidación pendiente.
 
+## Avance implementado — entrega 3
+
+- Cada conversación de WhatsApp conserva su propio borrador de pedido: productos, cliente, dirección, barrio, tarifa, ubicación y forma de pago sobreviven una recarga sin mezclarse con otro chat.
+- Cada intento de creación envía una clave única persistida con el borrador. Reintentar después de mala señal o doble clic devuelve el mismo pedido en vez de crear otro.
+- Una respuesta repetida del servidor no vuelve a imprimir la comanda.
+- Los borradores de chats abandonados vencen a los siete días y se conservan como máximo veinte para no acumular basura en el dispositivo.
+
 ## Diagnóstico del código actual
 
 1. `Order` ya distingue `DELIVERY`, `PICKUP` y `LOCAL`, pero `GET /orders`, las estadísticas del historial y varias búsquedas no aplican ese filtro. Por eso Historial Domicilios muestra pedidos de mesa.

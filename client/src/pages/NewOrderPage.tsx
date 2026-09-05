@@ -400,7 +400,29 @@ function AdditionDropdown({
       )}
     </div>
   )
-}const draftKey = 'niche-new-order-draft'
+}
+
+const draftKey = 'niche-new-order-draft'
+const createClientMutationId = () => globalThis.crypto?.randomUUID?.() || `order-${Date.now()}-${Math.random().toString(36).slice(2)}`
+const cleanupStaleChatDrafts = () => {
+  const prefix = `${draftKey}:chat:`
+  const validDrafts: { key: string; updatedAt: number }[] = []
+  const expiresBefore = Date.now() - 7 * 24 * 60 * 60 * 1000
+  for (let index = localStorage.length - 1; index >= 0; index -= 1) {
+    const key = localStorage.key(index)
+    if (!key?.startsWith(prefix)) continue
+    try {
+      const parsed = JSON.parse(localStorage.getItem(key) || '{}')
+      const updatedAt = Number(parsed.updatedAt || 0)
+      if (!updatedAt || updatedAt < expiresBefore) localStorage.removeItem(key)
+      else validDrafts.push({ key, updatedAt })
+    } catch {
+      localStorage.removeItem(key)
+    }
+  }
+  validDrafts.sort((a, b) => b.updatedAt - a.updatedAt)
+  validDrafts.slice(20).forEach(draft => localStorage.removeItem(draft.key))
+}
 let globalCategoriesCache: Category[] = []
 let globalZonesCache: Zone[] = []
 
@@ -409,6 +431,7 @@ export default function NewOrderPage() {
   const [searchParams] = useSearchParams()
   const editOrderId = searchParams.get('edit')
   const chatSessionId = searchParams.get('chatSessionId')
+  const activeDraftKey = chatSessionId ? `${draftKey}:chat:${chatSessionId}` : draftKey
   const { user } = useAuth()
 
   const [step, setStep] = useState<'menu' | 'delivery'>('menu')
@@ -443,7 +466,10 @@ export default function NewOrderPage() {
   const [categoryFilter, setCategoryFilter] = useState('ALL')
   const [loading, setLoading] = useState(false)
   const [draftLoaded, setDraftLoaded] = useState(false)
+  const [loadedDraftKey, setLoadedDraftKey] = useState<string | null>(null)
+  const [hasRestoredDraft, setHasRestoredDraft] = useState(false)
   const [error, setError] = useState('')
+  const [clientMutationId, setClientMutationId] = useState(createClientMutationId)
   const [orderType, setOrderType] = useState<'delivery' | 'pickup' | 'mostrador'>('delivery')
   const [mapSearch, setMapSearch] = useState('')
 
@@ -486,6 +512,10 @@ export default function NewOrderPage() {
   const [lastOrderDate, setLastOrderDate] = useState<string>('')
   const [isVoiceSearchingMenu, setIsVoiceSearchingMenu] = useState(false)
   const lastParsedSessionIdRef = useRef<string | null>(null)
+
+  useEffect(() => {
+    cleanupStaleChatDrafts()
+  }, [])
 
   const handleVoiceSearchMenu = () => {
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
@@ -652,7 +682,7 @@ export default function NewOrderPage() {
       setLoading(true)
       setEditOrderLoaded(false)
       setCart([])
-      try { localStorage.removeItem(draftKey) } catch (e) {}
+      try { localStorage.removeItem(activeDraftKey) } catch (e) {}
       api.get<any>(`/orders/${editOrderId}`)
         .then(order => {
           if (!order) return
@@ -721,21 +751,47 @@ export default function NewOrderPage() {
 
   useEffect(() => {
     if (editOrderId) return
-    if (chatSessionId) {
-      setDraftLoaded(true)
-      return
+    setDraftLoaded(false)
+    setHasRestoredDraft(false)
+    const resetDraftState = () => {
+      setCustomerName('')
+      setCustomerPhone('')
+      setExactAddress('')
+      setAddressReference('')
+      setZoneId('')
+      setZoneSearch('')
+      setZoneRateEdit('')
+      setMapSearch('')
+      setPaymentMethod('CASH')
+      setPaymentReference('')
+      setCashAmountInput('')
+      setTransferAmountInput('')
+      setLatitude(null)
+      setLongitude(null)
+      setNotes('')
+      setCustomerId('')
+      setCart([])
+      setOrderType('delivery')
+      setClientMutationId(createClientMutationId())
     }
-    const stored = localStorage.getItem(draftKey)
+    const stored = localStorage.getItem(activeDraftKey)
     if (stored) {
       try {
         const draft = JSON.parse(stored)
         setCustomerName(draft.customerName || '')
         setCustomerPhone(draft.customerPhone || '')
         setExactAddress(draft.exactAddress || '')
+        setAddressReference(draft.addressReference || '')
         setZoneId(draft.zoneId || '')
         setZoneSearch(draft.zoneSearch || '')
+        setZoneRateEdit(draft.zoneRateEdit || '')
         setMapSearch(draft.mapSearch || '')
         setPaymentMethod(draft.paymentMethod || 'CASH')
+        setPaymentReference(draft.paymentReference || '')
+        setCashAmountInput(draft.cashAmountInput || '')
+        setTransferAmountInput(draft.transferAmountInput || '')
+        setLatitude(typeof draft.latitude === 'number' ? draft.latitude : null)
+        setLongitude(typeof draft.longitude === 'number' ? draft.longitude : null)
         setNotes(draft.notes || '')
         setCustomerId(draft.customerId || '')
         const loadedCart = Array.isArray(draft.cart) ? draft.cart : []
@@ -749,10 +805,18 @@ export default function NewOrderPage() {
         }))
         setCart(consolidateCart(cartWithIds))
         setOrderType(draft.orderType || 'delivery')
-      } catch { localStorage.removeItem(draftKey) }
+        if (draft.clientMutationId) setClientMutationId(draft.clientMutationId)
+        setHasRestoredDraft(true)
+      } catch {
+        localStorage.removeItem(activeDraftKey)
+        resetDraftState()
+      }
+    } else {
+      resetDraftState()
     }
+    setLoadedDraftKey(activeDraftKey)
     setDraftLoaded(true)
-  }, [editOrderId, chatSessionId])
+  }, [editOrderId, activeDraftKey])
 
   const loadCustomerHistory = async (
     phone: string, 
@@ -861,7 +925,7 @@ export default function NewOrderPage() {
   }
 
   useEffect(() => {
-    if (editOrderId || !draftLoaded) return
+    if (editOrderId || !draftLoaded || loadedDraftKey !== activeDraftKey) return
     const phone = searchParams.get('phone')
     const name = searchParams.get('name')
     const urlAddress = searchParams.get('address')
@@ -901,7 +965,7 @@ export default function NewOrderPage() {
         }
       }
     }
-  }, [searchParams, draftLoaded, zones])
+  }, [searchParams, draftLoaded, loadedDraftKey, activeDraftKey, zones])
 
   useEffect(() => {
     if (showChatDrawer && chatDrawerScrollRef.current) {
@@ -1429,7 +1493,7 @@ export default function NewOrderPage() {
 }
 
   useEffect(() => {
-    if (editOrderId) return
+    if (editOrderId || !draftLoaded || loadedDraftKey !== activeDraftKey || hasRestoredDraft) return
 
     if (chatSessionId && categories.length > 0 && lastParsedSessionIdRef.current !== chatSessionId) {
       lastParsedSessionIdRef.current = chatSessionId
@@ -1730,12 +1794,12 @@ export default function NewOrderPage() {
         })
         .catch(err => console.error('Error fetching chat messages for autocomplete:', err))
     }
-  }, [chatSessionId, categories, editOrderLoaded, editOrderId])
+  }, [chatSessionId, categories, editOrderLoaded, editOrderId, draftLoaded, loadedDraftKey, activeDraftKey, hasRestoredDraft])
 
   useEffect(() => {
-    if (editOrderId || !draftLoaded) return
-    localStorage.setItem(draftKey, JSON.stringify({ customerName, customerPhone, exactAddress, zoneId, zoneSearch, mapSearch, paymentMethod, notes, cart, orderType, customerId }))
-  }, [cart, exactAddress, customerName, customerPhone, draftLoaded, notes, paymentMethod, zoneId, zoneSearch, mapSearch, orderType, editOrderId, customerId])
+    if (editOrderId || !draftLoaded || loadedDraftKey !== activeDraftKey) return
+    localStorage.setItem(activeDraftKey, JSON.stringify({ customerName, customerPhone, exactAddress, addressReference, zoneId, zoneSearch, zoneRateEdit, mapSearch, paymentMethod, paymentReference, cashAmountInput, transferAmountInput, latitude, longitude, notes, cart, orderType, customerId, clientMutationId, updatedAt: Date.now() }))
+  }, [cart, exactAddress, addressReference, customerName, customerPhone, draftLoaded, loadedDraftKey, notes, paymentMethod, paymentReference, cashAmountInput, transferAmountInput, latitude, longitude, zoneId, zoneSearch, zoneRateEdit, mapSearch, orderType, editOrderId, customerId, activeDraftKey, clientMutationId])
 
   useEffect(() => {
     if (editOrderId && editOrderLoaded) return
@@ -2487,6 +2551,7 @@ export default function NewOrderPage() {
         longitude: isMostradorOrPickup ? undefined : (longitude || undefined),
         customerId: customerId || undefined,
         chatSessionId: chatSessionId || undefined,
+        clientMutationId: editOrderId ? undefined : clientMutationId,
       }
 
       let savedOrder: ComandaOrder
@@ -2513,7 +2578,7 @@ export default function NewOrderPage() {
 
       try {
         const settings = await getPrinterSettings()
-        if (settings?.autoPrint !== false) {
+        if (settings?.autoPrint !== false && !(savedOrder as any).idempotentReplay) {
           await printComandaSmart(savedOrder, 'cocina', user?.role, true)
         }
       } catch (printErr) {
@@ -2526,7 +2591,7 @@ export default function NewOrderPage() {
         await alerts.success('Pedido Creado', `Pedido #${savedOrder.orderNumber || ''} registrado exitosamente.`)
       }
 
-      localStorage.removeItem(draftKey)
+      localStorage.removeItem(activeDraftKey)
       if (chatSessionId) {
         navigate('/chat')
       } else {
@@ -2545,7 +2610,8 @@ export default function NewOrderPage() {
       navigate('/orders')
       return
     }
-    localStorage.removeItem(draftKey)
+    localStorage.removeItem(activeDraftKey)
+    setClientMutationId(createClientMutationId())
     setCustomerName(''); setCustomerPhone(''); setExactAddress(''); setZoneId('')
     setZoneSearch(''); setZoneRateEdit('')
     setPaymentMethod('CASH'); setNotes(''); setCart([]); setError(''); setOrderType('delivery')
