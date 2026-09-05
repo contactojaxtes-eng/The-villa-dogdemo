@@ -3,6 +3,7 @@ import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { ZonesService } from './zones.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard, Roles } from '../auth/guards/roles.guard';
+import { PermissionsGuard, Permissions } from '../auth/guards/permissions.guard';
 
 @ApiTags('Delivery Zones')
 @ApiBearerAuth()
@@ -12,12 +13,16 @@ export class ZonesController {
   constructor(private zonesService: ZonesService) {}
 
   @Get()
+  @Permissions('zones.view')
+  @UseGuards(PermissionsGuard)
   @ApiOperation({ summary: 'Listar todas las zonas' })
   findAll() {
     return this.zonesService.findAll();
   }
 
   @Get('groups')
+  @Permissions('zones.view')
+  @UseGuards(PermissionsGuard)
   @ApiOperation({ summary: 'Listar grupos de zonas' })
   getGroups() {
     return this.zonesService.getGroups();
@@ -48,6 +53,8 @@ export class ZonesController {
   }
 
   @Get('grouped')
+  @Permissions('zones.view')
+  @UseGuards(PermissionsGuard)
   @ApiOperation({ summary: 'Zonas agrupadas por grupo/barrio' })
   findAllGrouped() {
     return this.zonesService.findAllGrouped();
@@ -62,6 +69,8 @@ export class ZonesController {
   }
 
   @Get(':id')
+  @Permissions('zones.view')
+  @UseGuards(PermissionsGuard)
   @ApiOperation({ summary: 'Obtener zona por ID' })
   findOne(@Param('id') id: string) {
     return this.zonesService.findOne(id);

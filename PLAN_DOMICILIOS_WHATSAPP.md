@@ -25,9 +25,10 @@ La separación no requiere duplicar productos, clientes ni infraestructura. El c
 - Abrir una caja ya no libera globalmente los chats asignados; varias gestoras pueden conservar sus conversaciones mientras operan otros turnos.
 - El rol Gestora de Domicilios queda enfocado en WhatsApp, creación e historial comercial. Se añadió el rol Despachador de Domicilios para despachos, rutas, cobro, reimpresión e historial de domiciliarios.
 - La creación de usuarios acepta roles personalizados activos y deja de convertir silenciosamente un rol desconocido en cajero.
+- La API aplica los permisos efectivos del usuario en WhatsApp, pedidos, despachos, domiciliarios, clientes, cajas y usuarios; los roles personalizados reciben los mismos controles que los roles del sistema.
 - La pantalla de cajas permite configurar el canal y muestra una insignia visible para evitar abrir o cerrar la caja equivocada.
 
-Pendiente de esta fase: liquidación de efectivo por domiciliario, bloqueo por efectivo en calle y permisos finos obligatorios en todos los endpoints.
+Pendiente de esta fase: liquidación de efectivo por domiciliario y bloqueo de cierre cuando aún hay dinero en calle.
 
 ## Diagnóstico del código actual
 

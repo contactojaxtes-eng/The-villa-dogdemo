@@ -3,6 +3,7 @@ import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
 import { PrintService } from './print.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard, Roles } from '../auth/guards/roles.guard';
+import { PermissionsGuard, Permissions } from '../auth/guards/permissions.guard';
 
 @ApiTags('Print')
 @ApiBearerAuth()
@@ -24,8 +25,8 @@ export class PrintController {
   }
 
   @Post('order/:orderId')
-  @Roles('ADMIN', 'SUPERADMIN', 'CASHIER', 'DELIVERY_MANAGER', 'DISPATCHER')
-  @UseGuards(RolesGuard)
+  @Permissions('orders.reprint', 'dispatch.change_status')
+  @UseGuards(PermissionsGuard)
   printOrder(
     @Param('orderId') orderId: string,
     @Query('target') target?: string,

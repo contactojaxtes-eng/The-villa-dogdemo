@@ -2,14 +2,14 @@ import { Controller, Get, Post, Put, Patch, Delete, Body, Param, Query, UseGuard
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { UsersService } from './users.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
-import { RolesGuard, Roles } from '../auth/guards/roles.guard';
+import { PermissionsGuard, Permissions } from '../auth/guards/permissions.guard';
 import { AuditService } from '../audit/audit.service';
 import { MailService } from '../mail/mail.service';
 import { SYSTEM_MODULES_PERMISSIONS, DEFAULT_ROLE_PERMISSIONS } from '../auth/permissions.constant';
 
 @ApiTags('Users')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard, RolesGuard)
+@UseGuards(JwtAuthGuard, PermissionsGuard)
 @Controller('users')
 export class UsersController {
   constructor(
@@ -19,7 +19,7 @@ export class UsersController {
   ) {}
 
   @Get()
-  @Roles('SUPERADMIN', 'ADMIN')
+  @Permissions('users.view')
   @ApiOperation({ summary: 'Listar todos los usuarios' })
   async findAll(@Request() req: any, @Query('role') role?: string, @Query('active') active?: string) {
     const users = await this.usersService.findAll({ role, active: active === 'true' ? true : active === 'false' ? false : undefined });
@@ -30,6 +30,7 @@ export class UsersController {
   }
 
   @Get('permissions-catalog')
+  @Permissions('users.view')
   @ApiOperation({ summary: 'Obtener catálogo de módulos y permisos del sistema' })
   getPermissionsCatalog() {
     return {
@@ -39,14 +40,14 @@ export class UsersController {
   }
 
   @Get('waiters')
-  @Roles('SUPERADMIN', 'ADMIN', 'CASHIER')
+  @Permissions('orders.create')
   @ApiOperation({ summary: 'Listar meseros activos' })
   getWaiters() {
     return this.usersService.getWaiters();
   }
 
   @Get(':id')
-  @Roles('SUPERADMIN', 'ADMIN')
+  @Permissions('users.view')
   @ApiOperation({ summary: 'Obtener usuario por ID' })
   async findOne(@Param('id') id: string, @Request() req: any) {
     const user = await this.usersService.findOne(id);
@@ -57,7 +58,7 @@ export class UsersController {
   }
 
   @Post()
-  @Roles('SUPERADMIN', 'ADMIN')
+  @Permissions('users.manage')
   @ApiOperation({ summary: 'Crear usuario' })
   async create(@Body() body: any, @Request() req: any) {
     if (body.role === 'SUPERADMIN' && req.user.role !== 'SUPERADMIN') {
@@ -78,7 +79,7 @@ export class UsersController {
   }
 
   @Put(':id')
-  @Roles('SUPERADMIN', 'ADMIN')
+  @Permissions('users.manage')
   @ApiOperation({ summary: 'Actualizar usuario' })
   async update(@Param('id') id: string, @Body() body: any, @Request() req: any) {
     const existing = await this.usersService.findOne(id);
@@ -107,7 +108,7 @@ export class UsersController {
   }
 
   @Patch(':id/password')
-  @Roles('SUPERADMIN', 'ADMIN')
+  @Permissions('users.manage')
   @ApiOperation({ summary: 'Cambiar contraseña de un usuario' })
   async changePassword(@Param('id') id: string, @Body() body: { password: string }, @Request() req: any) {
     if (!body.password || body.password.length < 3) {
@@ -134,7 +135,7 @@ export class UsersController {
   }
 
   @Delete(':id')
-  @Roles('SUPERADMIN', 'ADMIN')
+  @Permissions('users.delete')
   @ApiOperation({ summary: 'Eliminar usuario permanentemente' })
   async remove(@Param('id') id: string, @Request() req: any) {
     if (id === req.user.id) {

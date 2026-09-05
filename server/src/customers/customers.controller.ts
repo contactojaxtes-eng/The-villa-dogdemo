@@ -3,6 +3,7 @@ import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { CustomersService } from './customers.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard, Roles } from '../auth/guards/roles.guard';
+import { PermissionsGuard, Permissions } from '../auth/guards/permissions.guard';
 
 @ApiTags('Customers')
 @ApiBearerAuth()
@@ -12,28 +13,32 @@ export class CustomersController {
   constructor(private readonly customersService: CustomersService) {}
 
   @Post()
-  @Roles('ADMIN', 'SUPERADMIN', 'CASHIER', 'DELIVERY_MANAGER')
-  @UseGuards(RolesGuard)
+  @Permissions('customers.manage')
+  @UseGuards(PermissionsGuard)
   @ApiOperation({ summary: 'Crear un nuevo cliente' })
   create(@Body() body: { name: string; phone: string; address?: string }) {
     return this.customersService.create(body);
   }
 
   @Get()
+  @Permissions('customers.view')
+  @UseGuards(PermissionsGuard)
   @ApiOperation({ summary: 'Listar todos los clientes' })
   findAll(@Query('search') search?: string) {
     return this.customersService.findAll(search);
   }
 
   @Get(':id')
+  @Permissions('customers.view')
+  @UseGuards(PermissionsGuard)
   @ApiOperation({ summary: 'Obtener un cliente por ID con su historial' })
   findOne(@Param('id') id: string) {
     return this.customersService.findOne(id);
   }
 
   @Put(':id')
-  @Roles('ADMIN', 'SUPERADMIN', 'CASHIER', 'DELIVERY_MANAGER')
-  @UseGuards(RolesGuard)
+  @Permissions('customers.manage')
+  @UseGuards(PermissionsGuard)
   @ApiOperation({ summary: 'Actualizar un cliente' })
   update(
     @Param('id') id: string,

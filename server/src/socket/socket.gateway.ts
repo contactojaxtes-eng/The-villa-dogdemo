@@ -3,6 +3,7 @@ import { Server, Socket } from 'socket.io';
 import { JwtService } from '@nestjs/jwt';
 import { PrismaService } from '../prisma/prisma.service';
 import { isAllowedOrigin } from '../common/environment';
+import { DEFAULT_ROLE_PERMISSIONS } from '../auth/permissions.constant';
 
 @WebSocketGateway({ cors: { origin: (origin, callback) => callback(null, isAllowedOrigin(origin)), credentials: true }, namespace: 'the-villa-dog' })
 export class SocketGateway implements OnGatewayConnection, OnGatewayDisconnect, OnGatewayInit {
@@ -14,6 +15,18 @@ export class SocketGateway implements OnGatewayConnection, OnGatewayDisconnect, 
 
   constructor(private jwt: JwtService, private prisma: PrismaService) {}
 
+  private hasPermission(user: any, permission: string) {
+    if (user?.role === 'SUPERADMIN') return true;
+    let permissions = user?.permissions;
+    if (typeof permissions === 'string') {
+      try { permissions = JSON.parse(permissions); } catch { permissions = null; }
+    }
+    const effective = Array.isArray(permissions)
+      ? permissions
+      : (DEFAULT_ROLE_PERMISSIONS[user?.role] || []);
+    return effective.includes('*') || effective.includes(permission);
+  }
+
   afterInit(server: Server) {
     server.use(async (client, next) => {
       try {
@@ -21,7 +34,7 @@ export class SocketGateway implements OnGatewayConnection, OnGatewayDisconnect, 
         if (typeof token !== 'string') return next(new Error('UNAUTHORIZED'));
         const payload = await this.jwt.verifyAsync(token, { secret: process.env.JWT_SECRET || 'change-me-the-villa-dog-dev-secret' });
         if (!payload.sub || payload.type === 'refresh' || !payload.exp) return next(new Error('UNAUTHORIZED'));
-        const user = await this.prisma.user.findUnique({ where: { id: payload.sub }, select: { id: true, name: true, role: true, active: true } });
+        const user = await this.prisma.user.findUnique({ where: { id: payload.sub }, select: { id: true, name: true, role: true, permissions: true, active: true } });
         if (!user?.active) return next(new Error('UNAUTHORIZED'));
         client.data.user = user;
         client.data.expiresAt = payload.exp * 1000;
@@ -41,7 +54,7 @@ export class SocketGateway implements OnGatewayConnection, OnGatewayDisconnect, 
     client.join(`user:${user.id}`);
     if (['ADMIN', 'SUPERADMIN'].includes(user.role)) client.join('admins');
     if (user.role === 'CASHIER') client.join('cashiers');
-    if (['ADMIN', 'SUPERADMIN', 'CASHIER', 'DELIVERY_MANAGER'].includes(user.role)) client.join('whatsapp');
+    if (this.hasPermission(user, 'whatsapp.view')) client.join('whatsapp');
     client.data.expiryTimer = setTimeout(() => client.disconnect(true), Math.max(0, Math.min(client.data.expiresAt - Date.now(), 2_147_483_647)));
     if (sockets.size === 1) this.server.emit('userConnected', { userId: user.id, userName: user.name, connected: true });
   }
@@ -78,7 +91,7 @@ export class SocketGateway implements OnGatewayConnection, OnGatewayDisconnect, 
   @SubscribeMessage('claimOrder')
   handleClaimOrder(client: Socket, data: { orderId: string; userId: string; userName: string }) {
     const user = client.data.user;
-    if (!user || !['ADMIN', 'SUPERADMIN', 'CASHIER', 'DELIVERY_MANAGER'].includes(user.role) || typeof data?.orderId !== 'string') return;
+    if (!user || (!this.hasPermission(user, 'orders.edit') && !this.hasPermission(user, 'dispatch.change_status')) || typeof data?.orderId !== 'string') return;
     data = { ...data, userId: user.id, userName: user.name };
     const existing = this.activeOperators.get(data.orderId);
     if (existing && existing.userId !== data.userId) {

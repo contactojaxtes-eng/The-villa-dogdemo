@@ -3,6 +3,7 @@ import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { OrdersService } from './orders.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard, Roles } from '../auth/guards/roles.guard';
+import { PermissionsGuard, Permissions } from '../auth/guards/permissions.guard';
 
 @ApiTags('Orders')
 @ApiBearerAuth()
@@ -12,6 +13,8 @@ export class OrdersController {
   constructor(private ordersService: OrdersService) {}
 
   @Get()
+  @UseGuards(PermissionsGuard)
+  @Permissions('orders.view', 'dispatch.view', 'whatsapp.view')
   @ApiOperation({ summary: 'Listar todos los pedidos' })
   findAll(
     @Query('status') status?: string,
@@ -40,6 +43,8 @@ export class OrdersController {
   }
 
   @Get('active')
+  @UseGuards(PermissionsGuard)
+  @Permissions('dispatch.view')
   @ApiOperation({ summary: 'Obtener pedidos activos' })
   getActiveOrders() {
     return this.ordersService.getActiveOrders();
@@ -60,18 +65,24 @@ export class OrdersController {
   }
 
   @Get('can-create')
+  @UseGuards(PermissionsGuard)
+  @Permissions('orders.create', 'whatsapp.order_create')
   @ApiOperation({ summary: 'Verificar si se pueden crear pedidos (caja abierta)' })
   canCreate(@Request() req: any, @Query('orderType') orderType?: string) {
     return this.ordersService.checkCanCreateOrders(req.user.id, req.user.role, orderType || 'DELIVERY');
   }
 
   @Get('history/:phone')
+  @UseGuards(PermissionsGuard)
+  @Permissions('orders.view', 'whatsapp.view')
   @ApiOperation({ summary: 'Historial de pedidos por teléfono' })
   getCustomerHistory(@Param('phone') phone: string) {
     return this.ordersService.getCustomerHistory(phone);
   }
 
   @Get('number/:orderNumber')
+  @UseGuards(PermissionsGuard)
+  @Permissions('orders.view', 'dispatch.view', 'whatsapp.view')
   @ApiOperation({ summary: 'Buscar por número de orden' })
   findByNumber(@Param('orderNumber') orderNumber: string) {
     return this.ordersService.findByNumber(parseInt(orderNumber));
@@ -86,14 +97,16 @@ export class OrdersController {
   }
 
   @Get(':id')
+  @UseGuards(PermissionsGuard)
+  @Permissions('orders.view', 'dispatch.view', 'whatsapp.view')
   @ApiOperation({ summary: 'Obtener pedido por ID' })
   findOne(@Param('id') id: string) {
     return this.ordersService.findOne(id);
   }
 
   @Post()
-  @Roles('ADMIN', 'SUPERADMIN', 'DELIVERY_MANAGER', 'CASHIER')
-  @UseGuards(RolesGuard)
+  @Permissions('orders.create', 'whatsapp.order_create')
+  @UseGuards(PermissionsGuard)
   @ApiOperation({ summary: 'Crear nuevo pedido' })
   create(@Body() body: any, @Request() req: any) {
     return this.ordersService.create({
@@ -106,14 +119,16 @@ export class OrdersController {
   }
 
   @Put(':id')
-  @Roles('ADMIN', 'SUPERADMIN', 'DELIVERY_MANAGER', 'CASHIER', 'WAITER')
-  @UseGuards(RolesGuard)
+  @Permissions('orders.edit')
+  @UseGuards(PermissionsGuard)
   @ApiOperation({ summary: 'Actualizar pedido completo' })
   update(@Param('id') id: string, @Body() body: any) {
     return this.ordersService.update(id, body);
   }
 
   @Put(':id/status')
+  @Permissions('dispatch.change_status')
+  @UseGuards(PermissionsGuard)
   @ApiOperation({ summary: 'Actualizar estado del pedido' })
   updateStatus(
     @Param('id') id: string,
@@ -149,6 +164,8 @@ export class OrdersController {
   }
 
   @Put(':id/assign')
+  @Permissions('orders.edit', 'dispatch.change_status')
+  @UseGuards(PermissionsGuard)
   @ApiOperation({ summary: 'Asignar operador al pedido' })
   assignOperator(@Param('id') id: string, @Body() body: { operatorId: string | null; operatorName: string | null }) {
     return this.ordersService.assignOperator(id, body.operatorId, body.operatorName);
@@ -161,8 +178,8 @@ export class OrdersController {
   }
 
   @Put(':id/payment')
-  @Roles('ADMIN', 'SUPERADMIN', 'CASHIER', 'DELIVERY_MANAGER', 'DISPATCHER')
-  @UseGuards(RolesGuard)
+  @Permissions('orders.edit', 'dispatch.change_status', 'payment_validation.cash', 'payment_validation.transfer')
+  @UseGuards(PermissionsGuard)
   @ApiOperation({ summary: 'Actualizar método y estado de pago' })
   updatePayment(@Param('id') id: string, @Body() body: any, @Request() req: any) {
     return this.ordersService.updatePayment(id, body.method, body.paymentStatus, body.reference, req.user, body.customerId, body.courtesyItemIds, body.cashAmount, body.transferAmount);

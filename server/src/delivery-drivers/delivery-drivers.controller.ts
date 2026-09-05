@@ -4,6 +4,7 @@ import { DeliveryDriversService } from './delivery-drivers.service';
 import { CreateDriverDto, UpdateDriverDto } from './dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard, Roles } from '../auth/guards/roles.guard';
+import { PermissionsGuard, Permissions } from '../auth/guards/permissions.guard';
 
 @ApiTags('Delivery Drivers')
 @ApiBearerAuth()
@@ -13,14 +14,16 @@ export class DeliveryDriversController {
   constructor(private readonly deliveryDriversService: DeliveryDriversService) {}
 
   @Post()
-  @Roles('ADMIN', 'SUPERADMIN', 'CASHIER', 'DISPATCHER')
-  @UseGuards(RolesGuard)
+  @Permissions('drivers.manage')
+  @UseGuards(PermissionsGuard)
   @ApiOperation({ summary: 'Crear un nuevo domiciliario' })
   create(@Body() body: CreateDriverDto) {
     return this.deliveryDriversService.create(body);
   }
 
   @Get()
+  @Permissions('drivers.view', 'dispatch.view')
+  @UseGuards(PermissionsGuard)
   @ApiOperation({ summary: 'Listar todos los domiciliarios' })
   findAll(
     @Query('activeOnly') activeOnly?: string,
@@ -33,6 +36,8 @@ export class DeliveryDriversController {
   }
 
   @Get(':id')
+  @Permissions('drivers.view', 'dispatch.view')
+  @UseGuards(PermissionsGuard)
   @ApiOperation({ summary: 'Obtener un domiciliario por ID con sus pedidos' })
   findOne(
     @Param('id') id: string,
@@ -44,8 +49,8 @@ export class DeliveryDriversController {
   }
 
   @Put(':id')
-  @Roles('ADMIN', 'SUPERADMIN', 'CASHIER', 'DISPATCHER')
-  @UseGuards(RolesGuard)
+  @Permissions('drivers.manage')
+  @UseGuards(PermissionsGuard)
   @ApiOperation({ summary: 'Actualizar un domiciliario' })
   update(@Param('id') id: string, @Body() body: UpdateDriverDto) {
     return this.deliveryDriversService.update(id, body);
@@ -59,4 +64,3 @@ export class DeliveryDriversController {
     return this.deliveryDriversService.remove(id);
   }
 }
-

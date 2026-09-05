@@ -3,6 +3,7 @@ import { ApiTags, ApiOperation } from '@nestjs/swagger';
 import { WhatsappService } from './whatsapp.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard, Roles } from '../auth/guards/roles.guard';
+import { PermissionsGuard, Permissions } from '../auth/guards/permissions.guard';
 import { FileInterceptor } from '@nestjs/platform-express';
 import * as express from 'express';
 
@@ -155,14 +156,16 @@ export class WhatsappController {
   }
 
   @Get('sessions/stats')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @Permissions('whatsapp.view')
   async getSessionsStats(@Req() req: any) {
     const userId = req.user?.id;
     return this.whatsappService.getSessionsStats(userId);
   }
 
   @Get('sessions')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @Permissions('whatsapp.view')
   getSessions(
     @Query('search') search?: string,
     @Query('all') all?: string,
@@ -183,7 +186,8 @@ export class WhatsappController {
   }
 
   @Get('sessions/:id')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @Permissions('whatsapp.view')
   async getSession(@Param('id') id: string) {
     const session = await this.whatsappService.getSession(id);
     if (!session) throw new BadRequestException('Sesión no encontrada');
@@ -191,7 +195,8 @@ export class WhatsappController {
   }
 
   @Get('sessions/:id/messages')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @Permissions('whatsapp.view')
   async getSessionMessages(
     @Param('id') id: string,
     @Query('before') before?: string,
@@ -205,7 +210,8 @@ export class WhatsappController {
   }
 
   @Post('sessions/:id/read')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @Permissions('whatsapp.view')
   async markSessionAsRead(@Param('id') id: string) {
     await this.whatsappService.markSessionMessagesAsRead(id);
     return { success: true };
@@ -219,7 +225,8 @@ export class WhatsappController {
   }
 
   @Put('sessions/:id')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @Permissions('whatsapp.reply')
   updateSession(
     @Param('id') id: string,
     @Body() body: { customerName?: string; customerPhone?: string }
@@ -235,13 +242,15 @@ export class WhatsappController {
   }
 
   @Put('messages/:id')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @Permissions('whatsapp.reply')
   editMessage(@Param('id') id: string, @Body() body: { content: string }) {
     return this.whatsappService.editMessage(id, body.content);
   }
 
   @Get('media/:id')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @Permissions('whatsapp.view')
   async getMedia(@Param('id') id: string, @Res() res: express.Response) {
     const media = await this.whatsappService.getMediaStream(id);
     if (!media) {
@@ -273,7 +282,8 @@ export class WhatsappController {
   }
 
   @Put('sessions/:id/assign')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @Permissions('whatsapp.assign')
   assignSession(
     @Param('id') id: string,
     @Body('userId') userId: string | null,
@@ -283,7 +293,8 @@ export class WhatsappController {
   }
 
   @Post('sessions/unassign-all')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @Permissions('whatsapp.assign')
   unassignAll(@Req() req: any) {
     const user = req.user;
     return this.whatsappService.unassignAllSessions(
@@ -292,7 +303,8 @@ export class WhatsappController {
   }
 
   @Post('send')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @Permissions('whatsapp.reply')
   async sendMessage(@Body() body: { phone: string; text: string; replyToWaMessageId?: string; replyToContent?: string }) {
     const result = await this.whatsappService.sendMessage(body.phone, body.text, body.replyToWaMessageId, body.replyToContent);
     if (!result.sent) {
@@ -303,7 +315,8 @@ export class WhatsappController {
   }
 
   @Post('send-template')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @Permissions('whatsapp.reply')
   async sendTemplate(
     @Body() body: { phone: string; templateName: string; languageCode?: string; params?: string[] }
   ) {
@@ -321,7 +334,8 @@ export class WhatsappController {
   }
 
   @Post('send-location')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @Permissions('whatsapp.media')
   async sendLocation(
     @Body() body: { phone: string; latitude: number; longitude: number; name?: string; address?: string }
   ) {
@@ -334,7 +348,8 @@ export class WhatsappController {
   }
 
   @Post('send-media')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @Permissions('whatsapp.media')
   @UseInterceptors(FileInterceptor('file'))
   async sendMedia(
     @Body('phone') phone: string,
@@ -353,7 +368,8 @@ export class WhatsappController {
   }
 
   @Post('send-menu')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @Permissions('whatsapp.media', 'whatsapp.reply')
   async sendMenu(@Body('phone') phone: string) {
     if (!phone) {
       throw new BadRequestException('Teléfono no provisto');
@@ -366,7 +382,8 @@ export class WhatsappController {
   }
 
   @Post('send-payment-qr')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @Permissions('whatsapp.media', 'whatsapp.reply')
   async sendPaymentQr(@Body('phone') phone: string) {
     if (!phone) {
       throw new BadRequestException('Teléfono no provisto');
@@ -379,7 +396,8 @@ export class WhatsappController {
   }
 
   @Post('forward')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @Permissions('whatsapp.media', 'whatsapp.reply')
   async forwardMessage(
     @Body('phone') phone: string,
     @Body('content') content: string,
@@ -403,7 +421,8 @@ export class WhatsappController {
   }
 
   @Post('parse-order')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @Permissions('whatsapp.order_create')
   async parseOrder(@Body('text') text: string) {
     if (!text) {
       throw new BadRequestException('Texto del chat no provisto');
