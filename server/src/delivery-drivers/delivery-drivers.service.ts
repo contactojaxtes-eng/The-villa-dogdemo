@@ -81,7 +81,10 @@ export class DeliveryDriversService {
     } else {
       // Default: 'CURRENT' (Turno Actual)
       const activeClosing = await this.prisma.cashClosing.findFirst({
-        where: { isOpen: true },
+        where: {
+          isOpen: true,
+          cashRegister: { purpose: 'DELIVERY', active: true },
+        },
         orderBy: { shiftStart: 'desc' },
       });
       if (activeClosing && activeClosing.shiftStart) {
@@ -103,7 +106,20 @@ export class DeliveryDriversService {
       include: {
         orders: {
           where: orderDateFilter,
-          select: { id: true, orderNumber: true, total: true, deliveryFee: true, status: true, createdAt: true, customerName: true, customerAddress: true, paymentMethod: true },
+          select: {
+            id: true,
+            orderNumber: true,
+            total: true,
+            deliveryFee: true,
+            status: true,
+            createdAt: true,
+            customerName: true,
+            customerAddress: true,
+            paymentMethod: true,
+            paymentStatus: true,
+            cashAmount: true,
+            driverSettlementId: true,
+          },
           orderBy: { createdAt: 'desc' },
         },
       },
@@ -118,6 +134,14 @@ export class DeliveryDriversService {
       const activeOrders = activeOrdersList.length;
       const totalEarnings = completedOrdersList.reduce((sum, order) => sum + order.deliveryFee, 0);
       const totalDeliveredSales = completedOrdersList.reduce((sum, order) => sum + order.total, 0);
+      const pendingCashOrders = completedOrdersList.filter(order =>
+        !order.driverSettlementId &&
+        order.paymentStatus !== 'CONFIRMED' &&
+        ['CASH', 'MIXED'].includes(order.paymentMethod)
+      );
+      const pendingCash = pendingCashOrders.reduce((sum, order) =>
+        sum + (order.paymentMethod === 'MIXED' ? (order.cashAmount || 0) : order.total), 0
+      );
       return {
         id: driver.id,
         name: driver.name,
@@ -129,8 +153,168 @@ export class DeliveryDriversService {
         activeDeliveries: activeOrders,
         totalDeliveryEarnings: totalEarnings,
         totalDeliveredSales,
+        pendingCash,
+        pendingCashOrders: pendingCashOrders.map(order => ({
+          id: order.id,
+          orderNumber: order.orderNumber,
+          amount: order.paymentMethod === 'MIXED' ? (order.cashAmount || 0) : order.total,
+        })),
         orders: driver.orders,
       };
+    });
+  }
+
+  async getPendingSettlements() {
+    const openClosing = await this.prisma.cashClosing.findFirst({
+      where: {
+        isOpen: true,
+        cashRegister: { purpose: 'DELIVERY', active: true },
+      },
+      select: { id: true, cashRegisterId: true, shiftStart: true },
+      orderBy: { shiftStart: 'desc' },
+    });
+    if (!openClosing) return { cashClosingId: null, totalPendingCash: 0, drivers: [] };
+
+    const orders = await this.prisma.order.findMany({
+      where: {
+        cashClosingId: openClosing.id,
+        orderType: 'DELIVERY',
+        status: 'DELIVERED',
+        paymentMethod: { in: ['CASH', 'MIXED'] },
+        paymentStatus: { not: 'CONFIRMED' },
+        driverSettlementId: null,
+        deliveryDriverId: { not: null },
+      },
+      select: {
+        id: true,
+        orderNumber: true,
+        total: true,
+        cashAmount: true,
+        paymentMethod: true,
+        deliveryDriver: { select: { id: true, name: true, phone: true } },
+      },
+      orderBy: { createdAt: 'asc' },
+    });
+
+    const grouped = new Map<string, any>();
+    for (const order of orders) {
+      if (!order.deliveryDriver) continue;
+      const amount = order.paymentMethod === 'MIXED' ? (order.cashAmount || 0) : order.total;
+      const entry = grouped.get(order.deliveryDriver.id) || {
+        driver: order.deliveryDriver,
+        expectedCash: 0,
+        orders: [],
+      };
+      entry.expectedCash += amount;
+      entry.orders.push({ id: order.id, orderNumber: order.orderNumber, amount });
+      grouped.set(order.deliveryDriver.id, entry);
+    }
+
+    const drivers = [...grouped.values()];
+    return {
+      cashClosingId: openClosing.id,
+      totalPendingCash: drivers.reduce((sum, entry) => sum + entry.expectedCash, 0),
+      drivers,
+    };
+  }
+
+  async settleCash(
+    driverId: string,
+    data: { orderIds: string[]; receivedCash: number; notes?: string },
+    receivedById: string,
+  ) {
+    const orderIds = [...new Set((data.orderIds || []).filter(Boolean))];
+    if (!orderIds.length || orderIds.length > 100) {
+      throw new BadRequestException('Selecciona al menos un pedido pendiente de liquidar.');
+    }
+    const receivedCash = Number(data.receivedCash);
+    if (!Number.isFinite(receivedCash) || receivedCash < 0) {
+      throw new BadRequestException('El efectivo recibido no es válido.');
+    }
+
+    const result = await this.prisma.$transaction(async tx => {
+      const openClosing = await tx.cashClosing.findFirst({
+        where: {
+          isOpen: true,
+          cashRegister: { purpose: 'DELIVERY', active: true },
+        },
+        select: { id: true },
+        orderBy: { shiftStart: 'desc' },
+      });
+      if (!openClosing) throw new BadRequestException('La Caja Domicilios está cerrada.');
+
+      const orders = await tx.order.findMany({
+        where: {
+          id: { in: orderIds },
+          deliveryDriverId: driverId,
+          cashClosingId: openClosing.id,
+          orderType: 'DELIVERY',
+          status: 'DELIVERED',
+          paymentMethod: { in: ['CASH', 'MIXED'] },
+          paymentStatus: { not: 'CONFIRMED' },
+          driverSettlementId: null,
+        },
+        select: { id: true, total: true, cashAmount: true, paymentMethod: true },
+      });
+      if (orders.length !== orderIds.length) {
+        throw new BadRequestException('Uno de los pedidos ya fue liquidado o no pertenece a este domiciliario y turno.');
+      }
+
+      const expectedCash = orders.reduce((sum, order) =>
+        sum + (order.paymentMethod === 'MIXED' ? (order.cashAmount || 0) : order.total), 0
+      );
+      const settlement = await tx.driverSettlement.create({
+        data: {
+          driverId,
+          cashClosingId: openClosing.id,
+          receivedById,
+          expectedCash,
+          receivedCash,
+          difference: receivedCash - expectedCash,
+          notes: data.notes?.trim() || null,
+        },
+      });
+      const linked = await tx.order.updateMany({
+        where: { id: { in: orderIds }, driverSettlementId: null },
+        data: { driverSettlementId: settlement.id, paymentStatus: 'CONFIRMED' },
+      });
+      if (linked.count !== orderIds.length) {
+        throw new BadRequestException('La liquidación cambió mientras se procesaba. Intenta nuevamente.');
+      }
+      await tx.payment.updateMany({
+        where: { orderId: { in: orderIds } },
+        data: {
+          status: 'CONFIRMED',
+          confirmedAt: new Date(),
+          confirmedBy: receivedById,
+        },
+      });
+      return tx.driverSettlement.findUnique({
+        where: { id: settlement.id },
+        include: {
+          driver: { select: { id: true, name: true, phone: true } },
+          receivedBy: { select: { id: true, name: true } },
+          orders: { select: { id: true, orderNumber: true, total: true, cashAmount: true, paymentMethod: true } },
+        },
+      });
+    });
+
+    this.socketGateway.server.emit('driverSettlementCreated', result);
+    this.socketGateway.server.emit('driversChanged');
+    this.socketGateway.server.emit('cashRegistersChanged');
+    return result;
+  }
+
+  async getSettlements(driverId: string) {
+    await this.findOne(driverId, 'ALL');
+    return this.prisma.driverSettlement.findMany({
+      where: { driverId },
+      include: {
+        receivedBy: { select: { id: true, name: true } },
+        orders: { select: { id: true, orderNumber: true } },
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 100,
     });
   }
 

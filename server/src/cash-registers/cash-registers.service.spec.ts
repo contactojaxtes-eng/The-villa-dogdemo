@@ -20,8 +20,9 @@ describe('CashRegistersService delivery isolation', () => {
       order: {
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
         findMany: jest.fn().mockResolvedValue([
-          { total: 30_000, tip: 0, paymentMethod: 'CASH', cashAmount: 30_000, payment: null },
-          { total: 25_000, tip: 0, paymentMethod: 'TRANSFER', transferAmount: 25_000, payment: null },
+          { total: 30_000, tip: 0, status: 'DELIVERED', paymentStatus: 'CONFIRMED', paymentMethod: 'CASH', cashAmount: 30_000, payment: null },
+          { total: 25_000, tip: 0, status: 'DELIVERED', paymentStatus: 'CONFIRMED', paymentMethod: 'TRANSFER', transferAmount: 25_000, payment: null },
+          { total: 12_000, tip: 0, status: 'DELIVERED', paymentStatus: 'DRIVER_CASH_PENDING', paymentMethod: 'CASH', cashAmount: 12_000, payment: null },
         ]),
       },
       expense: { findMany: jest.fn().mockResolvedValue([]) },
@@ -50,9 +51,10 @@ describe('CashRegistersService delivery isolation', () => {
       include: { payment: true },
     });
     expect(summary).toMatchObject({
-      orderCount: 2,
-      totalSales: 55_000,
+      orderCount: 3,
+      totalSales: 67_000,
       totalCash: 30_000,
+      pendingDriverCash: 12_000,
       totalTransfer: 25_000,
       cashInDrawer: 50_000,
     });

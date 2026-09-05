@@ -773,7 +773,7 @@ export default function ActiveDeliveriesPage() {
                           </td>
                           <td className="px-3 py-2.5">
                             <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-md ${order.paymentStatus === 'CONFIRMED' ? 'text-emerald-600 bg-emerald-500/10' : 'text-amber-600 bg-amber-500/10'}`}>
-                              {order.paymentStatus === 'CONFIRMED' ? '✓ Cobrado' : 'Pendiente'}
+                              {order.paymentStatus === 'CONFIRMED' ? '✓ Cobrado' : order.paymentStatus === 'DRIVER_CASH_PENDING' ? 'Con domiciliario' : 'Pendiente'}
                             </span>
                           </td>
                           <td className="px-3 py-2.5">
@@ -1126,7 +1126,7 @@ export default function ActiveDeliveriesPage() {
                         <p className="text-xs text-[var(--text-secondary)]">Domiciliario: <span className="font-bold text-emerald-600">{o.deliveryDriver.name} ({o.deliveryDriver.phone})</span></p>
                       )}
                       <p className="text-xs text-[var(--text-secondary)]">Método: <span className="font-bold">{getStatusLabel(o.paymentMethod)}</span></p>
-                      <p className="text-xs text-[var(--text-secondary)]">Pago: <span className={`font-bold ${o.paymentStatus === 'CONFIRMED' ? 'text-emerald-600' : 'text-amber-600'}`}>{o.paymentStatus === 'CONFIRMED' ? '✓ Cobrado' : 'Pendiente'}</span></p>
+                      <p className="text-xs text-[var(--text-secondary)]">Pago: <span className={`font-bold ${o.paymentStatus === 'CONFIRMED' ? 'text-emerald-600' : 'text-amber-600'}`}>{o.paymentStatus === 'CONFIRMED' ? '✓ Cobrado' : o.paymentStatus === 'DRIVER_CASH_PENDING' ? 'Efectivo con domiciliario' : 'Pendiente'}</span></p>
                       <p className="text-xs text-[var(--text-secondary)]">Creado: <span className="font-semibold">{formatDate(o.createdAt)}</span></p>
                       <p className="text-xs text-[var(--text-secondary)]">Tiempo: <span className="font-bold">{getElapsedTime(o.createdAt)}</span></p>
                     </div>

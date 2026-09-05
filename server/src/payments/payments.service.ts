@@ -121,6 +121,7 @@ export class PaymentsService {
     if (!openCash) {
       return {
         totalCash: 0,
+        pendingDriverCash: 0,
         totalTransfers: 0,
         totalNequi: 0,
         totalBancolombia: 0,
@@ -209,7 +210,10 @@ export class PaymentsService {
       }).catch(() => []);
     }
 
-    const byMethod = (method: string) => orders.filter(o => o.paymentMethod === method).reduce((sum, o) => sum + o.total, 0);
+    const cashWasCollected = (order: any) => !isDeliveryRegister || order.paymentStatus === 'CONFIRMED';
+    const byMethod = (method: string) => orders
+      .filter(order => order.paymentMethod === method && (method !== 'CASH' || cashWasCollected(order)))
+      .reduce((sum, order) => sum + order.total, 0);
 
     // Ventas a crédito creadas durante este turno
     const creditSales = byMethod('CREDIT');
@@ -252,7 +256,7 @@ export class PaymentsService {
 
     const customerPaymentsCash = customerPayments.filter(p => p.method === 'CASH').reduce((sum, p) => sum + p.amount, 0);
     const customerPaymentsTransfer = customerPayments.filter(p => p.method === 'TRANSFER').reduce((sum, p) => sum + p.amount, 0);
-    const mixedCash = orders.filter(o => o.paymentMethod === 'MIXED').reduce((sum, o) => sum + (o.cashAmount || 0), 0);
+    const mixedCash = orders.filter(o => o.paymentMethod === 'MIXED' && cashWasCollected(o)).reduce((sum, o) => sum + (o.cashAmount || 0), 0);
     const mixedTransfer = orders.filter(o => o.paymentMethod === 'MIXED').reduce((sum, o) => sum + (o.transferAmount || 0), 0);
 
     const totalCash = byMethod('CASH') + mixedCash + creditByMethod('CASH') + customerPaymentsCash;
@@ -263,6 +267,14 @@ export class PaymentsService {
 
     const totalSales = orders.reduce((sum, o) => sum + o.total, 0);
     const totalTips = orders.reduce((sum, o) => sum + (o.tip || 0), 0);
+    const pendingDriverCash = isDeliveryRegister
+      ? orders.reduce((sum, order) => {
+          if (order.status !== 'DELIVERED' || cashWasCollected(order)) return sum;
+          if (order.paymentMethod === 'CASH') return sum + order.total;
+          if (order.paymentMethod === 'MIXED') return sum + (order.cashAmount || 0);
+          return sum;
+        }, 0)
+      : 0;
 
     let totalExpenses = 0;
     try {
@@ -279,6 +291,7 @@ export class PaymentsService {
 
     return {
       totalCash,
+      pendingDriverCash,
       totalTransfers,
       totalNequi,
       totalBancolombia,
@@ -338,6 +351,22 @@ export class PaymentsService {
 
     if (pendingCount > 0) {
       throw new BadRequestException(`No se puede cerrar la caja. Hay ${pendingCount} pedido(s) activo(s) pendiente(s) de entrega o cobro. Por favor finalízalos o cancélalos antes de cerrar el turno.`);
+    }
+
+    if (isDeliveryRegister && openClosing) {
+      const pendingDriverCash = await this.prisma.order.count({
+        where: {
+          cashClosingId: openClosing.id,
+          orderType: 'DELIVERY',
+          status: 'DELIVERED',
+          paymentMethod: { in: ['CASH', 'MIXED'] },
+          paymentStatus: { not: 'CONFIRMED' },
+          driverSettlementId: null,
+        },
+      });
+      if (pendingDriverCash > 0) {
+        throw new BadRequestException(`No se puede cerrar la Caja Domicilios. Hay ${pendingDriverCash} pedido(s) con efectivo pendiente por entregar del domiciliario.`);
+      }
     }
 
     if (this.tablesService) {

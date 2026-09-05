@@ -27,8 +27,9 @@ La separación no requiere duplicar productos, clientes ni infraestructura. El c
 - La creación de usuarios acepta roles personalizados activos y deja de convertir silenciosamente un rol desconocido en cajero.
 - La API aplica los permisos efectivos del usuario en WhatsApp, pedidos, despachos, domiciliarios, clientes, cajas y usuarios; los roles personalizados reciben los mismos controles que los roles del sistema.
 - La pantalla de cajas permite configurar el canal y muestra una insignia visible para evitar abrir o cerrar la caja equivocada.
-
-Pendiente de esta fase: liquidación de efectivo por domiciliario y bloqueo de cierre cuando aún hay dinero en calle.
+- Al entregar un domicilio en efectivo, el pago queda como `DRIVER_CASH_PENDING`; ya no se contabiliza como dinero recibido en caja.
+- Domiciliarios muestra cuánto debe entregar cada repartidor y permite liquidar juntos los pedidos de su turno, registrando esperado, recibido, diferencia, responsable y nota.
+- La Caja Domicilios muestra el efectivo que sigue en calle y bloquea el cierre mientras exista una liquidación pendiente.
 
 ## Diagnóstico del código actual
 

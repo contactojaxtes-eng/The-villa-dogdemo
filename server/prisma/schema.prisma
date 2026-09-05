@@ -42,6 +42,7 @@ model User {
   orderChangeLogs OrderChangeLog[]
   transferProofs  TransferProof[] @relation("TransferProofSubmittedBy")
   reviewedProofs  TransferProof[] @relation("TransferProofReviewedBy")
+  receivedDriverSettlements DriverSettlement[] @relation("DriverSettlementReceiver")
 
   @@map("users")
 }
@@ -200,6 +201,7 @@ model Order {
   cancelledById     String?
   cashRegisterId    String?
   cashClosingId     String?
+  driverSettlementId String?
   customerId        String?
   deliveryDriverId  String?
   chatSessionId     String?
@@ -215,6 +217,7 @@ model Order {
   cancelledBy       User?           @relation("OrderCancellation", fields: [cancelledById], references: [id])
   cashRegister      CashRegister?   @relation(fields: [cashRegisterId], references: [id])
   cashClosing       CashClosing?    @relation(fields: [cashClosingId], references: [id])
+  driverSettlement  DriverSettlement? @relation(fields: [driverSettlementId], references: [id])
   customer          Customer?       @relation(fields: [customerId], references: [id])
   deliveryDriver    DeliveryDriver? @relation(fields: [deliveryDriverId], references: [id])
   items             OrderItem[]
@@ -232,6 +235,7 @@ model Order {
   @@index([assignedTo])
   @@index([cashRegisterId])
   @@index([cashClosingId])
+  @@index([driverSettlementId])
   @@index([deliveryDriverId])
   @@index([chatSessionId])
   @@index([tableId])
@@ -404,6 +408,7 @@ model CashClosing {
   cashRegister   CashRegister? @relation(fields: [cashRegisterId], references: [id])
   diningTables   DiningTable[]
   orders         Order[]
+  driverSettlements DriverSettlement[]
   transferProofs TransferProof[]
 
   @@index([userId, isOpen])
@@ -632,8 +637,31 @@ model DeliveryDriver {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   orders    Order[]
+  settlements DriverSettlement[]
 
   @@map("delivery_drivers")
+}
+
+model DriverSettlement {
+  id             String   @id @default(uuid())
+  expectedCash   Float
+  receivedCash   Float
+  difference     Float    @default(0)
+  notes          String?
+  createdAt      DateTime @default(now())
+
+  driverId       String
+  cashClosingId  String
+  receivedById   String
+
+  driver         DeliveryDriver @relation(fields: [driverId], references: [id])
+  cashClosing    CashClosing    @relation(fields: [cashClosingId], references: [id])
+  receivedBy     User           @relation("DriverSettlementReceiver", fields: [receivedById], references: [id])
+  orders         Order[]
+
+  @@index([driverId, createdAt])
+  @@index([cashClosingId, createdAt])
+  @@map("driver_settlements")
 }
 
 model CustomRole {

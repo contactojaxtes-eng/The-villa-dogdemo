@@ -1159,6 +1159,14 @@ export class OrdersService implements OnModuleInit {
       dataUpdate.deliveryDriverId = deliveryDriverId || null;
     }
 
+    const hasDriverCash = status === 'DELIVERED'
+      && order.orderType === 'DELIVERY'
+      && !!targetDriverId
+      && ['CASH', 'MIXED'].includes(order.paymentMethod);
+    if (hasDriverCash && order.paymentStatus !== 'CONFIRMED') {
+      dataUpdate.paymentStatus = 'DRIVER_CASH_PENDING';
+    }
+
     if (order.status === status && deliveryDriverId === undefined) return order;
 
     if (user) {
@@ -1190,11 +1198,18 @@ export class OrdersService implements OnModuleInit {
     });
 
     if (status === 'DELIVERED') {
-      await this.prisma.payment.updateMany({
-        where: { orderId: id },
-        data: { status: order.paymentMethod === 'CASH' ? 'CONFIRMED' : undefined },
-      });
-      if (order.paymentMethod !== 'CASH') {
+      if (hasDriverCash && order.paymentStatus !== 'CONFIRMED') {
+        await this.prisma.payment.updateMany({
+          where: { orderId: id },
+          data: { status: 'DRIVER_CASH_PENDING' },
+        });
+      } else if (order.paymentMethod === 'CASH') {
+        await this.prisma.payment.updateMany({
+          where: { orderId: id },
+          data: { status: 'CONFIRMED' },
+        });
+        await this.prisma.order.update({ where: { id }, data: { paymentStatus: 'CONFIRMED' } });
+      } else {
         await this.prisma.order.update({ where: { id }, data: { paymentStatus: 'CONFIRMED' } });
       }
     }

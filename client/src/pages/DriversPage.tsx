@@ -15,9 +15,9 @@ import { Separator } from '@/components/ui/separator'
 import { 
   Users, Search, Plus, Phone, Award, Bike, DollarSign, History, 
   ArrowLeft, Loader2, CheckCircle2, AlertTriangle, Edit, Trash2, ShieldAlert,
-  User, MapPin, ClipboardList, UtensilsCrossed, XCircle, Printer, FileSpreadsheet, FileText, Download
+  User, MapPin, ClipboardList, UtensilsCrossed, XCircle, Printer, FileSpreadsheet, FileText, Download, Wallet
 } from 'lucide-react'
-import { formatCurrency, formatDate, getStatusColor, getStatusLabel, cleanNotes, groupOrderItems } from '@/lib/utils'
+import { formatCurrency, formatDate, getStatusColor, getStatusLabel, cleanNotes, groupOrderItems, formatThousandsInput, parseThousandsInput } from '@/lib/utils'
 import { printComandaSmart } from '@/lib/printer'
 
 interface DriverOrder {
@@ -30,6 +30,8 @@ interface DriverOrder {
   customerName?: string
   customerAddress?: string
   paymentMethod?: string
+  paymentStatus?: string
+  cashAmount?: number
 }
 
 interface Driver {
@@ -41,6 +43,8 @@ interface Driver {
   completedDeliveries: number
   totalDeliveryEarnings: number
   totalDeliveredSales?: number
+  pendingCash?: number
+  pendingCashOrders?: { id: string; orderNumber: number; amount: number }[]
   orders?: DriverOrder[]
 }
 
@@ -81,6 +85,10 @@ export default function DriversPage() {
   const [driverPhone, setDriverPhone] = useState('')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+  const [settlementDriver, setSettlementDriver] = useState<Driver | null>(null)
+  const [settlementAmount, setSettlementAmount] = useState('')
+  const [settlementNotes, setSettlementNotes] = useState('')
+  const [settling, setSettling] = useState(false)
 
   // Details Modal
   const [detailDriver, setDetailDriver] = useState<DriverDetail | null>(null)
@@ -173,8 +181,33 @@ export default function DriversPage() {
     const total = drivers.length
     const active = drivers.filter(d => d.active).length
     const totalFees = drivers.reduce((sum, d) => sum + d.totalDeliveryEarnings, 0)
-    return { total, active, totalFees }
+    const pendingCash = drivers.reduce((sum, d) => sum + (d.pendingCash || 0), 0)
+    return { total, active, totalFees, pendingCash }
   }, [drivers])
+
+  const openSettlementDialog = (driver: Driver) => {
+    setSettlementDriver(driver)
+    setSettlementAmount(String(Math.round(driver.pendingCash || 0)))
+    setSettlementNotes('')
+  }
+
+  const handleSettleCash = async () => {
+    if (!settlementDriver?.pendingCashOrders?.length) return
+    setSettling(true)
+    try {
+      await api.post(`/delivery-drivers/${settlementDriver.id}/settlements`, {
+        orderIds: settlementDriver.pendingCashOrders.map(order => order.id),
+        receivedCash: parseThousandsInput(settlementAmount),
+        notes: settlementNotes || undefined,
+      })
+      setSettlementDriver(null)
+      await loadDrivers()
+    } catch (err: any) {
+      alert(err.message || 'No se pudo liquidar el efectivo del domiciliario')
+    } finally {
+      setSettling(false)
+    }
+  }
 
   const openCreateDialog = () => {
     setEditId(null)
@@ -508,7 +541,7 @@ export default function DriversPage() {
       </div>
 
       {/* Summary Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
         <Card className="border-[var(--border-subtle)] bg-[var(--bg-panel)] shadow-sm rounded-2xl">
           <CardContent className="p-5 flex items-center justify-between">
             <div>
@@ -517,6 +550,18 @@ export default function DriversPage() {
             </div>
             <div className="h-12 w-12 rounded-xl bg-[var(--accent-muted)]/40 flex items-center justify-center text-[var(--accent)]">
               <Users className="h-6 w-6" />
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card className="border-amber-500/25 bg-[var(--bg-panel)] shadow-sm rounded-2xl">
+          <CardContent className="p-5 flex items-center justify-between">
+            <div>
+              <p className="text-[10px] font-bold text-[var(--text-secondary)] uppercase tracking-wider">Efectivo por entregar</p>
+              <h3 className="text-3xl font-black text-amber-500 mt-1.5">{formatCurrency(summary.pendingCash)}</h3>
+            </div>
+            <div className="h-12 w-12 rounded-xl bg-amber-500/10 flex items-center justify-center text-amber-500">
+              <Wallet className="h-6 w-6" />
             </div>
           </CardContent>
         </Card>
@@ -699,6 +744,14 @@ export default function DriversPage() {
                             )}
                           </div>
                         </div>
+                        {(d.pendingCash || 0) > 0 && (hasPermission('dispatch.change_status') || hasPermission('cash.open_close')) && (
+                          <Button
+                            onClick={() => openSettlementDialog(d)}
+                            className="h-10 w-full rounded-xl border border-amber-500/30 bg-amber-500/10 text-xs font-extrabold text-amber-600 hover:bg-amber-500/20"
+                          >
+                            <DollarSign className="mr-1.5 h-4 w-4" /> Liquidar {formatCurrency(d.pendingCash || 0)}
+                          </Button>
+                        )}
                       </CardContent>
                     </Card>
                   </motion.div>
@@ -762,6 +815,59 @@ export default function DriversPage() {
           </Card>
         </div>
       </div>
+
+      <Dialog open={!!settlementDriver} onOpenChange={open => { if (!open && !settling) setSettlementDriver(null) }}>
+        <DialogContent className="border-[var(--border-subtle)] bg-[var(--bg-panel)] rounded-3xl max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-lg font-black text-[var(--text-primary)]">
+              <Wallet className="h-5 w-5 text-amber-500" /> Liquidar efectivo
+            </DialogTitle>
+            <DialogDescription>
+              Recibe el dinero de {settlementDriver?.name} y deja estos pedidos conciliados en Caja Domicilios.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="rounded-2xl border border-amber-500/25 bg-amber-500/10 p-4">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-[var(--text-secondary)]">Valor esperado</span>
+                <strong className="text-xl font-black text-amber-600">{formatCurrency(settlementDriver?.pendingCash || 0)}</strong>
+              </div>
+              <div className="mt-3 flex flex-wrap gap-1.5">
+                {(settlementDriver?.pendingCashOrders || []).map(order => (
+                  <Badge key={order.id} className="border border-[var(--border-subtle)] bg-[var(--bg-panel)] text-[10px] text-[var(--text-secondary)]">
+                    #{order.orderNumber} · {formatCurrency(order.amount)}
+                  </Badge>
+                ))}
+              </div>
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-[10px] font-extrabold uppercase tracking-wider text-[var(--text-secondary)]">Efectivo recibido</Label>
+              <div className="relative">
+                <span className="absolute left-3 top-1/2 -translate-y-1/2 font-bold text-[var(--text-muted)]">$</span>
+                <Input
+                  value={formatThousandsInput(settlementAmount)}
+                  onChange={event => setSettlementAmount(event.target.value.replace(/\D/g, ''))}
+                  className="h-12 rounded-xl border-[var(--border-default)] bg-[var(--bg-input)] pl-8 text-lg font-black"
+                  inputMode="numeric"
+                />
+              </div>
+            </div>
+            {settlementDriver && parseThousandsInput(settlementAmount) !== Math.round(settlementDriver.pendingCash || 0) && (
+              <div className="rounded-xl border border-red-500/25 bg-red-500/10 p-3 text-xs font-bold text-red-500">
+                Diferencia: {formatCurrency(parseThousandsInput(settlementAmount) - (settlementDriver.pendingCash || 0))}. Quedará registrada en la liquidación.
+              </div>
+            )}
+            <div className="space-y-1.5">
+              <Label className="text-[10px] font-extrabold uppercase tracking-wider text-[var(--text-secondary)]">Nota opcional</Label>
+              <Input value={settlementNotes} onChange={event => setSettlementNotes(event.target.value)} placeholder="Ej: faltante informado por el domiciliario" className="h-11 rounded-xl" />
+            </div>
+            <Button onClick={handleSettleCash} disabled={settling} className="h-12 w-full rounded-xl bg-amber-500 font-extrabold text-white hover:bg-amber-600">
+              {settling ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle2 className="mr-2 h-4 w-4" />}
+              Confirmar entrega de efectivo
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* ── CREATE / EDIT DIALOG ── */}
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>

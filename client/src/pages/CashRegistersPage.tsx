@@ -37,6 +37,7 @@ interface Summary {
   totalDaviplata: number
   totalTips: number
   totalExpenses: number
+  pendingDriverCash?: number
   isOpen?: boolean
   initialCash?: number
   cashInDrawer?: number
@@ -51,6 +52,7 @@ interface CashSummary {
   totalSales: number
   totalTips: number
   totalExpenses: number
+  pendingDriverCash?: number
   creditSales: number
   totalCreditPayments: number
   orderCount: number
@@ -97,6 +99,7 @@ export default function CashRegistersPage() {
 
   // Close result
   const [closeSuccess, setCloseSuccess] = useState(false)
+  const pendingDriverCashAtClose = closeRegSummary?.pendingDriverCash || closeSummary?.pendingDriverCash || 0
 
   const load = async () => {
     setLoading(true)
@@ -260,6 +263,7 @@ export default function CashRegistersPage() {
         totalSales: regSummary?.totalSales || 0,
         totalTips: regSummary?.totalTips || 0,
         totalExpenses: regSummary?.totalExpenses || 0,
+        pendingDriverCash: regSummary?.pendingDriverCash || 0,
         orderCount: regSummary?.orderCount || 0,
         isOpen: regSummary?.isOpen ?? true,
         initialCash: regSummary?.initialCash || 0,
@@ -485,6 +489,16 @@ export default function CashRegistersPage() {
                     </div>
                   )}
 
+                  {reg.purpose === 'DELIVERY' && (sum?.pendingDriverCash || 0) > 0 && (
+                    <div className="flex items-start gap-2 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-600">
+                      <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                      <div>
+                        <p className="font-extrabold">{formatCurrency(sum?.pendingDriverCash || 0)} en manos de domiciliarios</p>
+                        <p className="mt-0.5 text-[10px] text-[var(--text-secondary)]">Liquida ese efectivo desde Domiciliarios antes de cerrar esta caja.</p>
+                      </div>
+                    </div>
+                  )}
+
                   {/* Action buttons */}
                   {canOperate && (
                     <div className="flex gap-2 pt-2">
@@ -647,6 +661,13 @@ export default function CashRegistersPage() {
                     </div>
                   </div>
 
+                  {pendingDriverCashAtClose > 0 && (
+                    <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-600">
+                      <p className="flex items-center gap-2 font-extrabold"><AlertTriangle className="h-4 w-4" /> No se puede cerrar todavía</p>
+                      <p className="mt-1">Falta recibir {formatCurrency(pendingDriverCashAtClose)} de los domiciliarios. Liquídalo en Domiciliarios.</p>
+                    </div>
+                  )}
+
                   {/* Notes */}
                   <div className="space-y-1.5">
                     <Label className="text-xs uppercase font-extrabold tracking-wider text-[var(--text-secondary)]">Notas del cierre (Opcional)</Label>
@@ -671,14 +692,14 @@ export default function CashRegistersPage() {
                     <Button
                       className="h-11 bg-amber-500 hover:bg-amber-600 text-white font-bold rounded-xl text-xs uppercase tracking-wider gap-2 shadow-md"
                       onClick={() => handleCloseCash(false)}
-                      disabled={closingLoading}
+                      disabled={closingLoading || pendingDriverCashAtClose > 0}
                     >
                       <Lock className="h-4 w-4" /> Solo Cerrar
                     </Button>
                     <Button
                       className="h-11 bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-fg)] font-bold rounded-xl text-xs uppercase tracking-wider gap-2 shadow-md col-span-2 border-0 cursor-pointer"
                       onClick={() => handleCloseCash(true)}
-                      disabled={closingLoading}
+                      disabled={closingLoading || pendingDriverCashAtClose > 0}
                     >
                       <Printer className="h-4 w-4" /> Cerrar e Imprimir
                     </Button>

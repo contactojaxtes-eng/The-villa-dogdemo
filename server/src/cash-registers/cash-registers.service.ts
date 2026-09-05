@@ -223,7 +223,16 @@ export class CashRegistersService {
         where: { userId: openClosing.userId, createdAt: { gte: openClosing.shiftStart } },
       })).reduce((sum, expense) => sum + (expense.amount || 0), 0);
       const paymentMethod = (order: (typeof shiftOrders)[number]) => String(order.payment?.method || order.paymentMethod || '').toUpperCase().trim();
+      const isCollected = (order: (typeof shiftOrders)[number]) => order.paymentStatus === 'CONFIRMED' || order.payment?.status === 'CONFIRMED';
       const totalCash = shiftOrders.reduce((sum, order) => {
+        const method = paymentMethod(order);
+        if (!isCollected(order)) return sum;
+        if (method === 'CASH') return sum + (order.total || 0);
+        if (method === 'MIXED') return sum + (order.cashAmount || order.payment?.cashAmount || 0);
+        return sum;
+      }, 0);
+      const pendingDriverCash = shiftOrders.reduce((sum, order) => {
+        if (order.status !== 'DELIVERED' || isCollected(order)) return sum;
         const method = paymentMethod(order);
         if (method === 'CASH') return sum + (order.total || 0);
         if (method === 'MIXED') return sum + (order.cashAmount || order.payment?.cashAmount || 0);
@@ -246,6 +255,7 @@ export class CashRegistersService {
         orderCount: shiftOrders.length,
         totalSales: shiftOrders.reduce((sum, order) => sum + (order.total || 0), 0),
         totalCash,
+        pendingDriverCash,
         initialCash,
         cashInDrawer: Math.max(0, initialCash + totalCash - totalExpenses),
         totalExpenses,
