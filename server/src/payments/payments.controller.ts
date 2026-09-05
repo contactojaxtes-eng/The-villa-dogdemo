@@ -50,6 +50,7 @@ export class PaymentsController {
   }
 
   @Get('closing/history')
+  @Roles('ADMIN', 'SUPERADMIN', 'CASHIER', 'DISPATCHER')
   @ApiOperation({ summary: 'Historial de cierres de caja' })
   getCashClosings(@Query('date') date?: string, @Query('userId') userIdQuery?: string, @Query('cashRegisterId') cashRegisterId?: string, @Request() req?: any) {
     const isCashier = req.user?.role === 'CASHIER';
@@ -58,6 +59,7 @@ export class PaymentsController {
   }
 
   @Get('closing/:id/detail')
+  @Roles('ADMIN', 'SUPERADMIN', 'CASHIER', 'DISPATCHER')
   @ApiOperation({ summary: 'Detalle expandido de un cierre para Reporte Z' })
   getClosingDetail(@Param('id') id: string) {
     return this.paymentsService.getClosingDetail(id);

@@ -63,9 +63,7 @@ export class UsersController {
     if (body.role === 'SUPERADMIN' && req.user.role !== 'SUPERADMIN') {
       throw new ForbiddenException('No se pueden crear más Super Admins');
     }
-    if (!['ADMIN', 'CASHIER', 'DELIVERY_MANAGER', 'WAITER', 'KITCHEN'].includes(body.role)) {
-      body.role = 'CASHIER';
-    }
+    body.role = await this.usersService.assertValidRole(body.role);
     const created = await this.usersService.create(body);
     this.auditService.log({
       actorId: req.user.id,
@@ -92,8 +90,8 @@ export class UsersController {
     }
     if (existing.role === 'SUPERADMIN') {
       delete body.role;
-    } else if (body.role && !['ADMIN', 'CASHIER', 'DELIVERY_MANAGER', 'WAITER', 'KITCHEN'].includes(body.role)) {
-      body.role = 'CASHIER';
+    } else if (body.role) {
+      body.role = await this.usersService.assertValidRole(body.role);
     }
     const updated = await this.usersService.update(id, body);
     this.auditService.log({

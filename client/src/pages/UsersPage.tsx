@@ -57,6 +57,7 @@ const defaultRoleColors: Record<string, string> = {
   ADMIN: '#3B82F6',
   CASHIER: '#10B981',
   DELIVERY_MANAGER: '#8B5CF6',
+  DISPATCHER: '#0EA5E9',
   WAITER: '#F97316',
   KITCHEN: '#DC2626',
   ACCOUNTANT: '#2563EB',
@@ -68,6 +69,7 @@ const roleIcons: Record<string, any> = {
   ADMIN: Shield,
   CASHIER: UserCheck,
   DELIVERY_MANAGER: Bike,
+  DISPATCHER: Bike,
   WAITER: UtensilsCrossed,
   KITCHEN: ChefHat,
   ACCOUNTANT: ShieldCheck,
@@ -78,7 +80,8 @@ const roleBadgeLabels: Record<string, string> = {
   SUPERADMIN: 'Super Administrador',
   ADMIN: 'Administrador',
   CASHIER: 'Cajero / Facturación',
-  DELIVERY_MANAGER: 'Gestor de Domicilios',
+  DELIVERY_MANAGER: 'Gestora de Domicilios',
+  DISPATCHER: 'Despachador de Domicilios',
   WAITER: 'Mesero / Salón',
   KITCHEN: 'Cocinero / Cocina',
   ACCOUNTANT: 'Contador',
@@ -185,7 +188,7 @@ export default function UsersPage() {
     api.get<UserData[]>('/users')
       .then(usrs => setUsers(usrs.sort((a, b) => {
         if (a.active !== b.active) return a.active ? -1 : 1
-        const order = ['SUPERADMIN', 'ADMIN', 'CASHIER', 'WAITER', 'KITCHEN', 'DELIVERY_MANAGER']
+        const order = ['SUPERADMIN', 'ADMIN', 'CASHIER', 'WAITER', 'KITCHEN', 'DELIVERY_MANAGER', 'DISPATCHER']
         const ai = order.indexOf(a.role)
         const bi = order.indexOf(b.role)
         return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi)
@@ -241,7 +244,8 @@ export default function UsersPage() {
       { value: 'CASHIER', label: 'Cajero / Facturación (Caja, Pedidos, Cobros)', color: '#10B981' },
       { value: 'WAITER', label: 'Mesero (Mesas, Salón y Comandas)', color: '#F97316' },
       { value: 'KITCHEN', label: 'Cocinero (Tablet de Cocina y Preparación)', color: '#DC2626' },
-      { value: 'DELIVERY_MANAGER', label: 'Gestor de Domicilios (Despachos y Rutas)', color: '#8B5CF6' },
+      { value: 'DELIVERY_MANAGER', label: 'Gestora de Domicilios (WhatsApp y toma de pedidos)', color: '#8B5CF6' },
+      { value: 'DISPATCHER', label: 'Despachador de Domicilios (Despachos y rutas)', color: '#0EA5E9' },
     ]
   }, [rolesList, isSuperAdmin])
 

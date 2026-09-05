@@ -64,7 +64,7 @@ interface DriverDetail {
 const fadeUp = { hidden: { opacity: 0, y: 15 }, visible: { opacity: 1, y: 0, transition: { duration: 0.3 } } }
 
 export default function DriversPage() {
-  const { user, hasRole } = useAuth()
+  const { user, hasRole, hasPermission } = useAuth()
   const [drivers, setDrivers] = useState<Driver[]>([])
   const [closings, setClosings] = useState<any[]>([])
   const [filterType, setFilterType] = useState<string>('CURRENT')
@@ -474,7 +474,7 @@ export default function DriversPage() {
           <p className="text-[var(--text-secondary)] text-xs mt-1.5 font-medium">Control, entrega y ranking de repartidores en tiempo real.</p>
         </div>
         <div className="flex items-center gap-2.5 flex-wrap">
-          {!hasRole('CASHIER') && (
+          {hasPermission('drivers.export') && (
             <>
               <Button 
                 onClick={handleExportExcel}
@@ -496,7 +496,7 @@ export default function DriversPage() {
               </Button>
             </>
           )}
-          {hasRole('ADMIN', 'SUPERADMIN', 'CASHIER') && (
+          {hasPermission('drivers.manage') && (
             <Button 
               onClick={openCreateDialog}
               className="bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-fg)] font-extrabold rounded-xl h-11 px-5 gap-1.5 shadow-md shadow-[var(--accent)]/10 border-0 cursor-pointer text-xs uppercase tracking-wider"
@@ -675,6 +675,7 @@ export default function DriversPage() {
                             <History className="h-3.5 w-3.5" /> Historial
                           </Button>
                           <div className="flex items-center gap-1">
+                            {hasPermission('drivers.manage') && (
                             <Button
                               size="icon"
                               variant="ghost"
@@ -684,6 +685,8 @@ export default function DriversPage() {
                             >
                               <Edit className="h-3.5 w-3.5" />
                             </Button>
+                            )}
+                            {hasRole('ADMIN', 'SUPERADMIN') && (
                             <Button
                               size="icon"
                               variant="ghost"
@@ -693,6 +696,7 @@ export default function DriversPage() {
                             >
                               <Trash2 className="h-3.5 w-3.5" />
                             </Button>
+                            )}
                           </div>
                         </div>
                       </CardContent>

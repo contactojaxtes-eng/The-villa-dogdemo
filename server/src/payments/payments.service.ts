@@ -55,6 +55,10 @@ export class PaymentsService {
 
     const payment = await this.prisma.payment.findUnique({ where: { id } });
     if (!payment) throw new NotFoundException('Pago no encontrado');
+    const currentOrder = await this.prisma.order.findUnique({
+      where: { id: payment.orderId },
+      select: { cashClosingId: true },
+    });
     const updated = await this.prisma.payment.update({
       where: { id },
       data: { status: 'CONFIRMED', confirmedAt: new Date(), confirmedBy },
@@ -63,7 +67,9 @@ export class PaymentsService {
       where: { id: payment.orderId },
       data: { 
         paymentStatus: 'CONFIRMED',
-        ...(activeClosing?.cashRegisterId ? { cashRegisterId: activeClosing.cashRegisterId } : {})
+        ...(!currentOrder?.cashClosingId && activeClosing?.cashRegisterId
+          ? { cashRegisterId: activeClosing.cashRegisterId, cashClosingId: activeClosing.id }
+          : {})
       },
     });
     if (updatedOrder.customerPhone) {
@@ -135,8 +141,15 @@ export class PaymentsService {
     const targetUserId = openCash.userId;
     const targetUser = await this.prisma.user.findUnique({ where: { id: targetUserId } });
     const targetIsCashier = targetUser?.role === 'CASHIER';
+    const register = openCash.cashRegisterId
+      ? await this.prisma.cashRegister.findUnique({
+          where: { id: openCash.cashRegisterId },
+          select: { purpose: true },
+        })
+      : null;
+    const isDeliveryRegister = register?.purpose === 'DELIVERY';
 
-    if (openCash.cashRegisterId) {
+    if (openCash.cashRegisterId && !isDeliveryRegister) {
       await this.prisma.order.updateMany({
         where: {
           createdAt: { gte: start, lte: end },
@@ -148,27 +161,40 @@ export class PaymentsService {
       });
     }
 
+    if (openCash.cashRegisterId && isDeliveryRegister) {
+      await this.prisma.order.updateMany({
+        where: {
+          cashRegisterId: openCash.cashRegisterId,
+          cashClosingId: null,
+          orderType: { in: ['DELIVERY', 'PICKUP'] },
+          createdAt: { gte: start, lte: end },
+        },
+        data: { cashClosingId: openCash.id },
+      });
+    }
+
     let orders: any[] = [];
     try {
       orders = await this.prisma.order.findMany({
-        where: { 
-          createdAt: { gte: start, lte: end }, 
-          status: { not: 'CANCELLED' },
-          OR: [
-            { status: 'DELIVERED' },
-            { paymentStatus: 'CONFIRMED' },
-            { paymentMethod: { not: '' } },
-          ],
-          ...(openCash.cashRegisterId
-            ? { cashRegisterId: openCash.cashRegisterId }
-            : (targetIsCashier ? {
-                OR: [
-                  { waiterId: targetUserId },
-                  { payment: { confirmedBy: targetUserId } }
-                ]
-              } : {})
-          )
-        },
+        where: isDeliveryRegister
+          ? {
+              cashClosingId: openCash.id,
+              cashRegisterId: openCash.cashRegisterId!,
+              orderType: { in: ['DELIVERY', 'PICKUP'] },
+              status: { not: 'CANCELLED' },
+            }
+          : {
+              createdAt: { gte: start, lte: end },
+              status: { not: 'CANCELLED' },
+              ...(openCash.cashRegisterId
+                ? { cashRegisterId: openCash.cashRegisterId }
+                : (targetIsCashier ? {
+                    OR: [
+                      { waiterId: targetUserId },
+                      { payment: { confirmedBy: targetUserId } },
+                    ],
+                  } : {})),
+            },
       });
     } catch (err) {
       console.warn('Error en consulta principal de órdenes en getCashClosingToday, reintentando con filtro básico:', err);
@@ -176,7 +202,9 @@ export class PaymentsService {
         where: {
           createdAt: { gte: start, lte: end },
           status: { not: 'CANCELLED' },
-          ...(openCash.cashRegisterId ? { cashRegisterId: openCash.cashRegisterId } : {})
+          ...(isDeliveryRegister
+            ? { cashClosingId: openCash.id, orderType: { in: ['DELIVERY', 'PICKUP'] } }
+            : (openCash.cashRegisterId ? { cashRegisterId: openCash.cashRegisterId } : {}))
         },
       }).catch(() => []);
     }
@@ -195,7 +223,9 @@ export class PaymentsService {
           status: 'CONFIRMED',
           order: {
             paymentMethod: 'CREDIT',
-            ...(openCash.cashRegisterId ? { cashRegisterId: openCash.cashRegisterId } : {})
+            ...(isDeliveryRegister
+              ? { cashClosingId: openCash.id, orderType: { in: ['DELIVERY', 'PICKUP'] } }
+              : (openCash.cashRegisterId ? { cashRegisterId: openCash.cashRegisterId } : {}))
           },
           ...(!openCash.cashRegisterId && targetIsCashier ? { confirmedBy: targetUserId } : {})
         }
@@ -239,7 +269,7 @@ export class PaymentsService {
       const expenses = await this.prisma.expense.findMany({
         where: { 
           createdAt: { gte: start, lte: end },
-          ...(targetIsCashier ? { userId: targetUserId } : {})
+          ...((targetIsCashier || isDeliveryRegister) ? { userId: targetUserId } : {})
         },
       });
       totalExpenses = expenses.reduce((sum, e) => sum + e.amount, 0);
@@ -287,10 +317,22 @@ export class PaymentsService {
     });
 
     const targetRegisterId = data.cashRegisterId || openClosing?.cashRegisterId;
+    const targetRegister = targetRegisterId
+      ? await this.prisma.cashRegister.findUnique({
+          where: { id: targetRegisterId },
+          select: { purpose: true },
+        })
+      : null;
+    const isDeliveryRegister = targetRegister?.purpose === 'DELIVERY';
     const pendingCount = await this.prisma.order.count({
       where: {
         status: { in: ['PENDING', 'IN_ROUTE', 'READY'] },
-        ...(targetRegisterId ? { cashRegisterId: targetRegisterId } : {})
+        ...(isDeliveryRegister && openClosing
+          ? {
+              cashClosingId: openClosing.id,
+              orderType: { in: ['DELIVERY', 'PICKUP'] },
+            }
+          : (targetRegisterId ? { cashRegisterId: targetRegisterId } : {}))
       }
     });
 
@@ -360,7 +402,6 @@ export class PaymentsService {
     });
     this.socketGateway.server.emit('cashStatusChanged', { isOpen: !!anyOpen });
     this.socketGateway.server.emit('cashRegistersChanged');
-    this.socketGateway.server.emit('whatsappSessionUpdated', { cashClosed: true, unassignedAll: true });
     if (this.tablesService) {
       await this.tablesService.purgeProofsForClosing(closing.id);
     }
@@ -422,15 +463,8 @@ export class PaymentsService {
       },
     });
 
-    // Liberar asignaciones de chats de WhatsApp de turnos anteriores para que el nuevo cajero/asesor pueda atender libremente
-    await this.prisma.whatsAppSession.updateMany({
-      where: { active: true, assignedToId: { not: null } },
-      data: { assignedToId: null }
-    });
-
     this.socketGateway.server.emit('cashStatusChanged', { isOpen: true });
     this.socketGateway.server.emit('cashRegistersChanged');
-    this.socketGateway.server.emit('whatsappSessionUpdated', { unassignedAll: true });
 
     return open;
   }
@@ -442,7 +476,17 @@ export class PaymentsService {
     tomorrow.setDate(tomorrow.getDate() + 1);
 
     const user = await this.prisma.user.findUnique({ where: { id: userId } });
-    if (user?.role === 'ADMIN' || user?.role === 'SUPERADMIN' || user?.role === 'DELIVERY_MANAGER') {
+    if (user?.role === 'DELIVERY_MANAGER') {
+      return this.prisma.cashClosing.findFirst({
+        where: {
+          isOpen: true,
+          cashRegister: { purpose: 'DELIVERY', active: true },
+        },
+        orderBy: { shiftStart: 'desc' },
+      });
+    }
+
+    if (user?.role === 'ADMIN' || user?.role === 'SUPERADMIN') {
       return this.prisma.cashClosing.findFirst({
         where: { isOpen: true },
       });
@@ -538,13 +582,14 @@ export class PaymentsService {
       where: { id: closingId },
       include: {
         user: { select: { id: true, name: true } },
-        cashRegister: { select: { id: true, name: true } },
+        cashRegister: { select: { id: true, name: true, purpose: true } },
       },
     });
     if (!closing) throw new NotFoundException('Cierre de caja no encontrado');
     const effectiveEnd = closing.isOpen ? new Date() : (closing.shiftEnd || new Date());
+    const isDeliveryRegister = closing.cashRegister?.purpose === 'DELIVERY';
 
-    if (closing.cashRegisterId) {
+    if (closing.cashRegisterId && !isDeliveryRegister) {
       await this.prisma.order.updateMany({
         where: {
           createdAt: { gte: closing.shiftStart, lte: effectiveEnd },
@@ -556,19 +601,31 @@ export class PaymentsService {
       });
     }
 
-    // Obtener pedidos del turno (entregados o con pago confirmado)
-    const whereOrders: any = {
-      createdAt: { gte: closing.shiftStart, lte: effectiveEnd },
-      status: { not: 'CANCELLED' },
-      OR: [
-        { status: 'DELIVERED' },
-        { paymentStatus: 'CONFIRMED' },
-        { paymentMethod: { not: '' } },
-      ],
-    };
-    if (closing.cashRegisterId) {
-      whereOrders.cashRegisterId = closing.cashRegisterId;
+    if (closing.cashRegisterId && isDeliveryRegister) {
+      await this.prisma.order.updateMany({
+        where: {
+          cashRegisterId: closing.cashRegisterId,
+          cashClosingId: null,
+          orderType: { in: ['DELIVERY', 'PICKUP'] },
+          createdAt: { gte: closing.shiftStart, lte: effectiveEnd },
+        },
+        data: { cashClosingId: closing.id },
+      });
     }
+
+    // Obtener pedidos del turno (entregados o con pago confirmado)
+    const whereOrders: any = isDeliveryRegister
+      ? {
+          cashClosingId: closing.id,
+          cashRegisterId: closing.cashRegisterId,
+          orderType: { in: ['DELIVERY', 'PICKUP'] },
+          status: { not: 'CANCELLED' },
+        }
+      : {
+          createdAt: { gte: closing.shiftStart, lte: effectiveEnd },
+          status: { not: 'CANCELLED' },
+          ...(closing.cashRegisterId ? { cashRegisterId: closing.cashRegisterId } : {}),
+        };
 
     const orders = await this.prisma.order.findMany({ 
       where: whereOrders,
@@ -586,7 +643,9 @@ export class PaymentsService {
         status: 'CONFIRMED',
         order: {
           paymentMethod: 'CREDIT',
-          ...(closing.cashRegisterId ? { cashRegisterId: closing.cashRegisterId } : {}),
+          ...(isDeliveryRegister
+            ? { cashClosingId: closing.id, orderType: { in: ['DELIVERY', 'PICKUP'] } }
+            : (closing.cashRegisterId ? { cashRegisterId: closing.cashRegisterId } : {})),
         },
       },
     });
@@ -595,6 +654,7 @@ export class PaymentsService {
     const expenses = await this.prisma.expense.findMany({
       where: {
         createdAt: { gte: closing.shiftStart, lte: effectiveEnd },
+        ...(isDeliveryRegister ? { userId: closing.userId } : {}),
       },
       include: { category: { select: { name: true } } },
     });

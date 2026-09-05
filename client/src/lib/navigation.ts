@@ -40,7 +40,7 @@ export interface NavItem {
 export const allNavItems: NavItem[] = [
   // SECCIÓN PRINCIPAL
   { href: '/dashboard', label: 'Inicio', icon: LayoutDashboard, roles: ['ADMIN', 'CASHIER'], permission: 'cash.view', section: 'Principal', module: 'dashboard' },
-  { href: '/dispatch', label: 'Despachos Activos', icon: Bike, roles: ['ADMIN', 'CASHIER', 'DELIVERY_MANAGER'], permission: 'dispatch.view', section: 'Principal', module: 'dispatch' },
+  { href: '/dispatch', label: 'Despachos Activos', icon: Bike, roles: ['ADMIN', 'CASHIER', 'DISPATCHER'], permission: 'dispatch.view', section: 'Principal', module: 'dispatch' },
   { href: '/orders/new', label: 'Nuevo Pedido Domicilio', icon: PlusCircle, roles: ['ADMIN', 'CASHIER', 'DELIVERY_MANAGER'], permission: 'orders.create', section: 'Principal', module: 'orders_new' },
   { href: '/tables', label: 'Mesas', icon: UtensilsCrossed, roles: ['ADMIN', 'CASHIER', 'WAITER'], permission: 'tables.view', section: 'Principal', module: 'tables' },
   { href: '/tables/new', label: 'Nuevo Pedido Mesa', icon: PlusCircle, roles: ['ADMIN', 'CASHIER', 'WAITER'], permission: 'tables.create', section: 'Principal', module: 'tables_new' },
@@ -52,7 +52,7 @@ export const allNavItems: NavItem[] = [
   { href: '/orders', label: 'Historial Domicilios', icon: ScrollText, roles: ['ADMIN', 'CASHIER', 'DELIVERY_MANAGER'], permission: 'orders.view', section: 'Gestion', module: 'orders_history' },
   { href: '/tables/history', label: 'Historial Pedidos Mesa', icon: ScrollText, roles: ['ADMIN', 'CASHIER', 'WAITER'], permission: 'tables.view', section: 'Gestion', module: 'tables_history' },
   { href: '/customers', label: 'Clientes', icon: Users, roles: ['ADMIN', 'CASHIER', 'DELIVERY_MANAGER'], permission: 'customers.view', section: 'Gestion', module: 'customers' },
-  { href: '/drivers', label: 'Domiciliarios', icon: Bike, roles: ['ADMIN', 'CASHIER'], permission: 'drivers.view', section: 'Gestion', module: 'drivers' },
+  { href: '/drivers', label: 'Domiciliarios', icon: Bike, roles: ['ADMIN', 'CASHIER', 'DISPATCHER'], permission: 'drivers.view', section: 'Gestion', module: 'drivers' },
   { href: '/products', label: 'Productos y Menu', icon: PackagePlus, roles: ['ADMIN'], permission: 'products.view', section: 'Gestion', module: 'products' },
   { href: '/zones', label: 'Barrios y Tarifas', icon: MapPin, roles: ['ADMIN', 'CASHIER', 'DELIVERY_MANAGER'], permission: 'zones.view', section: 'Gestion', module: 'zones' },
   { href: '/cash-registers', label: 'Cajas Registradoras', icon: Wallet, roles: ['ADMIN', 'CASHIER'], permission: 'cash.view', section: 'Gestion', module: 'cash_registers' },

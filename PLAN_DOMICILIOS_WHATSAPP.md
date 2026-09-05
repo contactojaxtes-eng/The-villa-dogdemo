@@ -17,6 +17,18 @@ La separación no requiere duplicar productos, clientes ni infraestructura. El c
 - La pantalla de WhatsApp usa toda la altura y ancho disponibles, con una barra superior compacta y comportamiento móvil de bandeja/conversación.
 - Se agregaron índices de PostgreSQL para bandeja, asignaciones, mensajes y conteos de lectura.
 
+## Avance implementado — entrega 2
+
+- `CashRegister` distingue caja general, salón y domicilios; la caja existente cuyo nombre contiene “Domicilios” se clasifica automáticamente sin modificar las demás.
+- Cada pedido nuevo guarda `cashClosingId`, el turno exacto que lo recibió. Si existe Caja Domicilios, los pedidos `DELIVERY` y `PICKUP` requieren que esté abierta.
+- Los resúmenes y detalles de Caja Domicilios consultan solo pedidos enlazados a ese turno y excluyen pedidos `LOCAL` y pedidos huérfanos.
+- Abrir una caja ya no libera globalmente los chats asignados; varias gestoras pueden conservar sus conversaciones mientras operan otros turnos.
+- El rol Gestora de Domicilios queda enfocado en WhatsApp, creación e historial comercial. Se añadió el rol Despachador de Domicilios para despachos, rutas, cobro, reimpresión e historial de domiciliarios.
+- La creación de usuarios acepta roles personalizados activos y deja de convertir silenciosamente un rol desconocido en cajero.
+- La pantalla de cajas permite configurar el canal y muestra una insignia visible para evitar abrir o cerrar la caja equivocada.
+
+Pendiente de esta fase: liquidación de efectivo por domiciliario, bloqueo por efectivo en calle y permisos finos obligatorios en todos los endpoints.
+
 ## Diagnóstico del código actual
 
 1. `Order` ya distingue `DELIVERY`, `PICKUP` y `LOCAL`, pero `GET /orders`, las estadísticas del historial y varias búsquedas no aplican ese filtro. Por eso Historial Domicilios muestra pedidos de mesa.

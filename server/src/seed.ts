@@ -132,7 +132,8 @@ const roleCatalog = [
   { code: 'SUPERADMIN', name: 'Super Administrador', color: '#7A1F2B', icon: 'Crown', isSystem: true },
   { code: 'ADMIN', name: 'Administrador', color: '#F97316', icon: 'ShieldCheck', isSystem: true },
   { code: 'CASHIER', name: 'Cajero', color: '#FBBF24', icon: 'Wallet', isSystem: true },
-  { code: 'DELIVERY_MANAGER', name: 'Gestor de Domicilios', color: '#EF4444', icon: 'Bike', isSystem: true },
+  { code: 'DELIVERY_MANAGER', name: 'Gestora de Domicilios', color: '#8B5CF6', icon: 'MessageCircle', isSystem: true },
+  { code: 'DISPATCHER', name: 'Despachador de Domicilios', color: '#0EA5E9', icon: 'Bike', isSystem: true },
   { code: 'WAITER', name: 'Mesero', color: '#3B82F6', icon: 'UtensilsCrossed', isSystem: true },
   { code: 'KITCHEN', name: 'Cocinero', color: '#10B981', icon: 'ChefHat', isSystem: true },
 ];
@@ -313,8 +314,8 @@ async function main() {
   if ((await prisma.cashRegister.count()) === 0) {
     await prisma.cashRegister.createMany({
       data: [
-        { name: 'Caja Principal (Salón)', description: 'Mostrador principal del restaurante', managerId: admin?.id },
-        { name: 'Caja Domicilios', description: 'Operadores de pedidos y entregas', managerId: admin?.id },
+        { name: 'Caja Principal (Salón)', description: 'Mostrador principal del restaurante', purpose: 'DINING', managerId: admin?.id },
+        { name: 'Caja Domicilios', description: 'Operadores de pedidos y entregas', purpose: 'DELIVERY', managerId: admin?.id },
       ],
     });
   }

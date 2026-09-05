@@ -10,6 +10,19 @@ export class UsersService {
     private socketGateway: SocketGateway,
   ) {}
 
+  async assertValidRole(role?: string) {
+    if (!role) return 'CASHIER';
+    const normalized = String(role).trim().toUpperCase();
+    const systemRoles = ['SUPERADMIN', 'ADMIN', 'CASHIER', 'DELIVERY_MANAGER', 'DISPATCHER', 'WAITER', 'KITCHEN'];
+    if (systemRoles.includes(normalized)) return normalized;
+    const customRole = await this.prisma.customRole.findFirst({
+      where: { code: normalized, active: true },
+      select: { code: true },
+    });
+    if (!customRole) throw new BadRequestException(`El rol ${normalized} no existe o está inactivo.`);
+    return customRole.code;
+  }
+
   private validateStrongPassword(password: string) {
     if (!password || password.length < 4) {
       throw new BadRequestException('La contraseña debe tener al menos 4 caracteres.');

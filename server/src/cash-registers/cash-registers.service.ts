@@ -16,7 +16,7 @@ export class CashRegistersService {
     });
     if (unassignedOpen) {
       const defaultRegister = await this.prisma.cashRegister.findFirst({
-        where: { active: true },
+        where: { active: true, purpose: { not: 'DELIVERY' } },
         orderBy: { name: 'asc' },
       });
       if (defaultRegister) {
@@ -40,17 +40,43 @@ export class CashRegistersService {
     });
   }
 
-  async create(data: { name: string; description?: string; managerId?: string }) {
+  private normalizePurpose(purpose?: string) {
+    const value = String(purpose || 'GENERAL').trim().toUpperCase();
+    if (!['GENERAL', 'DINING', 'DELIVERY'].includes(value)) {
+      throw new BadRequestException('Tipo de caja inválido');
+    }
+    return value;
+  }
+
+  async create(data: { name: string; description?: string; managerId?: string; purpose?: string }) {
+    const purpose = this.normalizePurpose(data.purpose);
+    if (purpose === 'DELIVERY') {
+      const existing = await this.prisma.cashRegister.findFirst({
+        where: { purpose: 'DELIVERY', active: true },
+        select: { id: true },
+      });
+      if (existing) throw new BadRequestException('Ya existe una Caja de Domicilios activa.');
+    }
     const res = await this.prisma.cashRegister.create({
-      data,
+      data: { ...data, purpose },
       include: { manager: { select: { id: true, name: true } } },
     });
     this.socketGateway.server.emit('cashRegistersChanged');
     return res;
   }
 
-  async update(id: string, data: Partial<{ name: string; description: string; managerId: string | null; active: boolean }>) {
+  async update(id: string, data: Partial<{ name: string; description: string; managerId: string | null; active: boolean; purpose: string }>) {
     await this.findOne(id);
+    if (data.purpose) {
+      data.purpose = this.normalizePurpose(data.purpose);
+      if (data.purpose === 'DELIVERY') {
+        const existing = await this.prisma.cashRegister.findFirst({
+          where: { purpose: 'DELIVERY', active: true, id: { not: id } },
+          select: { id: true },
+        });
+        if (existing) throw new BadRequestException('Ya existe una Caja de Domicilios activa.');
+      }
+    }
     const res = await this.prisma.cashRegister.update({
       where: { id },
       data,
@@ -121,6 +147,13 @@ export class CashRegistersService {
       };
     }
 
+    const register = await this.prisma.cashRegister.findUnique({
+      where: { id: registerId },
+      select: { id: true, purpose: true },
+    });
+    if (!register) throw new NotFoundException('Caja no encontrada');
+    const isDeliveryRegister = register.purpose === 'DELIVERY';
+
     // Para una caja registrada específica:
     let openClosing = await this.prisma.cashClosing.findFirst({
       where: { cashRegisterId: registerId, isOpen: true },
@@ -129,7 +162,7 @@ export class CashRegistersService {
     });
 
     // Si la caja no tiene turno explícito pero hay un turno activo en el sistema, vincularlo
-    if (!openClosing) {
+    if (!openClosing && !isDeliveryRegister) {
       const unassignedClosing = await this.prisma.cashClosing.findFirst({
         where: { isOpen: true, cashRegisterId: null },
         include: { user: { select: { id: true, name: true } } },
@@ -160,6 +193,67 @@ export class CashRegistersService {
         totalTips: 0,
         initialCash: 0,
         cashInDrawer: 0,
+      };
+    }
+
+    if (isDeliveryRegister) {
+      // Compatibilidad con pedidos anteriores: solo se adoptan domicilios que ya
+      // pertenecían explícitamente a esta caja. Nunca se toman pedidos huérfanos.
+      await this.prisma.order.updateMany({
+        where: {
+          cashRegisterId: registerId,
+          cashClosingId: null,
+          orderType: { in: ['DELIVERY', 'PICKUP'] },
+          createdAt: { gte: openClosing.shiftStart },
+        },
+        data: { cashClosingId: openClosing.id },
+      });
+
+      const shiftOrders = await this.prisma.order.findMany({
+        where: {
+          cashClosingId: openClosing.id,
+          cashRegisterId: registerId,
+          orderType: { in: ['DELIVERY', 'PICKUP'] },
+          status: { not: 'CANCELLED' },
+        },
+        include: { payment: true },
+      });
+
+      const totalExpenses = (await this.prisma.expense.findMany({
+        where: { userId: openClosing.userId, createdAt: { gte: openClosing.shiftStart } },
+      })).reduce((sum, expense) => sum + (expense.amount || 0), 0);
+      const paymentMethod = (order: (typeof shiftOrders)[number]) => String(order.payment?.method || order.paymentMethod || '').toUpperCase().trim();
+      const totalCash = shiftOrders.reduce((sum, order) => {
+        const method = paymentMethod(order);
+        if (method === 'CASH') return sum + (order.total || 0);
+        if (method === 'MIXED') return sum + (order.cashAmount || order.payment?.cashAmount || 0);
+        return sum;
+      }, 0);
+      const totalTransfer = shiftOrders.reduce((sum, order) => {
+        const method = paymentMethod(order);
+        if (['TRANSFER', 'NEQUI', 'BANCOLOMBIA', 'DAVIPLATA'].includes(method)) return sum + (order.total || 0);
+        if (method === 'MIXED') return sum + (order.transferAmount || order.payment?.transferAmount || 0);
+        return sum;
+      }, 0);
+      const initialCash = openClosing.initialCash || 0;
+
+      return {
+        registerId,
+        date: openClosing.shiftStart.toISOString().split('T')[0],
+        isOpen: true,
+        shiftStart: openClosing.shiftStart,
+        operatorName: openClosing.user?.name || 'Gestor de domicilios',
+        orderCount: shiftOrders.length,
+        totalSales: shiftOrders.reduce((sum, order) => sum + (order.total || 0), 0),
+        totalCash,
+        initialCash,
+        cashInDrawer: Math.max(0, initialCash + totalCash - totalExpenses),
+        totalExpenses,
+        totalTransfer,
+        totalNequi: shiftOrders.filter(order => paymentMethod(order) === 'NEQUI').reduce((sum, order) => sum + order.total, 0),
+        totalBancolombia: shiftOrders.filter(order => paymentMethod(order) === 'BANCOLOMBIA').reduce((sum, order) => sum + order.total, 0),
+        totalDaviplata: shiftOrders.filter(order => paymentMethod(order) === 'DAVIPLATA').reduce((sum, order) => sum + order.total, 0),
+        totalTips: shiftOrders.reduce((sum, order) => sum + (order.tip || 0), 0),
       };
     }
 

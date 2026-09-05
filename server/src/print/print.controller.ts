@@ -24,7 +24,7 @@ export class PrintController {
   }
 
   @Post('order/:orderId')
-  @Roles('ADMIN', 'SUPERADMIN', 'CASHIER', 'DELIVERY_MANAGER')
+  @Roles('ADMIN', 'SUPERADMIN', 'CASHIER', 'DELIVERY_MANAGER', 'DISPATCHER')
   @UseGuards(RolesGuard)
   printOrder(
     @Param('orderId') orderId: string,

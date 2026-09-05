@@ -20,6 +20,7 @@ interface CashRegister {
   id: string
   name: string
   description: string | null
+  purpose: 'GENERAL' | 'DINING' | 'DELIVERY'
   manager: { id: string; name: string } | null
   closings: { id: string; isOpen: boolean; user: { id: string; name: string }; initialCash: number; shiftStart: string }[]
 }
@@ -75,7 +76,7 @@ export default function CashRegistersPage() {
   const [summaries, setSummaries] = useState<Record<string, Summary>>({})
   const [loading, setLoading] = useState(true)
   const [dialogOpen, setDialogOpen] = useState(false)
-  const [form, setForm] = useState({ name: '', description: '', managerId: 'NONE' })
+  const [form, setForm] = useState({ name: '', description: '', managerId: 'NONE', purpose: 'GENERAL' as CashRegister['purpose'] })
   const [editRegId, setEditRegId] = useState<string | null>(null)
   const [isCreatingNewUser, setIsCreatingNewUser] = useState(false)
   const [newUserForm, setNewUserForm] = useState({ name: '', email: '', password: '', role: 'CASHIER', phone: '' })
@@ -105,7 +106,7 @@ export default function CashRegistersPage() {
         isAdmin ? api.get<UserOption[]>('/users?active=true') : Promise.resolve([]),
       ])
       setRegisters(regs)
-      setUsers(usrs.filter(u => u.active !== false && ['CASHIER', 'ADMIN', 'SUPERADMIN'].includes(u.role)))
+      setUsers(usrs.filter(u => u.active !== false && ['CASHIER', 'ADMIN', 'SUPERADMIN', 'DELIVERY_MANAGER'].includes(u.role)))
 
       const sums: Record<string, Summary> = {}
       for (const r of regs) {
@@ -179,7 +180,8 @@ export default function CashRegistersPage() {
       const payload = {
         name: form.name,
         description: form.description || undefined,
-        managerId: finalManagerId
+        managerId: finalManagerId,
+        purpose: form.purpose,
       }
 
       if (editRegId) {
@@ -197,7 +199,7 @@ export default function CashRegistersPage() {
 
   const resetForm = () => {
     setEditRegId(null)
-    setForm({ name: '', description: '', managerId: 'NONE' })
+    setForm({ name: '', description: '', managerId: 'NONE', purpose: 'GENERAL' })
     setIsCreatingNewUser(false)
     setNewUserForm({ name: '', email: '', password: '', role: 'CASHIER', phone: '' })
   }
@@ -207,7 +209,8 @@ export default function CashRegistersPage() {
     setForm({
       name: reg.name,
       description: reg.description || '',
-      managerId: reg.manager?.id || 'NONE'
+      managerId: reg.manager?.id || 'NONE',
+      purpose: reg.purpose || 'GENERAL',
     })
     setIsCreatingNewUser(false)
     setDialogOpen(true)
@@ -388,6 +391,9 @@ export default function CashRegistersPage() {
                       <div className="flex items-center gap-2">
                         <Wallet className="h-5 w-5 text-[var(--accent)]" />
                         <h3 className="font-extrabold text-lg text-[var(--text-primary)] tracking-wide group-hover:text-[var(--accent)] transition-colors">{reg.name}</h3>
+                        <Badge className="border border-[var(--border-subtle)] bg-[var(--bg-elevated)] text-[9px] font-extrabold uppercase tracking-wider text-[var(--text-secondary)]">
+                          {reg.purpose === 'DELIVERY' ? 'Domicilios' : reg.purpose === 'DINING' ? 'Salón' : 'General'}
+                        </Badge>
                       </div>
                       {reg.description && (
                         <p className="text-xs text-[var(--text-secondary)] font-medium leading-relaxed max-w-sm">{reg.description}</p>
@@ -717,6 +723,21 @@ export default function CashRegistersPage() {
               />
             </div>
 
+            <div className="space-y-2">
+              <Label className="text-xs uppercase font-extrabold tracking-wider text-[var(--text-secondary)]">Canal de ventas</Label>
+              <Select value={form.purpose} onValueChange={value => setForm(previous => ({ ...previous, purpose: value as CashRegister['purpose'] }))}>
+                <SelectTrigger className="h-11 rounded-xl bg-[var(--bg-elevated)] border-[var(--border-subtle)] text-[var(--text-primary)]">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent className="border-[var(--border-subtle)] bg-[var(--bg-panel)] rounded-xl">
+                  <SelectItem value="DELIVERY">Domicilios y pedidos para recoger</SelectItem>
+                  <SelectItem value="DINING">Salón y mesas</SelectItem>
+                  <SelectItem value="GENERAL">Caja general</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-[10px] text-[var(--text-muted)]">La caja de domicilios solo acumula pedidos de domicilio y para recoger de su turno.</p>
+            </div>
+
              <div className="space-y-2">
               <div className="flex justify-between items-center">
                 <Label className="text-xs uppercase font-extrabold tracking-wider text-[var(--text-secondary)]">
@@ -806,6 +827,7 @@ export default function CashRegistersPage() {
                         <SelectItem value="CASHIER" className="text-xs text-[var(--text-primary)]">Cajero</SelectItem>
                         <SelectItem value="ADMIN" className="text-xs text-[var(--text-primary)]">Administrador</SelectItem>
                         <SelectItem value="DELIVERY_MANAGER" className="text-xs text-[var(--text-primary)]">Gestor de Domicilios</SelectItem>
+                        <SelectItem value="DISPATCHER" className="text-xs text-[var(--text-primary)]">Despachador de Domicilios</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>

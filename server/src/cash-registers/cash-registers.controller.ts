@@ -25,7 +25,7 @@ export class CashRegistersController {
   @Post()
   @Roles('ADMIN', 'SUPERADMIN')
   @UseGuards(RolesGuard)
-  create(@Body() body: { name: string; description?: string; managerId?: string }) {
+  create(@Body() body: { name: string; description?: string; managerId?: string; purpose?: string }) {
     return this.cashRegistersService.create(body);
   }
 

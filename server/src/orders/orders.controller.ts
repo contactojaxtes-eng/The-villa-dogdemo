@@ -61,8 +61,8 @@ export class OrdersController {
 
   @Get('can-create')
   @ApiOperation({ summary: 'Verificar si se pueden crear pedidos (caja abierta)' })
-  canCreate(@Request() req: any) {
-    return this.ordersService.checkCanCreateOrders(req.user.id, req.user.role);
+  canCreate(@Request() req: any, @Query('orderType') orderType?: string) {
+    return this.ordersService.checkCanCreateOrders(req.user.id, req.user.role, orderType || 'DELIVERY');
   }
 
   @Get('history/:phone')
@@ -161,7 +161,7 @@ export class OrdersController {
   }
 
   @Put(':id/payment')
-  @Roles('ADMIN', 'SUPERADMIN', 'CASHIER', 'DELIVERY_MANAGER')
+  @Roles('ADMIN', 'SUPERADMIN', 'CASHIER', 'DELIVERY_MANAGER', 'DISPATCHER')
   @UseGuards(RolesGuard)
   @ApiOperation({ summary: 'Actualizar método y estado de pago' })
   updatePayment(@Param('id') id: string, @Body() body: any, @Request() req: any) {

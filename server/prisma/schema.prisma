@@ -148,6 +148,7 @@ model CashRegister {
   id          String        @id @default(uuid())
   name        String
   description String?
+  purpose     String        @default("GENERAL")
   active      Boolean       @default(true)
   createdAt   DateTime      @default(now())
 
@@ -157,6 +158,7 @@ model CashRegister {
   orders      Order[]
   diningTables DiningTable[]
 
+  @@index([purpose, active])
   @@map("cash_registers")
 }
 
@@ -197,6 +199,7 @@ model Order {
   assignedTo        String?
   cancelledById     String?
   cashRegisterId    String?
+  cashClosingId     String?
   customerId        String?
   deliveryDriverId  String?
   chatSessionId     String?
@@ -211,6 +214,7 @@ model Order {
   assignee          User?           @relation("OrderAssignment", fields: [assignedTo], references: [id])
   cancelledBy       User?           @relation("OrderCancellation", fields: [cancelledById], references: [id])
   cashRegister      CashRegister?   @relation(fields: [cashRegisterId], references: [id])
+  cashClosing       CashClosing?    @relation(fields: [cashClosingId], references: [id])
   customer          Customer?       @relation(fields: [customerId], references: [id])
   deliveryDriver    DeliveryDriver? @relation(fields: [deliveryDriverId], references: [id])
   items             OrderItem[]
@@ -227,6 +231,7 @@ model Order {
   @@index([waiterId])
   @@index([assignedTo])
   @@index([cashRegisterId])
+  @@index([cashClosingId])
   @@index([deliveryDriverId])
   @@index([chatSessionId])
   @@index([tableId])
@@ -398,9 +403,11 @@ model CashClosing {
   user           User          @relation(fields: [userId], references: [id])
   cashRegister   CashRegister? @relation(fields: [cashRegisterId], references: [id])
   diningTables   DiningTable[]
+  orders         Order[]
   transferProofs TransferProof[]
 
   @@index([userId, isOpen])
+  @@index([cashRegisterId, isOpen])
   @@map("cash_closings")
 }
 

@@ -16,7 +16,10 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
   async onModuleInit() {
     await this.$connect();
     // Production schema changes must run through reviewed migrations.
-    if (process.env.NODE_ENV === 'production') return;
+    if (process.env.NODE_ENV === 'production') {
+      await this.ensureDeliveryFoundation();
+      return;
+    }
     try {
       await this.$executeRawUnsafe(`ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "failedLoginAttempts" INTEGER NOT NULL DEFAULT 0;`).catch(() => {});
       await this.$executeRawUnsafe(`ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "lockoutUntil" TIMESTAMP(3);`).catch(() => {});
@@ -136,6 +139,86 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
 
     } catch (e: any) {
       console.warn('Auto-migration safeguard note:', e?.message || e);
+    }
+    await this.ensureDeliveryFoundation();
+  }
+
+  private async ensureDeliveryFoundation() {
+    const advisorPermissions = [
+      'orders.view', 'orders.create', 'orders.edit', 'orders.reprint',
+      'whatsapp.view', 'whatsapp.reply', 'whatsapp.media', 'whatsapp.assign',
+      'whatsapp.order_create', 'zones.view', 'customers.view', 'customers.manage',
+    ];
+    const dispatcherPermissions = [
+      'orders.view', 'orders.change_driver', 'dispatch.view',
+      'dispatch.change_status', 'drivers.view', 'drivers.manage', 'drivers.export',
+    ];
+
+    try {
+      await this.cashRegister.updateMany({
+        where: {
+          purpose: 'GENERAL',
+          name: { contains: 'domicil', mode: 'insensitive' },
+        },
+        data: { purpose: 'DELIVERY' },
+      });
+
+      await this.customRole.upsert({
+        where: { code: 'DELIVERY_MANAGER' },
+        create: {
+          code: 'DELIVERY_MANAGER',
+          name: 'Gestora de Domicilios',
+          description: 'Atención por WhatsApp, clientes y toma de domicilios',
+          color: '#8B5CF6',
+          icon: 'MessageCircle',
+          permissions: advisorPermissions,
+          isSystem: true,
+          active: true,
+        },
+        update: {
+          name: 'Gestora de Domicilios',
+          description: 'Atención por WhatsApp, clientes y toma de domicilios',
+          permissions: advisorPermissions,
+          isSystem: true,
+          active: true,
+        },
+      });
+
+      await this.customRole.upsert({
+        where: { code: 'DISPATCHER' },
+        create: {
+          code: 'DISPATCHER',
+          name: 'Despachador de Domicilios',
+          description: 'Asignación de domiciliarios, salida y entrega de pedidos',
+          color: '#0EA5E9',
+          icon: 'Bike',
+          permissions: dispatcherPermissions,
+          isSystem: true,
+          active: true,
+        },
+        update: {
+          name: 'Despachador de Domicilios',
+          description: 'Asignación de domiciliarios, salida y entrega de pedidos',
+          permissions: dispatcherPermissions,
+          isSystem: true,
+          active: true,
+        },
+      });
+
+      const permissionMigration = await this.appSetting.findUnique({
+        where: { key: 'delivery_roles_v1' },
+      });
+      if (!permissionMigration) {
+        await this.user.updateMany({
+          where: { role: 'DELIVERY_MANAGER' },
+          data: { permissions: advisorPermissions },
+        });
+        await this.appSetting.create({
+          data: { key: 'delivery_roles_v1', value: new Date().toISOString() },
+        });
+      }
+    } catch (error: any) {
+      console.warn('Delivery foundation note:', error?.message || error);
     }
   }
 

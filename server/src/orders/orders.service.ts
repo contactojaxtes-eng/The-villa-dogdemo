@@ -314,7 +314,25 @@ export class OrdersService implements OnModuleInit {
     return { today, tomorrow };
   }
 
-  async checkCanCreateOrders(userId: string, role: string) {
+  async checkCanCreateOrders(userId: string, role: string, orderType = 'DELIVERY') {
+    const isDeliveryOrder = ['DELIVERY', 'PICKUP'].includes(orderType);
+    if (isDeliveryOrder) {
+      const deliveryRegister = await this.prisma.cashRegister.findFirst({
+        where: { purpose: 'DELIVERY', active: true },
+        select: { id: true, name: true },
+        orderBy: { createdAt: 'asc' },
+      });
+      if (deliveryRegister) {
+        const deliveryClosing = await this.prisma.cashClosing.findFirst({
+          where: { cashRegisterId: deliveryRegister.id, isOpen: true },
+          select: { id: true },
+        });
+        return deliveryClosing
+          ? { allowed: true, reason: null }
+          : { allowed: false, reason: `La ${deliveryRegister.name} está cerrada. Ábrela antes de tomar domicilios.` };
+      }
+    }
+
     if (['SUPERADMIN', 'ADMIN', 'WAITER'].includes(role)) {
       return { allowed: true, reason: null };
     }
@@ -336,8 +354,8 @@ export class OrdersService implements OnModuleInit {
     return { allowed: true, reason: null };
   }
 
-  private async assertCashOpenForOrder(userId: string, role: string) {
-    const check = await this.checkCanCreateOrders(userId, role);
+  private async assertCashOpenForOrder(userId: string, role: string, orderType = 'DELIVERY') {
+    const check = await this.checkCanCreateOrders(userId, role, orderType);
     if (!check.allowed) {
       throw new BadRequestException(check.reason || 'Caja cerrada');
     }
@@ -390,10 +408,6 @@ export class OrdersService implements OnModuleInit {
     tableId?: string;
     clientMutationId?: string;
   }, tx: Prisma.TransactionClient) {
-    if (data.userId && data.userRole) {
-      await this.assertCashOpenForOrder(data.userId, data.userRole);
-    }
-
     if (!Array.isArray(data.items) || data.items.length > 100 || !data.items.length) {
       throw new BadRequestException('El pedido debe incluir al menos un producto');
     }
@@ -401,6 +415,10 @@ export class OrdersService implements OnModuleInit {
       if (!Number.isSafeInteger(item.quantity) || item.quantity <= 0 || item.quantity > 100) {
         throw new BadRequestException('La cantidad de cada producto debe ser mayor a cero');
       }
+    }
+
+    if (data.userId && data.userRole) {
+      await this.assertCashOpenForOrder(data.userId, data.userRole, data.orderType || 'DELIVERY');
     }
 
     if (data.customerPhone) {
@@ -443,22 +461,53 @@ export class OrdersService implements OnModuleInit {
 
     const resolvedZoneId = await this.findOrCreateZone(data.zoneId, data.zoneName, data.deliveryFee);
 
+    const normalizedOrderType = data.orderType || 'DELIVERY';
     let cashRegisterId = data.cashRegisterId;
-    if (!cashRegisterId) {
-      let activeClosing = data.userId ? await tx.cashClosing.findFirst({
-        where: { userId: data.userId, isOpen: true },
-      }) : null;
+    let cashClosingId: string | undefined;
+    let activeClosing: { id: string; cashRegisterId: string | null } | null = null;
 
-      if (!activeClosing) {
+    if (['DELIVERY', 'PICKUP'].includes(normalizedOrderType)) {
+      const deliveryRegister = await tx.cashRegister.findFirst({
+        where: { purpose: 'DELIVERY', active: true },
+        select: { id: true },
+        orderBy: { createdAt: 'asc' },
+      });
+      if (deliveryRegister) {
         activeClosing = await tx.cashClosing.findFirst({
-          where: { isOpen: true },
+          where: { cashRegisterId: deliveryRegister.id, isOpen: true },
+          select: { id: true, cashRegisterId: true },
           orderBy: { shiftStart: 'desc' },
         });
+        if (!activeClosing) {
+          throw new BadRequestException('La Caja Domicilios está cerrada. Ábrela antes de confirmar el pedido.');
+        }
       }
+    }
 
-      if (activeClosing) {
-        cashRegisterId = activeClosing.cashRegisterId || undefined;
-      }
+    if (!activeClosing && cashRegisterId) {
+      activeClosing = await tx.cashClosing.findFirst({
+        where: { cashRegisterId, isOpen: true },
+        select: { id: true, cashRegisterId: true },
+        orderBy: { shiftStart: 'desc' },
+      });
+    }
+    if (!activeClosing && data.userId) {
+      activeClosing = await tx.cashClosing.findFirst({
+        where: { userId: data.userId, isOpen: true },
+        select: { id: true, cashRegisterId: true },
+        orderBy: { shiftStart: 'desc' },
+      });
+    }
+    if (!activeClosing) {
+      activeClosing = await tx.cashClosing.findFirst({
+        where: { isOpen: true },
+        select: { id: true, cashRegisterId: true },
+        orderBy: { shiftStart: 'desc' },
+      });
+    }
+    if (activeClosing) {
+      cashClosingId = activeClosing.id;
+      cashRegisterId = activeClosing.cashRegisterId || cashRegisterId;
     }
 
     // Calcular el consecutivo de número de pedido (#1, #2, #3...)
@@ -599,12 +648,13 @@ export class OrdersService implements OnModuleInit {
         cashAmount: data.paymentMethod === 'MIXED' ? (data.cashAmount || 0) : (data.paymentMethod === 'CASH' ? total : 0),
         transferAmount: data.paymentMethod === 'MIXED' ? (data.transferAmount || 0) : (data.paymentMethod !== 'CASH' && data.paymentMethod !== 'CREDIT' && data.paymentMethod !== 'CORTESIA' ? total : 0),
         paymentReference: data.paymentReference,
-        orderType: data.orderType || 'DELIVERY',
+        orderType: normalizedOrderType,
         source: data.source || 'MANUAL',
         waiterId: data.waiterId,
         zoneId: isPickupOrLocal ? null : resolvedZoneId,
         assignedTo: data.assignedTo || data.waiterId,
         cashRegisterId: cashRegisterId,
+        cashClosingId,
         customerId: resolvedCustomerId,
         chatSessionId: data.chatSessionId || null,
         tableId: data.tableId || null,
@@ -1509,6 +1559,7 @@ export class OrdersService implements OnModuleInit {
     }
 
     let cashRegisterId: string | undefined = undefined;
+    let cashClosingId: string | undefined = undefined;
     let confirmedBy: string | undefined = undefined;
 
     if (user) {
@@ -1518,6 +1569,7 @@ export class OrdersService implements OnModuleInit {
       });
       if (activeClosing) {
         cashRegisterId = activeClosing.cashRegisterId || undefined;
+        cashClosingId = activeClosing.id;
       }
     }
 
@@ -1558,7 +1610,9 @@ export class OrdersService implements OnModuleInit {
         paymentStatus, 
         paymentReference: reference,
         ...(targetCustomerId ? { customerId: targetCustomerId } : {}),
-        ...(cashRegisterId && paymentStatus === 'CONFIRMED' ? { cashRegisterId } : {})
+        ...(cashRegisterId && paymentStatus === 'CONFIRMED' && !order.cashClosingId
+          ? { cashRegisterId, cashClosingId }
+          : {})
       },
       include: {
         waiter: { select: { id: true, name: true } },
