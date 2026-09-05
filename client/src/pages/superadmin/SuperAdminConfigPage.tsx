@@ -55,6 +55,10 @@ export default function SuperAdminConfigPage() {
 
   const handleTestGemini = async () => {
     const keysJoined = geminiKeys.map(k => k.trim()).filter(Boolean).join(',');
+    if (!keysJoined) {
+      alerts.warning('Ingresa al menos una clave API de Gemini antes de probar.')
+      return
+    }
     setTestingGemini(true)
     try {
       const res = await api.post<{ success: boolean; message: string }>('/whatsapp/test-gemini', {
@@ -447,10 +451,10 @@ export default function SuperAdminConfigPage() {
                 {(() => {
                   const validKeys = geminiKeys.filter(k => k.trim().length > 0);
                   const keysCount = validKeys.length;
-                  const totalCapacity = (keysCount || 1) * 1500;
+                  const totalCapacity = keysCount * 1500;
                   const usedToday = wa.geminiRequestsToday || 0;
                   const remainingToday = Math.max(0, totalCapacity - usedToday);
-                  const percentageUsed = Math.min(100, Math.round((usedToday / totalCapacity) * 100));
+                  const percentageUsed = totalCapacity > 0 ? Math.min(100, Math.round((usedToday / totalCapacity) * 100)) : 0;
 
                   return (
                     <div className="p-3 rounded-xl bg-[#F6F7F9]/80 border border-[#E2E8F0] space-y-2 mt-2">
@@ -460,7 +464,7 @@ export default function SuperAdminConfigPage() {
                           Uso de IA Hoy:
                         </span>
                         <span className="text-[#7A1F2B] font-extrabold">
-                          {usedToday.toLocaleString('de-DE')} / {totalCapacity.toLocaleString('de-DE')} sol.
+                          {keysCount > 0 ? `${usedToday.toLocaleString('de-DE')} / ${totalCapacity.toLocaleString('de-DE')} sol.` : '0 / 0 sol.'}
                         </span>
                       </div>
 
@@ -470,13 +474,15 @@ export default function SuperAdminConfigPage() {
                           className={`h-full transition-all duration-500 ${
                             percentageUsed > 85 ? 'bg-red-500' : percentageUsed > 60 ? 'bg-amber-500' : 'bg-[#7A1F2B]'
                           }`}
-                          style={{ width: `${Math.max(3, percentageUsed)}%` }}
+                          style={{ width: `${keysCount > 0 ? Math.max(3, percentageUsed) : 0}%` }}
                         />
                       </div>
 
                       <div className="flex items-center justify-between text-[10px] text-[#64748B] font-mono">
-                        <span>{keysCount || 1} Llave(s) activa(s)</span>
-                        <span className="text-[#7A1F2B] font-bold">{remainingToday.toLocaleString('de-DE')} disponibles hoy</span>
+                        <span>{keysCount} Llave(s) activa(s)</span>
+                        <span className="text-[#7A1F2B] font-bold">
+                          {keysCount > 0 ? `${remainingToday.toLocaleString('de-DE')} disponibles hoy` : 'Sin llaves de Gemini'}
+                        </span>
                       </div>
                     </div>
                   );

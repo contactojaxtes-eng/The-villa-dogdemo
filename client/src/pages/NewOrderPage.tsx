@@ -19,11 +19,15 @@ import type { ComandaOrder } from '@/components/orders/ComandaPrint'
 import { estimateDeliveryKm } from '@/lib/distance'
 import { AddressSearch, type AddressResult } from '@/components/orders/AddressSearch'
 import { globalSessionsCache } from '@/lib/chatCache'
-import { ArrowLeft, ShoppingCart, Trash2, Search, Save, Sparkles, Clock, Bike, Store, Loader2, Plus, Minus, MapPin, DollarSign, AlertTriangle, Route, Pizza, CupSoda, ChefHat, Flame, UtensilsCrossed, X, Users, CheckCircle2, Mic, MicOff, ChevronDown, MessageCircle, Send, FileText, Phone, ExternalLink, Download } from 'lucide-react'
+import { ArrowLeft, ShoppingCart, Trash2, Search, Save, Sparkles, Clock, Bike, Store, Loader2, Plus, Minus, MapPin, DollarSign, AlertTriangle, Route, Pizza, CupSoda, ChefHat, Flame, UtensilsCrossed, X, Users, CheckCircle2, Mic, MicOff, ChevronDown, MessageCircle, Send, FileText, Phone, ExternalLink, Download, Eye, RotateCw, ZoomIn, ZoomOut } from 'lucide-react'
 
 function ChatDrawerMedia({ mediaId, type }: { mediaId: string; type: string }) {
   const [src, setSrc] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
+  const [isZoomed, setIsZoomed] = useState(false)
+  const [rotation, setRotation] = useState(0)
+  const [scale, setScale] = useState(1)
+
   const rawMediaId = mediaId.split('|')[0]
   const cleanMediaId = rawMediaId.includes('/') ? rawMediaId.split('/').pop() : rawMediaId
   const captionText = mediaId.includes('|') ? mediaId.split('|').slice(1).join('|') : ''
@@ -60,13 +64,142 @@ function ChatDrawerMedia({ mediaId, type }: { mediaId: string; type: string }) {
     }
   }, [cleanMediaId])
 
+  const handleCloseZoom = () => {
+    setIsZoomed(false)
+    setRotation(0)
+    setScale(1)
+  }
+
+  useEffect(() => {
+    if (!isZoomed) return
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') handleCloseZoom()
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [isZoomed])
+
   if (loading) return <div className="text-[10px] text-gray-400 p-1 font-mono">Cargando multimedia...</div>
   if (!src) return <div className="text-[10px] text-red-400 p-1 font-mono">[Archivo multimedia]</div>
 
   return (
     <div className="space-y-1 my-1">
       {type === 'image' ? (
-        <img src={src} alt="Adjunto WhatsApp" className="max-h-48 rounded-xl object-contain border border-black/10 shadow-xs" />
+        <>
+          <div className="relative group overflow-hidden rounded-xl border border-black/10 shadow-xs max-w-full inline-block">
+            <img 
+              src={src} 
+              alt="Adjunto WhatsApp" 
+              className="max-h-48 rounded-xl object-contain cursor-zoom-in transition-transform duration-200 hover:scale-[1.02]" 
+              onClick={() => setIsZoomed(true)}
+            />
+            <div className="absolute top-1.5 right-1.5 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  setIsZoomed(true)
+                }}
+                className="p-1 rounded-md bg-black/70 hover:bg-black text-white text-[10px] font-bold shadow-md cursor-pointer"
+                title="Ver en grande"
+              >
+                <Eye className="h-3 w-3" />
+              </button>
+              <a
+                href={src}
+                download={`whatsapp-imagen-${Date.now()}.jpg`}
+                onClick={(e) => e.stopPropagation()}
+                className="p-1 rounded-md bg-black/70 hover:bg-black text-white text-[10px] font-bold shadow-md cursor-pointer"
+                title="Descargar"
+              >
+                <Download className="h-3 w-3" />
+              </a>
+            </div>
+          </div>
+
+          {isZoomed && (
+            <div 
+              className="fixed inset-0 z-[9999] bg-black/85 backdrop-blur-sm flex flex-col items-center justify-between p-4 select-none animate-in fade-in duration-200"
+              onClick={handleCloseZoom}
+            >
+              <div 
+                className="w-full max-w-3xl flex items-center justify-between py-2 px-4 rounded-2xl bg-black/70 border border-white/10 text-white backdrop-blur-md shadow-2xl z-10"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-bold tracking-wide text-white/90">Vista previa de imagen</span>
+                  {captionText && <span className="text-[11px] text-white/60 truncate max-w-xs">• {captionText}</span>}
+                </div>
+
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => setRotation(r => (r + 90) % 360)}
+                    className="p-2 rounded-xl hover:bg-white/15 text-white/80 hover:text-white transition-colors cursor-pointer"
+                    title="Rotar 90°"
+                  >
+                    <RotateCw className="h-4 w-4" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setScale(s => Math.max(0.5, s - 0.25))}
+                    className="p-2 rounded-xl hover:bg-white/15 text-white/80 hover:text-white transition-colors cursor-pointer"
+                    title="Alejar"
+                  >
+                    <ZoomOut className="h-4 w-4" />
+                  </button>
+                  <span className="text-[11px] font-mono font-bold text-white/70 w-10 text-center">
+                    {Math.round(scale * 100)}%
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setScale(s => Math.min(3, s + 0.25))}
+                    className="p-2 rounded-xl hover:bg-white/15 text-white/80 hover:text-white transition-colors cursor-pointer"
+                    title="Acercar"
+                  >
+                    <ZoomIn className="h-4 w-4" />
+                  </button>
+                  <a
+                    href={src}
+                    download={`whatsapp-imagen-${Date.now()}.jpg`}
+                    className="p-2 rounded-xl hover:bg-white/15 text-white/80 hover:text-white transition-colors cursor-pointer ml-1"
+                    title="Descargar"
+                  >
+                    <Download className="h-4 w-4" />
+                  </a>
+                  <button
+                    type="button"
+                    onClick={handleCloseZoom}
+                    className="p-2 ml-2 rounded-xl bg-white/15 hover:bg-red-500 text-white transition-colors cursor-pointer"
+                    title="Cerrar (Esc)"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+              </div>
+
+              <div 
+                className="flex-1 w-full flex items-center justify-center overflow-hidden py-4 cursor-default"
+                onClick={handleCloseZoom}
+              >
+                <img 
+                  src={src} 
+                  alt="WhatsApp Preview" 
+                  style={{
+                    transform: `rotate(${rotation}deg) scale(${scale})`,
+                    transition: 'transform 0.2s ease-out'
+                  }}
+                  className="max-h-[82vh] max-w-[90vw] object-contain rounded-xl shadow-2xl drop-shadow-2xl pointer-events-auto"
+                  onClick={(e) => e.stopPropagation()}
+                />
+              </div>
+
+              <div className="text-[11px] font-medium text-white/50 pb-1">
+                Haz clic fuera de la foto o presiona Esc para cerrar
+              </div>
+            </div>
+          )}
+        </>
       ) : type === 'audio' ? (
         <audio controls src={src} className="h-7 w-full accent-[var(--accent)]" />
       ) : (

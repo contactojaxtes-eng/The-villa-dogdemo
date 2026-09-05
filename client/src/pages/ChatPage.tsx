@@ -19,7 +19,8 @@ import {
   Phone, Clock, AlertCircle, AlertTriangle, ArrowLeft, Loader2, Trash2, Paperclip, FileText,
   Camera, Mic, MicOff, Check, CheckCheck, Pencil, Search, Lock, Bot,
   ChevronDown, Copy, ChevronLeft, ChevronRight, MapPin, ExternalLink, Download, Forward, QrCode, Reply, X,
-  Calendar, MessagesSquare, Mail, Flame, Users, Sparkles, MessageSquareText, Radio, Bell, BellOff
+  Calendar, MessagesSquare, Mail, Flame, Users, Sparkles, MessageSquareText, Radio, Bell, BellOff,
+  Eye, RotateCw, ZoomIn, ZoomOut
 } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Mp3Recorder } from '@/lib/mp3Recorder'
@@ -56,6 +57,9 @@ function WhatsAppMedia({ mediaId, type }: { mediaId: string; type: 'image' | 'au
   const [src, setSrc] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(false)
+  const [isZoomed, setIsZoomed] = useState(false)
+  const [rotation, setRotation] = useState(0)
+  const [scale, setScale] = useState(1)
 
   const safeMediaId = typeof mediaId === 'string' ? mediaId : String(mediaId || '')
   const rawMediaId = safeMediaId.split('|')[0] || ''
@@ -100,6 +104,21 @@ function WhatsAppMedia({ mediaId, type }: { mediaId: string; type: 'image' | 'au
     }
   }, [cleanMediaId])
 
+  const handleCloseZoom = () => {
+    setIsZoomed(false)
+    setRotation(0)
+    setScale(1)
+  }
+
+  useEffect(() => {
+    if (!isZoomed) return
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') handleCloseZoom()
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [isZoomed])
+
   return (
     <div className="space-y-1.5 max-w-full">
       {loading ? (
@@ -113,24 +132,126 @@ function WhatsAppMedia({ mediaId, type }: { mediaId: string; type: 'image' | 'au
           <span>Error al cargar multimedia</span>
         </div>
       ) : type === 'image' ? (
-        <div className="relative group overflow-hidden rounded-xl border border-[var(--border-subtle)]/40 max-w-full">
-          <img 
-            src={src} 
-            alt="WhatsApp Image" 
-            className="max-h-60 object-contain rounded-xl w-full cursor-zoom-in transition-transform duration-200 hover:scale-[1.02]"
-            onClick={() => window.open(src, '_blank')}
-          />
-          <a
-            href={src}
-            download={`whatsapp-imagen-${Date.now()}.jpg`}
-            onClick={(e) => e.stopPropagation()}
-            className="absolute top-2 right-2 p-1.5 rounded-lg bg-black/70 hover:bg-black text-white shadow-md transition-all cursor-pointer flex items-center gap-1 text-[10px] font-bold"
-            title="Descargar Imagen"
-          >
-            <Download className="h-3.5 w-3.5" />
-            <span className="hidden sm:inline">Descargar</span>
-          </a>
-        </div>
+        <>
+          <div className="relative group overflow-hidden rounded-xl border border-[var(--border-subtle)]/40 max-w-full">
+            <img 
+              src={src} 
+              alt="WhatsApp Image" 
+              className="max-h-60 object-contain rounded-xl w-full cursor-zoom-in transition-transform duration-200 hover:scale-[1.02]"
+              onClick={() => setIsZoomed(true)}
+            />
+            <div className="absolute top-2 right-2 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  setIsZoomed(true)
+                }}
+                className="p-1.5 rounded-lg bg-black/70 hover:bg-black text-white shadow-md transition-all cursor-pointer text-[10px] font-bold"
+                title="Ver en grande"
+              >
+                <Eye className="h-3.5 w-3.5" />
+              </button>
+              <a
+                href={src}
+                download={`whatsapp-imagen-${Date.now()}.jpg`}
+                onClick={(e) => e.stopPropagation()}
+                className="p-1.5 rounded-lg bg-black/70 hover:bg-black text-white shadow-md transition-all cursor-pointer flex items-center gap-1 text-[10px] font-bold"
+                title="Descargar Imagen"
+              >
+                <Download className="h-3.5 w-3.5" />
+                <span className="hidden sm:inline">Descargar</span>
+              </a>
+            </div>
+          </div>
+
+          {/* Modal In-App: Visor de foto en grande sin abrir nueva pestaña */}
+          {isZoomed && (
+            <div 
+              className="fixed inset-0 z-[9999] bg-black/85 backdrop-blur-sm flex flex-col items-center justify-between p-4 select-none animate-in fade-in duration-200"
+              onClick={handleCloseZoom}
+            >
+              {/* Barra superior de herramientas */}
+              <div 
+                className="w-full max-w-3xl flex items-center justify-between py-2 px-4 rounded-2xl bg-black/70 border border-white/10 text-white backdrop-blur-md shadow-2xl z-10"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-bold tracking-wide text-white/90">Vista previa de imagen</span>
+                  {captionText && <span className="text-[11px] text-white/60 truncate max-w-xs">• {captionText}</span>}
+                </div>
+
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => setRotation(r => (r + 90) % 360)}
+                    className="p-2 rounded-xl hover:bg-white/15 text-white/80 hover:text-white transition-colors cursor-pointer"
+                    title="Rotar 90°"
+                  >
+                    <RotateCw className="h-4 w-4" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setScale(s => Math.max(0.5, s - 0.25))}
+                    className="p-2 rounded-xl hover:bg-white/15 text-white/80 hover:text-white transition-colors cursor-pointer"
+                    title="Alejar"
+                  >
+                    <ZoomOut className="h-4 w-4" />
+                  </button>
+                  <span className="text-[11px] font-mono font-bold text-white/70 w-10 text-center">
+                    {Math.round(scale * 100)}%
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setScale(s => Math.min(3, s + 0.25))}
+                    className="p-2 rounded-xl hover:bg-white/15 text-white/80 hover:text-white transition-colors cursor-pointer"
+                    title="Acercar"
+                  >
+                    <ZoomIn className="h-4 w-4" />
+                  </button>
+                  <a
+                    href={src}
+                    download={`whatsapp-imagen-${Date.now()}.jpg`}
+                    className="p-2 rounded-xl hover:bg-white/15 text-white/80 hover:text-white transition-colors cursor-pointer ml-1"
+                    title="Descargar a tu equipo"
+                  >
+                    <Download className="h-4 w-4" />
+                  </a>
+                  <button
+                    type="button"
+                    onClick={handleCloseZoom}
+                    className="p-2 ml-2 rounded-xl bg-white/15 hover:bg-red-500 text-white transition-colors cursor-pointer"
+                    title="Cerrar (Esc)"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+              </div>
+
+              {/* Contenedor central de la foto con rotación y zoom */}
+              <div 
+                className="flex-1 w-full flex items-center justify-center overflow-hidden py-4 cursor-default"
+                onClick={handleCloseZoom}
+              >
+                <img 
+                  src={src} 
+                  alt="WhatsApp Preview" 
+                  style={{
+                    transform: `rotate(${rotation}deg) scale(${scale})`,
+                    transition: 'transform 0.2s ease-out'
+                  }}
+                  className="max-h-[82vh] max-w-[90vw] object-contain rounded-xl shadow-2xl drop-shadow-2xl pointer-events-auto"
+                  onClick={(e) => e.stopPropagation()}
+                />
+              </div>
+
+              {/* Pie de foto informativo */}
+              <div className="text-[11px] font-medium text-white/50 pb-1">
+                Haz clic fuera de la foto o presiona Esc para cerrar
+              </div>
+            </div>
+          )}
+        </>
       ) : type === 'video' ? (
         <div className="relative group overflow-hidden rounded-xl border border-[var(--border-subtle)]/40 max-w-full">
           <video controls src={src} className="max-h-60 rounded-xl w-full" />
