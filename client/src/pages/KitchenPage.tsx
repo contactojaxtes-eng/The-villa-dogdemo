@@ -580,9 +580,30 @@ export default function KitchenPage() {
                           #{ticket.order?.orderNumber || '0'} · {ticket.order?.diningTable?.label || ticket.order?.customerName || 'Mesa'}
                         </span>
                         {ticket.isEdited && (
-                          <span className="rounded-full bg-amber-500 text-slate-950 px-2 py-0.5 text-[10px] font-black flex items-center gap-1 shadow-xs animate-pulse">
-                            <AlertTriangle className="h-3 w-3" /> PEDIDO EDITADO
-                          </span>
+                          (() => {
+                            const actionItems = (ticket.items || []).filter(i => i.changeType === 'ADDED' || i.changeType === 'REMOVED' || (i.changeType === 'MODIFIED' && ((i.previousQty ?? i.quantity) !== i.quantity || i.notes !== i.previousNotes)))
+                            const hasRemoved = actionItems.some(i => i.changeType === 'REMOVED' || (i.changeType === 'MODIFIED' && (i.quantity < (i.previousQty ?? i.quantity))))
+                            const hasAdded = actionItems.some(i => i.changeType === 'ADDED' || (i.changeType === 'MODIFIED' && (i.quantity > (i.previousQty ?? i.quantity))))
+                            if (hasRemoved && !hasAdded) {
+                              return (
+                                <span className="rounded-full bg-rose-600 text-white px-2 py-0.5 text-[10px] font-black flex items-center gap-1 shadow-xs animate-pulse">
+                                  <XCircle className="h-3 w-3" /> SE CANCELÓ / REDUJO
+                                </span>
+                              )
+                            }
+                            if (hasAdded && !hasRemoved) {
+                              return (
+                                <span className="rounded-full bg-emerald-600 text-white px-2 py-0.5 text-[10px] font-black flex items-center gap-1 shadow-xs animate-pulse">
+                                  <Flame className="h-3 w-3" /> ¡SE AGREGÓ AL PEDIDO!
+                                </span>
+                              )
+                            }
+                            return (
+                              <span className="rounded-full bg-amber-500 text-slate-950 px-2 py-0.5 text-[10px] font-black flex items-center gap-1 shadow-xs animate-pulse">
+                                <AlertTriangle className="h-3 w-3" /> PEDIDO EDITADO
+                              </span>
+                            )
+                          })()
                         )}
                       </div>
                       <p className="text-xs text-[var(--text-secondary)] mt-0.5 flex flex-wrap items-center gap-1.5">
@@ -635,17 +656,14 @@ export default function KitchenPage() {
                     </div>
                   )}
 
-                  {/* Lista de items: si el pedido fue editado, mostrar EXCLUSIVAMENTE lo nuevo agregado/modificado en letra GRANDE */}
+                  {/* Lista de items: si el pedido fue editado, mostrar EXCLUSIVAMENTE lo nuevo agregado/modificado en letra GRANDE sin mezclar lo anterior */}
                   {(() => {
                     const isEditedTicket = ticket.isEdited || (ticket.items || []).some(i => i.changeType === 'ADDED' || i.changeType === 'REMOVED' || i.changeType === 'MODIFIED')
                     const actionItems = isEditedTicket
                       ? (ticket.items || []).filter(i => i.changeType === 'ADDED' || i.changeType === 'REMOVED' || (i.changeType === 'MODIFIED' && ((i.previousQty ?? i.quantity) !== i.quantity || i.notes !== i.previousNotes)))
                       : []
-                    const unchangedItems = isEditedTicket
-                      ? (ticket.items || []).filter(i => !i.changeType || i.changeType === 'UNCHANGED' || (i.changeType === 'MODIFIED' && (i.previousQty ?? i.quantity) === i.quantity && i.notes === i.previousNotes))
-                      : []
 
-                    // Si fue editado y estamos en pestañas activas (no en HISTORIAL): destacar lo nuevo y permitir expandir lo anterior
+                    // Si fue editado y estamos en pestañas activas (no en HISTORIAL): destacar exclusivamente lo nuevo/editado sin enredos
                     if (isEditedTicket && !isFullyCancelled && activeTab !== 'HISTORY') {
                       if (actionItems.length === 0) {
                         return (
@@ -655,13 +673,28 @@ export default function KitchenPage() {
                         )
                       }
 
+                      const hasOnlyRemoved = actionItems.every(i => i.changeType === 'REMOVED' || (i.changeType === 'MODIFIED' && i.quantity < (i.previousQty ?? i.quantity)))
+                      const hasOnlyAdded = actionItems.every(i => i.changeType === 'ADDED' || (i.changeType === 'MODIFIED' && i.quantity > (i.previousQty ?? i.quantity)))
+
                       return (
                         <div className="mt-2.5 space-y-2.5">
-                          {/* Banner limpio y directo */}
-                          <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-500/20 border-2 border-amber-500/40 text-amber-900 dark:text-amber-200 text-xs font-black uppercase tracking-wider">
-                            <Flame className="h-4 w-4 text-amber-600 dark:text-amber-400 animate-pulse" />
-                            <span>🔥 LO NUEVO / EDITADO A PREPARAR:</span>
-                          </div>
+                          {/* Banner limpio y directo según el tipo de cambio */}
+                          {hasOnlyRemoved ? (
+                            <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-rose-500/20 border-2 border-rose-500/40 text-rose-950 dark:text-rose-200 text-xs font-black uppercase tracking-wider">
+                              <XCircle className="h-4 w-4 text-rose-600 dark:text-rose-400 animate-pulse" />
+                              <span>❌ SE CANCELÓ (¡NO PREPARAR!):</span>
+                            </div>
+                          ) : hasOnlyAdded ? (
+                            <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-500/20 border-2 border-emerald-500/40 text-emerald-950 dark:text-emerald-200 text-xs font-black uppercase tracking-wider">
+                              <Flame className="h-4 w-4 text-emerald-600 dark:text-emerald-400 animate-pulse" />
+                              <span>✨ SE AGREGÓ A PREPARAR:</span>
+                            </div>
+                          ) : (
+                            <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-500/20 border-2 border-amber-500/40 text-amber-900 dark:text-amber-200 text-xs font-black uppercase tracking-wider">
+                              <Flame className="h-4 w-4 text-amber-600 dark:text-amber-400 animate-pulse" />
+                              <span>🔥 LO NUEVO / EDITADO A PREPARAR:</span>
+                            </div>
+                          )}
 
                           {/* Items agregados, modificados o eliminados con letra GRANDE y clara */}
                           <div className="space-y-2.5">
@@ -791,32 +824,6 @@ export default function KitchenPage() {
                               )
                             })}
                           </div>
-
-                          {/* Productos de la orden previa / ya preparados siempre visibles para tranquilidad de cocina */}
-                          {unchangedItems.length > 0 && (
-                            <div className="pt-2 border-t border-[var(--border-subtle)] space-y-1.5">
-                              <div className="flex items-center justify-between text-[11px] font-bold text-[var(--text-secondary)]">
-                                <span className="flex items-center gap-1 font-black text-[11px] text-[var(--text-muted)]">
-                                  ✅ Ya despachados / preparados de esta mesa:
-                                </span>
-                                <span className="text-[10px] bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 px-1.5 py-0.2 rounded font-black">
-                                  {unchangedItems.reduce((sum: number, i: any) => sum + (i.quantity || 0), 0)} un.
-                                </span>
-                              </div>
-                              <div className="space-y-1">
-                                {unchangedItems.map((item: any) => (
-                                  <div key={item.id} className="flex items-center justify-between text-xs py-1 px-2.5 rounded-xl bg-[var(--bg-elevated)] border border-[var(--border-subtle)]">
-                                    <span className="font-extrabold text-[var(--text-primary)]">
-                                      {item.quantity}x {item.nameSnapshot}
-                                    </span>
-                                    <span className="text-[10px] font-bold text-emerald-700 dark:text-emerald-400">
-                                      {item.notes ? `(${item.notes})` : '✓ Listo'}
-                                    </span>
-                                  </div>
-                                ))}
-                              </div>
-                            </div>
-                          )}
                         </div>
                       )
                     }
@@ -872,24 +879,35 @@ export default function KitchenPage() {
 
                 {/* EXACTAMENTE 2 PASOS: 1. PREPARAR -> 2. LISTO (Y YA QUEDA COMPLETO) */}
                 <div className="mt-3.5 pt-2 border-t border-[var(--border-subtle)]">
-                  {isFullyCancelled ? (
-                    <Button
-                      variant="outline"
-                      onClick={() => setStatus(ticket, 'SERVED')}
-                      className="w-full h-11 border-rose-300 text-rose-700 hover:bg-rose-50 font-black text-xs gap-1.5 cursor-pointer rounded-xl"
-                    >
-                      <XCircle className="h-4 w-4" /> Descartar y archivar a historial
-                    </Button>
-                  ) : ticket.status === 'NEW' ? (
-                    /* PASO 1: SOLO PREPARAR (ÁMBAR) */
-                    <Button
-                      size="sm"
-                      onClick={() => setStatus(ticket, 'PREPARING')}
-                      className="w-full h-11 bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-xs gap-2 rounded-xl shadow-md transition-all active:scale-95 cursor-pointer"
-                    >
-                      <Flame className="h-4 w-4" /> {ticket.isEdited ? '1. Empezar a Preparar lo Nuevo' : '1. Empezar a Preparar'}
-                    </Button>
-                  ) : ticket.status === 'PREPARING' ? (
+                  {(() => {
+                    const isCancellationOnly = isFullyCancelled || (ticket.isEdited && (ticket.items || []).length > 0 && (ticket.items || []).every(i => i.changeType === 'REMOVED' || (i.changeType === 'MODIFIED' && (i.quantity < (i.previousQty ?? i.quantity)))))
+                    if (isCancellationOnly) {
+                      return (
+                        <Button
+                          variant="outline"
+                          onClick={() => setStatus(ticket, 'SERVED')}
+                          className="w-full h-11 border-rose-300 bg-rose-50 hover:bg-rose-100 text-rose-700 dark:bg-rose-950/30 dark:border-rose-800 dark:text-rose-300 font-black text-xs gap-1.5 cursor-pointer rounded-xl shadow-xs"
+                        >
+                          <CheckCircle2 className="h-4 w-4" /> ✓ Entendido (Descartar aviso de cancelación)
+                        </Button>
+                      )
+                    }
+
+                    if (ticket.status === 'NEW') {
+                      return (
+                        <Button
+                          size="sm"
+                          onClick={() => setStatus(ticket, 'PREPARING')}
+                          className="w-full h-11 bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-xs gap-2 rounded-xl shadow-md transition-all active:scale-95 cursor-pointer"
+                        >
+                          <Flame className="h-4 w-4" /> {ticket.isEdited ? '1. Empezar a Preparar lo Nuevo' : '1. Empezar a Preparar'}
+                        </Button>
+                      )
+                    }
+
+                    return null
+                  })()}
+                  {ticket.status === 'PREPARING' && !isFullyCancelled && !(ticket.isEdited && (ticket.items || []).length > 0 && (ticket.items || []).every(i => i.changeType === 'REMOVED' || (i.changeType === 'MODIFIED' && (i.quantity < (i.previousQty ?? i.quantity))))) ? (
                     /* PASO 2: EN PREPARACIÓN -> BOTÓN LISTO (ESMERALDA) + OPCIÓN REVERTIR */
                     <div className="flex gap-2 items-center w-full">
                       <Button

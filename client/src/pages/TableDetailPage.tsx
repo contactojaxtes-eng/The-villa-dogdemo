@@ -680,7 +680,7 @@ export default function TableDetailPage() {
                     <input
                       ref={cameraInputRef}
                       type="file"
-                      accept="image/*"
+                      accept="image/jpeg,image/png,image/webp"
                       capture="environment"
                       className="hidden"
                       onChange={handleFileChange}
@@ -699,7 +699,7 @@ export default function TableDetailPage() {
                     <input
                       ref={galleryInputRef}
                       type="file"
-                      accept="image/*"
+                      accept="image/jpeg,image/png,image/webp"
                       multiple
                       className="hidden"
                       onChange={handleFileChange}
