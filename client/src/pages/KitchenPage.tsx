@@ -15,6 +15,7 @@ import {
   XCircle,
   Coffee,
   PauseCircle,
+  UserCheck,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { api } from '@/lib/api'
@@ -260,6 +261,22 @@ export default function KitchenPage() {
     return Array.from(map.entries()).map(([id, name]) => ({ id, name }))
   }, [consolidatedTickets])
 
+  const selectedCookName = useMemo(() => {
+    if (cookFilter === 'ALL') return null
+    return availableCooks.find(c => c.id === cookFilter)?.name || 'Cocinero'
+  }, [cookFilter, availableCooks])
+
+  const cookStats = useMemo(() => {
+    const stats: Record<string, { active: number; history: number; total: number }> = {}
+    for (const cook of availableCooks) {
+      const cookTickets = consolidatedTickets.filter(t => (t.assignedToId || t.assignedTo?.id) === cook.id)
+      const active = cookTickets.filter(t => ['NEW', 'PREPARING'].includes(t.status)).length
+      const history = cookTickets.filter(t => ['SERVED', 'READY', 'CANCELLED'].includes(t.status)).length
+      stats[cook.id] = { active, history, total: cookTickets.length }
+    }
+    return stats
+  }, [availableCooks, consolidatedTickets])
+
   // Tickets filtrados por usuario/rol, estación y cocinero
   const scopedTickets = useMemo(() => {
     return consolidatedTickets.filter(t => {
@@ -291,8 +308,7 @@ export default function KitchenPage() {
   const countAllActive = countNew + countPreparing + countCancelled
   const countHistory = useMemo(() => scopedTickets.filter(t => ['SERVED', 'CANCELLED', 'READY'].includes(t.status)).length, [scopedTickets])
 
-  // Lista de tickets según la pestaña activa (orden FIFO: el más antiguo primero arriba)
-  // Exactamente 2 pasos en cocina: Preparar -> Listo y pasa a Listos/Historial
+  // Lista de tickets según la pestaña activa (orden FIFO para activos; más recientes primero en HISTORIAL)
   const displayTickets = useMemo(() => {
     let list: KitchenTicketSummary[] = []
     if (activeTab === 'ALL_ACTIVE') {
@@ -305,6 +321,9 @@ export default function KitchenPage() {
       list = scopedTickets.filter(t => t.status === 'READY')
     } else if (activeTab === 'HISTORY') {
       list = scopedTickets.filter(t => ['SERVED', 'CANCELLED', 'READY'].includes(t.status))
+    }
+    if (activeTab === 'HISTORY') {
+      return list.sort((a, b) => new Date(b.updatedAt || b.createdAt).getTime() - new Date(a.updatedAt || a.createdAt).getTime())
     }
     return list.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime())
   }, [scopedTickets, activeTab])
@@ -393,146 +412,224 @@ export default function KitchenPage() {
         </div>
       )}
 
-      {/* Barra de control superior con Filtros de Estado y Estación */}
-      <div className="flex flex-wrap items-center justify-between gap-2.5 bg-[var(--bg-panel)] p-2.5 sm:p-3 rounded-2xl border border-[var(--border-subtle)] shadow-xs">
-        {/* Pestañas de estado: Todos Activos, Nuevos, En Preparación, Listos, Historial */}
-        <div className="flex items-center gap-1.5 overflow-x-auto pb-1 sm:pb-0">
-          <Button
-            size="sm"
-            variant={activeTab === 'ALL_ACTIVE' ? 'default' : 'ghost'}
-            onClick={() => setActiveTab('ALL_ACTIVE')}
-            className={`font-black gap-1.5 h-8 text-xs shrink-0 ${activeTab === 'ALL_ACTIVE' ? 'bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-white shadow-xs' : ''}`}
-          >
-            <Flame className="h-3.5 w-3.5" />
-            <span>En Cocina</span>
-            <span className={`ml-1 rounded-full px-1.5 py-0.2 text-[10px] font-black ${activeTab === 'ALL_ACTIVE' ? 'bg-white text-[var(--accent)]' : 'bg-[var(--bg-elevated)] text-[var(--text-primary)]'}`}>
-              {countAllActive}
-            </span>
-          </Button>
+      {/* Barra de control superior con Filtros de Estado, Estación y Cocinero */}
+      <div className="bg-[var(--bg-panel)] p-2.5 sm:p-3.5 rounded-2xl border border-[var(--border-subtle)] shadow-xs space-y-2.5">
+        {/* Fila 1: Pestañas de estado + Botón Actualizar */}
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-1.5 overflow-x-auto pb-1 no-scrollbar flex-1 min-w-0">
+            <Button
+              size="sm"
+              variant={activeTab === 'ALL_ACTIVE' ? 'default' : 'ghost'}
+              onClick={() => setActiveTab('ALL_ACTIVE')}
+              className={`font-black gap-1.5 h-8 text-xs shrink-0 ${activeTab === 'ALL_ACTIVE' ? 'bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-white shadow-xs' : ''}`}
+            >
+              <Flame className="h-3.5 w-3.5" />
+              <span>En Cocina</span>
+              <span className={`ml-1 rounded-full px-1.5 py-0.2 text-[10px] font-black ${activeTab === 'ALL_ACTIVE' ? 'bg-white text-[var(--accent)]' : 'bg-[var(--bg-elevated)] text-[var(--text-primary)]'}`}>
+                {countAllActive}
+              </span>
+            </Button>
 
-          <Button
-            size="sm"
-            variant={activeTab === 'NEW' ? 'default' : 'ghost'}
-            onClick={() => setActiveTab('NEW')}
-            className={`font-black gap-1.5 h-8 text-xs shrink-0 ${activeTab === 'NEW' ? 'bg-blue-600 hover:bg-blue-700 text-white shadow-xs' : ''}`}
-          >
-            <Clock className="h-3.5 w-3.5" />
-            <span>Nuevos</span>
-            <span className={`ml-1 rounded-full px-1.5 py-0.2 text-[10px] font-black ${activeTab === 'NEW' ? 'bg-white text-blue-600' : 'bg-[var(--bg-elevated)] text-[var(--text-primary)]'}`}>
-              {countNew}
-            </span>
-          </Button>
+            <Button
+              size="sm"
+              variant={activeTab === 'NEW' ? 'default' : 'ghost'}
+              onClick={() => setActiveTab('NEW')}
+              className={`font-black gap-1.5 h-8 text-xs shrink-0 ${activeTab === 'NEW' ? 'bg-blue-600 hover:bg-blue-700 text-white shadow-xs' : ''}`}
+            >
+              <Clock className="h-3.5 w-3.5" />
+              <span>Nuevos</span>
+              <span className={`ml-1 rounded-full px-1.5 py-0.2 text-[10px] font-black ${activeTab === 'NEW' ? 'bg-white text-blue-600' : 'bg-[var(--bg-elevated)] text-[var(--text-primary)]'}`}>
+                {countNew}
+              </span>
+            </Button>
 
-          <Button
-            size="sm"
-            variant={activeTab === 'PREPARING' ? 'default' : 'ghost'}
-            onClick={() => setActiveTab('PREPARING')}
-            className={`font-black gap-1.5 h-8 text-xs shrink-0 ${activeTab === 'PREPARING' ? 'bg-amber-500 hover:bg-amber-600 text-slate-950 shadow-xs' : ''}`}
-          >
-            <Flame className="h-3.5 w-3.5" />
-            <span>En Preparación</span>
-            <span className={`ml-1 rounded-full px-1.5 py-0.2 text-[10px] font-black ${activeTab === 'PREPARING' ? 'bg-slate-950 text-amber-400' : 'bg-[var(--bg-elevated)] text-[var(--text-primary)]'}`}>
-              {countPreparing}
-            </span>
-          </Button>
+            <Button
+              size="sm"
+              variant={activeTab === 'PREPARING' ? 'default' : 'ghost'}
+              onClick={() => setActiveTab('PREPARING')}
+              className={`font-black gap-1.5 h-8 text-xs shrink-0 ${activeTab === 'PREPARING' ? 'bg-amber-500 hover:bg-amber-600 text-slate-950 shadow-xs' : ''}`}
+            >
+              <Flame className="h-3.5 w-3.5" />
+              <span>En Preparación</span>
+              <span className={`ml-1 rounded-full px-1.5 py-0.2 text-[10px] font-black ${activeTab === 'PREPARING' ? 'bg-slate-950 text-amber-400' : 'bg-[var(--bg-elevated)] text-[var(--text-primary)]'}`}>
+                {countPreparing}
+              </span>
+            </Button>
 
-          <Button
-            size="sm"
-            variant={activeTab === 'READY' ? 'default' : 'ghost'}
-            onClick={() => setActiveTab('READY')}
-            className={`font-black gap-1.5 h-8 text-xs shrink-0 ${activeTab === 'READY' ? 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs' : ''}`}
-          >
-            <CheckCircle2 className="h-3.5 w-3.5" />
-            <span>Listos</span>
-            <span className={`ml-1 rounded-full px-1.5 py-0.2 text-[10px] font-black ${activeTab === 'READY' ? 'bg-white text-emerald-600' : 'bg-[var(--bg-elevated)] text-[var(--text-primary)]'}`}>
-              {countReady}
-            </span>
-          </Button>
+            <Button
+              size="sm"
+              variant={activeTab === 'READY' ? 'default' : 'ghost'}
+              onClick={() => setActiveTab('READY')}
+              className={`font-black gap-1.5 h-8 text-xs shrink-0 ${activeTab === 'READY' ? 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs' : ''}`}
+            >
+              <CheckCircle2 className="h-3.5 w-3.5" />
+              <span>Listos</span>
+              <span className={`ml-1 rounded-full px-1.5 py-0.2 text-[10px] font-black ${activeTab === 'READY' ? 'bg-white text-emerald-600' : 'bg-[var(--bg-elevated)] text-[var(--text-primary)]'}`}>
+                {countReady}
+              </span>
+            </Button>
 
-          <Button
-            size="sm"
-            variant={activeTab === 'HISTORY' ? 'default' : 'ghost'}
-            onClick={() => setActiveTab('HISTORY')}
-            className={`font-bold gap-1.5 h-8 text-xs shrink-0 ${activeTab === 'HISTORY' ? 'bg-[var(--text-primary)] text-white shadow-xs' : ''}`}
-          >
-            <History className="h-3.5 w-3.5" />
-            <span>Historial</span>
-            <span className="ml-1 rounded-full bg-[var(--bg-elevated)] px-1.5 py-0.2 text-[10px] font-bold text-[var(--text-secondary)]">
-              {countHistory}
-            </span>
-          </Button>
-        </div>
+            <Button
+              size="sm"
+              variant={activeTab === 'HISTORY' ? 'default' : 'ghost'}
+              onClick={() => setActiveTab('HISTORY')}
+              className={`font-bold gap-1.5 h-8 text-xs shrink-0 ${activeTab === 'HISTORY' ? 'bg-[var(--text-primary)] text-white shadow-xs' : ''}`}
+            >
+              <History className="h-3.5 w-3.5" />
+              <span>Historial</span>
+              <span className={`ml-1 rounded-full px-1.5 py-0.2 text-[10px] font-bold ${activeTab === 'HISTORY' ? 'bg-white text-slate-900' : 'bg-[var(--bg-elevated)] text-[var(--text-secondary)]'}`}>
+                {countHistory}
+              </span>
+            </Button>
+          </div>
 
-        {/* Filtros de estación y cocinero + botón actualizar */}
-        <div className="flex flex-wrap items-center gap-2">
-          {stations.length > 1 && (
-            <div className="flex items-center gap-1 overflow-x-auto">
-              <span className="text-[11px] text-[var(--text-muted)] font-bold mr-0.5 hidden md:inline">Estación:</span>
-              <Button
-                size="sm"
-                variant={stationFilter === 'ALL' ? 'secondary' : 'ghost'}
-                className="h-7 px-2 text-[11px] font-bold"
-                onClick={() => handleStationFilter('ALL')}
-              >
-                Todas
-              </Button>
-              {stations.map(st => (
-                <Button
-                  key={st.id}
-                  size="sm"
-                  variant={stationFilter === st.id ? 'secondary' : 'ghost'}
-                  className="h-7 px-2 text-[11px] font-bold shrink-0"
-                  onClick={() => handleStationFilter(st.id)}
-                >
-                  {st.name}
-                </Button>
-              ))}
-            </div>
-          )}
-
-          {/* Filtro de cocineros para Admin / Superadmin / Cajero */}
-          {['ADMIN', 'SUPERADMIN', 'CASHIER'].includes(user?.role || '') && availableCooks.length > 1 && (
-            <div className="flex items-center gap-1 overflow-x-auto border-l border-[var(--border-subtle)] pl-2">
-              <span className="text-[11px] text-[var(--text-muted)] font-bold mr-0.5 hidden md:inline">Cocinero:</span>
-              <Button
-                size="sm"
-                variant={cookFilter === 'ALL' ? 'secondary' : 'ghost'}
-                className="h-7 px-2 text-[11px] font-bold"
-                onClick={() => handleCookFilter('ALL')}
-              >
-                Todos
-              </Button>
-              {availableCooks.map(cook => (
-                <Button
-                  key={cook.id}
-                  size="sm"
-                  variant={cookFilter === cook.id ? 'secondary' : 'ghost'}
-                  className="h-7 px-2 text-[11px] font-bold shrink-0"
-                  onClick={() => handleCookFilter(cook.id)}
-                >
-                  👨‍🍳 {cook.name}
-                </Button>
-              ))}
-            </div>
-          )}
-
-          <Button variant="outline" size="sm" onClick={() => load(true)} className="gap-1.5 font-bold h-8 text-xs cursor-pointer">
+          <Button variant="outline" size="sm" onClick={() => load(true)} className="gap-1.5 font-bold h-8 text-xs shrink-0 cursor-pointer">
             <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
             <span className="hidden sm:inline">Actualizar</span>
           </Button>
         </div>
+
+        {/* Fila 2: Filtros de Estación (si hay más de 1) */}
+        {stations.length > 1 && (
+          <div className="flex items-center gap-1 pt-2 border-t border-[var(--border-subtle)] overflow-x-auto pb-0.5 no-scrollbar">
+            <span className="text-[11px] font-bold text-[var(--text-muted)] shrink-0 mr-1 flex items-center gap-1">
+              Estación:
+            </span>
+            <Button
+              size="sm"
+              variant={stationFilter === 'ALL' ? 'secondary' : 'ghost'}
+              className="h-7 px-2.5 text-xs font-bold shrink-0 rounded-lg"
+              onClick={() => handleStationFilter('ALL')}
+            >
+              Todas
+            </Button>
+            {stations.map(st => (
+              <Button
+                key={st.id}
+                size="sm"
+                variant={stationFilter === st.id ? 'secondary' : 'ghost'}
+                className="h-7 px-2.5 text-xs font-bold shrink-0 rounded-lg"
+                onClick={() => handleStationFilter(st.id)}
+              >
+                {st.name}
+              </Button>
+            ))}
+          </div>
+        )}
+
+        {/* Fila 3: Filtro de Cocineros e Historial individual (para Admin / Superadmin / Cajero) */}
+        {['ADMIN', 'SUPERADMIN', 'CASHIER'].includes(user?.role || '') && availableCooks.length > 0 && (
+          <div className="flex items-center gap-1.5 pt-2 border-t border-[var(--border-subtle)] overflow-x-auto pb-0.5 no-scrollbar">
+            <span className="text-[11px] font-bold text-[var(--text-muted)] shrink-0 mr-1 flex items-center gap-1">
+              👨‍🍳 Cocinero:
+            </span>
+            <Button
+              size="sm"
+              variant={cookFilter === 'ALL' ? 'secondary' : 'ghost'}
+              className="h-7 px-2.5 text-xs font-bold shrink-0 rounded-lg"
+              onClick={() => handleCookFilter('ALL')}
+            >
+              Todos ({consolidatedTickets.length})
+            </Button>
+            {availableCooks.map(cook => {
+              const stats = cookStats[cook.id] || { active: 0, history: 0, total: 0 }
+              const isSelected = cookFilter === cook.id
+              return (
+                <Button
+                  key={cook.id}
+                  size="sm"
+                  variant={isSelected ? 'default' : 'outline'}
+                  className={`h-7 px-2.5 text-xs font-bold shrink-0 rounded-lg gap-1.5 transition ${
+                    isSelected
+                      ? 'bg-blue-600 hover:bg-blue-700 text-white shadow-xs border-blue-600'
+                      : 'text-[var(--text-secondary)] bg-[var(--bg-elevated)] border-[var(--border-subtle)] hover:bg-[var(--bg-hover)]'
+                  }`}
+                  onClick={() => handleCookFilter(cook.id)}
+                >
+                  <span>👨‍🍳 {cook.name}</span>
+                  <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-black ${
+                    isSelected ? 'bg-white text-blue-700' : 'bg-[var(--bg-panel)] text-[var(--text-primary)]'
+                  }`}>
+                    {activeTab === 'HISTORY' ? `${stats.history} desp.` : `${stats.history} hist. · ${stats.active} act.`}
+                  </span>
+                </Button>
+              )
+            })}
+          </div>
+        )}
       </div>
+
+      {/* Banner de contexto cuando se filtra por un cocinero específico (Admin / Cajero) */}
+      {['ADMIN', 'SUPERADMIN', 'CASHIER'].includes(user?.role || '') && cookFilter !== 'ALL' && selectedCookName && (
+        <div className="flex flex-wrap items-center justify-between gap-2 p-3 rounded-2xl bg-blue-500/10 border border-blue-500/30 text-blue-900 dark:text-blue-200 shadow-xs">
+          <div className="flex items-center gap-2">
+            <UserCheck className="h-5 w-5 text-blue-600 dark:text-blue-400 shrink-0" />
+            <div>
+              <p className="text-xs font-black">
+                Comandas de: <strong>{selectedCookName}</strong>
+              </p>
+              <p className="text-[11px] opacity-85">
+                {activeTab === 'HISTORY'
+                  ? `Mostrando ${displayTickets.length} pedido(s) despachado(s) en su historial de este turno.`
+                  : `Tiene ${countAllActive} comanda(s) activa(s) y ${countHistory} en su historial.`
+                }
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-1.5 flex-wrap">
+            {activeTab !== 'HISTORY' && countHistory > 0 && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 text-xs font-bold bg-white dark:bg-slate-900 border-blue-400 text-blue-700 dark:text-blue-300 hover:bg-blue-50 cursor-pointer"
+                onClick={() => setActiveTab('HISTORY')}
+              >
+                <History className="h-3 w-3 mr-1" /> Ver su Historial ({countHistory})
+              </Button>
+            )}
+            {activeTab === 'HISTORY' && countAllActive > 0 && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 text-xs font-bold bg-white dark:bg-slate-900 border-blue-400 text-blue-700 dark:text-blue-300 hover:bg-blue-50 cursor-pointer"
+                onClick={() => setActiveTab('ALL_ACTIVE')}
+              >
+                <Flame className="h-3 w-3 mr-1" /> Ver sus Activos ({countAllActive})
+              </Button>
+            )}
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-7 text-xs font-bold text-blue-700 dark:text-blue-300 hover:bg-blue-200/50 cursor-pointer"
+              onClick={() => handleCookFilter('ALL')}
+            >
+              ✕ Ver todos
+            </Button>
+          </div>
+        </div>
+      )}
 
       {loading && tickets.length === 0 ? (
         <p className="text-sm text-[var(--text-secondary)] py-8 text-center">Cargando pedidos de cocina...</p>
       ) : displayTickets.length === 0 ? (
         /* VISTA VACÍA */
-        <div className="rounded-2xl border-2 border-dashed border-[var(--border-default)] p-12 text-center bg-[var(--bg-panel)]">
+        <div className="rounded-2xl border-2 border-dashed border-[var(--border-default)] p-8 sm:p-12 text-center bg-[var(--bg-panel)]">
           {activeTab === 'HISTORY' ? (
             <>
               <History className="h-12 w-12 text-[var(--text-muted)] mx-auto mb-2 opacity-70" />
-              <h3 className="text-lg font-black text-[var(--text-primary)]">Sin pedidos despachados</h3>
-              <p className="text-sm text-[var(--text-secondary)] mt-1">Aún no hay pedidos marcados como despachados o cancelados en este turno.</p>
+              <h3 className="text-lg font-black text-[var(--text-primary)]">
+                {cookFilter !== 'ALL' && selectedCookName ? `Sin historial para ${selectedCookName}` : 'Sin pedidos despachados'}
+              </h3>
+              <p className="text-sm text-[var(--text-secondary)] mt-1 max-w-md mx-auto">
+                {cookFilter !== 'ALL' && selectedCookName
+                  ? `Este cocinero no tiene comandas despachadas en este turno aún.`
+                  : 'Aún no hay pedidos marcados como despachados o cancelados en este turno.'}
+              </p>
+              {cookFilter !== 'ALL' && (
+                <Button size="sm" variant="outline" className="mt-3 font-bold text-xs cursor-pointer" onClick={() => handleCookFilter('ALL')}>
+                  Ver historial de todos los cocineros
+                </Button>
+              )}
             </>
           ) : activeTab === 'READY' ? (
             <>
@@ -543,8 +640,27 @@ export default function KitchenPage() {
           ) : (
             <>
               <UtensilsCrossed className="h-12 w-12 text-emerald-500 mx-auto mb-2 opacity-80" />
-              <h3 className="text-lg font-black text-[var(--text-primary)]">¡Cocina al día!</h3>
-              <p className="text-sm text-[var(--text-secondary)] mt-1">No hay pedidos pendientes en esta sección.</p>
+              <h3 className="text-lg font-black text-[var(--text-primary)]">
+                {cookFilter !== 'ALL' && selectedCookName ? `¡${selectedCookName} está al día!` : '¡Cocina al día!'}
+              </h3>
+              <p className="text-sm text-[var(--text-secondary)] mt-1 max-w-md mx-auto">
+                {cookFilter !== 'ALL' && selectedCookName ? (
+                  countHistory > 0 ? (
+                    <span>
+                      No tiene pedidos pendientes en esta sección. Tiene <strong>{countHistory} pedido(s) despachado(s)</strong> en su historial.
+                    </span>
+                  ) : (
+                    <span>No tiene pedidos pendientes asignados en este momento.</span>
+                  )
+                ) : (
+                  'No hay pedidos pendientes en esta sección.'
+                )}
+              </p>
+              {cookFilter !== 'ALL' && countHistory > 0 && (
+                <Button size="sm" variant="outline" className="mt-3 font-bold gap-1 text-xs cursor-pointer" onClick={() => setActiveTab('HISTORY')}>
+                  <History className="h-3.5 w-3.5" /> Ver su Historial ({countHistory})
+                </Button>
+              )}
             </>
           )}
         </div>
