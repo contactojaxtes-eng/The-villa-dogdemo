@@ -940,10 +940,6 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
       await lockOperation(tx);
       const ticket = await tx.kitchenTicket.findUnique({ where: { id: ticketId }, include: { order: { include: { waiter: true, diningTable: true } } } });
       if (!ticket) throw new NotFoundException('Ticket no encontrado');
-      if (ticket.tableId) {
-        const table = await tx.diningTable.findUnique({ where: { id: ticket.tableId } });
-        if (table?.status === 'CLOSED' && ticket.status !== status) throw new BadRequestException('La cuenta ya está cerrada');
-      }
       if (ticket.status === status) {
         return { updated: ticket, table: null };
       }
