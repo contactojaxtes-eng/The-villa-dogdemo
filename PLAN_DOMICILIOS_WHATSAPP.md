@@ -38,6 +38,7 @@ La separación no requiere duplicar productos, clientes ni infraestructura. El c
 - Una respuesta repetida del servidor no vuelve a imprimir la comanda.
 - Los borradores de chats abandonados vencen a los siete días y se conservan como máximo veinte para no acumular basura en el dispositivo.
 - Al confirmar o cancelar la toma del pedido, la gestora regresa a la misma conversación y conserva el contexto del cliente.
+- El interruptor técnico del chatbot se administra desde Configuración SuperAdmin; dejó de ocupar espacio y de permitir cambios accidentales en la cabecera diaria de WhatsApp.
 
 ## Diagnóstico del código actual
 

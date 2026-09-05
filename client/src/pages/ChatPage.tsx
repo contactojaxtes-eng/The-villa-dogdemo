@@ -16,7 +16,7 @@ import { Badge } from '@/components/ui/badge'
 import { 
   MessageCircle, Send, UserCheck, UserPlus, UserX, PlusCircle, User, 
   Phone, Clock, AlertCircle, AlertTriangle, ArrowLeft, Loader2, Trash2, Paperclip, FileText,
-  Camera, Mic, MicOff, Check, CheckCheck, Pencil, Search, Lock, Bot,
+  Camera, Mic, MicOff, Check, CheckCheck, Pencil, Search, Lock,
   ChevronDown, Copy, ChevronLeft, ChevronRight, MapPin, ExternalLink, Download, Forward, QrCode, Reply, X,
   MessageSquareText, Bell, BellOff,
   Eye, RotateCw, ZoomIn, ZoomOut
@@ -802,8 +802,6 @@ function ChatPage() {
   const [chatSearch, setChatSearch] = useState('')
   const [chatFilter, setChatFilter] = useState<'TODAY' | 'ALL' | 'UNREAD' | 'WAITING' | 'MINE' | 'UNASSIGNED'>('TODAY')
   const [displayLimit, setDisplayLimit] = useState(100)
-  const [isChatbotEnabled, setIsChatbotEnabled] = useState<boolean>(false)
-  const [togglingBot, setTogglingBot] = useState<boolean>(false)
   const [isMutedWa, setIsMutedWa] = useState(() => localStorage.getItem('niche_mute_wa_toasts') === 'true')
   const tabsRef = useRef<HTMLDivElement>(null)
   const statusReloadTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -1017,43 +1015,6 @@ function ChatPage() {
     window.addEventListener('click', handleGlobalClick)
     return () => window.removeEventListener('click', handleGlobalClick)
   }, [])
-
-  useEffect(() => {
-    api.get('/whatsapp/settings')
-      .then((res: any) => {
-        setIsChatbotEnabled(res.chatbotEnabled === true)
-      })
-      .catch((err: any) => console.error('Error cargando ajustes de chatbot:', err))
-  }, [])
-
-  const handleToggleChatbot = async () => {
-    if (togglingBot) return
-    const newStatus = !isChatbotEnabled
-    const confirm = await alerts.confirm(
-      newStatus ? '¿Activar Chatbot IA de WhatsApp?' : '¿Pausar Chatbot IA de WhatsApp?',
-      newStatus 
-        ? 'Al activar el Chatbot, la Inteligencia Artificial responderá automáticamente a los mensajes entrantes de los clientes.'
-        : 'Al pausar el Chatbot, se detienen todas las respuestas automáticas de IA y la atención será 100% manual por asesores.',
-      newStatus ? 'Sí, Activar Bot' : 'Sí, Pausar Bot',
-      'Cancelar'
-    )
-    if (!confirm) return
-
-    setTogglingBot(true)
-    try {
-      await api.put('/whatsapp/settings', { chatbotEnabled: newStatus })
-      setIsChatbotEnabled(newStatus)
-      alerts.success(
-        newStatus ? 'Chatbot IA Activado' : 'Chatbot IA Pausado',
-        newStatus ? 'El bot responderá a los mensajes entrantes.' : 'El bot está en pausa; nadie recibirá respuestas automáticas.'
-      )
-    } catch (err: any) {
-      console.error('Error al cambiar estado del chatbot:', err)
-      alerts.error('Error', err.message || 'No se pudo cambiar el estado del Chatbot IA')
-    } finally {
-      setTogglingBot(false)
-    }
-  }
 
   const socketRef = useRef<Socket | null>(null)
   const activeSessionRef = useRef<Session | null>(activeSession)
@@ -1659,12 +1620,6 @@ function ChatPage() {
         }
         return m
       }))
-    })
-
-    socket.on('whatsappSettingsUpdated', (payload: any) => {
-      if (payload && typeof payload.chatbotEnabled === 'boolean') {
-        setIsChatbotEnabled(payload.chatbotEnabled)
-      }
     })
 
     socket.on('whatsappMessageStatus', (payload: {
@@ -2465,21 +2420,6 @@ function ChatPage() {
               <span className="hidden 2xl:inline">Liberar</span>
             </button>
           )}
-          <button
-            type="button"
-            onClick={handleToggleChatbot}
-            disabled={togglingBot}
-            className={cn(
-              "flex h-8 items-center gap-1.5 rounded-lg border px-2 text-[11px] font-bold",
-              isChatbotEnabled
-                ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-600"
-                : "border-rose-500/30 bg-rose-500/10 text-rose-600"
-            )}
-            title={isChatbotEnabled ? 'Chatbot activo. Clic para pausar' : 'Chatbot pausado. Clic para activar'}
-          >
-            {togglingBot ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Bot className="h-3.5 w-3.5" />}
-            <span className="hidden lg:inline">Bot {isChatbotEnabled ? 'activo' : 'pausado'}</span>
-          </button>
           <button
             type="button"
             onClick={toggleMuteWa}

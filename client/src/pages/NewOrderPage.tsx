@@ -3663,7 +3663,7 @@ const renderDeliveryCard = () => {
           <Button 
             variant="outline" 
             size="sm"
-            onClick={() => navigate(chatReturnPath)} 
+            onClick={() => navigate(chatReturnPath)}
             className="border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/20 font-bold rounded-xl text-xs h-9 px-3 cursor-pointer flex items-center gap-1.5 transition-all shadow-xs"
             title="Regresar al panel de chat de WhatsApp"
           >
