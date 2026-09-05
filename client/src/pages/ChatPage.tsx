@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { type Socket } from 'socket.io-client'
 import { io } from '@/lib/socket'
 import { useAuth } from '@/hooks/useAuth'
@@ -781,6 +781,8 @@ export function getSessionDisplayName(session?: Session | null): string {
 function ChatPage() {
   const { user } = useAuth()
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
+  const requestedSessionId = searchParams.get('session')
   
   const [sessions, setSessions] = useState<Session[]>(() => (globalSessionsCache || []).map(session => ({ ...session, lastMessageAt: session.lastMessageAt || '', assignedToId: session.assignedToId || null, assignedTo: session.assignedTo || null, messages: session.messages || [] })))
   // Iniciar siempre en modo vacío (sin chat seleccionado) estilo WhatsApp Web
@@ -1187,6 +1189,12 @@ function ChatPage() {
           uniqueSessions.push(s)
         }
       }
+      if (selectId && !uniqueSessions.some(session => session.id === selectId)) {
+        const selectedSession = await api.get<Session>(`/whatsapp/sessions/${selectId}`).catch(() => null)
+        if (selectedSession) {
+          uniqueSessions.unshift({ ...selectedSession, messages: selectedSession.messages || [] })
+        }
+      }
       if (!searchParam && !fetchAll && activeFilter === 'ALL') {
         setGlobalSessionsCache(uniqueSessions)
       }
@@ -1352,7 +1360,7 @@ function ChatPage() {
 
   // Socket connection and listener
   useEffect(() => {
-    loadSessions()
+    loadSessions(requestedSessionId || undefined)
 
     const socketUrl = import.meta.env.VITE_API_URL || window.location.origin
     const socket = io(`${socketUrl}/the-villa-dog`, {
@@ -2179,6 +2187,7 @@ function ChatPage() {
       await api.delete(`/whatsapp/sessions/${sessionToDeleteId}`)
       if (activeSession?.id === sessionToDeleteId) {
         setActiveSession(null)
+        navigate('/chat', { replace: true })
       }
       loadSessions()
     } catch (err: any) {
@@ -2597,6 +2606,7 @@ function ChatPage() {
                     <button
                       key={s.id}
                       onClick={async () => {
+                        navigate(`/chat?session=${encodeURIComponent(s.id)}`, { replace: true })
                         setGlobalActiveSessionIdCache(s.id)
                         try {
                           localStorage.setItem('niche_last_active_whatsapp_session_id', s.id)
@@ -2748,6 +2758,7 @@ function ChatPage() {
                       setGlobalActiveSessionIdCache(null)
                       try { localStorage.removeItem('niche_last_active_whatsapp_session_id') } catch (e) {}
                       setActiveSession(null)
+                      navigate('/chat', { replace: true })
                     }}
                   >
                     <ArrowLeft className="h-4 w-4" />
@@ -2925,6 +2936,7 @@ function ChatPage() {
                       setGlobalActiveSessionIdCache(null)
                       try { localStorage.removeItem('niche_last_active_whatsapp_session_id') } catch (e) {}
                       setActiveSession(null)
+                      navigate('/chat', { replace: true })
                     }}
                     title="Cerrar chat (Dejar sin conversación seleccionada)"
                   >

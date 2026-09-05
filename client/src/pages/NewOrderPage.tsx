@@ -432,6 +432,7 @@ export default function NewOrderPage() {
   const editOrderId = searchParams.get('edit')
   const chatSessionId = searchParams.get('chatSessionId')
   const activeDraftKey = chatSessionId ? `${draftKey}:chat:${chatSessionId}` : draftKey
+  const chatReturnPath = chatSessionId ? `/chat?session=${encodeURIComponent(chatSessionId)}` : '/chat'
   const { user } = useAuth()
 
   const [step, setStep] = useState<'menu' | 'delivery'>('menu')
@@ -2593,7 +2594,7 @@ export default function NewOrderPage() {
 
       localStorage.removeItem(activeDraftKey)
       if (chatSessionId) {
-        navigate('/chat')
+        navigate(chatReturnPath)
       } else {
         navigate('/dispatch')
       }
@@ -3662,7 +3663,7 @@ const renderDeliveryCard = () => {
           <Button 
             variant="outline" 
             size="sm"
-            onClick={() => navigate('/chat')} 
+            onClick={() => navigate(chatReturnPath)} 
             className="border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/20 font-bold rounded-xl text-xs h-9 px-3 cursor-pointer flex items-center gap-1.5 transition-all shadow-xs"
             title="Regresar al panel de chat de WhatsApp"
           >
@@ -3823,7 +3824,7 @@ const renderDeliveryCard = () => {
                   <Button
                     size="sm"
                     variant="outline"
-                    onClick={() => navigate('/chat')}
+                    onClick={() => navigate(chatReturnPath)}
                     className="h-8 px-2.5 text-[10px] font-bold border-emerald-500/30 text-emerald-600 hover:bg-emerald-500/10 rounded-lg flex items-center gap-1 cursor-pointer"
                     title="Abrir pantalla completa de Chat"
                   >

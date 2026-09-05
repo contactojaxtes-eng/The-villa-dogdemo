@@ -37,6 +37,7 @@ La separación no requiere duplicar productos, clientes ni infraestructura. El c
 - Cada intento de creación envía una clave única persistida con el borrador. Reintentar después de mala señal o doble clic devuelve el mismo pedido en vez de crear otro.
 - Una respuesta repetida del servidor no vuelve a imprimir la comanda.
 - Los borradores de chats abandonados vencen a los siete días y se conservan como máximo veinte para no acumular basura en el dispositivo.
+- Al confirmar o cancelar la toma del pedido, la gestora regresa a la misma conversación y conserva el contexto del cliente.
 
 ## Diagnóstico del código actual
 
