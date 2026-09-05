@@ -44,6 +44,7 @@ export interface KitchenTicketItemSummary {
   nameSnapshot: string
   notes?: string
   previousQty?: number
+  previousNotes?: string
   changeType?: 'UNCHANGED' | 'ADDED' | 'MODIFIED' | 'REMOVED' | string
 }
 
@@ -75,6 +76,7 @@ export interface KitchenTicketSummary {
   assignedToId?: string
   assignedTo?: BasicUser
   createdAt: string
+  updatedAt?: string
   station?: KitchenStationSummary
   order?: DiningOrderSummary
   items?: KitchenTicketItemSummary[]
@@ -83,6 +85,7 @@ export interface KitchenTicketSummary {
 export interface DiningTableSummary {
   id: string
   label: string
+  status?: string
   total?: number
   balance?: number
   kitchenStatus?: string

@@ -313,6 +313,7 @@ export default function OrdersPage() {
   const loadOrders = useCallback((silent = false) => {
     if (!silent) setIsRefreshing(true)
     const params = new URLSearchParams()
+    params.set('orderType', 'DELIVERY,PICKUP')
     if (submittedSearch) params.set('search', submittedSearch)
     if (startDate) params.set('startDate', startDate)
     if (endDate) params.set('endDate', endDate)
@@ -595,8 +596,8 @@ export default function OrdersPage() {
             <ClipboardList className="h-5 w-5 text-[var(--accent-fg)]" />
           </div>
           <div>
-            <h2 className="antifont text-4xl tracking-wider text-[var(--text-primary)] leading-none uppercase">Historial de Pedidos</h2>
-            <p className="mt-1 text-sm text-[var(--text-secondary)]">Audita, filtra y busca en el registro completo de pedidos procesados.</p>
+            <h2 className="antifont text-4xl tracking-wider text-[var(--text-primary)] leading-none uppercase">Historial Domicilios</h2>
+            <p className="mt-1 text-sm text-[var(--text-secondary)]">Domicilios y pedidos para recoger, separados de las mesas del salón.</p>
           </div>
         </div>
         <div className="flex items-center gap-3">

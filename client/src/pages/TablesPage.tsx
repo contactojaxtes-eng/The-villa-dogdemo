@@ -74,7 +74,7 @@ export default function TablesPage() {
   const myOpenTables = useMemo(() => {
     return openTables.filter(t => {
       const isMine = t.openedBy?.id === user?.id || (t.orders || []).some((o: any) => o.waiter?.id === user?.id)
-      return isMine && t.balance > 0
+      return isMine && (t.balance || 0) > 0
     })
   }, [openTables, user?.id])
 

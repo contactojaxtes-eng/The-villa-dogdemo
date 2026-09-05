@@ -6,7 +6,6 @@ import { useAuth } from '@/hooks/useAuth'
 import { api } from '@/lib/api'
 import { alerts } from '@/lib/alerts'
 import { cn } from '@/lib/utils'
-import { PageHeader } from '@/components/ui/PageHeader'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -19,12 +18,11 @@ import {
   Phone, Clock, AlertCircle, AlertTriangle, ArrowLeft, Loader2, Trash2, Paperclip, FileText,
   Camera, Mic, MicOff, Check, CheckCheck, Pencil, Search, Lock, Bot,
   ChevronDown, Copy, ChevronLeft, ChevronRight, MapPin, ExternalLink, Download, Forward, QrCode, Reply, X,
-  Calendar, MessagesSquare, Mail, Flame, Users, Sparkles, MessageSquareText, Radio, Bell, BellOff,
+  MessageSquareText, Bell, BellOff,
   Eye, RotateCw, ZoomIn, ZoomOut
 } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Mp3Recorder } from '@/lib/mp3Recorder'
-import { MassBroadcastModal } from '@/components/whatsapp/MassBroadcastModal'
 
 type Session = {
   id: string
@@ -782,6 +780,8 @@ function ChatPage() {
   // Iniciar siempre en modo vacío (sin chat seleccionado) estilo WhatsApp Web
   const [activeSession, setActiveSession] = useState<Session | null>(null)
   const [messages, setMessages] = useState<Message[]>([])
+  const [hasOlderMessages, setHasOlderMessages] = useState(false)
+  const [loadingOlderMessages, setLoadingOlderMessages] = useState(false)
   const [inputValue, setInputValue] = useState('')
   const [message, setMessage] = useState('')
   const [loadingSessions, setLoadingSessions] = useState(() => !globalSessionsCache || globalSessionsCache.length === 0)
@@ -796,7 +796,6 @@ function ChatPage() {
   const [displayLimit, setDisplayLimit] = useState(100)
   const [isChatbotEnabled, setIsChatbotEnabled] = useState<boolean>(false)
   const [togglingBot, setTogglingBot] = useState<boolean>(false)
-  const [showBroadcastModal, setShowBroadcastModal] = useState(false)
   const [isMutedWa, setIsMutedWa] = useState(() => localStorage.getItem('niche_mute_wa_toasts') === 'true')
   const tabsRef = useRef<HTMLDivElement>(null)
   const statusReloadTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -1055,6 +1054,7 @@ function ChatPage() {
   }, [activeSession])
 
   const messagesEndRef = useRef<HTMLDivElement>(null)
+  const messagesViewportRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const cameraInputRef = useRef<HTMLInputElement>(null)
   const [uploadingMedia, setUploadingMedia] = useState(false)
@@ -1295,8 +1295,9 @@ function ChatPage() {
     }
 
     try {
-      const data = await api.get<Message[]>(`/whatsapp/sessions/${sessionId}/messages`)
+      const data = await api.get<Message[]>(`/whatsapp/sessions/${sessionId}/messages?limit=120`)
       const safeMessages = Array.isArray(data) ? data : []
+      setHasOlderMessages(safeMessages.length === 120)
       messagesCacheRef.current[sessionId] = safeMessages
       setMessages(safeMessages)
       if (safeMessages.length > 0) {
@@ -1314,6 +1315,35 @@ function ChatPage() {
     }
   }
 
+  const loadOlderMessages = async () => {
+    if (!activeSession || loadingOlderMessages || !hasOlderMessages || messages.length === 0) return
+    const oldest = messages[0]?.createdAt
+    if (!oldest) return
+    const viewport = messagesViewportRef.current
+    const previousHeight = viewport?.scrollHeight || 0
+    setLoadingOlderMessages(true)
+    try {
+      const older = await api.get<Message[]>(
+        `/whatsapp/sessions/${activeSession.id}/messages?limit=120&before=${encodeURIComponent(oldest)}`
+      )
+      const safeOlder = Array.isArray(older) ? older : []
+      setHasOlderMessages(safeOlder.length === 120)
+      setMessages(current => {
+        const known = new Set(current.map(item => item.id))
+        const merged = [...safeOlder.filter(item => !known.has(item.id)), ...current]
+        messagesCacheRef.current[activeSession.id] = merged
+        return merged
+      })
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        if (viewport) viewport.scrollTop += viewport.scrollHeight - previousHeight
+      }))
+    } catch (err: any) {
+      alerts.error('No se pudo cargar el historial', err?.message || 'Inténtalo nuevamente.')
+    } finally {
+      setLoadingOlderMessages(false)
+    }
+  }
+
   // Socket connection and listener
   useEffect(() => {
     loadSessions()
@@ -1323,8 +1353,10 @@ function ChatPage() {
       transports: ['websocket', 'polling'],
     })
 
+    let connectedOnce = false
     socket.on('connect', () => {
-      loadSessions(undefined, chatSearch.trim(), false)
+      if (connectedOnce) loadSessions(undefined, chatSearch.trim(), false)
+      connectedOnce = true
     })
     socket.on('chatSessionAssigned', (payload: any) => {
       if (!payload || !payload.sessionId) return
@@ -1621,32 +1653,6 @@ function ChatPage() {
       }
     })
 
-    socket.on('chatSessionAssigned', (payload: {
-      sessionId: string
-      assignedToId: string | null
-      assignedTo: { id: string; name: string } | null
-      waitingForAdvisor?: boolean
-    }) => {
-      setSessions(prev => prev.map(s => s.id === payload.sessionId ? {
-        ...s,
-        assignedToId: payload.assignedToId,
-        assignedTo: payload.assignedTo,
-        waitingForAdvisor: payload.waitingForAdvisor ?? false
-      } : s))
-
-      setActiveSession(current => {
-        if (current && current.id === payload.sessionId) {
-          return {
-            ...current,
-            assignedToId: payload.assignedToId,
-            assignedTo: payload.assignedTo,
-            waitingForAdvisor: payload.waitingForAdvisor ?? false
-          }
-        }
-        return current
-      })
-    })
-
     socket.on('whatsappMessageStatus', (payload: {
       messageId: string
       waMessageId?: string
@@ -1739,6 +1745,7 @@ function ChatPage() {
       loadMessages(activeSession.id, activeSession)
     } else {
       setMessages([])
+      setHasOlderMessages(false)
     }
   }, [activeSession?.id])
 
@@ -1832,8 +1839,12 @@ function ChatPage() {
 
     setUploadingMedia(true)
 
-    if (!activeSession.assignedToId && user) {
-      await handleClaimSession()
+    if (user && activeSession.assignedToId !== user.id) {
+      if (!await handleClaimSession()) {
+        setUploadingMedia(false)
+        if (fileInputRef.current) fileInputRef.current.value = ''
+        return
+      }
     }
 
     const formData = new FormData()
@@ -1859,8 +1870,8 @@ function ChatPage() {
 
     const cleanText = textToSend.trim()
 
-    if (!activeSession.assignedToId && user) {
-      handleClaimSession()
+    if (user && activeSession.assignedToId !== user.id) {
+      if (!await handleClaimSession()) return
     }
 
     // 1. Mostrar la burbuja de mensaje de inmediato en 0ms
@@ -1920,8 +1931,8 @@ function ChatPage() {
     }
     lastSendMenuAtRef.current = now
 
-    if (!activeSession.assignedToId && user) {
-      handleClaimSession()
+    if (user && activeSession.assignedToId !== user.id) {
+      if (!await handleClaimSession()) return
     }
 
     setSendingMenu(true)
@@ -1946,8 +1957,8 @@ function ChatPage() {
     }
     lastSendQrAtRef.current = now
 
-    if (!activeSession.assignedToId && user) {
-      handleClaimSession()
+    if (user && activeSession.assignedToId !== user.id) {
+      if (!await handleClaimSession()) return
     }
 
     setSendingPaymentQr(true)
@@ -1968,8 +1979,8 @@ function ChatPage() {
   const handleSendLocation = async () => {
     if (!activeSession || sendingLocation) return
 
-    if (!activeSession.assignedToId && user) {
-      handleClaimSession()
+    if (user && activeSession.assignedToId !== user.id) {
+      if (!await handleClaimSession()) return
     }
 
     if (!navigator.geolocation) {
@@ -2094,31 +2105,40 @@ function ChatPage() {
   }
 
   // Claim/assign session to current user
-  const handleClaimSession = async () => {
-    if (!activeSession || !user) return
-    const updatedAssigned = { id: user.id, name: user.name }
-    setActiveSession(prev => prev ? { ...prev, assignedToId: user.id, assignedTo: updatedAssigned, waitingForAdvisor: false } : null)
-    setSessions(prev => prev.map(s => s.id === activeSession.id ? { ...s, assignedToId: user.id, assignedTo: updatedAssigned, waitingForAdvisor: false } : s))
+  const handleClaimSession = async (): Promise<boolean> => {
+    if (!activeSession || !user) return false
+    if (activeSession.assignedToId === user.id) return true
+    if (activeSession.assignedToId && activeSession.assignedToId !== user.id) {
+      alerts.info('Chat ocupado', `Esta conversación está siendo atendida por ${activeSession.assignedTo?.name || 'otra asesora'}.`)
+      return false
+    }
     try {
-      await api.put(`/whatsapp/sessions/${activeSession.id}/assign`, {
+      const updated = await api.put<Session>(`/whatsapp/sessions/${activeSession.id}/assign`, {
         userId: user.id
       })
-    } catch (err) {
-      console.error('Error asignando chat:', err)
+      const assignedTo = updated.assignedTo || { id: user.id, name: user.name }
+      setActiveSession(prev => prev?.id === updated.id ? { ...prev, ...updated, assignedTo } : prev)
+      setSessions(prev => prev.map(s => s.id === updated.id ? { ...s, ...updated, assignedTo } : s))
+      return true
+    } catch (err: any) {
+      alerts.error('No se pudo tomar el chat', err?.message || 'Otra asesora tomó esta conversación primero.')
+      await loadSessions(undefined, chatSearch.trim(), false, chatFilter)
+      return false
     }
   }
 
   // Release/unassign session
   const handleReleaseSession = async () => {
     if (!activeSession) return
-    setActiveSession(prev => prev ? { ...prev, assignedToId: null, assignedTo: null } : null)
-    setSessions(prev => prev.map(s => s.id === activeSession.id ? { ...s, assignedToId: null, assignedTo: null } : s))
     try {
-      await api.put(`/whatsapp/sessions/${activeSession.id}/assign`, {
+      const updated = await api.put<Session>(`/whatsapp/sessions/${activeSession.id}/assign`, {
         userId: null
       })
-    } catch (err) {
-      console.error('Error liberando chat:', err)
+      setActiveSession(prev => prev?.id === updated.id ? { ...prev, ...updated } : prev)
+      setSessions(prev => prev.map(s => s.id === updated.id ? { ...s, ...updated } : s))
+    } catch (err: any) {
+      alerts.error('No se pudo liberar el chat', err?.message || 'Actualiza la bandeja e inténtalo nuevamente.')
+      await loadSessions(undefined, chatSearch.trim(), false, chatFilter)
     }
   }
 
@@ -2368,184 +2388,100 @@ function ChatPage() {
   }
 
   return (
-    <div className="space-y-3 flex flex-col h-[calc(100vh-100px)]">
-      {/* HEADER CARD CON DISEÑO PREMIUM Y MODERNO */}
-      <div className="shrink-0 bg-gradient-to-b from-[var(--bg-panel)] to-[var(--bg-elevated)] p-3.5 sm:p-4 rounded-3xl border border-[var(--border-subtle)] shadow-xl flex flex-col gap-3 backdrop-blur-md">
-        {/* Fila 1: Título, Estado y Botones Principales */}
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <div className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-tr from-[#EA580C] to-[#F97316] text-[#0D0D0D] shadow-lg shadow-[#F97316]/25 border border-[#F97316]/40 font-black">
-              <MessageSquareText className="h-5 w-5" />
-              <span className="absolute -top-1 -right-1 flex h-3 w-3">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#F97316] opacity-75"></span>
-                <span className="relative inline-flex rounded-full h-3 w-3 bg-[#F97316] border-2 border-white dark:border-black"></span>
-              </span>
-            </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <h1 className="text-base font-black tracking-wider text-[var(--text-primary)] uppercase">Chats de WhatsApp</h1>
-                <Badge className="bg-[var(--accent-muted)] text-[var(--accent-hover)] dark:text-[var(--accent)] border border-[var(--accent-border)] text-[9px] font-black tracking-widest uppercase px-1.5 py-0">En vivo</Badge>
-              </div>
-              <p className="text-xs font-medium text-[var(--text-secondary)]">Atención en vivo a clientes y toma rápida de pedidos</p>
-            </div>
+    <div className="flex h-full min-h-0 flex-col gap-1.5 sm:gap-2">
+      {/* Barra compacta: maximiza el espacio disponible para la conversación. */}
+      <div className="shrink-0 min-w-0 rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] px-2 py-2 shadow-sm flex items-center gap-2">
+        <div className="hidden xl:flex items-center gap-2 shrink-0 pl-1 pr-2">
+          <div className="relative flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-tr from-[#EA580C] to-[#F97316] text-[#0D0D0D]">
+            <MessageSquareText className="h-4.5 w-4.5" />
+            <span className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full border-2 border-[var(--bg-panel)] bg-emerald-500" />
           </div>
-
-          <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap shrink-0">
-            {chatFilter === 'MINE' && tabCounts.countMine > 0 && (
-              <button
-                type="button"
-                onClick={handleUnassignAll}
-                className="h-9.5 text-xs font-bold text-amber-700 dark:text-amber-300 hover:bg-amber-500/20 bg-amber-500/10 px-3.5 rounded-xl border border-amber-500/30 flex items-center gap-2 cursor-pointer shrink-0 transition-all shadow-xs active:scale-95"
-                title="Liberar todos mis chats a la cola general"
-              >
-                <UserX className="h-4 w-4" />
-                <span>Liberar mis chats ({tabCounts.countMine})</span>
-              </button>
-            )}
-
-            <button
-              onClick={handleToggleChatbot}
-              disabled={togglingBot}
-              title={isChatbotEnabled ? "Haz clic para pausar las respuestas automáticas de la IA" : "Haz clic para activar el bot de IA de WhatsApp"}
-              className={cn(
-                "h-9.5 px-4 rounded-xl font-black text-xs flex items-center justify-center gap-2 transition-all shadow-md cursor-pointer shrink-0 border uppercase tracking-wider active:scale-95",
-                isChatbotEnabled
-                  ? "bg-gradient-to-r from-[#EA580C] to-[#F97316] hover:from-[#6c9c38] hover:to-[#EA580C] text-[#0D0D0D] border-[#F97316]/60 shadow-[#F97316]/25"
-                  : "bg-gradient-to-r from-rose-600 to-red-600 hover:from-rose-500 hover:to-red-500 text-white border-rose-300/40 shadow-rose-950/20"
-              )}
-            >
-              {togglingBot ? (
-                <Loader2 className="w-4 h-4 animate-spin text-current" />
-              ) : (
-                <Bot className={cn("w-4 h-4", isChatbotEnabled && "animate-pulse")} />
-              )}
-              <span>{isChatbotEnabled ? 'CHATBOT IA: ACTIVO' : 'CHATBOT IA: PAUSADO'}</span>
-              <span className={cn("w-2 h-2 rounded-full", isChatbotEnabled ? "bg-[#0D0D0D] animate-ping" : "bg-rose-300")} />
-            </button>
-
-            <button
-              onClick={toggleMuteWa}
-              title={isMutedWa ? "Avisos emergentes silenciados (Clic para activar)" : "Avisos emergentes activados (Clic para silenciar)"}
-              className={cn(
-                "h-9.5 px-3.5 rounded-xl font-bold text-xs flex items-center justify-center gap-2 transition-all shadow-xs cursor-pointer shrink-0 border active:scale-95",
-                isMutedWa
-                  ? "bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/30 hover:bg-amber-500/20"
-                  : "bg-[var(--bg-elevated)] text-[var(--text-secondary)] border-[var(--border-subtle)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]"
-              )}
-            >
-              {isMutedWa ? <BellOff className="w-4 h-4 text-amber-500" /> : <Bell className="w-4 h-4" />}
-              <span>{isMutedWa ? 'Avisos: Off' : 'Avisos: On'}</span>
-            </button>
-
-            <button
-              onClick={() => setShowBroadcastModal(true)}
-              className="h-9.5 px-4 rounded-xl font-black text-xs bg-gradient-to-r from-[#EA580C] to-[#F97316] hover:from-[#6c9c38] hover:to-[#EA580C] text-[#0D0D0D] shadow-md shadow-[#F97316]/25 flex items-center gap-2 border border-[#F97316]/60 transition-all hover:scale-[1.02] active:scale-[0.98] cursor-pointer tracking-wider uppercase"
-            >
-              <Send className="w-3.5 h-3.5" />
-              <span>Envío Masivo</span>
-            </button>
+          <div className="leading-tight">
+            <div className="flex items-center gap-1.5">
+              <h1 className="text-sm font-black uppercase tracking-wide text-[var(--text-primary)]">WhatsApp</h1>
+              <Badge className="border border-emerald-500/25 bg-emerald-500/10 px-1.5 py-0 text-[8px] font-black text-emerald-600">EN VIVO</Badge>
+            </div>
+            <p className="text-[10px] font-medium text-[var(--text-muted)]">Atención en tiempo real</p>
           </div>
         </div>
 
-        {/* Fila 2: Barra de Filtros Centrada y Limpia */}
-        <div className="pt-2.5 border-t border-[var(--border-subtle)] flex items-center justify-center gap-2 flex-wrap py-1">
-          <button 
-            onClick={() => { setChatFilter('TODAY'); loadSessions(undefined, chatSearch.trim(), false, 'TODAY'); }} 
-            className={cn(
-              "text-xs px-4 py-2 rounded-xl font-bold shrink-0 transition-all border flex items-center gap-2 cursor-pointer select-none",
-              chatFilter === 'TODAY' 
-                ? "bg-[var(--accent)] text-[var(--accent-fg)] border-[var(--accent)] shadow-md shadow-[var(--accent)]/20" 
-                : "bg-[var(--bg-base)] text-[var(--text-secondary)] border-[var(--border-subtle)] hover:bg-[var(--bg-elevated)] hover:text-[var(--text-primary)]"
-            )}
-          >
-            <Calendar className="h-3.5 w-3.5" />
-            <span>Hoy</span>
-            <span className={cn(
-              "px-2 py-0.5 rounded-full text-[10px] font-black",
-              chatFilter === 'TODAY' ? "bg-black/20 text-black" : "bg-black/5 dark:bg-white/10 text-[var(--text-secondary)]"
-            )}>{tabCounts.countToday}</span>
-          </button>
-
-          <button 
-            onClick={() => { setChatFilter('ALL'); loadSessions(undefined, chatSearch.trim(), false, 'ALL'); }} 
-            className={cn(
-              "text-xs px-4 py-2 rounded-xl font-bold shrink-0 transition-all border flex items-center gap-2 cursor-pointer select-none",
-              chatFilter === 'ALL' 
-                ? "bg-[var(--accent)] text-[var(--accent-fg)] border-[var(--accent)] shadow-md shadow-[var(--accent)]/20" 
-                : "bg-[var(--bg-base)] text-[var(--text-secondary)] border-[var(--border-subtle)] hover:bg-[var(--bg-elevated)] hover:text-[var(--text-primary)]"
-            )}
-          >
-            <MessagesSquare className="h-3.5 w-3.5" />
-            <span>Todas</span>
-            <span className={cn(
-              "px-2 py-0.5 rounded-full text-[10px] font-black",
-              chatFilter === 'ALL' ? "bg-black/20 text-black" : "bg-black/5 dark:bg-white/10 text-[var(--text-secondary)]"
-            )}>{tabCounts.countAll}</span>
-          </button>
-
-          <button 
-            onClick={() => { setChatFilter('UNREAD'); loadSessions(undefined, chatSearch.trim(), false, 'UNREAD'); }} 
-            className={cn(
-              "text-xs px-4 py-2 rounded-xl font-bold shrink-0 transition-all border flex items-center gap-2 cursor-pointer select-none",
-              chatFilter === 'UNREAD' 
-                ? "bg-[var(--accent)] text-[var(--accent-fg)] border-[var(--accent)] shadow-md shadow-[var(--accent)]/25" 
-                : "bg-[var(--bg-base)] text-[var(--text-secondary)] border-[var(--border-subtle)] hover:bg-[var(--bg-elevated)] hover:text-[var(--text-primary)]"
-            )}
-          >
-            <Mail className={cn("h-3.5 w-3.5", chatFilter === 'UNREAD' ? "text-[var(--accent-fg)]" : "text-[var(--accent)]")} />
-            <span>No leídos</span>
-            {tabCounts.countUnread > 0 ? (
+        <div ref={tabsRef} className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          {([
+            ['TODAY', 'Hoy', tabCounts.countToday],
+            ['UNASSIGNED', 'Sin asignar', tabCounts.countUnassigned],
+            ['UNREAD', 'No leídos', tabCounts.countUnread],
+            ['WAITING', 'En espera', tabCounts.countWaiting],
+            ['MINE', 'Míos', tabCounts.countMine],
+            ['ALL', 'Todos', tabCounts.countAll],
+          ] as const).map(([filter, label, count]) => (
+            <button
+              key={filter}
+              type="button"
+              aria-pressed={chatFilter === filter}
+              onClick={() => {
+                setChatFilter(filter)
+                loadSessions(undefined, chatSearch.trim(), false, filter)
+              }}
+              className={cn(
+                "h-8 shrink-0 rounded-lg border px-2.5 text-[11px] font-bold transition-colors flex items-center gap-1.5",
+                chatFilter === filter
+                  ? "border-[var(--accent)] bg-[var(--accent)] text-[var(--accent-fg)]"
+                  : "border-transparent bg-[var(--bg-elevated)] text-[var(--text-secondary)] hover:border-[var(--border-subtle)] hover:text-[var(--text-primary)]"
+              )}
+            >
+              <span>{label}</span>
               <span className={cn(
-                "px-2 py-0.5 rounded-full text-[10px] font-black shadow-xs",
-                chatFilter === 'UNREAD' ? "bg-black/20 text-black" : "bg-[var(--accent)] text-black font-black animate-pulse"
-              )}>{tabCounts.countUnread}</span>
-            ) : (
-              <span className="opacity-60 text-[10px]">0</span>
-            )}
-          </button>
+                "min-w-4 rounded-full px-1 text-center text-[9px] leading-4",
+                chatFilter === filter ? "bg-black/15" : "bg-black/5 dark:bg-white/10"
+              )}>{count}</span>
+            </button>
+          ))}
+        </div>
 
-          <button 
-            onClick={() => { setChatFilter('WAITING'); loadSessions(undefined, chatSearch.trim(), false, 'WAITING'); }} 
+        <div className="flex shrink-0 items-center gap-1">
+          {chatFilter === 'MINE' && tabCounts.countMine > 0 && (
+            <button
+              type="button"
+              onClick={handleUnassignAll}
+              className="flex h-8 items-center gap-1.5 rounded-lg border border-amber-500/30 bg-amber-500/10 px-2 text-[11px] font-bold text-amber-600 hover:bg-amber-500/20"
+              title="Liberar todos mis chats"
+            >
+              <UserX className="h-3.5 w-3.5" />
+              <span className="hidden 2xl:inline">Liberar</span>
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={handleToggleChatbot}
+            disabled={togglingBot}
             className={cn(
-              "text-xs px-4 py-2 rounded-xl font-bold shrink-0 transition-all border flex items-center gap-2 cursor-pointer select-none",
-              chatFilter === 'WAITING' 
-                ? "bg-red-500 text-white border-red-500 shadow-md shadow-red-500/25" 
-                : "bg-[var(--bg-base)] text-[var(--text-secondary)] border-[var(--border-subtle)] hover:bg-[var(--bg-elevated)] hover:text-[var(--text-primary)]"
+              "flex h-8 items-center gap-1.5 rounded-lg border px-2 text-[11px] font-bold",
+              isChatbotEnabled
+                ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-600"
+                : "border-rose-500/30 bg-rose-500/10 text-rose-600"
             )}
+            title={isChatbotEnabled ? 'Chatbot activo. Clic para pausar' : 'Chatbot pausado. Clic para activar'}
           >
-            <Flame className={cn("h-3.5 w-3.5", chatFilter === 'WAITING' ? "text-white animate-bounce" : "text-red-500")} />
-            <span>En espera</span>
-            {tabCounts.countWaiting > 0 ? (
-              <span className={cn(
-                "px-2 py-0.5 rounded-full text-[10px] font-black shadow-xs animate-pulse",
-                chatFilter === 'WAITING' ? "bg-white text-red-700" : "bg-red-500 text-white"
-              )}>{tabCounts.countWaiting}</span>
-            ) : (
-              <span className="opacity-60 text-[10px]">0</span>
-            )}
+            {togglingBot ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Bot className="h-3.5 w-3.5" />}
+            <span className="hidden lg:inline">Bot {isChatbotEnabled ? 'activo' : 'pausado'}</span>
           </button>
-
-          <button 
-            onClick={() => { setChatFilter('MINE'); loadSessions(undefined, chatSearch.trim(), false, 'MINE'); }} 
+          <button
+            type="button"
+            onClick={toggleMuteWa}
             className={cn(
-              "text-xs px-4 py-2 rounded-xl font-bold shrink-0 transition-all border flex items-center gap-2 cursor-pointer select-none",
-              chatFilter === 'MINE' 
-                ? "bg-[var(--accent)] text-[var(--accent-fg)] border-[var(--accent)] shadow-md shadow-[var(--accent)]/25" 
-                : "bg-[var(--bg-base)] text-[var(--text-secondary)] border-[var(--border-subtle)] hover:bg-[var(--bg-elevated)] hover:text-[var(--text-primary)]"
+              "flex h-8 w-8 items-center justify-center rounded-lg border",
+              isMutedWa
+                ? "border-amber-500/30 bg-amber-500/10 text-amber-500"
+                : "border-[var(--border-subtle)] bg-[var(--bg-elevated)] text-[var(--text-secondary)]"
             )}
+            title={isMutedWa ? 'Activar avisos' : 'Silenciar avisos'}
           >
-            <UserCheck className={cn("h-3.5 w-3.5", chatFilter === 'MINE' ? "text-[var(--accent-fg)]" : "text-[var(--accent)]")} />
-            <span>Míos</span>
-            <span className={cn(
-              "px-2 py-0.5 rounded-full text-[10px] font-black",
-              chatFilter === 'MINE' ? "bg-black/20 text-black" : "bg-black/5 dark:bg-white/10 text-[var(--text-secondary)]"
-            )}>{tabCounts.countMine}</span>
+            {isMutedWa ? <BellOff className="h-3.5 w-3.5" /> : <Bell className="h-3.5 w-3.5" />}
           </button>
         </div>
       </div>
-
       {/* ÁREA PRINCIPAL DE CHATS */}
-      <div className="flex-1 flex gap-3.5 min-h-0">
+      <div className="flex min-h-0 flex-1 gap-1.5 sm:gap-2">
         {/* SESSIONS PANEL (LEFT) */}
         <Card className={`w-full md:w-84 lg:w-96 shrink-0 border-[var(--border-subtle)] bg-[var(--bg-panel)] rounded-3xl flex flex-col overflow-hidden shadow-xl ${activeSession ? 'hidden md:flex' : 'flex'}`}>
           <div className="flex-none p-3 border-b border-[var(--border-subtle)] relative z-10 bg-[var(--bg-base)]/80 backdrop-blur-md">
@@ -2654,7 +2590,7 @@ function ChatPage() {
                   return (
                     <button
                       key={s.id}
-                      onClick={() => {
+                      onClick={async () => {
                         setGlobalActiveSessionIdCache(s.id)
                         try {
                           localStorage.setItem('niche_last_active_whatsapp_session_id', s.id)
@@ -2665,16 +2601,20 @@ function ChatPage() {
                           setActiveOrder(s.activeOrder)
                         }
                         
-                        // Auto-tomar chat libre si el usuario es asesor o cajero
+                        // Abrir de inmediato y tomar el chat en el servidor de forma atómica.
                         const isUnassigned = !s.assignedToId && !s.assignedTo
-                        const targetAssignedId = isUnassigned && user?.id ? user.id : s.assignedToId
-                        const targetAssignedObj = isUnassigned && user?.id ? { id: user.id, name: user.name } : s.assignedTo
-
-                        setActiveSession({ ...s, unreadCount: 0, assignedToId: targetAssignedId, assignedTo: targetAssignedObj })
-                        setSessions(prev => prev.map(item => item.id === s.id ? { ...item, unreadCount: 0, assignedToId: targetAssignedId, assignedTo: targetAssignedObj } : item))
+                        setActiveSession({ ...s, unreadCount: 0 })
+                        setSessions(prev => prev.map(item => item.id === s.id ? { ...item, unreadCount: 0 } : item))
                         
                         if (isUnassigned && user?.id) {
-                          api.put(`/whatsapp/sessions/${s.id}/assign`, { userId: user.id }).catch(() => {})
+                          try {
+                            const claimed = await api.put<Session>(`/whatsapp/sessions/${s.id}/assign`, { userId: user.id })
+                            setActiveSession(prev => prev?.id === claimed.id ? { ...prev, ...claimed } : prev)
+                            setSessions(prev => prev.map(item => item.id === claimed.id ? { ...item, ...claimed } : item))
+                          } catch (err: any) {
+                            alerts.info('Chat tomado', err?.message || 'Otra asesora tomó esta conversación primero.')
+                            await loadSessions(undefined, chatSearch.trim(), false, chatFilter)
+                          }
                         }
                         api.post(`/whatsapp/sessions/${s.id}/read`).catch(() => {})
                       }}
@@ -3044,6 +2984,7 @@ function ChatPage() {
 
               {/* MESSAGES BODY */}
               <div 
+                ref={messagesViewportRef}
                 className="flex-1 overflow-y-auto p-4 space-y-4 bg-[var(--bg-elevated)]/10"
                 onScroll={(e) => {
                   const { scrollTop, scrollHeight, clientHeight } = e.currentTarget
@@ -3063,6 +3004,18 @@ function ChatPage() {
                   </div>
                 ) : (
                   <div className="space-y-4">
+                    {hasOlderMessages && (
+                      <div className="flex justify-center pb-1">
+                        <button
+                          type="button"
+                          onClick={loadOlderMessages}
+                          disabled={loadingOlderMessages}
+                          className="h-8 px-3 rounded-full border border-[var(--border-subtle)] bg-[var(--bg-panel)] text-[11px] font-bold text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)] disabled:opacity-60"
+                        >
+                          {loadingOlderMessages ? 'Cargando…' : 'Cargar mensajes anteriores'}
+                        </button>
+                      </div>
+                    )}
                     {(() => {
                       let prevDateStr: string | null = null
                       return messages.map((m, index) => {
@@ -3625,11 +3578,6 @@ function ChatPage() {
         </DialogContent>
       </Dialog>
 
-      <MassBroadcastModal
-        open={showBroadcastModal}
-        onOpenChange={setShowBroadcastModal}
-        onSuccess={() => loadSessions()}
-      />
     </div>
   )
 }

@@ -22,6 +22,8 @@ export function AppLayout() {
   // Administradores y cajeros ven la barra lateral normal para navegar fluidamente.
   const isDedicatedKitchen = user?.role === 'KITCHEN'
   const isKitchen = isDedicatedKitchen || location.pathname === '/kitchen'
+  const isWhatsAppWorkspace = location.pathname === '/chat'
+  const isFullWidthWorkspace = isKitchen || isWhatsAppWorkspace
   // Las meseras operan exclusivamente con la barra inferior nativa (Mesas, Nuevo Pedido, Historial)
   const isWaiter = user?.role === 'WAITER'
 
@@ -248,8 +250,13 @@ export function AppLayout() {
           </header>
         )}
 
-        <main className={cn("flex-1 overflow-y-auto", isKitchen ? "p-2 sm:p-3" : "p-3 md:p-6 pb-32 md:pb-8")}>
-          <div className={cn(isKitchen ? "w-full max-w-none" : "mx-auto max-w-7xl min-h-full")}>
+        <main className={cn(
+          "flex-1 min-h-0",
+          isFullWidthWorkspace ? "overflow-hidden p-1.5 sm:p-2" : "overflow-y-auto p-3 md:p-6 pb-32 md:pb-8"
+        )}>
+          <div className={cn(
+            isFullWidthWorkspace ? "h-full w-full max-w-none" : "mx-auto max-w-7xl min-h-full"
+          )}>
             <ErrorBoundary key={location.pathname}>
               <Outlet />
             </ErrorBoundary>

@@ -439,7 +439,7 @@ async function processHeicSafe(file: File, baseFileName: string): Promise<Prepar
         quality: 0.82,
         multiple: false,
       })
-      const converted = await withTimeout(convertPromise, 2500, null)
+      const converted = await withTimeout<Blob | Blob[] | null>(Promise.resolve(convertPromise), 2500, null)
       const jpegBlob: Blob | null = Array.isArray(converted) ? converted[0] : converted
       if (jpegBlob && jpegBlob.size > 0) {
         const compressed = await decodeViaImageElement(jpegBlob, baseFileName)
@@ -529,4 +529,3 @@ export async function prepareReceiptPhoto(file: File): Promise<PreparedReceiptPh
 
   return Promise.race([worker(), timeoutGuard])
 }
-

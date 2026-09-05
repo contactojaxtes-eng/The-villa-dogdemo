@@ -231,6 +231,8 @@ model Order {
   @@index([chatSessionId])
   @@index([tableId])
   @@index([kitchenStatus])
+  @@index([orderType, createdAt])
+  @@index([orderType, status, createdAt])
   @@map("orders")
 }
 
@@ -496,6 +498,8 @@ model WhatsAppSession {
   @@index([active])
   @@index([waitingForAdvisor])
   @@index([customerPhone])
+  @@index([active, lastMessageAt])
+  @@index([active, assignedToId, lastMessageAt])
   @@map("whatsapp_sessions")
 }
 
@@ -517,6 +521,8 @@ model WhatsAppMessage {
 
   @@index([sessionId])
   @@index([createdAt])
+  @@index([sessionId, createdAt])
+  @@index([direction, status, createdAt])
   @@map("whatsapp_messages")
 }
 

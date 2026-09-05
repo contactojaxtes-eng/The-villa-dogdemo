@@ -5,12 +5,14 @@ describe('Authenticated real-time connections', () => {
   let gateway: SocketGateway;
   let jwt: any;
   let db: any;
+  let roomEmitter: any;
   beforeEach(() => {
     jwt = { verifyAsync: jest.fn().mockResolvedValue({ sub: 'staff', exp: Math.floor(Date.now() / 1000) + 60 }) };
     db = { user: { findUnique: jest.fn().mockResolvedValue({ id: 'staff', name: 'Equipo', role: 'WAITER', active: true }) } };
     gateway = new SocketGateway(jwt, db);
     gateway.afterInit({ use: (callback: any) => { middleware = callback; } } as any);
-    gateway.server = { emit: jest.fn() } as any;
+    roomEmitter = { emit: jest.fn() };
+    gateway.server = { emit: jest.fn(), to: jest.fn().mockReturnValue(roomEmitter) } as any;
   });
   it('rejects anonymous connections even if they claim admin in the query', async () => {
     const next = jest.fn();
@@ -42,5 +44,20 @@ describe('Authenticated real-time connections', () => {
     expect(gateway.server.emit).not.toHaveBeenCalledWith('userDisconnected', expect.anything());
     gateway.handleDisconnect(second);
     expect(gateway.server.emit).toHaveBeenCalledWith('userDisconnected', { userId: 'staff' });
+  });
+  it('joins delivery advisors to the WhatsApp room', async () => {
+    db.user.findUnique.mockResolvedValue({ id: 'staff', name: 'Asesora', role: 'DELIVERY_MANAGER', active: true });
+    const client: any = { id: 'socket', handshake: { auth: { token: 'access' } }, data: {}, join: jest.fn(), disconnect: jest.fn() };
+    const next = jest.fn();
+    await middleware(client, next);
+    gateway.handleConnection(client);
+    expect(client.join.mock.calls).toEqual([['user:staff'], ['whatsapp']]);
+    gateway.handleDisconnect(client);
+  });
+  it('sends WhatsApp events only to the WhatsApp room', () => {
+    const payload = { sessionId: 'chat-1' };
+    gateway.emitWhatsApp('whatsappSessionUpdated', payload);
+    expect(gateway.server.to).toHaveBeenCalledWith('whatsapp');
+    expect(roomEmitter.emit).toHaveBeenCalledWith('whatsappSessionUpdated', payload);
   });
 });

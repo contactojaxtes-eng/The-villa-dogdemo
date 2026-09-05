@@ -23,6 +23,7 @@ export class OrdersController {
     @Query('orderNumber') orderNumber?: string,
     @Query('paymentMethod') paymentMethod?: string,
     @Query('paymentStatus') paymentStatus?: string,
+    @Query('orderType') orderType?: string,
   ) {
     return this.ordersService.findAll({
       status,
@@ -34,6 +35,7 @@ export class OrdersController {
       orderNumber: orderNumber ? parseInt(orderNumber) : undefined,
       paymentMethod,
       paymentStatus,
+      orderType,
     });
   }
 

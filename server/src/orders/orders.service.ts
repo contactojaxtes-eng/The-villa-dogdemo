@@ -156,13 +156,21 @@ export class OrdersService implements OnModuleInit {
     }
   }
 
-  async findAll(params: { status?: string; waiterId?: string; date?: string; startDate?: string; endDate?: string; search?: string; orderNumber?: number; paymentMethod?: string; paymentStatus?: string }) {
+  async findAll(params: { status?: string; waiterId?: string; date?: string; startDate?: string; endDate?: string; search?: string; orderNumber?: number; paymentMethod?: string; paymentStatus?: string; orderType?: string }) {
     const where: any = {};
     if (params.status) where.status = params.status;
     if (params.waiterId) where.waiterId = params.waiterId;
     if (params.paymentMethod) where.paymentMethod = params.paymentMethod;
     if (params.paymentStatus) where.paymentStatus = params.paymentStatus;
     if (params.orderNumber) where.orderNumber = params.orderNumber;
+    if (params.orderType) {
+      const allowedTypes = params.orderType
+        .split(',')
+        .map(value => value.trim().toUpperCase())
+        .filter(value => ['DELIVERY', 'PICKUP', 'LOCAL'].includes(value));
+      if (allowedTypes.length === 1) where.orderType = allowedTypes[0];
+      if (allowedTypes.length > 1) where.orderType = { in: allowedTypes };
+    }
     if (params.startDate || params.endDate) {
       const startDateStr = params.startDate || '2020-01-01';
       const endDateStr = params.endDate || new Date().toLocaleDateString('en-CA', { timeZone: 'America/Bogota' });
@@ -1577,6 +1585,7 @@ export class OrdersService implements OnModuleInit {
       where: {
         status: { notIn: ['DELIVERED', 'CANCELLED'] },
         tableId: null,
+        orderType: { in: ['DELIVERY', 'PICKUP'] },
       },
       include: {
         waiter: { select: { id: true, name: true } },
@@ -1681,7 +1690,10 @@ export class OrdersService implements OnModuleInit {
     }
 
     return this.prisma.order.findMany({
-      where: { OR: orConditions },
+      where: {
+        orderType: { in: ['DELIVERY', 'PICKUP'] },
+        OR: orConditions,
+      },
       include: { items: { include: { menuItem: true } }, zone: true },
       orderBy: { createdAt: 'desc' },
       take: 20,

@@ -41,6 +41,7 @@ export class SocketGateway implements OnGatewayConnection, OnGatewayDisconnect, 
     client.join(`user:${user.id}`);
     if (['ADMIN', 'SUPERADMIN'].includes(user.role)) client.join('admins');
     if (user.role === 'CASHIER') client.join('cashiers');
+    if (['ADMIN', 'SUPERADMIN', 'CASHIER', 'DELIVERY_MANAGER'].includes(user.role)) client.join('whatsapp');
     client.data.expiryTimer = setTimeout(() => client.disconnect(true), Math.max(0, Math.min(client.data.expiresAt - Date.now(), 2_147_483_647)));
     if (sockets.size === 1) this.server.emit('userConnected', { userId: user.id, userName: user.name, connected: true });
   }
@@ -156,6 +157,10 @@ export class SocketGateway implements OnGatewayConnection, OnGatewayDisconnect, 
 
   emitDashboardUpdate(stats: any) {
     this.server.emit('dashboardUpdated', stats);
+  }
+
+  emitWhatsApp(event: string, payload: any) {
+    this.server.to('whatsapp').emit(event, payload);
   }
 
   emitTableCreated(table: any) {

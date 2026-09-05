@@ -1,4 +1,4 @@
-import { Injectable, Logger, BadRequestException, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, BadRequestException, ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
 import { SocketGateway } from '../socket/socket.gateway';
@@ -527,7 +527,7 @@ export class WhatsappService {
             },
           });
 
-          this.socketGateway.server.emit('whatsappMessage', {
+          this.socketGateway.emitWhatsApp('whatsappMessage', {
             id: newMsg.id,
             waMessageId: newMsg.waMessageId,
             sessionId: session.id,
@@ -654,7 +654,7 @@ export class WhatsappService {
             },
           });
 
-          this.socketGateway.server.emit('whatsappMessage', {
+          this.socketGateway.emitWhatsApp('whatsappMessage', {
             id: newMsg.id,
             waMessageId: newMsg.waMessageId,
             sessionId: session.id,
@@ -750,7 +750,7 @@ export class WhatsappService {
           },
         });
 
-        this.socketGateway.server.emit('whatsappMessage', {
+        this.socketGateway.emitWhatsApp('whatsappMessage', {
           id: newMsg.id,
           waMessageId: newMsg.waMessageId,
           sessionId: session.id,
@@ -836,7 +836,7 @@ export class WhatsappService {
     }
     const currentSettings = await this.getSettings();
     if (this.socketGateway) {
-      this.socketGateway.server.emit('whatsappSettingsUpdated', currentSettings);
+      this.socketGateway.emitWhatsApp('whatsappSettingsUpdated', currentSettings);
     }
     return currentSettings;
   }
@@ -972,14 +972,14 @@ export class WhatsappService {
           }
 
           if (this.socketGateway) {
-            this.socketGateway.server.emit('whatsappMessageStatus', {
+            this.socketGateway.emitWhatsApp('whatsappMessageStatus', {
               messageId: msg.id,
               waMessageId: msg.waMessageId || waMessageId,
               sessionId: msg.sessionId,
               status,
               errors: errorsList
             });
-            this.socketGateway.server.emit('whatsappSessionUpdated', {
+            this.socketGateway.emitWhatsApp('whatsappSessionUpdated', {
               sessionId: msg.sessionId,
             });
           }
@@ -1055,7 +1055,7 @@ export class WhatsappService {
               data: { reaction: emoji || null }
             });
             if (this.socketGateway) {
-              this.socketGateway.server.emit('whatsappMessageReaction', {
+              this.socketGateway.emitWhatsApp('whatsappMessageReaction', {
                 messageId: targetMsg.id,
                 waMessageId: targetWaMessageId,
                 sessionId: targetMsg.sessionId,
@@ -1306,7 +1306,7 @@ export class WhatsappService {
       },
     });
 
-    this.socketGateway.server.emit('whatsappMessage', {
+    this.socketGateway.emitWhatsApp('whatsappMessage', {
       id: newMsg.id,
       waMessageId: newMsg.waMessageId,
       sessionId: session.id,
@@ -1324,7 +1324,7 @@ export class WhatsappService {
       replyToDirection,
     });
 
-    this.socketGateway.server.emit('whatsappSessionUpdated', {
+    this.socketGateway.emitWhatsApp('whatsappSessionUpdated', {
       sessionId: session.id,
       customerName: session.customerName,
       customerPhone: session.customerPhone,
@@ -1472,6 +1472,7 @@ export class WhatsappService {
         matchingOrders = await this.prisma.order.findMany({
           where: {
             orderNumber: orderSearchNum,
+            orderType: { in: ['DELIVERY', 'PICKUP'] },
             createdAt: { gte: searchSince },
           },
           select: { id: true, orderNumber: true, customerName: true, customerPhone: true, status: true, total: true, createdAt: true },
@@ -1485,6 +1486,7 @@ export class WhatsappService {
           matchingOrders = await this.prisma.order.findMany({
             where: {
               orderNumber: orderSearchNum,
+              orderType: { in: ['DELIVERY', 'PICKUP'] },
               createdAt: { gte: recentDays },
             },
             select: { id: true, orderNumber: true, customerName: true, customerPhone: true, status: true, total: true, createdAt: true },
@@ -1836,6 +1838,7 @@ export class WhatsappService {
         activeShiftOrders = await this.prisma.order.findMany({
           where: {
             customerPhone: { in: candidatePhones },
+            orderType: { in: ['DELIVERY', 'PICKUP'] },
             createdAt: { gte: shiftStartTime },
             status: { not: 'CANCELLED' }
           },
@@ -1988,7 +1991,7 @@ export class WhatsappService {
     });
 
     if (this.socketGateway) {
-      this.socketGateway.server.emit('whatsappSessionUpdated', {
+      this.socketGateway.emitWhatsApp('whatsappSessionUpdated', {
         sessionId: updated.id,
         customerName: updated.customerName,
         customerPhone: updated.customerPhone,
@@ -2001,9 +2004,19 @@ export class WhatsappService {
     return updated;
   }
 
-  async getSessionMessages(sessionId: string) {
+  async getSessionMessages(sessionId: string, before?: string, requestedLimit?: number) {
     const session = await this.prisma.whatsAppSession.findUnique({ where: { id: sessionId } });
     if (!session) return [];
+
+    const limit = Number.isFinite(requestedLimit)
+      ? Math.min(200, Math.max(20, Math.trunc(requestedLimit!)))
+      : 120;
+    let beforeDate: Date | undefined;
+    if (before) {
+      const parsed = new Date(before);
+      if (Number.isNaN(parsed.getTime())) throw new BadRequestException('Cursor de mensajes inválido');
+      beforeDate = parsed;
+    }
 
     const raw = (session.phone || '').trim();
     const cleanDigits = raw.replace(/\D/g, '');
@@ -2028,10 +2041,15 @@ export class WhatsappService {
     const sessionIds = matchingSessions.map(s => s.id);
     if (!sessionIds.includes(sessionId)) sessionIds.push(sessionId);
 
-    return this.prisma.whatsAppMessage.findMany({
-      where: { sessionId: { in: sessionIds } },
-      orderBy: { createdAt: 'asc' },
+    const messages = await this.prisma.whatsAppMessage.findMany({
+      where: {
+        sessionId: { in: sessionIds },
+        ...(beforeDate ? { createdAt: { lt: beforeDate } } : {}),
+      },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: limit,
     });
+    return messages.reverse();
   }
 
   async deleteSession(id: string) {
@@ -2052,7 +2070,7 @@ export class WhatsappService {
         });
       }
       if (this.socketGateway) {
-        this.socketGateway.server.emit('chatSessionDeleted', { sessionId: id });
+        this.socketGateway.emitWhatsApp('chatSessionDeleted', { sessionId: id });
       }
     }
     return { ok: true, message: 'Chat e historial eliminados completamente' };
@@ -2100,7 +2118,7 @@ export class WhatsappService {
       });
 
       if (this.socketGateway) {
-        this.socketGateway.server.emit('chatMessageEdited', {
+        this.socketGateway.emitWhatsApp('chatMessageEdited', {
           messageId: id,
           sessionId: msg.sessionId,
           content: '🚫 Este mensaje fue eliminado',
@@ -2112,7 +2130,7 @@ export class WhatsappService {
     } else {
       await this.prisma.whatsAppMessage.delete({ where: { id } });
       if (this.socketGateway) {
-        this.socketGateway.server.emit('chatMessageDeleted', {
+        this.socketGateway.emitWhatsApp('chatMessageDeleted', {
           messageId: id,
           sessionId: msg.sessionId,
           mode: 'for_me',
@@ -2168,7 +2186,7 @@ export class WhatsappService {
     });
 
     if (this.socketGateway) {
-      this.socketGateway.server.emit('chatMessageEdited', {
+      this.socketGateway.emitWhatsApp('chatMessageEdited', {
         messageId: id,
         sessionId: msg.sessionId,
         content,
@@ -2182,7 +2200,20 @@ export class WhatsappService {
     const session = await this.prisma.whatsAppSession.findUnique({ where: { id: sessionId } });
     if (!session) return;
 
-    // 1. Marcar todos los mensajes entrantes de la sesión en la BD como leídos
+    // Capturar únicamente los mensajes que realmente están pendientes antes de
+    // actualizar la BD. Así no reenviamos a Meta todo el historial cada vez que
+    // una asesora abre la conversación.
+    const unreadMessages = await this.prisma.whatsAppMessage.findMany({
+      where: {
+        sessionId,
+        direction: 'IN',
+        status: { not: 'read' },
+        waMessageId: { not: null },
+      },
+      select: { id: true, waMessageId: true },
+    });
+
+    // 1. Marcar todos los mensajes entrantes pendientes como leídos en la BD
     await this.prisma.whatsAppMessage.updateMany({
       where: {
         sessionId,
@@ -2193,7 +2224,7 @@ export class WhatsappService {
     });
 
     // 2. Emitir actualización a los clientes por WebSockets
-    this.socketGateway.server.emit('whatsappSessionUpdated', {
+    this.socketGateway.emitWhatsApp('whatsappSessionUpdated', {
       id: sessionId,
       sessionId,
     });
@@ -2201,14 +2232,6 @@ export class WhatsappService {
     // 3. Notificar a Meta WhatsApp Graph API en segundo plano (Fire-and-forget asíncrono sin bloquear la interfaz)
     (async () => {
       try {
-        const unreadMessages = await this.prisma.whatsAppMessage.findMany({
-          where: {
-            sessionId,
-            direction: 'IN',
-            waMessageId: { not: null }
-          }
-        });
-
         const phoneId = await this.getSetting('whatsapp_phone_id');
         const token = await this.getSetting('whatsapp_token');
         if (!phoneId || !token) return;
@@ -2304,17 +2327,74 @@ export class WhatsappService {
     }
   }
 
-  async assignSession(sessionId: string, userId: string | null) {
+  async assignSession(
+    sessionId: string,
+    userId: string | null,
+    actor?: { id: string; name?: string; role: string },
+  ) {
     const session = await this.prisma.whatsAppSession.findUnique({
       where: { id: sessionId },
     });
+    if (!session) throw new NotFoundException('Conversación no encontrada');
+
+    const isSupervisor = !actor || ['ADMIN', 'SUPERADMIN'].includes(actor.role);
+    if (actor && userId && userId !== actor.id && !isSupervisor) {
+      throw new ForbiddenException('No puedes asignar esta conversación a otra persona');
+    }
+
+    if (userId) {
+      const target = await this.prisma.user.findUnique({
+        where: { id: userId },
+        select: { id: true, active: true },
+      });
+      if (!target?.active) throw new BadRequestException('La asesora seleccionada no está activa');
+
+      if (isSupervisor && actor && userId !== actor.id) {
+        await this.prisma.whatsAppSession.update({
+          where: { id: sessionId },
+          data: { assignedToId: userId, waitingForAdvisor: false },
+        });
+      } else {
+        const claimed = await this.prisma.whatsAppSession.updateMany({
+          where: {
+            id: sessionId,
+            OR: [{ assignedToId: null }, { assignedToId: userId }],
+          },
+          data: { assignedToId: userId, waitingForAdvisor: false },
+        });
+        if (claimed.count === 0) {
+          const owner = await this.prisma.whatsAppSession.findUnique({
+            where: { id: sessionId },
+            include: { assignedTo: { select: { id: true, name: true } } },
+          });
+          throw new ConflictException(
+            owner?.assignedTo?.name
+              ? `Esta conversación ya fue tomada por ${owner.assignedTo.name}`
+              : 'Esta conversación ya fue tomada por otra asesora',
+          );
+        }
+      }
+    } else if (actor && !isSupervisor) {
+      const released = await this.prisma.whatsAppSession.updateMany({
+        where: {
+          id: sessionId,
+          OR: [{ assignedToId: actor.id }, { assignedToId: null }],
+        },
+        data: { assignedToId: null },
+      });
+      if (released.count === 0) {
+        throw new ConflictException('No puedes liberar una conversación atendida por otra asesora');
+      }
+    } else {
+      await this.prisma.whatsAppSession.update({
+        where: { id: sessionId },
+        data: { assignedToId: null },
+      });
+    }
 
     const updated = await this.prisma.whatsAppSession.update({
       where: { id: sessionId },
-      data: { 
-        assignedToId: userId,
-        waitingForAdvisor: false
-      },
+      data: { waitingForAdvisor: false },
       include: { assignedTo: { select: { id: true, name: true } } },
     });
 
@@ -2342,7 +2422,7 @@ export class WhatsappService {
       });
     }
 
-    this.socketGateway.server.emit('chatSessionAssigned', {
+    this.socketGateway.emitWhatsApp('chatSessionAssigned', {
       id: sessionId,
       sessionId,
       phone: updated.phone,
@@ -2351,7 +2431,7 @@ export class WhatsappService {
       waitingForAdvisor: false,
     });
 
-    this.socketGateway.server.emit('whatsappSessionUpdated', {
+    this.socketGateway.emitWhatsApp('whatsappSessionUpdated', {
       id: sessionId,
       sessionId,
       phone: updated.phone,
@@ -2373,7 +2453,7 @@ export class WhatsappService {
       data: { assignedToId: null }
     });
 
-    this.socketGateway.server.emit('whatsappSessionUpdated', { unassignedAll: true });
+    this.socketGateway.emitWhatsApp('whatsappSessionUpdated', { unassignedAll: true });
     return { count: result.count };
   }
 
@@ -2477,7 +2557,7 @@ export class WhatsappService {
           },
         });
 
-        this.socketGateway.server.emit('whatsappMessage', {
+        this.socketGateway.emitWhatsApp('whatsappMessage', {
           id: newMsg.id,
           waMessageId: newMsg.waMessageId,
           sessionId: session.id,
@@ -2586,7 +2666,7 @@ export class WhatsappService {
           },
         });
 
-        this.socketGateway.server.emit('whatsappMessage', {
+        this.socketGateway.emitWhatsApp('whatsappMessage', {
           id: newMsg.id,
           waMessageId: newMsg.waMessageId,
           sessionId: session.id,
@@ -2668,7 +2748,7 @@ export class WhatsappService {
           },
         });
 
-        this.socketGateway.server.emit('whatsappMessage', {
+        this.socketGateway.emitWhatsApp('whatsappMessage', {
           id: newMsg.id,
           waMessageId: newMsg.waMessageId,
           sessionId: session.id,
@@ -2819,7 +2899,7 @@ The Villa Dog • Montería`;
           },
         });
 
-        this.socketGateway.server.emit('whatsappMessage', {
+        this.socketGateway.emitWhatsApp('whatsappMessage', {
           id: newMsg.id,
           waMessageId: newMsg.waMessageId,
           sessionId: session.id,
@@ -2833,7 +2913,7 @@ The Villa Dog • Montería`;
           createdAt: newMsg.createdAt,
         });
 
-        this.socketGateway.server.emit('whatsappSessionUpdated', {
+        this.socketGateway.emitWhatsApp('whatsappSessionUpdated', {
           id: session.id,
           sessionId: session.id,
           phone: session.phone,
@@ -2847,96 +2927,6 @@ The Villa Dog • Montería`;
       this.logger.error('Error enviando plantilla WhatsApp', err);
       return { sent: false, reason: 'api_error' };
     }
-  }
-
-  async sendBulkTemplate(
-    numbers: string[],
-    templateName: string,
-    languageCode: string = 'es_EC',
-    params: string[] = [],
-    excludeDelivered: boolean = true,
-  ) {
-    const results: { phone: string; success: boolean; error?: string }[] = [];
-    let sentCount = 0;
-    let failedCount = 0;
-
-    let targetNumbers = [...numbers];
-
-    // Filter out contacts that already received TEMPLATE messages with status 'delivered' or 'read' recently (last 4 days)
-    if (excludeDelivered) {
-      try {
-        const fourDaysAgo = new Date(Date.now() - 4 * 24 * 60 * 60 * 1000);
-        const deliveredMsgs = await this.prisma.whatsAppMessage.findMany({
-          where: {
-            direction: 'OUT',
-            messageType: 'template',
-            status: { in: ['delivered', 'read'] },
-            createdAt: { gte: fourDaysAgo },
-          },
-          include: { session: true },
-        });
-
-        const deliveredSet = new Set<string>();
-        deliveredMsgs.forEach((m) => {
-          const clean = (m.session?.phone || '').replace(/\D/g, '');
-          const p10 = clean.length === 12 && clean.startsWith('57') ? clean.slice(2) : clean;
-          if (p10.length === 10) deliveredSet.add(p10);
-        });
-
-        const initialCount = targetNumbers.length;
-        targetNumbers = targetNumbers.filter((rawPhone) => {
-          const cleanPhone = rawPhone.replace(/\D/g, '');
-          const p10 = cleanPhone.length === 12 && cleanPhone.startsWith('57') ? cleanPhone.slice(2) : cleanPhone;
-          return !deliveredSet.has(p10);
-        });
-
-        this.logger.log(`Excluidos ${initialCount - targetNumbers.length} contactos que ya recibieron mensaje recientemente.`);
-      } catch (err) {
-        this.logger.error('Error al filtrar contactos ya entregados:', err);
-      }
-    }
-
-    const BATCH_SIZE = 20;
-    for (let i = 0; i < targetNumbers.length; i += BATCH_SIZE) {
-      const batch = targetNumbers.slice(i, i + BATCH_SIZE);
-      const batchPromises = batch.map(async (rawPhone) => {
-        const cleanPhone = rawPhone.replace(/\D/g, '');
-        if (!cleanPhone) return null;
-        const formattedPhone = cleanPhone.length === 10 ? `57${cleanPhone}` : cleanPhone;
-
-        const res = await this.sendTemplate(formattedPhone, templateName, languageCode, params);
-        if (res.sent) {
-          return { phone: formattedPhone, success: true };
-        } else {
-          const errorMsg = res.data?.error?.message || res.reason || 'Error al enviar';
-          return { phone: formattedPhone, success: false, error: errorMsg };
-        }
-      });
-
-      const batchResults = await Promise.all(batchPromises);
-      for (const item of batchResults) {
-        if (!item) continue;
-        if (item.success) {
-          sentCount++;
-        } else {
-          failedCount++;
-        }
-        results.push(item);
-      }
-
-      await new Promise((resolve) => setTimeout(resolve, 100));
-    }
-
-    if (this.socketGateway) {
-      this.socketGateway.server.emit('whatsappSessionUpdated', { broadcastCompleted: true });
-    }
-
-    return {
-      total: numbers.length,
-      sentCount,
-      failedCount,
-      results,
-    };
   }
 
   async sendMediaMessage(
@@ -3039,7 +3029,7 @@ The Villa Dog • Montería`;
           },
         });
 
-        this.socketGateway.server.emit('whatsappMessage', {
+        this.socketGateway.emitWhatsApp('whatsappMessage', {
           id: newMsg.id,
           waMessageId: newMsg.waMessageId,
           sessionId: session.id,
@@ -3091,7 +3081,7 @@ The Villa Dog • Montería`;
         });
         
         // Notificar al frontend vía socket
-        this.socketGateway.server.emit('chatSessionAssigned', {
+        this.socketGateway.emitWhatsApp('chatSessionAssigned', {
           sessionId: session.id,
           assignedToId: session.assignedToId,
           assignedTo: session.assignedTo,
@@ -3110,7 +3100,7 @@ The Villa Dog • Montería`;
         });
 
         // Notificar al frontend vía socket
-        this.socketGateway.server.emit('chatSessionAssigned', {
+        this.socketGateway.emitWhatsApp('chatSessionAssigned', {
           sessionId: session.id,
           assignedToId: session.assignedToId,
           waitingForAdvisor: false,
@@ -3421,7 +3411,7 @@ Restaurante (Tú):
           data: { waitingForAdvisor: true },
         });
 
-        this.socketGateway.server.emit('whatsappAgentRequest', {
+        this.socketGateway.emitWhatsApp('whatsappAgentRequest', {
           sessionId: session.id,
           phone: session.phone,
           customerName: session.customerName,
@@ -3464,7 +3454,7 @@ Restaurante (Tú):
         });
         
         // Notificar al frontend vía socket
-        this.socketGateway.server.emit('chatSessionAssigned', {
+        this.socketGateway.emitWhatsApp('chatSessionAssigned', {
           sessionId: session.id,
           assignedToId: session.assignedToId,
           assignedTo: session.assignedTo,
@@ -3483,7 +3473,7 @@ Restaurante (Tú):
         });
 
         // Notificar al frontend vía socket
-        this.socketGateway.server.emit('chatSessionAssigned', {
+        this.socketGateway.emitWhatsApp('chatSessionAssigned', {
           sessionId: session.id,
           assignedToId: session.assignedToId,
           waitingForAdvisor: false,
@@ -3524,7 +3514,7 @@ Restaurante (Tú):
             data: { waitingForAdvisor: true },
           });
 
-          this.socketGateway.server.emit('whatsappAgentRequest', {
+          this.socketGateway.emitWhatsApp('whatsappAgentRequest', {
             sessionId: session.id,
             phone: session.phone,
             customerName: session.customerName,
@@ -3543,7 +3533,7 @@ Restaurante (Tú):
             data: { waitingForAdvisor: true },
           });
 
-          this.socketGateway.server.emit('whatsappAgentRequest', {
+          this.socketGateway.emitWhatsApp('whatsappAgentRequest', {
             sessionId: session.id,
             phone: session.phone,
             customerName: session.customerName,
@@ -3563,7 +3553,7 @@ Restaurante (Tú):
             data: { waitingForAdvisor: true },
           });
 
-          this.socketGateway.server.emit('whatsappAgentRequest', {
+          this.socketGateway.emitWhatsApp('whatsappAgentRequest', {
             sessionId: session.id,
             phone: session.phone,
             customerName: session.customerName,
@@ -3610,7 +3600,7 @@ Restaurante (Tú):
           data: { waitingForAdvisor: true },
         });
 
-        this.socketGateway.server.emit('whatsappAgentRequest', {
+        this.socketGateway.emitWhatsApp('whatsappAgentRequest', {
           sessionId: session.id,
           phone: session.phone,
           customerName: session.customerName,
@@ -3797,7 +3787,7 @@ Restaurante (Tú):
         });
 
         // Notificar a todos los asesores conectados
-        this.socketGateway.server.emit('whatsappAgentRequest', {
+        this.socketGateway.emitWhatsApp('whatsappAgentRequest', {
           sessionId: session.id,
           phone: session.phone,
           customerName: session.customerName,
@@ -3872,7 +3862,7 @@ Restaurante (Tú):
           data: { waitingForAdvisor: true },
         });
 
-        this.socketGateway.server.emit('whatsappAgentRequest', {
+        this.socketGateway.emitWhatsApp('whatsappAgentRequest', {
           sessionId: session.id,
           phone: session.phone,
           customerName: session.customerName,
@@ -4631,7 +4621,7 @@ ${menuSummary}
         data: { waitingForAdvisor: true },
       });
 
-      this.socketGateway.server.emit('whatsappAgentRequest', {
+      this.socketGateway.emitWhatsApp('whatsappAgentRequest', {
         sessionId: session.id,
         phone: session.phone,
         customerName: session.customerName,

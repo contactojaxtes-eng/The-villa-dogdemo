@@ -192,8 +192,16 @@ export class WhatsappController {
 
   @Get('sessions/:id/messages')
   @UseGuards(JwtAuthGuard)
-  async getSessionMessages(@Param('id') id: string) {
-    return this.whatsappService.getSessionMessages(id);
+  async getSessionMessages(
+    @Param('id') id: string,
+    @Query('before') before?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.whatsappService.getSessionMessages(
+      id,
+      before,
+      limit ? parseInt(limit, 10) : undefined,
+    );
   }
 
   @Post('sessions/:id/read')
@@ -266,8 +274,12 @@ export class WhatsappController {
 
   @Put('sessions/:id/assign')
   @UseGuards(JwtAuthGuard)
-  assignSession(@Param('id') id: string, @Body('userId') userId: string | null) {
-    return this.whatsappService.assignSession(id, userId);
+  assignSession(
+    @Param('id') id: string,
+    @Body('userId') userId: string | null,
+    @Req() req: any,
+  ) {
+    return this.whatsappService.assignSession(id, userId, req.user);
   }
 
   @Post('sessions/unassign-all')
@@ -306,27 +318,6 @@ export class WhatsappController {
       throw new BadRequestException(errorMsg);
     }
     return result;
-  }
-
-  @Post('broadcast-template')
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('ADMIN', 'SUPERADMIN')
-  async broadcastTemplate(
-    @Body() body: { numbers: string[]; templateName: string; languageCode?: string; params?: string[]; excludeDelivered?: boolean }
-  ) {
-    if (!body.numbers || !Array.isArray(body.numbers) || body.numbers.length === 0) {
-      throw new BadRequestException('Se debe proveer una lista de números de teléfono');
-    }
-    if (!body.templateName) {
-      throw new BadRequestException('El nombre de la plantilla es requerido');
-    }
-    return this.whatsappService.sendBulkTemplate(
-      body.numbers,
-      body.templateName,
-      body.languageCode || 'es_EC',
-      body.params || [],
-      body.excludeDelivered ?? true
-    );
   }
 
   @Post('send-location')

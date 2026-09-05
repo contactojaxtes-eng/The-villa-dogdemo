@@ -35,6 +35,7 @@ interface Summary {
   totalBancolombia: number
   totalDaviplata: number
   totalTips: number
+  totalExpenses: number
   isOpen?: boolean
   initialCash?: number
   cashInDrawer?: number
@@ -43,9 +44,14 @@ interface Summary {
 interface CashSummary {
   totalCash: number
   totalTransfers: number
+  totalNequi: number
+  totalBancolombia: number
+  totalDaviplata: number
   totalSales: number
   totalTips: number
   totalExpenses: number
+  creditSales: number
+  totalCreditPayments: number
   orderCount: number
   isOpen: boolean
   initialCash: number

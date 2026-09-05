@@ -1,11 +1,10 @@
 import { useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
 import { api } from '@/lib/api'
-import { Crown, Users, ShoppingBag, Database, AlertTriangle, MessageCircle, Loader2, Server, Activity, ArrowRight, LogIn, RefreshCw, Send } from 'lucide-react'
+import { Crown, Users, ShoppingBag, Database, AlertTriangle, MessageCircle, Loader2, Server, Activity, ArrowRight, LogIn, RefreshCw } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { useAuth } from '@/hooks/useAuth'
 import { alerts } from '@/lib/alerts'
-import { MassBroadcastModal } from '@/components/whatsapp/MassBroadcastModal'
 
 interface Overview {
   usersByRole: { role: string; count: number }[]
@@ -54,7 +53,6 @@ export default function SuperAdminOverviewPage() {
   const { startImpersonation, user: currentUser } = useAuth()
   const [impersonatingId, setImpersonatingId] = useState<string | null>(null)
   const [refreshing, setRefreshing] = useState(false)
-  const [showBroadcastModal, setShowBroadcastModal] = useState(false)
 
   const handleBroadcastRefresh = async () => {
     const ok = await alerts.confirm(
@@ -241,15 +239,6 @@ export default function SuperAdminOverviewPage() {
                   </span>
                 </div>
 
-                <div className="pt-2">
-                  <button
-                    onClick={() => setShowBroadcastModal(true)}
-                    className="w-full py-3 px-4 rounded-xl font-bold text-xs bg-[#E30613] hover:bg-[#C40510] text-white shadow-md shadow-[#E30613]/20 flex items-center justify-center gap-2 transition-all hover:scale-[1.01]"
-                  >
-                    <Send className="h-4 w-4" />
-                    🚀 Lanzar Envío Masivo de WhatsApp
-                  </button>
-                </div>
               </div>
 
               <div className="mt-6 pt-4 border-t border-[#E5E7EB]">
@@ -262,10 +251,6 @@ export default function SuperAdminOverviewPage() {
         </div>
       </motion.div>
 
-      <MassBroadcastModal
-        open={showBroadcastModal}
-        onOpenChange={setShowBroadcastModal}
-      />
     </div>
   )
 }
