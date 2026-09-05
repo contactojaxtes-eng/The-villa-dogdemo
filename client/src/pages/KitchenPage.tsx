@@ -16,8 +16,15 @@ import {
   Coffee,
   PauseCircle,
   UserCheck,
+  BarChart3,
+  ChefHat,
+  Copy,
+  Check,
+  Layers,
+  X,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { api } from '@/lib/api'
 import { alerts } from '@/lib/alerts'
 import { useAuth } from '@/hooks/useAuth'
@@ -36,6 +43,12 @@ export default function KitchenPage() {
   const [cookFilter, setCookFilter] = useState<string>(() => searchParams.get('cook') || 'ALL')
   const [showPrevious, setShowPrevious] = useState<Record<string, boolean>>({})
   const toggleShowPrevious = (ticketId: string) => setShowPrevious(p => ({ ...p, [ticketId]: !p[ticketId] }))
+
+  // Modal de resumen de producción y platos por cocinero (exclusivo Admin / SuperAdmin)
+  const [showProductionModal, setShowProductionModal] = useState(false)
+  const [selectedProductionCookId, setSelectedProductionCookId] = useState<string>('ALL')
+  const [copiedReport, setCopiedReport] = useState(false)
+  const isAdmin = ['ADMIN', 'SUPERADMIN'].includes(user?.role || '')
 
   // Estado de cena / pausa para cocineros en su tablet
   const [cookStatus, setCookStatus] = useState<{ active?: boolean; onBreak?: boolean; breakUntil?: number | null; breakReason?: string; breakMinutes?: number } | null>(null)
@@ -277,6 +290,152 @@ export default function KitchenPage() {
     return stats
   }, [availableCooks, consolidatedTickets])
 
+  // Producción acumulada de platos por cocinero (exclusivo para Admin / Superadmin)
+  const cookProduction = useMemo(() => {
+    const result: Record<string, {
+      id: string
+      name: string
+      totalItems: number
+      completedItems: number
+      activeItems: number
+      products: { name: string; count: number; completed: number; active: number }[]
+    }> = {}
+
+    for (const cook of availableCooks) {
+      result[cook.id] = {
+        id: cook.id,
+        name: cook.name,
+        totalItems: 0,
+        completedItems: 0,
+        activeItems: 0,
+        products: []
+      }
+    }
+
+    const productMaps: Record<string, Map<string, { count: number; completed: number; active: number }>> = {}
+
+    for (const t of consolidatedTickets) {
+      const cookId = t.assignedToId || t.assignedTo?.id
+      if (!cookId) continue
+
+      if (!result[cookId]) {
+        result[cookId] = {
+          id: cookId,
+          name: t.assignedTo?.name || 'Cocinero',
+          totalItems: 0,
+          completedItems: 0,
+          activeItems: 0,
+          products: []
+        }
+      }
+
+      if (!productMaps[cookId]) {
+        productMaps[cookId] = new Map()
+      }
+
+      const isCompleted = ['SERVED', 'READY'].includes(t.status)
+      const isActive = ['NEW', 'PREPARING'].includes(t.status)
+
+      for (const item of t.items || []) {
+        const qty = Number(item.quantity || 1)
+        const name = (item.nameSnapshot || 'Producto').trim()
+
+        result[cookId].totalItems += qty
+        if (isCompleted) result[cookId].completedItems += qty
+        if (isActive) result[cookId].activeItems += qty
+
+        const current = productMaps[cookId].get(name) || { count: 0, completed: 0, active: 0 }
+        current.count += qty
+        if (isCompleted) current.completed += qty
+        if (isActive) current.active += qty
+        productMaps[cookId].set(name, current)
+      }
+    }
+
+    for (const [cId, pMap] of Object.entries(productMaps)) {
+      if (result[cId]) {
+        result[cId].products = Array.from(pMap.entries())
+          .map(([name, data]) => ({ name, ...data }))
+          .sort((a, b) => b.count - a.count)
+      }
+    }
+
+    return result
+  }, [availableCooks, consolidatedTickets])
+
+  // Total global de producción de la cocina en el turno actual
+  const globalKitchenProduction = useMemo(() => {
+    const map = new Map<string, { count: number; completed: number; active: number }>()
+    let totalItems = 0
+    let completedItems = 0
+    let activeItems = 0
+
+    for (const t of consolidatedTickets) {
+      const isCompleted = ['SERVED', 'READY'].includes(t.status)
+      const isActive = ['NEW', 'PREPARING'].includes(t.status)
+
+      for (const item of t.items || []) {
+        const qty = Number(item.quantity || 1)
+        const name = (item.nameSnapshot || 'Producto').trim()
+
+        totalItems += qty
+        if (isCompleted) completedItems += qty
+        if (isActive) activeItems += qty
+
+        const current = map.get(name) || { count: 0, completed: 0, active: 0 }
+        current.count += qty
+        if (isCompleted) current.completed += qty
+        if (isActive) current.active += qty
+        map.set(name, current)
+      }
+    }
+
+    const products = Array.from(map.entries())
+      .map(([name, data]) => ({ name, ...data }))
+      .sort((a, b) => b.count - a.count)
+
+    return { totalItems, completedItems, activeItems, products }
+  }, [consolidatedTickets])
+
+  // Generador de texto para compartir el reporte del turno por WhatsApp
+  const generateReportText = () => {
+    let text = `📊 *RESUMEN DE PRODUCCIÓN COCINA - THE VILLA DOG*\n`
+    text += `📅 Turno Actual · ${new Date().toLocaleDateString('es-CO')}\n`
+    text += `🍽️ *Total Platos Preparados:* ${globalKitchenProduction.totalItems} (${globalKitchenProduction.completedItems} despachados, ${globalKitchenProduction.activeItems} en curso)\n`
+    text += `━━━━━━━━━━━━━━━━━━━━━━\n\n`
+
+    for (const cook of availableCooks) {
+      const prod = cookProduction[cook.id]
+      if (!prod || prod.totalItems === 0) continue
+      text += `👨‍🍳 *${cook.name}* (${prod.totalItems} platos en total):\n`
+      for (const p of prod.products) {
+        text += `   • ${p.count}x ${p.name} ${p.completed > 0 ? `(${p.completed} desp.)` : ''}\n`
+      }
+      text += `\n`
+    }
+
+    if (globalKitchenProduction.products.length > 0) {
+      text += `━━━━━━━━━━━━━━━━━━━━━━\n`
+      text += `🏆 *RANKING PRODUCTOS DEL TURNO:*\n`
+      globalKitchenProduction.products.slice(0, 7).forEach((p, idx) => {
+        text += `${idx + 1}. ${p.name}: ${p.count} unidad(es)\n`
+      })
+    }
+
+    return text
+  }
+
+  const handleCopyReport = async () => {
+    try {
+      await navigator.clipboard.writeText(generateReportText())
+      setCopiedReport(true)
+      alerts.toast('📋 Reporte de producción copiado al portapapeles listo para enviar por WhatsApp')
+      setTimeout(() => setCopiedReport(false), 3000)
+    } catch {
+      alerts.error('No se pudo copiar el reporte')
+    }
+  }
+
   // Tickets filtrados por usuario/rol, estación y cocinero
   const scopedTickets = useMemo(() => {
     return consolidatedTickets.filter(t => {
@@ -483,10 +642,32 @@ export default function KitchenPage() {
             </Button>
           </div>
 
-          <Button variant="outline" size="sm" onClick={() => load(true)} className="gap-1.5 font-bold h-8 text-xs shrink-0 cursor-pointer">
-            <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
-            <span className="hidden sm:inline">Actualizar</span>
-          </Button>
+          <div className="flex items-center gap-1.5 shrink-0">
+            {isAdmin && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  setSelectedProductionCookId(cookFilter !== 'ALL' ? cookFilter : 'ALL')
+                  setShowProductionModal(true)
+                }}
+                className="gap-1.5 font-black h-8 text-xs shrink-0 cursor-pointer bg-gradient-to-r from-amber-500/10 to-orange-500/15 border-amber-500/40 text-amber-700 dark:text-amber-300 hover:bg-amber-500/20 shadow-xs"
+                title="Ver desglose y conteo de productos preparados por cada cocinero hoy"
+              >
+                <BarChart3 className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400" />
+                <span className="hidden sm:inline">📊 Platos del Día</span>
+                <span className="sm:hidden">📊 Platos</span>
+                <span className="rounded-full px-1.5 py-0.2 text-[10px] font-black bg-amber-500 text-slate-950">
+                  {globalKitchenProduction.totalItems}
+                </span>
+              </Button>
+            )}
+
+            <Button variant="outline" size="sm" onClick={() => load(true)} className="gap-1.5 font-bold h-8 text-xs shrink-0 cursor-pointer">
+              <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
+              <span className="hidden sm:inline">Actualizar</span>
+            </Button>
+          </div>
         </div>
 
         {/* Fila 2: Filtros de Estación (si hay más de 1) */}
@@ -550,62 +731,117 @@ export default function KitchenPage() {
                   <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-black ${
                     isSelected ? 'bg-white text-blue-700' : 'bg-[var(--bg-panel)] text-[var(--text-primary)]'
                   }`}>
-                    {activeTab === 'HISTORY' ? `${stats.history} desp.` : `${stats.history} hist. · ${stats.active} act.`}
+                    {activeTab === 'HISTORY'
+                      ? `${stats.history} desp.`
+                      : isAdmin && cookProduction[cook.id]?.totalItems > 0
+                      ? `${cookProduction[cook.id].totalItems} platos`
+                      : `${stats.history} hist. · ${stats.active} act.`}
                   </span>
                 </Button>
               )
             })}
+            {isAdmin && (
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-7 px-2.5 text-xs font-bold shrink-0 rounded-lg gap-1 text-amber-700 dark:text-amber-400 hover:bg-amber-500/10 border border-amber-500/30 cursor-pointer"
+                onClick={() => {
+                  setSelectedProductionCookId('ALL')
+                  setShowProductionModal(true)
+                }}
+              >
+                <BarChart3 className="h-3.5 w-3.5" />
+                <span>Ver Platos por Cocinero</span>
+              </Button>
+            )}
           </div>
         )}
       </div>
 
       {/* Banner de contexto cuando se filtra por un cocinero específico (Admin / Cajero) */}
       {['ADMIN', 'SUPERADMIN', 'CASHIER'].includes(user?.role || '') && cookFilter !== 'ALL' && selectedCookName && (
-        <div className="flex flex-wrap items-center justify-between gap-2 p-3 rounded-2xl bg-blue-500/10 border border-blue-500/30 text-blue-900 dark:text-blue-200 shadow-xs">
-          <div className="flex items-center gap-2">
-            <UserCheck className="h-5 w-5 text-blue-600 dark:text-blue-400 shrink-0" />
-            <div>
-              <p className="text-xs font-black">
-                Comandas de: <strong>{selectedCookName}</strong>
-              </p>
-              <p className="text-[11px] opacity-85">
-                {activeTab === 'HISTORY'
-                  ? `Mostrando ${displayTickets.length} pedido(s) despachado(s) en su historial de este turno.`
-                  : `Tiene ${countAllActive} comanda(s) activa(s) y ${countHistory} en su historial.`
-                }
-              </p>
+        <div className="flex flex-col gap-2 p-3 rounded-2xl bg-blue-500/10 border border-blue-500/30 text-blue-900 dark:text-blue-200 shadow-xs">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <UserCheck className="h-5 w-5 text-blue-600 dark:text-blue-400 shrink-0" />
+              <div>
+                <p className="text-xs font-black">
+                  Comandas de: <strong>{selectedCookName}</strong>
+                </p>
+                <p className="text-[11px] opacity-85">
+                  {activeTab === 'HISTORY'
+                    ? `Mostrando ${displayTickets.length} pedido(s) despachado(s) en su historial de este turno.`
+                    : `Tiene ${countAllActive} comanda(s) activa(s) y ${countHistory} en su historial.`
+                  }
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-1.5 flex-wrap">
+              {activeTab !== 'HISTORY' && countHistory > 0 && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-7 text-xs font-bold bg-white dark:bg-slate-900 border-blue-400 text-blue-700 dark:text-blue-300 hover:bg-blue-50 cursor-pointer"
+                  onClick={() => setActiveTab('HISTORY')}
+                >
+                  <History className="h-3 w-3 mr-1" /> Ver su Historial ({countHistory})
+                </Button>
+              )}
+              {activeTab === 'HISTORY' && countAllActive > 0 && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-7 text-xs font-bold bg-white dark:bg-slate-900 border-blue-400 text-blue-700 dark:text-blue-300 hover:bg-blue-50 cursor-pointer"
+                  onClick={() => setActiveTab('ALL_ACTIVE')}
+                >
+                  <Flame className="h-3 w-3 mr-1" /> Ver sus Activos ({countAllActive})
+                </Button>
+              )}
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-7 text-xs font-bold text-blue-700 dark:text-blue-300 hover:bg-blue-200/50 cursor-pointer"
+                onClick={() => handleCookFilter('ALL')}
+              >
+                ✕ Ver todos
+              </Button>
             </div>
           </div>
-          <div className="flex items-center gap-1.5 flex-wrap">
-            {activeTab !== 'HISTORY' && countHistory > 0 && (
+
+          {/* Desglose rápido de producción del cocinero seleccionado (solo Admin) */}
+          {isAdmin && cookProduction[cookFilter] && cookProduction[cookFilter].totalItems > 0 && (
+            <div className="w-full pt-2 border-t border-blue-500/20 flex flex-wrap items-center justify-between gap-2 text-xs">
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="font-extrabold text-blue-950 dark:text-blue-100 flex items-center gap-1">
+                  🌭 Platos hoy:
+                  <span className="px-1.5 py-0.2 rounded bg-blue-600 text-white font-black text-[11px]">
+                    {cookProduction[cookFilter].totalItems}
+                  </span>
+                </span>
+                {cookProduction[cookFilter].products.slice(0, 4).map(p => (
+                  <span key={p.name} className="px-2 py-0.5 rounded-md bg-white/90 dark:bg-slate-900/90 font-bold border border-blue-400/40 text-blue-900 dark:text-blue-200 text-[11px]">
+                    {p.count}x {p.name}
+                  </span>
+                ))}
+                {cookProduction[cookFilter].products.length > 4 && (
+                  <span className="text-[11px] font-medium opacity-75">
+                    +{cookProduction[cookFilter].products.length - 4} más
+                  </span>
+                )}
+              </div>
               <Button
                 size="sm"
-                variant="outline"
-                className="h-7 text-xs font-bold bg-white dark:bg-slate-900 border-blue-400 text-blue-700 dark:text-blue-300 hover:bg-blue-50 cursor-pointer"
-                onClick={() => setActiveTab('HISTORY')}
+                variant="ghost"
+                className="h-6 px-2 text-[11px] font-black text-blue-700 dark:text-blue-300 hover:bg-blue-500/20 cursor-pointer ml-auto"
+                onClick={() => {
+                  setSelectedProductionCookId(cookFilter)
+                  setShowProductionModal(true)
+                }}
               >
-                <History className="h-3 w-3 mr-1" /> Ver su Historial ({countHistory})
+                Ver desglose completo ➔
               </Button>
-            )}
-            {activeTab === 'HISTORY' && countAllActive > 0 && (
-              <Button
-                size="sm"
-                variant="outline"
-                className="h-7 text-xs font-bold bg-white dark:bg-slate-900 border-blue-400 text-blue-700 dark:text-blue-300 hover:bg-blue-50 cursor-pointer"
-                onClick={() => setActiveTab('ALL_ACTIVE')}
-              >
-                <Flame className="h-3 w-3 mr-1" /> Ver sus Activos ({countAllActive})
-              </Button>
-            )}
-            <Button
-              size="sm"
-              variant="ghost"
-              className="h-7 text-xs font-bold text-blue-700 dark:text-blue-300 hover:bg-blue-200/50 cursor-pointer"
-              onClick={() => handleCookFilter('ALL')}
-            >
-              ✕ Ver todos
-            </Button>
-          </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -1081,6 +1317,258 @@ export default function KitchenPage() {
             )
           })}
         </div>
+      )}
+
+      {/* Modal de Resumen de Producción y Platos por Cocinero (Exclusivo Admin / Superadmin) */}
+      {isAdmin && (
+        <Dialog open={showProductionModal} onOpenChange={setShowProductionModal}>
+          <DialogContent className="max-w-3xl w-[95vw] max-h-[92vh] flex flex-col p-0 overflow-hidden bg-[var(--bg-panel)] text-[var(--text-primary)] border border-[var(--border-subtle)] rounded-2xl shadow-2xl [&>button.absolute]:hidden">
+            {/* Header */}
+            <div className="flex items-center justify-between p-4 border-b border-[var(--border-subtle)] bg-gradient-to-r from-[var(--bg-elevated)] to-[var(--bg-panel)]">
+              <div className="flex items-center gap-2.5 min-w-0">
+                <div className="p-2 rounded-xl bg-amber-500/15 border border-amber-500/30 text-amber-600 dark:text-amber-400 shrink-0">
+                  <BarChart3 className="h-5 w-5" />
+                </div>
+                <div>
+                  <DialogTitle className="text-base font-black text-[var(--text-primary)] flex items-center gap-2">
+                    Resumen de Producción por Cocinero
+                    <span className="text-[10px] font-black uppercase px-2 py-0.5 rounded-md bg-amber-500 text-slate-950">
+                      Turno Actual
+                    </span>
+                  </DialogTitle>
+                  <p className="text-[11px] text-[var(--text-secondary)] font-medium">
+                    Conteo exacto de platos y productos preparados por cada cocinero hoy.
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 shrink-0">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-8 px-2.5 text-xs font-bold gap-1.5 border-emerald-500/40 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-500/10 cursor-pointer"
+                  onClick={handleCopyReport}
+                  title="Copiar reporte en formato texto para enviar por WhatsApp"
+                >
+                  {copiedReport ? <Check className="h-3.5 w-3.5 text-emerald-600" /> : <Copy className="h-3.5 w-3.5" />}
+                  <span className="hidden sm:inline">{copiedReport ? '¡Copiado!' : 'Copiar WhatsApp'}</span>
+                </Button>
+                <button
+                  type="button"
+                  onClick={() => setShowProductionModal(false)}
+                  className="p-1.5 rounded-xl hover:bg-[var(--bg-hover)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors cursor-pointer"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+            </div>
+
+            {/* KPIs Rápidos del Turno */}
+            <div className="grid grid-cols-3 gap-2 p-3 bg-[var(--bg-elevated)]/50 border-b border-[var(--border-subtle)] text-center text-xs">
+              <div className="p-2 rounded-xl bg-[var(--bg-panel)] border border-[var(--border-subtle)] shadow-xs">
+                <p className="text-[10px] uppercase font-bold text-[var(--text-muted)]">Total Platos Turno</p>
+                <p className="text-xl font-black text-amber-600 dark:text-amber-400 mt-0.5">
+                  {globalKitchenProduction.totalItems}
+                </p>
+              </div>
+              <div className="p-2 rounded-xl bg-[var(--bg-panel)] border border-[var(--border-subtle)] shadow-xs">
+                <p className="text-[10px] uppercase font-bold text-[var(--text-muted)]">Despachados / Listos</p>
+                <p className="text-xl font-black text-emerald-600 dark:text-emerald-400 mt-0.5">
+                  {globalKitchenProduction.completedItems}
+                </p>
+              </div>
+              <div className="p-2 rounded-xl bg-[var(--bg-panel)] border border-[var(--border-subtle)] shadow-xs">
+                <p className="text-[10px] uppercase font-bold text-[var(--text-muted)]">Cocineros Activos</p>
+                <p className="text-xl font-black text-blue-600 dark:text-blue-400 mt-0.5">
+                  {availableCooks.length}
+                </p>
+              </div>
+            </div>
+
+            {/* Pestañas de Cocineros / Consolidado */}
+            <div className="flex items-center gap-1.5 p-2 border-b border-[var(--border-subtle)] overflow-x-auto no-scrollbar bg-[var(--bg-panel)]">
+              <Button
+                size="sm"
+                variant={selectedProductionCookId === 'ALL' ? 'default' : 'ghost'}
+                className={`h-7 px-2.5 text-xs font-bold shrink-0 rounded-lg ${
+                  selectedProductionCookId === 'ALL'
+                    ? 'bg-amber-600 hover:bg-amber-700 text-white shadow-xs'
+                    : 'text-[var(--text-secondary)]'
+                }`}
+                onClick={() => setSelectedProductionCookId('ALL')}
+              >
+                <span>👥 Todos los Cocineros</span>
+              </Button>
+              <Button
+                size="sm"
+                variant={selectedProductionCookId === 'GLOBAL' ? 'default' : 'ghost'}
+                className={`h-7 px-2.5 text-xs font-bold shrink-0 rounded-lg ${
+                  selectedProductionCookId === 'GLOBAL'
+                    ? 'bg-amber-600 hover:bg-amber-700 text-white shadow-xs'
+                    : 'text-[var(--text-secondary)]'
+                }`}
+                onClick={() => setSelectedProductionCookId('GLOBAL')}
+              >
+                <span>🏆 Consolidado General Cocina</span>
+              </Button>
+              {availableCooks.map(cook => {
+                const prod = cookProduction[cook.id]
+                const count = prod?.totalItems || 0
+                const isSel = selectedProductionCookId === cook.id
+                return (
+                  <Button
+                    key={cook.id}
+                    size="sm"
+                    variant={isSel ? 'default' : 'outline'}
+                    className={`h-7 px-2.5 text-xs font-bold shrink-0 rounded-lg gap-1.5 transition ${
+                      isSel
+                        ? 'bg-blue-600 hover:bg-blue-700 text-white shadow-xs'
+                        : 'text-[var(--text-secondary)] bg-[var(--bg-elevated)] border-[var(--border-subtle)]'
+                    }`}
+                    onClick={() => setSelectedProductionCookId(cook.id)}
+                  >
+                    <span>👨‍🍳 {cook.name}</span>
+                    <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-black ${
+                      isSel ? 'bg-white text-blue-700' : 'bg-[var(--bg-panel)] text-[var(--text-primary)]'
+                    }`}>
+                      {count}
+                    </span>
+                  </Button>
+                )
+              })}
+            </div>
+
+            {/* Contenido Desplazable con Tarjetas y Desglose */}
+            <div className="flex-1 overflow-y-auto p-4 space-y-4">
+              {/* VISTA 1: Consolidado General de la Cocina */}
+              {selectedProductionCookId === 'GLOBAL' ? (
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-sm font-black text-[var(--text-primary)] flex items-center gap-2">
+                      🏆 Ranking de Platos Más Preparados en el Turno
+                    </h3>
+                    <span className="text-xs font-bold text-[var(--text-secondary)]">
+                      {globalKitchenProduction.products.length} productos distintos
+                    </span>
+                  </div>
+
+                  {globalKitchenProduction.products.length === 0 ? (
+                    <div className="p-8 text-center text-xs text-[var(--text-muted)] bg-[var(--bg-elevated)] rounded-xl border border-dashed border-[var(--border-subtle)]">
+                      No hay platos registrados en este turno aún.
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2.5">
+                      {globalKitchenProduction.products.map((p, idx) => (
+                        <div
+                          key={p.name}
+                          className="flex items-center justify-between p-3 rounded-xl bg-[var(--bg-elevated)] border border-[var(--border-subtle)] shadow-xs"
+                        >
+                          <div className="flex items-center gap-2 min-w-0">
+                            <span className={`w-6 h-6 rounded-lg flex items-center justify-center font-black text-xs shrink-0 ${
+                              idx === 0 ? 'bg-amber-500 text-slate-950' : idx === 1 ? 'bg-slate-300 text-slate-900' : idx === 2 ? 'bg-amber-700 text-white' : 'bg-[var(--bg-panel)] text-[var(--text-muted)]'
+                            }`}>
+                              #{idx + 1}
+                            </span>
+                            <span className="font-bold text-xs text-[var(--text-primary)] truncate">
+                              {p.name}
+                            </span>
+                          </div>
+                          <span className="font-black text-sm px-2.5 py-0.5 rounded-lg bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/30 shrink-0 ml-2">
+                            {p.count}x
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                /* VISTA 2: Por Cocinero (Uno específico o Todos) */
+                <div className="space-y-4">
+                  {(selectedProductionCookId === 'ALL' ? availableCooks : availableCooks.filter(c => c.id === selectedProductionCookId)).map(cook => {
+                    const prod = cookProduction[cook.id]
+                    const total = prod?.totalItems || 0
+                    const products = prod?.products || []
+
+                    return (
+                      <div
+                        key={cook.id}
+                        className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)]/60 p-4 shadow-xs space-y-3"
+                      >
+                        {/* Cabecera del Cocinero */}
+                        <div className="flex flex-wrap items-center justify-between gap-2 pb-2.5 border-b border-[var(--border-subtle)]">
+                          <div className="flex items-center gap-2.5">
+                            <div className="w-9 h-9 rounded-xl bg-blue-500/15 border border-blue-500/30 text-blue-600 dark:text-blue-400 flex items-center justify-center font-black text-sm shrink-0">
+                              👨‍🍳
+                            </div>
+                            <div>
+                              <h4 className="text-sm font-black text-[var(--text-primary)]">
+                                {cook.name}
+                              </h4>
+                              <p className="text-[11px] text-[var(--text-secondary)] font-medium">
+                                {prod?.completedItems || 0} despachados · {prod?.activeItems || 0} en curso
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs font-black px-3 py-1 rounded-xl bg-amber-500 text-slate-950 shadow-xs">
+                              {total} platos preparados
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* Desglose de Productos del Cocinero */}
+                        {products.length === 0 ? (
+                          <p className="text-xs text-[var(--text-muted)] italic py-2">
+                            Este cocinero no tiene platos registrados en el turno actual.
+                          </p>
+                        ) : (
+                          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
+                            {products.map(p => (
+                              <div
+                                key={p.name}
+                                className="flex items-center justify-between p-2.5 rounded-xl bg-[var(--bg-panel)] border border-[var(--border-subtle)] text-xs shadow-2xs hover:border-amber-500/50 transition-colors"
+                              >
+                                <span className="font-bold text-[var(--text-primary)] truncate mr-2">
+                                  {p.name}
+                                </span>
+                                <span className="font-black text-xs px-2 py-0.5 rounded-md bg-blue-500/15 text-blue-700 dark:text-blue-300 border border-blue-500/20 shrink-0">
+                                  {p.count}x
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+
+            {/* Footer */}
+            <div className="p-3 border-t border-[var(--border-subtle)] bg-[var(--bg-elevated)]/50 flex items-center justify-between gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-1.5 text-xs font-bold border-emerald-500/40 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-500/10 cursor-pointer"
+                onClick={handleCopyReport}
+              >
+                {copiedReport ? <Check className="h-3.5 w-3.5 text-emerald-600" /> : <Copy className="h-3.5 w-3.5" />}
+                <span>{copiedReport ? '¡Reporte Copiado!' : 'Copiar Reporte para WhatsApp'}</span>
+              </Button>
+
+              <Button
+                size="sm"
+                variant="default"
+                className="bg-[var(--text-primary)] text-white hover:opacity-90 text-xs font-bold px-4 cursor-pointer"
+                onClick={() => setShowProductionModal(false)}
+              >
+                Cerrar
+              </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
       )}
     </div>
   )
