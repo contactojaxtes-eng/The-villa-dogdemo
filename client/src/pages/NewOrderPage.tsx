@@ -24,6 +24,7 @@ import { ArrowLeft, ShoppingCart, Trash2, Search, Save, Sparkles, Clock, Bike, S
 function ChatDrawerMedia({ mediaId, type }: { mediaId: string; type: string }) {
   const [src, setSrc] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(false)
   const [isZoomed, setIsZoomed] = useState(false)
   const [rotation, setRotation] = useState(0)
   const [scale, setScale] = useState(1)
@@ -50,9 +51,10 @@ function ChatDrawerMedia({ mediaId, type }: { mediaId: string; type: string }) {
             objectUrl = URL.createObjectURL(blob)
             setSrc(objectUrl)
           }
-        }
+        } else if (active) setError(true)
       } catch (err) {
         console.error('Error fetching media:', err)
+        if (active) setError(true)
       } finally {
         if (active) setLoading(false)
       }
@@ -80,7 +82,7 @@ function ChatDrawerMedia({ mediaId, type }: { mediaId: string; type: string }) {
   }, [isZoomed])
 
   if (loading) return <div className="text-[10px] text-gray-400 p-1 font-mono">Cargando multimedia...</div>
-  if (!src) return <div className="text-[10px] text-red-400 p-1 font-mono">[Archivo multimedia]</div>
+  if (error || !src) return <div className="text-[10px] text-red-400 p-1 font-mono">[Archivo multimedia no disponible]</div>
 
   return (
     <div className="space-y-1 my-1">
@@ -201,7 +203,7 @@ function ChatDrawerMedia({ mediaId, type }: { mediaId: string; type: string }) {
           )}
         </>
       ) : type === 'audio' ? (
-        <audio controls src={src} className="h-7 w-full accent-[var(--accent)]" />
+        <audio controls preload="metadata" src={src} onError={() => setError(true)} className="h-7 w-full accent-[var(--accent)]" />
       ) : (
         <a href={src} download="documento.pdf" target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 p-2 bg-black/5 rounded-lg text-[11px] font-bold text-emerald-600 hover:underline">
           <FileText className="h-4 w-4" /> <span>Descargar Documento</span>

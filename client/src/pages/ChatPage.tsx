@@ -265,7 +265,13 @@ function WhatsAppMedia({ mediaId, type }: { mediaId: string; type: 'image' | 'au
         </div>
       ) : type === 'audio' ? (
         <div className="py-1 min-w-[240px] flex items-center gap-2">
-          <audio controls src={src} className="flex-1 h-8 accent-[var(--accent)]" />
+          <audio
+            controls
+            preload="metadata"
+            src={src}
+            className="flex-1 h-8 accent-[var(--accent)]"
+            onError={() => setError(true)}
+          />
           <a
             href={src}
             download={`whatsapp-audio-${Date.now()}.mp3`}

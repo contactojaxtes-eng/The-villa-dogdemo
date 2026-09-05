@@ -6,6 +6,7 @@ import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import { AppModule } from './app.module';
 import { AllExceptionsFilter } from './common/all-exceptions.filter';
 import { PrismaService } from './prisma/prisma.service';
+import { contentSecurityPolicyDirectives } from './common/security-headers';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 import { json, urlencoded } from 'express';
@@ -29,10 +30,7 @@ async function bootstrap() {
 
   app.use(helmet({
     contentSecurityPolicy: {
-      directives: {
-        // Camera previews and authenticated receipt downloads use local object URLs.
-        imgSrc: ["'self'", 'data:', 'blob:', 'https:'],
-      },
+      directives: contentSecurityPolicyDirectives,
     },
   }));
   
