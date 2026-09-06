@@ -2807,9 +2807,9 @@ export default function NewOrderPage({
             </div>
 
             <CardContent className={cn("min-h-0 flex-1 overflow-y-auto p-4 pb-24", !embedded && "md:p-6 md:pb-6")}>
-          <div className="space-y-6">
+          <div className={cn(embedded ? "space-y-3" : "space-y-6")}>
             {/* Quick Natural Language Add Bar */}
-            <div className="relative rounded-2xl border border-[var(--accent-border)]/40 bg-[var(--accent-muted)]/15 p-4 shadow-inner">
+            {!embedded && <div className="relative rounded-2xl border border-[var(--accent-border)]/40 bg-[var(--accent-muted)]/15 p-4 shadow-inner">
               <div className="flex flex-col md:flex-row gap-3 items-stretch md:items-center justify-between">
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-1.5 text-xs font-extrabold text-[var(--accent)] uppercase tracking-wider">
@@ -2843,11 +2843,11 @@ export default function NewOrderPage({
                   </Button>
                 </div>
               </div>
-            </div>
+            </div>}
 
             {/* Intelligent Suggestions & History Integration */}
             {(suggestedProducts.length > 0 || lastOrderItems.length > 0) && (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 p-4 rounded-2xl bg-[var(--accent-muted)]/30 border border-[var(--accent-border)]/40 mb-2">
+              <div className={cn("grid grid-cols-1 md:grid-cols-2 gap-4 rounded-2xl bg-[var(--accent-muted)]/30 border border-[var(--accent-border)]/40 mb-2", embedded ? "p-3" : "p-4")}>
                 
                 {/* WHATSAPP CHAT SUGGESTIONS */}
                 {suggestedProducts.length > 0 ? (
@@ -2948,22 +2948,25 @@ export default function NewOrderPage({
               return (
                 <div
                   key={catName}
-                  className="space-y-3"
+                  className={cn(embedded ? "space-y-2" : "space-y-3")}
                 >
-                  <div className="flex items-center gap-3 p-3 bg-[var(--bg-elevated)]/50 border border-[var(--border-subtle)]/40 rounded-2xl">
-                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl" style={{ background: `${catColor}15`, border: `1px solid ${catColor}30` }}>
-                      <CatIcon className="h-5 w-5" style={{ color: catColor }} />
+                  <div className={cn(
+                    "flex items-center bg-[var(--bg-elevated)]/50 border border-[var(--border-subtle)]/40 rounded-xl",
+                    embedded ? "gap-2 p-2" : "gap-3 p-3"
+                  )}>
+                    <div className={cn("flex shrink-0 items-center justify-center rounded-lg", embedded ? "h-8 w-8" : "h-10 w-10")} style={{ background: `${catColor}15`, border: `1px solid ${catColor}30` }}>
+                      <CatIcon className={cn(embedded ? "h-4 w-4" : "h-5 w-5")} style={{ color: catColor }} />
                     </div>
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2">
                         <h3 className="text-sm font-extrabold text-[var(--text-primary)] tracking-wide leading-none">{catName}</h3>
                         <Badge className="bg-[var(--accent)]/10 text-[var(--accent)] border border-[var(--accent)]/20 text-[9px] font-bold py-0 h-4.5">{group.items.length} ítems</Badge>
                       </div>
-                      <p className="text-[10px] text-[var(--text-muted)] mt-1 truncate">{catDesc}</p>
+                      {!embedded && <p className="text-[10px] text-[var(--text-muted)] mt-1 truncate">{catDesc}</p>}
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+                  <div className={cn("grid grid-cols-1 md:grid-cols-2", embedded ? "gap-2" : "gap-2.5")}>
                     {group.items.map(item => {
                       const isInCart = cartItemIds.has(item.id)
                       const cartItem = cart.find(ci => ci.menuItemId === item.id && !ci.notes) || cart.find(ci => ci.menuItemId === item.id)
@@ -2971,14 +2974,27 @@ export default function NewOrderPage({
                       return (
                         <div
                           key={item.id}
-                          className={`relative flex items-center gap-3 rounded-2xl border p-3 transition-all duration-200 cursor-pointer select-none hover:shadow-md ${justAdded ? 'scale-95' : ''}`}
+                          role="button"
+                          tabIndex={0}
+                          aria-label={`Agregar ${item.name} al pedido`}
+                          className={cn(
+                            "relative flex items-center rounded-xl border transition-all duration-200 cursor-pointer select-none hover:shadow-md focus:outline-none focus:ring-2 focus:ring-[var(--accent)]/30",
+                            embedded ? "gap-2.5 p-2.5" : "gap-3 p-3",
+                            justAdded && "scale-95"
+                          )}
                           style={{
                             backgroundColor: isInCart ? 'var(--accent-muted)' : 'var(--bg-elevated)',
                             borderColor: isInCart ? 'var(--accent-border)' : 'var(--border-default)',
                           }}
                           onClick={() => addToCart(item)}
+                          onKeyDown={event => {
+                            if (event.key === 'Enter' || event.key === ' ') {
+                              event.preventDefault()
+                              addToCart(item)
+                            }
+                          }}
                         >
-                          <div className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-[var(--bg-panel)] border border-[var(--border-subtle)] shadow-sm">
+                          <div className={cn("flex shrink-0 items-center justify-center overflow-hidden rounded-lg bg-[var(--bg-panel)] border border-[var(--border-subtle)] shadow-sm", embedded ? "h-10 w-10" : "h-12 w-12")}>
                             {item.image ? (
                               <img src={item.image} alt={item.name} className="h-full w-full object-cover" loading="lazy" />
                             ) : (
@@ -2986,7 +3002,7 @@ export default function NewOrderPage({
                             )}
                           </div>
 
-                          <div className="flex-1 min-w-0 pr-3">
+                          <div className="flex-1 min-w-0">
                             <p 
                               className={`text-xs sm:text-sm font-bold leading-snug break-words ${isInCart ? 'text-[var(--accent)] font-extrabold' : 'text-[var(--text-primary)]'}`}
                               title={item.name}
@@ -2996,13 +3012,14 @@ export default function NewOrderPage({
                             <p className="text-xs font-black text-[var(--accent)] mt-1">{formatCurrency(item.price)}</p>
                           </div>
 
-                          {isInCart && cartItem && (
-                            <div className="absolute -top-1.5 -right-1.5">
-                              <Badge className="bg-[var(--accent)] text-[var(--accent-fg)] font-black text-[11px] shadow-md px-2 py-0.5 min-w-[24px] flex items-center justify-center rounded-full border-2 border-[var(--bg-panel)]">
-                                {cartItem.quantity}
-                              </Badge>
-                            </div>
-                          )}
+                          <div className={cn(
+                            "flex h-7 w-7 shrink-0 items-center justify-center rounded-full transition-colors",
+                            isInCart ? "bg-[var(--accent)] text-[var(--accent-fg)]" : "bg-[var(--bg-panel)] text-[var(--accent)] border border-[var(--accent-border)]"
+                          )}>
+                            {isInCart && cartItem
+                              ? <span className="text-[11px] font-black">{cartItem.quantity}</span>
+                              : <Plus className="h-3.5 w-3.5" />}
+                          </div>
                         </div>
                       )
                     })}
@@ -3027,7 +3044,7 @@ export default function NewOrderPage({
 
 const renderDeliveryCard = () => {
   return (
-      <Card className="flex flex-col border border-[var(--border-subtle)] bg-[var(--bg-panel)] shadow-xl rounded-2xl p-5 h-auto">
+      <Card className={cn("flex flex-col border border-[var(--border-subtle)] bg-[var(--bg-panel)] rounded-2xl h-auto", embedded ? "p-4 shadow-sm" : "p-5 shadow-xl")}>
         <Button
           type="button"
           variant="ghost"
@@ -3037,7 +3054,7 @@ const renderDeliveryCard = () => {
           <ArrowLeft className="h-3.5 w-3.5" /> Volver a la Carta del Menú
         </Button>
         
-        <div className="space-y-5 flex-1">
+        <div className={cn("flex-1", embedded ? "space-y-4" : "space-y-5")}>
           <div>
             <CardTitle className="text-base font-bold text-[var(--text-primary)]">Datos de Entrega</CardTitle>
             <CardDescription className="text-xs text-[var(--text-secondary)] mt-0.5">Define los detalles del cliente y método de entrega</CardDescription>
@@ -3402,7 +3419,10 @@ const renderDeliveryCard = () => {
 
   const renderCartCard = (showSubmitButtonDirectly = false) => {
     return (
-      <Card className="flex flex-col border-2 border-[var(--accent-border)] bg-gradient-to-b from-[var(--bg-panel)] to-[var(--bg-elevated)] shadow-2xl rounded-2xl relative overflow-visible h-auto">
+      <Card className={cn(
+        "flex flex-col bg-gradient-to-b from-[var(--bg-panel)] to-[var(--bg-elevated)] rounded-2xl relative overflow-visible h-auto",
+        embedded ? "border border-[var(--border-subtle)] shadow-sm" : "border-2 border-[var(--accent-border)] shadow-2xl"
+      )}>
         <div className="absolute top-0 right-0 w-24 h-24 bg-gradient-to-br from-[var(--accent)]/5 to-transparent blur-xl pointer-events-none" />
         <CardHeader className="shrink-0 py-3.5 px-4 border-b border-[var(--border-subtle)]">
           <div className="flex items-center justify-between">
@@ -3416,7 +3436,7 @@ const renderDeliveryCard = () => {
         
         <div className="px-3 py-3 pb-4 space-y-2.5">
           {cart.length === 0 && (
-            <div className="py-16 text-center space-y-3">
+            <div className={cn("text-center space-y-3", embedded ? "py-10" : "py-16")}>
               <Sparkles className="mx-auto h-10 w-10 text-[var(--accent)]/30 animate-pulse" />
               <div>
                 <p className="text-xs font-semibold text-[var(--text-secondary)]">El pedido está vacío</p>
@@ -3742,7 +3762,7 @@ const renderDeliveryCard = () => {
           >
             {editOrderId ? 'Cancelar Edición' : (
               <>
-                <Trash2 className="mr-1.5 h-3.5 w-3.5 text-[var(--destructive)]" /> Limpiar Todo
+                <Trash2 className="mr-1.5 h-3.5 w-3.5 text-[var(--destructive)]" /> Limpiar
               </>
             )}
           </Button>
@@ -3773,8 +3793,16 @@ const renderDeliveryCard = () => {
         </button>
         <button
           type="button"
-          className={`flex-1 py-2 text-xs font-bold rounded-lg transition-all cursor-pointer ${step === 'delivery' ? 'bg-[var(--accent)] text-[var(--accent-fg)] shadow-sm' : 'text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]'}`}
+          disabled={embedded && cart.length === 0}
+          className={`flex-1 py-2 text-xs font-bold rounded-lg transition-all ${
+            step === 'delivery'
+              ? 'bg-[var(--accent)] text-[var(--accent-fg)] shadow-sm cursor-pointer'
+              : embedded && cart.length === 0
+                ? 'text-[var(--text-muted)] opacity-60 cursor-not-allowed'
+                : 'text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] cursor-pointer'
+          }`}
           onClick={() => setStep('delivery')}
+          title={embedded && cart.length === 0 ? 'Agrega al menos un producto para continuar' : 'Completar datos y confirmar pedido'}
         >
           2. Datos y confirmar <span className="ml-1 opacity-80">({cart.length > 0 ? formatCurrency(total) : '$0'})</span>
         </button>

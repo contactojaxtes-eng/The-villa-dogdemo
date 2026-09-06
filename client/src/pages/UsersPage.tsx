@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from 'react'
 import { io } from '@/lib/socket'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Card, CardContent } from '@/components/ui/card'
+import { Card } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -151,6 +151,7 @@ export default function UsersPage() {
   const [pwdSubmitting, setPwdSubmitting] = useState(false)
   const [pwdSuccess, setPwdSuccess] = useState(false)
   const [activeTab, setActiveTab] = useState<'active' | 'inactive'>('active')
+  const [userSearch, setUserSearch] = useState('')
   const [showSecurityModal, setShowSecurityModal] = useState(false)
   const [pendingSecurityAction, setPendingSecurityAction] = useState<{
     type: 'SUBMIT' | 'DELETE' | 'TOGGLE'
@@ -575,7 +576,7 @@ export default function UsersPage() {
 
   const activeUsers = users.filter(u => u.active && !u.email.startsWith('deleted_'))
   const inactiveUsers = users.filter(u => !u.active && !u.email.startsWith('deleted_'))
-  const displayedUsers = activeTab === 'active' ? activeUsers : inactiveUsers
+  const usersByStatus = activeTab === 'active' ? activeUsers : inactiveUsers
 
   const getInitials = (n: string) => {
     return n.split(' ').map(p => p[0]).join('').slice(0, 2).toUpperCase()
@@ -591,6 +592,13 @@ export default function UsersPage() {
     return found?.name || roleBadgeLabels[roleCode] || roleCode
   }
 
+  const normalizedUserSearch = userSearch.trim().toLocaleLowerCase('es')
+  const displayedUsers = normalizedUserSearch
+    ? usersByStatus.filter(u => [u.name, u.email, u.phone, u.role, getRoleLabel(u.role)]
+        .filter(Boolean)
+        .some(value => value.toLocaleLowerCase('es').includes(normalizedUserSearch)))
+    : usersByStatus
+
   if (loading) {
     return (
       <div className="flex flex-col items-center justify-center min-h-[60vh] space-y-4">
@@ -603,7 +611,7 @@ export default function UsersPage() {
   }
 
   return (
-    <motion.div className="space-y-7" initial="hidden" animate="visible" variants={stagger}>
+    <motion.div className="space-y-4" initial="hidden" animate="visible" variants={stagger}>
       
       {/* ── Header ── */}
       <motion.div className="flex flex-wrap items-center justify-between gap-4" variants={fadeUp}>
@@ -613,21 +621,21 @@ export default function UsersPage() {
             <Users className="h-5 w-5 text-[var(--accent-fg)]" />
           </div>
           <div>
-            <h2 className="antifont text-4xl tracking-wider text-[var(--text-primary)] leading-none">DIRECTORIO DE USUARIOS</h2>
-            <p className="mt-1 text-sm text-[var(--text-secondary)]">Gestión de empleados, roles dinámicos y matriz de permisos por módulo.</p>
+            <h2 className="antifont text-2xl sm:text-3xl tracking-wider text-[var(--text-primary)] leading-none">USUARIOS</h2>
+            <p className="mt-1 text-xs sm:text-sm text-[var(--text-secondary)]">Administra accesos, roles y permisos del equipo.</p>
           </div>
         </div>
 
-        <div className="flex items-center gap-2.5">
+        <div className="flex w-full sm:w-auto flex-wrap items-center gap-2">
           {/* Botón Gestor de Roles Dinámicos */}
           {(isSuperAdmin || currentUser?.role === 'ADMIN') && (
             <Button
               variant="outline"
               onClick={() => setOpenRolesModal(true)}
-              className="h-11 px-4 text-xs font-bold rounded-xl border-[var(--border-subtle)] bg-[var(--bg-panel)] hover:bg-[var(--bg-hover)] text-[var(--text-primary)] shadow-sm flex items-center gap-2 cursor-pointer"
+              className="h-10 px-3 text-xs font-bold rounded-xl border-[var(--border-subtle)] bg-[var(--bg-panel)] hover:bg-[var(--bg-hover)] text-[var(--text-primary)] shadow-sm flex items-center gap-2 cursor-pointer"
             >
               <SlidersHorizontal className="h-4 w-4 text-[var(--accent)]" />
-              <span>Gestionar Roles & Permisos</span>
+              <span>Roles y permisos</span>
             </Button>
           )}
 
@@ -636,7 +644,7 @@ export default function UsersPage() {
             <DialogTrigger asChild>
               <motion.div whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.97 }}>
                 <Button 
-                  className="bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-fg)] font-bold shadow-lg shadow-[var(--accent)]/15 rounded-xl h-11 px-5 gap-2 cursor-pointer" 
+                  className="bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-fg)] font-bold shadow-lg shadow-[var(--accent)]/15 rounded-xl h-10 px-4 gap-2 cursor-pointer"
                   onClick={openCreate}
                 >
                   <Plus className="h-4 w-4" /> Nuevo Usuario
@@ -644,39 +652,39 @@ export default function UsersPage() {
               </motion.div>
             </DialogTrigger>
 
-            <DialogContent className="border-[var(--border-subtle)] bg-[var(--bg-panel)] rounded-3xl shadow-2xl p-0 overflow-hidden max-w-4xl w-[95vw] max-h-[90vh] flex flex-col">
-              <div className="h-1.5 w-full shrink-0" style={{ background: 'linear-gradient(90deg, var(--accent), #10B981, #06B6D4)' }} />
+            <DialogContent className="border-[var(--border-subtle)] bg-[var(--bg-panel)] rounded-2xl shadow-2xl p-0 overflow-hidden max-w-4xl w-[95vw] max-h-[92dvh] flex flex-col">
+              <div className="h-1 w-full shrink-0 bg-[var(--accent)]" />
               
-              <div className="p-6 pb-3 flex items-center justify-between border-b border-[var(--border-subtle)] shrink-0">
-                <div>
-                  <DialogTitle className="text-xl font-bold text-[var(--text-primary)] tracking-tight flex items-center gap-2">
+              <div className="flex shrink-0 flex-col gap-3 border-b border-[var(--border-subtle)] p-4 sm:flex-row sm:items-center sm:justify-between sm:p-5">
+                <div className="min-w-0">
+                  <DialogTitle className="flex items-center gap-2 text-lg font-bold tracking-tight text-[var(--text-primary)] sm:text-xl">
                     <UserIcon className="h-5 w-5 text-[var(--accent)]" />
                     {editMode ? 'Editar Usuario y Permisos' : 'Crear Nuevo Usuario'}
                   </DialogTitle>
-                  <p className="text-xs text-[var(--text-muted)] mt-0.5">Define credenciales de acceso seguras y ajusta la matriz de permisos.</p>
+                  <p className="mt-0.5 text-xs text-[var(--text-muted)]">Completa los datos y define qué puede usar esta persona.</p>
                 </div>
 
                 {/* Tabs Switcher */}
-                <div className="flex items-center gap-1.5 p-1 bg-[var(--bg-subtle)] rounded-xl border border-[var(--border-subtle)]">
+                <div className="flex w-full items-center gap-1 p-1 bg-[var(--bg-subtle)] rounded-xl border border-[var(--border-subtle)] sm:w-auto">
                   <button
                     onClick={() => setModalTab('profile')}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                    className={`flex flex-1 items-center justify-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-bold transition-all cursor-pointer sm:flex-none ${
                       modalTab === 'profile'
                         ? 'bg-[var(--bg-panel)] text-[var(--text-primary)] shadow-sm'
                         : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
                     }`}
                   >
-                    <UserIcon className="h-3.5 w-3.5" /> Datos Básicos
+                    <UserIcon className="h-3.5 w-3.5" /> Datos
                   </button>
                   <button
                     onClick={() => setModalTab('permissions')}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                    className={`flex flex-1 items-center justify-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-bold transition-all cursor-pointer sm:flex-none ${
                       modalTab === 'permissions'
                         ? 'bg-[var(--accent)] text-[var(--accent-fg)] shadow-sm'
                         : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
                     }`}
                   >
-                    <ShieldCheck className="h-3.5 w-3.5" /> Matriz de Permisos
+                    <ShieldCheck className="h-3.5 w-3.5" /> Permisos
                     <span className="ml-1 px-1.5 py-0.2 bg-black/20 text-[10px] rounded-full font-mono font-bold">
                       {selectedPermissions.length}
                     </span>
@@ -685,7 +693,7 @@ export default function UsersPage() {
               </div>
               
               {/* Modal Body with Scroll */}
-              <div className="p-6 overflow-y-auto flex-1 custom-scrollbar">
+              <div className="flex-1 overflow-y-auto p-4 custom-scrollbar sm:p-6">
                 {modalTab === 'profile' ? (
                   <div className="space-y-4 max-w-xl mx-auto py-2">
                     <div className="space-y-1.5">
@@ -990,32 +998,73 @@ export default function UsersPage() {
         </div>
       </motion.div>
 
-      {/* ── Sub Navigation Tabs (Activos / Inactivos) ── */}
-      <motion.div className="flex items-center gap-2 border-b border-[var(--border-subtle)] pb-2" variants={fadeUp}>
-        <button
-          onClick={() => setActiveTab('active')}
-          className={`pb-2 px-3 text-xs font-bold border-b-2 transition-all cursor-pointer ${
-            activeTab === 'active'
-              ? 'border-[var(--accent)] text-[var(--accent)]'
-              : 'border-transparent text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
-          }`}
-        >
-          ACTIVOS ({activeUsers.length})
-        </button>
-        <button
-          onClick={() => setActiveTab('inactive')}
-          className={`pb-2 px-3 text-xs font-bold border-b-2 transition-all cursor-pointer ${
-            activeTab === 'inactive'
-              ? 'border-[var(--destructive)] text-[var(--destructive)]'
-              : 'border-transparent text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
-          }`}
-        >
-          INACTIVOS ({inactiveUsers.length})
-        </button>
+      {/* Barra de búsqueda y estado */}
+      <motion.div variants={fadeUp}>
+        <Card className="flex flex-col gap-3 p-3 sm:flex-row sm:items-center sm:justify-between sm:p-4">
+          <div className="relative w-full sm:max-w-sm">
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--text-muted)]" />
+            <Input
+              value={userSearch}
+              onChange={event => setUserSearch(event.target.value)}
+              placeholder="Buscar por nombre, usuario, teléfono o rol"
+              className="h-10 rounded-xl border-[var(--border-default)] bg-[var(--bg-elevated)] pl-9 pr-9 text-sm"
+            />
+            {userSearch && (
+              <button
+                type="button"
+                onClick={() => setUserSearch('')}
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 rounded-lg p-1 text-[var(--text-muted)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]"
+                aria-label="Limpiar búsqueda"
+              >
+                <XCircle className="h-4 w-4" />
+              </button>
+            )}
+          </div>
+
+          <div className="flex items-center gap-1 rounded-xl bg-[var(--bg-elevated)] p-1">
+            <button
+              type="button"
+              onClick={() => setActiveTab('active')}
+              className={`flex-1 rounded-lg px-3 py-2 text-xs font-bold transition-colors sm:flex-none ${
+                activeTab === 'active'
+                  ? 'bg-[var(--bg-panel)] text-emerald-600 shadow-sm'
+                  : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+              }`}
+            >
+              Activos <span className="ml-1 opacity-70">{activeUsers.length}</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab('inactive')}
+              className={`flex-1 rounded-lg px-3 py-2 text-xs font-bold transition-colors sm:flex-none ${
+                activeTab === 'inactive'
+                  ? 'bg-[var(--bg-panel)] text-rose-600 shadow-sm'
+                  : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+              }`}
+            >
+              Inactivos <span className="ml-1 opacity-70">{inactiveUsers.length}</span>
+            </button>
+          </div>
+        </Card>
       </motion.div>
 
-      {/* ── Users Grid ── */}
-      <motion.div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5" variants={stagger}>
+      {/* Lista compacta de usuarios */}
+      <motion.div className="overflow-hidden rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] shadow-sm" variants={stagger}>
+        <div className="hidden border-b border-[var(--border-subtle)] bg-[var(--bg-elevated)]/60 px-4 py-2.5 text-[10px] font-black uppercase tracking-wider text-[var(--text-muted)] lg:grid lg:grid-cols-[minmax(230px,1.25fr)_minmax(180px,0.85fr)_minmax(150px,0.7fr)_auto] lg:gap-4">
+          <span>Usuario</span>
+          <span>Rol y estado</span>
+          <span>Acceso</span>
+          <span className="text-right">Acciones</span>
+        </div>
+
+        {displayedUsers.length === 0 && (
+          <div className="flex flex-col items-center justify-center px-4 py-14 text-center">
+            <Search className="mb-3 h-8 w-8 text-[var(--text-muted)]" />
+            <p className="text-sm font-bold text-[var(--text-primary)]">No encontramos usuarios</p>
+            <p className="mt-1 text-xs text-[var(--text-muted)]">Prueba con otro nombre, teléfono o rol.</p>
+          </div>
+        )}
+
         {displayedUsers.map(u => {
           const RoleIcon = roleIcons[u.role] || UserIcon
           const isCurrent = currentUser?.id === u.id
@@ -1030,26 +1079,23 @@ export default function UsersPage() {
             <motion.div
               key={u.id}
               variants={fadeUp}
-              whileHover={{ y: -3 }}
-              className={`rounded-3xl border transition-all overflow-hidden bg-[var(--bg-panel)] flex flex-col justify-between p-5 relative shadow-sm ${
+              className={`border-b border-[var(--border-subtle)] p-4 transition-colors last:border-b-0 hover:bg-[var(--bg-hover)]/60 ${
                 u.active
-                  ? 'border-[var(--border-subtle)] hover:border-[var(--border-default)] hover:shadow-md'
-                  : 'border-rose-500/20 bg-rose-500/[0.02] opacity-80'
+                  ? ''
+                  : 'bg-rose-500/[0.025]'
               }`}
             >
-              <div className="space-y-4">
-                {/* User Top Row: Avatar, Name, Email, Action Icons */}
-                <div className="flex items-start justify-between gap-2">
-                  <div className="flex items-center gap-2.5 min-w-0 flex-1">
+              <div className="flex flex-col gap-3 lg:grid lg:grid-cols-[minmax(230px,1.25fr)_minmax(180px,0.85fr)_minmax(150px,0.7fr)_auto] lg:items-center lg:gap-4">
+                <div className="flex min-w-0 items-center gap-3">
                     <div
-                      className="h-10 w-10 rounded-2xl flex items-center justify-center text-white font-bold text-sm shadow-sm shrink-0"
+                      className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-sm font-black text-white shadow-sm"
                       style={{ backgroundColor: getRoleColor(u.role) }}
                     >
                       {getInitials(u.name)}
                     </div>
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-1.5 min-w-0">
-                        <h3 className="text-sm font-bold text-[var(--text-primary)] truncate" title={u.name}>
+                        <h3 className="truncate text-sm font-bold text-[var(--text-primary)]" title={u.name}>
                           {u.name}
                         </h3>
                         {isCurrent && (
@@ -1058,63 +1104,30 @@ export default function UsersPage() {
                           </span>
                         )}
                       </div>
-                      <p className="text-xs text-[var(--text-secondary)] truncate flex items-center gap-1 mt-0.5 font-semibold">
+                      <p className="mt-0.5 flex truncate text-xs font-semibold text-[var(--text-secondary)]">
                         {u.email.endsWith('@thevilladog.local') ? (
                           <>
-                            <span className="text-[var(--accent)] font-bold text-xs shrink-0">@</span>
+                            <span className="mr-0.5 shrink-0 font-bold text-[var(--accent)]">@</span>
                             <span className="truncate">{u.email.replace('@thevilladog.local', '')}</span>
                           </>
                         ) : (
                           <>
-                            <Mail className="h-3 w-3 shrink-0" />
+                            <Mail className="mr-1 h-3 w-3 shrink-0" />
                             <span className="truncate">{u.email}</span>
                           </>
                         )}
                       </p>
+                      {u.phone && (
+                        <p className="mt-0.5 flex items-center gap-1 text-[11px] text-[var(--text-muted)]">
+                          <Phone className="h-3 w-3" /> {u.phone}
+                        </p>
+                      )}
                     </div>
-                  </div>
-
-                  {/* Action Icons - ALWAYS VISIBLE, NEVER CLIPPED */}
-                  <div className="flex items-center gap-0.5 shrink-0">
-                    <button
-                      onClick={() => openEdit(u)}
-                      className="h-8 w-8 rounded-xl flex items-center justify-center text-emerald-600 hover:bg-emerald-500/10 transition-colors cursor-pointer"
-                      title="Editar usuario y matriz de permisos"
-                    >
-                      <Edit className="h-4 w-4" />
-                    </button>
-                    <button
-                      onClick={() => openPasswordDialog(u)}
-                      className="h-8 w-8 rounded-xl flex items-center justify-center text-purple-600 hover:bg-purple-500/10 transition-colors cursor-pointer"
-                      title="Cambiar contraseña"
-                    >
-                      <KeyRound className="h-4 w-4" />
-                    </button>
-                    {isSuperAdmin && u.id !== currentUser?.id && u.role !== 'SUPERADMIN' && (
-                      <button
-                        onClick={() => handleImpersonate(u)}
-                        className="h-8 w-8 rounded-xl flex items-center justify-center text-amber-600 hover:bg-amber-500/10 transition-colors cursor-pointer"
-                        title="Iniciar sesión de soporte"
-                      >
-                        {impersonatingId === u.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <LogIn className="h-4 w-4" />}
-                      </button>
-                    )}
-                    {u.role !== 'SUPERADMIN' && u.id !== currentUser?.id && (
-                      <button
-                        onClick={() => handleDeleteUserClick(u)}
-                        className="h-8 w-8 rounded-xl flex items-center justify-center text-rose-600 hover:bg-rose-500/10 transition-colors cursor-pointer"
-                        title="Eliminar usuario definitivamente"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </button>
-                    )}
-                  </div>
                 </div>
 
-                {/* Role and Info Badges */}
-                <div className="flex flex-wrap items-center gap-2 pt-1">
+                <div className="flex flex-wrap items-center gap-1.5">
                   <div
-                    className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl text-xs font-bold border"
+                    className="inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-[11px] font-bold"
                     style={{
                       borderColor: `${getRoleColor(u.role)}30`,
                       backgroundColor: `${getRoleColor(u.role)}10`,
@@ -1125,70 +1138,82 @@ export default function UsersPage() {
                     {getRoleLabel(u.role)}
                   </div>
 
-                  <div className={`px-2.5 py-1 rounded-xl text-[11px] font-bold ${
+                  <div className={`rounded-lg px-2 py-1 text-[10px] font-black ${
                     u.active ? 'bg-emerald-500/10 text-emerald-600' : 'bg-rose-500/10 text-rose-600'
                   }`}>
                     {u.active ? 'ACTIVO' : 'INACTIVO'}
                   </div>
 
                   {u.mustVerifyEmail && (
-                    <div className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl text-[10px] font-bold bg-amber-500/10 text-amber-600 border border-amber-500/20">
+                    <div className="inline-flex items-center gap-1 rounded-lg border border-amber-500/20 bg-amber-500/10 px-2 py-1 text-[10px] font-bold text-amber-600">
                       <Clock className="h-3 w-3" />
-                      <span>Clave Provisional (48h)</span>
-                    </div>
-                  )}
-
-                  {u.phone && (
-                    <div className="text-xs text-[var(--text-secondary)] font-mono flex items-center gap-1 ml-auto">
-                      <Phone className="h-3 w-3" /> {u.phone}
+                      <span>Clave provisional</span>
                     </div>
                   )}
                 </div>
 
-                {/* Granular Permissions Indicator Pill */}
-                <div className="pt-2 border-t border-[var(--border-subtle)] flex items-center justify-between text-xs">
-                  <span className="text-[var(--text-muted)] text-[11px] flex items-center gap-1">
-                    <ShieldCheck className="h-3.5 w-3.5 text-[var(--accent)]" /> Permisos:
-                  </span>
+                <div className="flex items-center">
                   <button
                     onClick={() => { openEdit(u); setModalTab('permissions'); }}
-                    className="text-[11px] font-bold text-[var(--accent)] hover:underline flex items-center gap-1 cursor-pointer"
+                    className="flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-[11px] font-bold text-[var(--accent)] hover:bg-[var(--accent)]/10"
+                    title="Editar permisos"
                   >
-                    <span>{userPerms.length} de {ALL_PERMISSION_KEYS.length} acciones</span>
+                    <ShieldCheck className="h-3.5 w-3.5" />
+                    <span>{userPerms.length} permisos</span>
                     {isCustomPerms && (
-                      <span className="px-1.5 py-0.2 rounded-full bg-blue-500/10 text-blue-600 text-[10px] font-bold">
-                        Personalizado
+                      <span className="rounded-full bg-blue-500/10 px-1.5 py-0.5 text-[9px] font-bold text-blue-600">
+                        Personalizados
                       </span>
                     )}
                   </button>
                 </div>
-              </div>
 
-              {/* Bottom Actions: Desactivar/Reactivar + Eliminar */}
-              {u.role !== 'SUPERADMIN' && (
-                <div className="mt-4 pt-3 border-t border-[var(--border-subtle)] flex items-center justify-between gap-2">
+                <div className="flex flex-wrap items-center gap-1.5 lg:justify-end">
                   <button
-                    onClick={() => toggleActive(u.id, u.active)}
-                    className={`py-1.5 px-3 rounded-xl text-xs font-bold uppercase tracking-wider transition-colors cursor-pointer ${
-                      u.active
-                        ? 'text-amber-600 hover:bg-amber-500/10'
-                        : 'text-emerald-600 hover:bg-emerald-500/10'
-                    }`}
+                    onClick={() => openEdit(u)}
+                    className="flex h-8 items-center gap-1.5 rounded-lg border border-[var(--border-subtle)] px-2.5 text-[11px] font-bold text-[var(--text-primary)] hover:bg-[var(--bg-elevated)]"
+                    title="Editar usuario"
                   >
-                    {u.active ? 'Desactivar' : 'Reactivar'}
+                    <Edit className="h-3.5 w-3.5 text-emerald-600" /> Editar
                   </button>
-
-                  {u.id !== currentUser?.id && (
+                  <button
+                    onClick={() => openPasswordDialog(u)}
+                    className="flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--border-subtle)] text-purple-600 hover:bg-purple-500/10"
+                    title="Cambiar contraseña"
+                  >
+                    <KeyRound className="h-3.5 w-3.5" />
+                  </button>
+                  {isSuperAdmin && u.id !== currentUser?.id && u.role !== 'SUPERADMIN' && (
+                    <button
+                      onClick={() => handleImpersonate(u)}
+                      className="flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--border-subtle)] text-amber-600 hover:bg-amber-500/10"
+                      title="Iniciar sesión de soporte"
+                    >
+                      {impersonatingId === u.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <LogIn className="h-3.5 w-3.5" />}
+                    </button>
+                  )}
+                  {u.role !== 'SUPERADMIN' && (
+                    <button
+                      onClick={() => toggleActive(u.id, u.active)}
+                      className={`flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--border-subtle)] ${
+                        u.active ? 'text-amber-600 hover:bg-amber-500/10' : 'text-emerald-600 hover:bg-emerald-500/10'
+                      }`}
+                      title={u.active ? 'Desactivar usuario' : 'Reactivar usuario'}
+                    >
+                      {u.active ? <XCircle className="h-3.5 w-3.5" /> : <UserCheck className="h-3.5 w-3.5" />}
+                    </button>
+                  )}
+                  {u.role !== 'SUPERADMIN' && u.id !== currentUser?.id && (
                     <button
                       onClick={() => handleDeleteUserClick(u)}
-                      className="py-1.5 px-3 rounded-xl text-xs font-bold uppercase tracking-wider text-rose-600 hover:bg-rose-500/10 transition-colors cursor-pointer flex items-center gap-1"
-                      title="Eliminar cuenta definitivamente"
+                      className="flex h-8 w-8 items-center justify-center rounded-lg border border-rose-500/20 text-rose-600 hover:bg-rose-500/10"
+                      title="Eliminar usuario"
                     >
-                      <Trash2 className="h-3.5 w-3.5" /> Eliminar
+                      <Trash2 className="h-3.5 w-3.5" />
                     </button>
                   )}
                 </div>
-              )}
+              </div>
             </motion.div>
           )
         })}
