@@ -84,4 +84,37 @@ describe('WhatsApp advisor concurrency', () => {
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
     }));
   });
+
+  it('paginates the conversation inbox with a stable timestamp and id cursor', async () => {
+    const sessions = [
+      { id: 'chat-3', phone: '3000000003', lastMessageAt: new Date('2026-09-05T15:00:00Z'), messages: [] },
+      { id: 'chat-2', phone: '3000000002', lastMessageAt: new Date('2026-09-05T14:00:00Z'), messages: [] },
+      { id: 'chat-1', phone: '3000000001', lastMessageAt: new Date('2026-09-05T13:00:00Z'), messages: [] },
+    ];
+    const prisma: any = {
+      whatsAppSession: { findMany: jest.fn().mockResolvedValueOnce(sessions).mockResolvedValueOnce([]) },
+      whatsAppMessage: { groupBy: jest.fn().mockResolvedValue([]) },
+      cashClosing: { findFirst: jest.fn().mockResolvedValue(null) },
+    };
+    const { service } = createService(prisma);
+
+    const firstPage: any = await service.getSessions(undefined, false, 2, undefined, 'ALL', 'advisor-1', undefined, true);
+    expect(firstPage.items.map((session: any) => session.id)).toEqual(['chat-3', 'chat-2']);
+    expect(firstPage.nextCursor).toEqual(expect.any(String));
+    expect(prisma.whatsAppSession.findMany.mock.calls[0][0]).toEqual(expect.objectContaining({
+      take: 3,
+      orderBy: [{ lastMessageAt: 'desc' }, { id: 'desc' }],
+    }));
+
+    await service.getSessions(undefined, false, 2, undefined, 'ALL', 'advisor-1', firstPage.nextCursor, true);
+    const cursorWhere = prisma.whatsAppSession.findMany.mock.calls[1][0].where;
+    expect(cursorWhere.AND).toEqual(expect.arrayContaining([
+      {
+        OR: [
+          { lastMessageAt: { lt: new Date('2026-09-05T14:00:00Z') } },
+          { lastMessageAt: new Date('2026-09-05T14:00:00Z'), id: { lt: 'chat-2' } },
+        ],
+      },
+    ]));
+  });
 });

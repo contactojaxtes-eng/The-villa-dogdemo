@@ -1437,12 +1437,15 @@ export class WhatsappService {
     limit?: number, 
     page?: number,
     filter?: string,
-    userId?: string
+    userId?: string,
+    cursor?: string,
+    cursorMode?: boolean,
   ) {
     const cleanSearch = search?.trim() ? search.trim().toLowerCase() : '';
     const safePage = Math.max(1, page || 1);
-    const takeAmount = fetchAll ? undefined : (limit || (cleanSearch ? 100 : 60));
-    const skipAmount = (!fetchAll && takeAmount && safePage > 1) ? (safePage - 1) * takeAmount : undefined;
+    const requestedLimit = Number.isFinite(limit) ? Math.trunc(limit as number) : (cleanSearch ? 100 : 60);
+    const takeAmount = fetchAll ? undefined : Math.min(100, Math.max(1, requestedLimit));
+    const skipAmount = (!fetchAll && !cursorMode && takeAmount && safePage > 1) ? (safePage - 1) * takeAmount : undefined;
 
     const andClauses: any[] = [{ active: true }];
     let matchingOrders: any[] = [];
@@ -1732,7 +1735,7 @@ export class WhatsappService {
         if (unreadIds.length > 0) {
           andClauses.push({ id: { in: unreadIds } });
         } else {
-          return [];
+          return cursorMode ? { items: [], nextCursor: null } : [];
         }
       } else if (filter === 'UNANSWERED') {
         const recentLimit = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
@@ -1768,18 +1771,46 @@ export class WhatsappService {
       }
     }
 
+    if (cursorMode && cursor) {
+      try {
+        const decoded = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8'));
+        const beforeDate = new Date(decoded?.lastMessageAt);
+        if (typeof decoded?.id !== 'string' || !decoded.id || decoded.id.length > 128 || Number.isNaN(beforeDate.getTime())) {
+          throw new Error('invalid cursor');
+        }
+        andClauses.push({
+          OR: [
+            { lastMessageAt: { lt: beforeDate } },
+            { lastMessageAt: beforeDate, id: { lt: decoded.id } },
+          ],
+        });
+      } catch {
+        throw new BadRequestException('Cursor de conversaciones inválido');
+      }
+    }
+
     const where: any = andClauses.length === 1 ? andClauses[0] : { AND: andClauses };
 
-    const sessions = await this.prisma.whatsAppSession.findMany({
+    const queriedSessions = await this.prisma.whatsAppSession.findMany({
       where,
       include: {
         assignedTo: { select: { id: true, name: true } },
         messages: { orderBy: { createdAt: 'desc' }, take: 1 },
       },
-      orderBy: { lastMessageAt: 'desc' },
-      ...(takeAmount ? { take: takeAmount } : {}),
+      orderBy: [{ lastMessageAt: 'desc' }, { id: 'desc' }],
+      ...(takeAmount ? { take: cursorMode ? takeAmount + 1 : takeAmount } : {}),
       ...(skipAmount ? { skip: skipAmount } : {}),
     });
+
+    const hasNextPage = Boolean(cursorMode && takeAmount && queriedSessions.length > takeAmount);
+    const sessions = hasNextPage ? queriedSessions.slice(0, takeAmount) : queriedSessions;
+    const cursorAnchor = sessions[sessions.length - 1];
+    const nextCursor = hasNextPage && cursorAnchor
+      ? Buffer.from(JSON.stringify({
+          lastMessageAt: cursorAnchor.lastMessageAt.toISOString(),
+          id: cursorAnchor.id,
+        })).toString('base64url')
+      : null;
 
     const sessionIds = sessions.map(s => s.id);
     const unreadCounts = sessionIds.length > 0 ? await this.prisma.whatsAppMessage.groupBy({
@@ -1957,7 +1988,7 @@ export class WhatsappService {
       });
     }
 
-    return deduplicatedSessions;
+    return cursorMode ? { items: deduplicatedSessions, nextCursor } : deduplicatedSessions;
   }
 
   async getSession(id: string) {

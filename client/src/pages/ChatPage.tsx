@@ -37,6 +37,11 @@ type Session = {
   messages: Message[]
 }
 
+type SessionPage = {
+  items: Session[]
+  nextCursor: string | null
+}
+
 type Message = {
   id: string
   direction: 'IN' | 'OUT'
@@ -828,10 +833,9 @@ function ChatPage() {
     unassigned: 0,
     mine: 0,
   })
-  const [page, setPage] = useState(1)
   const [hasMore, setHasMore] = useState(true)
   const [loadingMore, setLoadingMore] = useState(false)
-  const pageRef = useRef(1)
+  const sessionCursorRef = useRef<string | null>(null)
   const hasMoreRef = useRef(true)
   const loadingMoreRef = useRef(false)
   const messagesCacheRef = useRef<Record<string, Message[]>>({})
@@ -1111,10 +1115,9 @@ function ChatPage() {
   // Fetch active sessions with optional search, filter or full historic query
   const loadSessions = async (selectId?: string, searchParam?: string, fetchAll?: boolean, targetFilter?: string) => {
     setLoadingSessions(true)
-    pageRef.current = 1
+    sessionCursorRef.current = null
     hasMoreRef.current = true
     setHasMore(true)
-    setPage(1)
     loadStats()
     try {
       const activeFilter = targetFilter !== undefined ? targetFilter : chatFilter
@@ -1127,16 +1130,18 @@ function ChatPage() {
       if (fetchAll) {
         queryParams.set('all', 'true')
       } else {
-        queryParams.set('page', '1')
+        queryParams.set('pagination', 'cursor')
         queryParams.set('limit', '60')
       }
       const queryString = queryParams.toString() ? `?${queryParams.toString()}` : ''
 
-      const data = await api.get<Session[]>(`/whatsapp/sessions${queryString}`)
-      const safeData = Array.isArray(data) ? data : []
-      if (!fetchAll && safeData.length < 60) {
-        hasMoreRef.current = false
-        setHasMore(false)
+      const data = await api.get<Session[] | SessionPage>(`/whatsapp/sessions${queryString}`)
+      const safeData = Array.isArray(data) ? data : (Array.isArray(data?.items) ? data.items : [])
+      if (!fetchAll) {
+        const nextCursor = Array.isArray(data) ? null : data?.nextCursor || null
+        sessionCursorRef.current = nextCursor
+        hasMoreRef.current = Boolean(nextCursor)
+        setHasMore(Boolean(nextCursor))
       }
       // Deduplicar sesiones de forma segura (solo por teléfono estándar válido de 10 dígitos)
       const seen = new Set<string>()
@@ -1196,23 +1201,26 @@ function ChatPage() {
     loadingMoreRef.current = true
     setLoadingMore(true)
     try {
-      const nextPage = pageRef.current + 1
+      const cursor = sessionCursorRef.current
+      if (!cursor) {
+        hasMoreRef.current = false
+        setHasMore(false)
+        return
+      }
       const queryParams = new URLSearchParams()
       if (chatSearch?.trim()) queryParams.set('search', chatSearch.trim())
       if (chatFilter && chatFilter !== 'ALL') queryParams.set('filter', chatFilter)
-      queryParams.set('page', String(nextPage))
+      queryParams.set('pagination', 'cursor')
+      queryParams.set('cursor', cursor)
       queryParams.set('limit', '60')
       const queryString = `?${queryParams.toString()}`
 
-      const data = await api.get<Session[]>(`/whatsapp/sessions${queryString}`)
-      const safeData = Array.isArray(data) ? data : []
-      if (safeData.length < 60) {
-        hasMoreRef.current = false
-        setHasMore(false)
-      }
+      const data = await api.get<SessionPage>(`/whatsapp/sessions${queryString}`)
+      const safeData = Array.isArray(data?.items) ? data.items : []
+      sessionCursorRef.current = data?.nextCursor || null
+      hasMoreRef.current = Boolean(data?.nextCursor)
+      setHasMore(Boolean(data?.nextCursor))
       if (safeData.length > 0) {
-        pageRef.current = nextPage
-        setPage(nextPage)
         setSessions(prev => {
           const seen = new Set(prev.map(s => {
             const clean = (s.phone || '').replace(/\D/g, '')
@@ -1231,7 +1239,7 @@ function ChatPage() {
           }
           return [...prev, ...newItems]
         })
-      } else {
+      } else if (!data?.nextCursor) {
         hasMoreRef.current = false
         setHasMore(false)
       }

@@ -171,6 +171,8 @@ export class WhatsappController {
     @Query('all') all?: string,
     @Query('limit') limit?: string,
     @Query('page') page?: string,
+    @Query('cursor') cursor?: string,
+    @Query('pagination') pagination?: string,
     @Query('filter') filter?: string,
     @Req() req?: any
   ) {
@@ -181,7 +183,9 @@ export class WhatsappController {
       limit ? parseInt(limit, 10) : undefined,
       page ? parseInt(page, 10) : undefined,
       filter,
-      userId
+      userId,
+      cursor,
+      pagination === 'cursor',
     );
   }
 
