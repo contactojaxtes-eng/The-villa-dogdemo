@@ -252,10 +252,18 @@ export function AppLayout() {
 
         <main className={cn(
           "flex-1 min-h-0",
-          isFullWidthWorkspace ? "overflow-hidden p-1.5 sm:p-2" : "overflow-y-auto p-3 md:p-6 pb-32 md:pb-8"
+          isWhatsAppWorkspace 
+            ? "overflow-hidden p-1.5 sm:p-2" 
+            : isKitchen
+            ? "overflow-y-auto p-2 sm:p-3 pb-28 md:pb-12"
+            : "overflow-y-auto p-3 md:p-6 pb-32 md:pb-8"
         )}>
           <div className={cn(
-            isFullWidthWorkspace ? "h-full w-full max-w-none" : "mx-auto max-w-7xl min-h-full"
+            isWhatsAppWorkspace 
+              ? "h-full w-full max-w-none" 
+              : isKitchen
+              ? "w-full max-w-none min-h-full"
+              : "mx-auto max-w-7xl min-h-full"
           )}>
             <ErrorBoundary key={location.pathname}>
               <Outlet />
