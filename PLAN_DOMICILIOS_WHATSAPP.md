@@ -10,6 +10,7 @@ La separación no requiere duplicar productos, clientes ni infraestructura. El c
 
 - Se eliminó por completo el envío masivo de WhatsApp del panel, la API, el servicio y los scripts auxiliares.
 - Los chats se actualizan por una sala Socket.IO exclusiva para administradores, cajeros y gestoras de domicilios.
+- El estado visible de WhatsApp refleja la conexión Socket.IO real en escritorio y móvil: conectado, reconectando o sin conexión.
 - La toma de una conversación es atómica: si dos gestoras intentan tomarla, solo una obtiene la asignación y la otra ve quién la está atendiendo.
 - El historial de mensajes se carga en bloques de 120 con cursor para evitar descargar conversaciones completas.
 - Abrir un chat solo envía confirmación de lectura para mensajes realmente pendientes; ya no repite todo el historial contra Meta.

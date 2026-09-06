@@ -803,6 +803,7 @@ function ChatPage() {
   const [chatFilter, setChatFilter] = useState<'TODAY' | 'ALL' | 'UNREAD' | 'WAITING' | 'MINE' | 'UNASSIGNED'>('TODAY')
   const [displayLimit, setDisplayLimit] = useState(100)
   const [isMutedWa, setIsMutedWa] = useState(() => localStorage.getItem('niche_mute_wa_toasts') === 'true')
+  const [realtimeStatus, setRealtimeStatus] = useState<'connecting' | 'connected' | 'disconnected'>('connecting')
   const tabsRef = useRef<HTMLDivElement>(null)
   const statusReloadTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -1327,12 +1328,19 @@ function ChatPage() {
     const socket = io(`${socketUrl}/the-villa-dog`, {
       transports: ['websocket', 'polling'],
     })
+    socketRef.current = socket
+    setRealtimeStatus('connecting')
 
     let connectedOnce = false
     socket.on('connect', () => {
+      setRealtimeStatus('connected')
       if (connectedOnce) loadSessions(undefined, chatSearch.trim(), false)
       connectedOnce = true
     })
+    socket.on('disconnect', () => setRealtimeStatus(socket.active ? 'connecting' : 'disconnected'))
+    socket.on('connect_error', () => setRealtimeStatus(socket.active ? 'connecting' : 'disconnected'))
+    socket.io.on('reconnect_attempt', () => setRealtimeStatus('connecting'))
+    socket.io.on('reconnect_failed', () => setRealtimeStatus('disconnected'))
     socket.on('chatSessionAssigned', (payload: any) => {
       if (!payload || !payload.sessionId) return
       const payloadDigits = (payload.phone || '').replace(/\D/g, '')
@@ -1702,6 +1710,7 @@ function ChatPage() {
     })
 
     return () => {
+      socketRef.current = null
       socket.disconnect()
     }
   }, [])
@@ -2364,14 +2373,32 @@ function ChatPage() {
         <div className="hidden xl:flex items-center gap-2 shrink-0 pl-1 pr-2">
           <div className="relative flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-tr from-[#EA580C] to-[#F97316] text-[#0D0D0D]">
             <MessageSquareText className="h-4.5 w-4.5" />
-            <span className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full border-2 border-[var(--bg-panel)] bg-emerald-500" />
+            <span className={cn(
+              "absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full border-2 border-[var(--bg-panel)]",
+              realtimeStatus === 'connected' ? "bg-emerald-500" : realtimeStatus === 'connecting' ? "bg-amber-500 animate-pulse" : "bg-red-500"
+            )} />
           </div>
           <div className="leading-tight">
             <div className="flex items-center gap-1.5">
               <h1 className="text-sm font-black uppercase tracking-wide text-[var(--text-primary)]">WhatsApp</h1>
-              <Badge className="border border-emerald-500/25 bg-emerald-500/10 px-1.5 py-0 text-[8px] font-black text-emerald-600">EN VIVO</Badge>
+              <Badge className={cn(
+                "border px-1.5 py-0 text-[8px] font-black",
+                realtimeStatus === 'connected'
+                  ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-600"
+                  : realtimeStatus === 'connecting'
+                    ? "border-amber-500/25 bg-amber-500/10 text-amber-600"
+                    : "border-red-500/25 bg-red-500/10 text-red-600"
+              )}>
+                {realtimeStatus === 'connected' ? 'EN VIVO' : realtimeStatus === 'connecting' ? 'CONECTANDO' : 'SIN CONEXIÓN'}
+              </Badge>
             </div>
-            <p className="text-[10px] font-medium text-[var(--text-muted)]">Atención en tiempo real</p>
+            <p className="text-[10px] font-medium text-[var(--text-muted)]">
+              {realtimeStatus === 'connected'
+                ? 'Atención en tiempo real'
+                : realtimeStatus === 'connecting'
+                  ? 'Conectando actualizaciones'
+                  : 'Las actualizaciones pueden demorarse'}
+            </p>
           </div>
         </div>
 
@@ -2409,6 +2436,27 @@ function ChatPage() {
         </div>
 
         <div className="flex shrink-0 items-center gap-1">
+          <span
+            className={cn(
+              "flex h-8 items-center gap-1.5 rounded-lg border px-2 text-[10px] font-black xl:hidden",
+              realtimeStatus === 'connected'
+                ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-600"
+                : realtimeStatus === 'connecting'
+                  ? "border-amber-500/25 bg-amber-500/10 text-amber-600"
+                  : "border-red-500/25 bg-red-500/10 text-red-600"
+            )}
+            role="status"
+            aria-live="polite"
+            title={realtimeStatus === 'connected' ? 'WhatsApp conectado en tiempo real' : realtimeStatus === 'connecting' ? 'Conectando WhatsApp' : 'WhatsApp sin conexión en tiempo real'}
+          >
+            <span className={cn(
+              "h-2 w-2 rounded-full",
+              realtimeStatus === 'connected' ? "bg-emerald-500" : realtimeStatus === 'connecting' ? "bg-amber-500 animate-pulse" : "bg-red-500"
+            )} />
+            <span className="hidden sm:inline">
+              {realtimeStatus === 'connected' ? 'EN VIVO' : realtimeStatus === 'connecting' ? 'CONECTANDO' : 'SIN CONEXIÓN'}
+            </span>
+          </span>
           {chatFilter === 'MINE' && tabCounts.countMine > 0 && (
             <button
               type="button"
