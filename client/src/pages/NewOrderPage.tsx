@@ -2658,13 +2658,16 @@ export default function NewOrderPage({
    const renderMenuCard = () => {
     return (
       <Card className="flex min-h-0 flex-1 flex-col border border-[var(--border-subtle)] bg-[var(--bg-panel)] shadow-xl rounded-2xl overflow-hidden md:h-full h-auto">
-        <CardHeader className="shrink-0 pb-3 border-b border-[var(--border-subtle)] p-5">
-          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+        <CardHeader className={cn("shrink-0 border-b border-[var(--border-subtle)]", embedded ? "p-3 sm:p-4" : "p-5 pb-3")}>
+          <div className={cn(
+            "flex flex-col gap-3",
+            !embedded && "md:flex-row md:items-center md:justify-between"
+          )}>
             <div>
               <CardTitle className="text-base font-bold text-[var(--text-primary)]">Carta del Menú</CardTitle>
-              <CardDescription className="text-xs text-[var(--text-secondary)]">Selecciona los platos para agregarlos al pedido al instante</CardDescription>
+              <CardDescription className="text-xs text-[var(--text-secondary)]">Toca un producto para agregarlo al pedido</CardDescription>
             </div>
-            <div className="relative w-full md:w-80 flex items-center gap-2">
+            <div className={cn("relative flex w-full items-center gap-2", !embedded && "md:w-80")}>
               <div className="relative flex-1">
                 <Search className="absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-[var(--text-muted)]" />
                 <Input 
@@ -2713,7 +2716,10 @@ export default function NewOrderPage({
 
         <div className="flex flex-1 min-h-0">
           {/* Desktop Vertical Category Sidebar */}
-          <div className="hidden md:flex w-[290px] xl:w-[320px] shrink-0 border-r border-[var(--border-subtle)] bg-[var(--bg-panel)] flex-col gap-1.5 p-3 no-scrollbar overflow-hidden">
+          <div className={cn(
+            "w-[290px] xl:w-[320px] shrink-0 border-r border-[var(--border-subtle)] bg-[var(--bg-panel)] flex-col gap-1.5 p-3 no-scrollbar overflow-hidden",
+            embedded ? "hidden" : "hidden md:flex"
+          )}>
             <div className="relative group w-full shrink-0 mb-1">
               <Search className="absolute top-1/2 left-2.5 h-3.5 w-3.5 -translate-y-1/2 text-[var(--text-muted)] group-focus-within:text-[var(--accent)] transition-colors" />
               <Input
@@ -2763,7 +2769,10 @@ export default function NewOrderPage({
 
           <div className="flex-1 flex flex-col min-w-0 bg-[var(--bg-base)]/30">
             {/* Mobile Horizontal Category Navigation Bar */}
-            <div className="md:hidden shrink-0 px-4 py-3 border-b border-[var(--border-subtle)]/50 bg-[var(--bg-panel)]/30 flex gap-2 overflow-x-auto no-scrollbar scroll-smooth">
+            <div className={cn(
+              "shrink-0 px-3 sm:px-4 py-2.5 border-b border-[var(--border-subtle)]/50 bg-[var(--bg-panel)]/30 gap-2 overflow-x-auto no-scrollbar scroll-smooth",
+              embedded ? "flex" : "flex md:hidden"
+            )}>
               <button
                 type="button"
                 onClick={() => setCategoryFilter('ALL')}
@@ -2797,7 +2806,7 @@ export default function NewOrderPage({
               })}
             </div>
 
-            <CardContent className="min-h-0 flex-1 overflow-y-auto p-4 md:p-6 pb-24 md:pb-6">
+            <CardContent className={cn("min-h-0 flex-1 overflow-y-auto p-4 pb-24", !embedded && "md:p-6 md:pb-6")}>
           <div className="space-y-6">
             {/* Quick Natural Language Add Bar */}
             <div className="relative rounded-2xl border border-[var(--accent-border)]/40 bg-[var(--accent-muted)]/15 p-4 shadow-inner">
@@ -3750,65 +3759,85 @@ const renderDeliveryCard = () => {
         </div>
       )}
 
-      {/* Mobile Sticky Tab Headers */}
-      <div className="flex md:hidden rounded-xl bg-[var(--bg-panel)] p-1 border border-[var(--border-subtle)]/40 shrink-0">
+      {/* Flujo de pedido: siempre visible dentro de WhatsApp y compacto en móvil. */}
+      <div className={cn(
+        "rounded-xl bg-[var(--bg-panel)] p-1 border border-[var(--border-subtle)]/40 shrink-0",
+        embedded ? "flex" : "flex md:hidden"
+      )}>
         <button
           type="button"
-          className={`flex-1 py-2 text-xs font-bold rounded-lg transition-all cursor-pointer ${step === 'menu' ? 'bg-[var(--accent)] text-[var(--accent-fg)] shadow-sm' : 'text-[var(--text-secondary)]'}`}
+          className={`flex-1 py-2 text-xs font-bold rounded-lg transition-all cursor-pointer ${step === 'menu' ? 'bg-[var(--accent)] text-[var(--accent-fg)] shadow-sm' : 'text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]'}`}
           onClick={() => setStep('menu')}
         >
-          Carta ({cart.reduce((s, i) => s + i.quantity, 0)} items)
+          1. Productos <span className="ml-1 opacity-80">({cart.reduce((s, i) => s + i.quantity, 0)})</span>
         </button>
         <button
           type="button"
-          className={`flex-1 py-2 text-xs font-bold rounded-lg transition-all cursor-pointer ${step === 'delivery' ? 'bg-[var(--accent)] text-[var(--accent-fg)] shadow-sm' : 'text-[var(--text-secondary)]'}`}
+          className={`flex-1 py-2 text-xs font-bold rounded-lg transition-all cursor-pointer ${step === 'delivery' ? 'bg-[var(--accent)] text-[var(--accent-fg)] shadow-sm' : 'text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]'}`}
           onClick={() => setStep('delivery')}
         >
-          Entrega ({cart.length > 0 ? formatCurrency(total) : '$0'})
+          2. Datos y confirmar <span className="ml-1 opacity-80">({cart.length > 0 ? formatCurrency(total) : '$0'})</span>
         </button>
       </div>
 
-      {/* ── DESKTOP VIEW (hidden on mobile) ── */}
-      <div className={cn(
-        "hidden md:grid min-h-0 flex-1 gap-4 overflow-hidden",
-        embedded ? "grid-cols-[minmax(0,1.35fr)_minmax(18rem,0.65fr)]" : "md:grid-cols-2 lg:grid-cols-3"
-      )}>
-        {/* Columna 1: Menú (Ampliada) */}
-        <div className={cn("min-h-0 h-full flex flex-col", !embedded && "lg:col-span-2")}>
-          {renderMenuCard()}
+      {embedded ? (
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+          {step === 'menu' ? (
+            <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+              {renderMenuCard()}
+            </div>
+          ) : (
+            <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 overflow-y-auto pb-3 pr-1 no-scrollbar xl:grid-cols-[minmax(0,1.05fr)_minmax(20rem,0.95fr)] xl:overflow-hidden">
+              <div className="min-h-0 xl:overflow-y-auto xl:pr-1 no-scrollbar">
+                {renderDeliveryCard()}
+              </div>
+              <div className="min-h-0 xl:overflow-y-auto xl:pr-1 no-scrollbar">
+                {renderCartCard(true)}
+              </div>
+            </div>
+          )}
         </div>
-        
-        {/* Columna 2: Sidebar (Carrito + Datos) */}
-        <div className="min-h-0 h-full overflow-y-auto flex flex-col gap-4 pr-1 pb-4 no-scrollbar">
-          <div className="flex-none">
-            {renderCartCard(true)}
-          </div>
-          <div className="flex-none">
-            {renderDeliveryCard()}
-          </div>
-        </div>
-      </div>
+      ) : (
+        <>
+          {/* ── DESKTOP VIEW (hidden on mobile) ── */}
+          <div className="hidden md:grid min-h-0 flex-1 gap-4 overflow-hidden md:grid-cols-2 lg:grid-cols-3">
+            {/* Columna 1: Menú (Ampliada) */}
+            <div className="min-h-0 h-full flex flex-col lg:col-span-2">
+              {renderMenuCard()}
+            </div>
 
-      {/* ── MOBILE VIEW (hidden on desktop) ── */}
-      <div className="md:hidden flex-1 min-h-0 overflow-y-auto flex flex-col">
-        {step === 'menu' ? (
-          <div className="flex-1 min-h-0 overflow-y-auto">
-            {renderMenuCard()}
-          </div>
-        ) : (
-          <div className="flex-1 min-h-0 overflow-y-auto no-scrollbar space-y-4 pb-24">
-            {renderDeliveryCard()}
-            {/* On mobile, also display the Cart list in the Delivery tab so they can review their items before checkout */}
-            <div>
-              {renderCartCard(true)}
+            {/* Columna 2: Sidebar (Carrito + Datos) */}
+            <div className="min-h-0 h-full overflow-y-auto flex flex-col gap-4 pr-1 pb-4 no-scrollbar">
+              <div className="flex-none">
+                {renderCartCard(true)}
+              </div>
+              <div className="flex-none">
+                {renderDeliveryCard()}
+              </div>
             </div>
           </div>
-        )}
-      </div>
 
-      {/* Mobile Floating Cart Bar */}
+          {/* ── MOBILE VIEW (hidden on desktop) ── */}
+          <div className="md:hidden flex-1 min-h-0 overflow-y-auto flex flex-col">
+            {step === 'menu' ? (
+              <div className="flex-1 min-h-0 overflow-y-auto">
+                {renderMenuCard()}
+              </div>
+            ) : (
+              <div className="flex-1 min-h-0 overflow-y-auto no-scrollbar space-y-4 pb-24">
+                {renderDeliveryCard()}
+                <div>
+                  {renderCartCard(true)}
+                </div>
+              </div>
+            )}
+          </div>
+        </>
+      )}
+
+      {/* Resumen flotante para revisar el pedido sin perder la carta. */}
       {step === 'menu' && cart.length > 0 && !isCartDrawerOpen && (
-        <div className={cn("bottom-4 left-4 right-4 z-40 md:hidden", embedded ? "absolute" : "fixed")}>
+        <div className={cn("bottom-4 left-4 right-4 z-40", embedded ? "absolute" : "fixed md:hidden")}>
           <motion.div
             initial={{ y: 50, opacity: 0 }}
             animate={{ y: 0, opacity: 1 }}
@@ -3832,7 +3861,7 @@ const renderDeliveryCard = () => {
               onClick={() => setStep('delivery')} // Ir directamente a la pestaña de entrega!
               className="bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-fg)] font-bold text-xs px-4 h-9 rounded-xl flex items-center gap-1.5 shadow-md shadow-[var(--accent)]/10 cursor-pointer"
             >
-              Ver Pedido
+              Revisar y confirmar
             </Button>
           </motion.div>
         </div>

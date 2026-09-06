@@ -2892,7 +2892,7 @@ function ChatPage() {
 
                 <div className="flex w-full sm:w-auto items-center justify-end gap-1.5 sm:gap-2 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
                   {/* Create or Edit Order Button */}
-                  {activeOrder && (
+                  {!embeddedOrder && activeOrder && (
                     <Button 
                       size="sm"
                       className="h-8 bg-amber-500 hover:bg-amber-600 text-white font-extrabold text-[10px] uppercase tracking-wider rounded-lg flex items-center gap-1.5 shadow-md shadow-amber-500/20 px-2 sm:px-3 border border-amber-600/30 shrink-0 cursor-pointer"
@@ -2911,15 +2911,17 @@ function ChatPage() {
                       <span>Editar #{activeOrder.orderNumber}</span>
                     </Button>
                   )}
-                  <Button 
-                    size="sm"
-                    className="h-8 bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-fg)] font-bold text-[10px] uppercase tracking-wider rounded-lg flex items-center gap-1.5 shadow-md shadow-[var(--accent)]/10 px-2 sm:px-3 shrink-0"
-                    onClick={handleCreateOrder}
-                    title="Crear Nuevo Pedido"
-                  >
-                    <PlusCircle className="h-3.5 w-3.5" />
-                    <span>Nuevo Pedido</span>
-                  </Button>
+                  {!embeddedOrder && (
+                    <Button
+                      size="sm"
+                      className="h-8 bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-fg)] font-bold text-[10px] uppercase tracking-wider rounded-lg flex items-center gap-1.5 shadow-md shadow-[var(--accent)]/10 px-2 sm:px-3 shrink-0"
+                      onClick={handleCreateOrder}
+                      title="Crear Nuevo Pedido"
+                    >
+                      <PlusCircle className="h-3.5 w-3.5" />
+                      <span>Nuevo Pedido</span>
+                    </Button>
+                  )}
 
                   {/* Delete/Archive Session (Solo Admin/Superadmin) */}
                   {(user?.role === 'ADMIN' || user?.role === 'SUPERADMIN') && (
