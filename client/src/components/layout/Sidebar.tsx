@@ -1,6 +1,7 @@
 import { Link, useLocation } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { useEffect, useState } from 'react'
+import * as TooltipPrimitive from '@radix-ui/react-tooltip'
 import { useAuth } from '@/hooks/useAuth'
 import { useTheme } from '@/hooks/useTheme'
 import { cn } from '@/lib/utils'
@@ -134,13 +135,14 @@ export function Sidebar({ onClose, isCollapsed = false, onToggleCollapse }: Side
   }
 
   return (
-    <aside
-      className={cn(
-        "niche-sidebar flex shrink-0 flex-col border-r border-[var(--border-subtle)] bg-[var(--bg-panel)] relative transition-all duration-300 overflow-hidden z-20",
-        onClose ? "w-full h-full max-h-[100dvh]" : "h-screen"
-      )}
-      style={{ width: isCollapsed ? '64px' : onClose ? '100%' : '256px' }}
-    >
+    <TooltipPrimitive.Provider delayDuration={120} skipDelayDuration={80}>
+      <aside
+        className={cn(
+          "niche-sidebar flex shrink-0 flex-col border-r border-[var(--border-subtle)] bg-[var(--bg-panel)] relative transition-all duration-300 overflow-visible z-20",
+          onClose ? "w-full h-full max-h-[100dvh]" : "h-screen"
+        )}
+        style={{ width: isCollapsed ? '72px' : onClose ? '100%' : '256px' }}
+      >
       {onClose && (
         <Button variant="ghost" size="icon" onClick={onClose} className="absolute top-4 right-4 h-8 w-8 rounded-xl text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] md:hidden z-20 cursor-pointer">
           <X className="h-4 w-4" />
@@ -157,14 +159,14 @@ export function Sidebar({ onClose, isCollapsed = false, onToggleCollapse }: Side
         </button>
       )}
 
-      <div className="border-b border-[var(--border-subtle)] px-3 py-3 shrink-0 flex items-center justify-center">
-        <Link to={getFirstAllowedPath(user) || '/profile'} className={cn("flex justify-center rounded-2xl bg-white border border-slate-200/80 transition-all duration-200 hover:scale-[1.02] active:scale-[0.98]", isCollapsed ? "h-9 w-9 items-center p-1" : "py-2 px-3 w-full shadow-2xs")} onClick={onClose}>
+      <div className={cn("border-b border-[var(--border-subtle)] shrink-0 flex items-center justify-center", isCollapsed ? "px-3 py-3.5" : "px-3 py-3")}>
+        <Link to={getFirstAllowedPath(user) || '/profile'} className={cn("flex justify-center rounded-2xl bg-white border border-slate-200/80 transition-all duration-200 hover:scale-[1.02] active:scale-[0.98]", isCollapsed ? "h-11 w-11 items-center p-1 shadow-xs" : "py-2 px-3 w-full shadow-2xs")} onClick={onClose}>
           {isCollapsed ? <span className="text-sm font-black text-[#E30613]">V</span> : <BrandLogo compact imageClassName="w-24" />}
         </Link>
       </div>
 
-      <nav className={cn("flex-1 min-h-0 overflow-y-auto py-2", isCollapsed ? "px-1.5" : "px-3")}>
-        <ul className="space-y-0.5 mt-2">
+      <nav className={cn("flex-1 min-h-0 overflow-y-auto overflow-x-hidden", isCollapsed ? "px-2 py-2" : "px-3 py-2")}>
+        <ul className={cn("space-y-1", !isCollapsed && "mt-2")}>
           {finalItems.map((item, index) => {
             const Icon = item.icon
             const active = location.pathname === item.href || (
@@ -191,6 +193,9 @@ export function Sidebar({ onClose, isCollapsed = false, onToggleCollapse }: Side
                 onDrop={e => handleDrop(e, index)}
                 onDragEnd={() => { setDraggedIdx(null); setDragOverIdx(null) }}
               >
+                {showHeader && isCollapsed && index > 0 && (
+                  <div className="mx-2 my-2 h-px bg-[var(--border-subtle)]" aria-hidden="true" />
+                )}
                 {showHeader && !isCollapsed && (
                   <div className={cn("mb-1 px-3 flex items-center justify-between", index === 0 ? "" : "mt-4")}>
                     <p className={cn("text-[10px] font-bold tracking-widest uppercase flex items-center gap-1", item.section === 'SuperAdmin' ? 'text-amber-500' : 'text-[var(--text-muted)]')}>
@@ -226,28 +231,45 @@ export function Sidebar({ onClose, isCollapsed = false, onToggleCollapse }: Side
                       <GripVertical className="h-4 w-4" />
                     </div>
                   )}
-                  <Link
-                    to={item.href}
-                    onClick={e => { if (isEditing) e.preventDefault() }}
-                    title={isCollapsed ? item.label : undefined}
-                    className={cn(
-                      'relative flex items-center py-2.5 text-sm z-10 transition-all duration-200 flex-1',
-                      isCollapsed ? 'justify-center px-0' : 'gap-3 px-3',
-                      active && !isCollapsed && (item.section === 'SuperAdmin' ? 'font-semibold text-amber-500 pl-3' : 'font-semibold text-[var(--accent)] pl-3'),
-                      active && isCollapsed && (item.section === 'SuperAdmin' ? 'text-amber-500' : 'text-[var(--accent)]'),
-                      !active && 'text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)] rounded-xl'
+                  <TooltipPrimitive.Root>
+                    <TooltipPrimitive.Trigger asChild>
+                      <Link
+                        to={item.href}
+                        onClick={e => { if (isEditing) e.preventDefault() }}
+                        aria-label={isCollapsed ? item.label : undefined}
+                        className={cn(
+                          'relative flex items-center text-sm z-10 transition-all duration-200 flex-1 rounded-xl',
+                          isCollapsed ? 'h-10 justify-center px-0' : 'py-2.5 gap-3 px-3',
+                          active && !isCollapsed && (item.section === 'SuperAdmin' ? 'font-semibold text-amber-500 pl-3' : 'font-semibold text-[var(--accent)] pl-3'),
+                          active && isCollapsed && (item.section === 'SuperAdmin' ? 'text-amber-500' : 'text-[var(--accent)]'),
+                          !active && 'text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)]'
+                        )}
+                      >
+                        {active && (
+                          <motion.div
+                            layoutId="sidebar-active-indicator"
+                            className={cn("absolute inset-0 -z-10 rounded-xl", item.section === 'SuperAdmin' ? 'bg-amber-500/10' : 'bg-[var(--accent-muted)]', !isCollapsed && cn('border-l-4 rounded-l-none', item.section === 'SuperAdmin' ? 'border-amber-500' : 'border-[var(--accent)]'))}
+                            transition={{ type: 'spring', stiffness: 380, damping: 30 }}
+                          />
+                        )}
+                        <Icon className={cn("shrink-0", isCollapsed ? "h-[19px] w-[19px]" : "h-4 w-4")} />
+                        {!isCollapsed && <span className="relative line-clamp-1">{item.label}</span>}
+                      </Link>
+                    </TooltipPrimitive.Trigger>
+                    {isCollapsed && (
+                      <TooltipPrimitive.Portal>
+                        <TooltipPrimitive.Content
+                          side="right"
+                          sideOffset={10}
+                          className="z-[100] rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-xs font-bold text-white shadow-xl data-[state=delayed-open]:animate-in data-[state=closed]:animate-out"
+                        >
+                          {item.label}
+                          <span className="ml-2 text-[9px] font-semibold uppercase tracking-wider text-slate-400">{item.section}</span>
+                          <TooltipPrimitive.Arrow className="fill-slate-950" />
+                        </TooltipPrimitive.Content>
+                      </TooltipPrimitive.Portal>
                     )}
-                  >
-                    {active && (
-                      <motion.div
-                        layoutId="sidebar-active-indicator"
-                        className={cn("absolute inset-0 -z-10", item.section === 'SuperAdmin' ? 'bg-amber-500/10' : 'bg-[var(--accent-muted)]', isCollapsed ? "rounded-xl mx-1.5" : cn('border-l-4 rounded-r-xl', item.section === 'SuperAdmin' ? 'border-amber-500' : 'border-[var(--accent)]'))}
-                        transition={{ type: 'spring', stiffness: 380, damping: 30 }}
-                      />
-                    )}
-                    <Icon className="h-4 w-4 shrink-0" />
-                    {!isCollapsed && <span className="relative line-clamp-1">{item.label}</span>}
-                  </Link>
+                  </TooltipPrimitive.Root>
                   {isEditing && !isCollapsed && (
                     <div className="flex flex-col ml-1 shrink-0">
                       <button onClick={() => moveItem(index, 'up')} disabled={index === 0} className="text-[var(--text-muted)] hover:text-[var(--text-primary)] disabled:opacity-30 disabled:cursor-not-allowed">
@@ -266,25 +288,25 @@ export function Sidebar({ onClose, isCollapsed = false, onToggleCollapse }: Side
       </nav>
 
       {isCollapsed ? (
-        <div className="border-t border-[var(--border-subtle)] py-4 px-2 flex flex-col items-center gap-3">
+        <div className="border-t border-[var(--border-subtle)] py-2.5 px-2 flex flex-col items-center gap-1">
           <Link to="/profile" title="Mi perfil">
-            <Avatar className="h-8 w-8 ring-2 ring-[var(--border-default)] hover:ring-[var(--accent)] transition-all cursor-pointer">
+            <Avatar className="mb-1.5 h-9 w-9 ring-2 ring-[var(--border-default)] hover:ring-[var(--accent)] transition-all cursor-pointer">
               <AvatarFallback className="bg-[var(--bg-base)] text-[10px] font-extrabold text-[var(--text-primary)]">{initials}</AvatarFallback>
             </Avatar>
           </Link>
           <Button
             variant="ghost"
             size="icon"
-            className={cn("h-7 w-7 rounded-xl transition cursor-pointer", isMuted ? "text-amber-500 hover:bg-amber-500/15" : "text-emerald-500 hover:bg-emerald-500/15")}
+            className={cn("h-8 w-8 rounded-xl transition cursor-pointer", isMuted ? "text-amber-500 hover:bg-amber-500/15" : "text-emerald-500 hover:bg-emerald-500/15")}
             onClick={handleToggleMute}
             title={isMuted ? "Notificaciones silenciadas (clic para activar)" : "Notificaciones activadas (clic para silenciar)"}
           >
             {isMuted ? <BellOff className="h-3.5 w-3.5" /> : <Bell className="h-3.5 w-3.5" />}
           </Button>
-          <Button variant="ghost" size="icon" className="h-7 w-7 text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] rounded-xl cursor-pointer" onClick={toggleTheme} title="Cambiar tema">
+          <Button variant="ghost" size="icon" className="h-8 w-8 text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] rounded-xl cursor-pointer" onClick={toggleTheme} title="Cambiar tema">
             {theme === 'dark' ? <Sun className="h-3.5 w-3.5" /> : <Moon className="h-3.5 w-3.5" />}
           </Button>
-          <Button variant="ghost" size="icon" className="h-7 w-7 text-[var(--text-secondary)] hover:text-[var(--destructive)] hover:bg-[var(--bg-hover)] rounded-xl cursor-pointer" onClick={logout} title="Cerrar sesion">
+          <Button variant="ghost" size="icon" className="h-8 w-8 text-[var(--text-secondary)] hover:text-[var(--destructive)] hover:bg-rose-500/10 rounded-xl cursor-pointer" onClick={logout} title="Cerrar sesion">
             <LogOut className="h-3.5 w-3.5" />
           </Button>
         </div>
@@ -318,6 +340,7 @@ export function Sidebar({ onClose, isCollapsed = false, onToggleCollapse }: Side
           </div>
         </div>
       )}
-    </aside>
+      </aside>
+    </TooltipPrimitive.Provider>
   )
 }

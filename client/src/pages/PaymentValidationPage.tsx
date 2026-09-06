@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { io } from '@/lib/socket'
-import { Banknote, Bell, BellOff, CheckCircle2, Eye, History, Image, RefreshCw, Search, Smartphone, Wallet, XCircle } from 'lucide-react'
+import { Banknote, Bell, BellOff, CheckCircle2, Eye, History, Image, RefreshCw, RotateCcw, Search, Smartphone, Wallet, XCircle, ZoomIn, ZoomOut } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Dialog, DialogContent } from '@/components/ui/dialog'
@@ -51,6 +51,7 @@ export default function PaymentValidationPage() {
     index: number
     payment?: any
   } | null>(null)
+  const [proofZoom, setProofZoom] = useState(1)
   const [isMuted, setIsMuted] = useState(() => isNotificationsMuted())
   const [actionLoading, setActionLoading] = useState<string | null>(null)
 
@@ -202,6 +203,7 @@ export default function PaymentValidationPage() {
       alerts.warning('Comprobante', 'No hay imágenes disponibles para este cobro.')
       return
     }
+    setProofZoom(1)
     setModalViewer({
       items: valid,
       index: Math.min(Math.max(initialIndex, 0), valid.length - 1),
@@ -211,6 +213,15 @@ export default function PaymentValidationPage() {
 
   const openProof = (proofId: string, directBase64?: string, payment?: any) => {
     openProofViewer([{ id: proofId, fileBase64: directBase64 }], 0, payment)
+  }
+
+  const changeProofZoom = (amount: number) => {
+    setProofZoom(current => Math.min(3, Math.max(0.75, Number((current + amount).toFixed(2)))))
+  }
+
+  const selectProof = (index: number) => {
+    setProofZoom(1)
+    setModalViewer(prev => prev ? { ...prev, index } : null)
   }
 
   const review = async (payment: any, action: 'validate' | 'reject') => {
@@ -680,8 +691,8 @@ export default function PaymentValidationPage() {
       )}
 
       {/* Modal Multi-Comprobante: Pantalla completa, navegación fluida entre fotos y validación directa */}
-      <Dialog open={Boolean(modalViewer)} onOpenChange={(open) => { if (!open) setModalViewer(null) }}>
-        <DialogContent className="max-w-2xl w-[94vw] max-h-[96vh] p-3 bg-[var(--bg-panel)] border border-[var(--border-default)] text-[var(--text-primary)] rounded-2xl shadow-2xl overflow-hidden flex flex-col items-center [&>button.absolute]:hidden">
+      <Dialog open={Boolean(modalViewer)} onOpenChange={(open) => { if (!open) { setModalViewer(null); setProofZoom(1) } }}>
+        <DialogContent className="max-w-4xl w-[96vw] h-[94vh] max-h-[900px] p-3 bg-[var(--bg-panel)] border border-[var(--border-default)] text-[var(--text-primary)] rounded-2xl shadow-2xl overflow-hidden flex flex-col items-center gap-0 [&>button.absolute]:hidden">
           {/* Header */}
           <div className="flex w-full items-center justify-between pb-2 border-b border-[var(--border-subtle)] gap-4">
             <div className="flex items-center gap-2 min-w-0">
@@ -702,6 +713,7 @@ export default function PaymentValidationPage() {
                 e.preventDefault()
                 e.stopPropagation()
                 setModalViewer(null)
+                setProofZoom(1)
               }}
             >
               ✕ Cerrar
@@ -715,7 +727,7 @@ export default function PaymentValidationPage() {
                 variant="outline"
                 size="sm"
                 disabled={modalViewer.index === 0}
-                onClick={() => setModalViewer(prev => prev ? { ...prev, index: prev.index - 1 } : null)}
+                onClick={() => selectProof(modalViewer.index - 1)}
                 className="h-7 px-2.5 text-xs font-bold gap-1 rounded-lg cursor-pointer"
               >
                 ◀ Anterior
@@ -725,7 +737,7 @@ export default function PaymentValidationPage() {
                   <button
                     key={i}
                     type="button"
-                    onClick={() => setModalViewer(prev => prev ? { ...prev, index: i } : null)}
+                    onClick={() => selectProof(i)}
                     className={`w-7 h-7 rounded-lg text-xs font-black cursor-pointer transition ${
                       modalViewer.index === i
                         ? 'bg-[var(--accent)] text-white shadow-xs scale-105'
@@ -740,7 +752,7 @@ export default function PaymentValidationPage() {
                 variant="outline"
                 size="sm"
                 disabled={modalViewer.index === modalViewer.items.length - 1}
-                onClick={() => setModalViewer(prev => prev ? { ...prev, index: prev.index + 1 } : null)}
+                onClick={() => selectProof(modalViewer.index + 1)}
                 className="h-7 px-2.5 text-xs font-bold gap-1 rounded-lg cursor-pointer"
               >
                 Siguiente ▶
@@ -748,28 +760,84 @@ export default function PaymentValidationPage() {
             </div>
           )}
 
-          {/* Foto Principal */}
-          <div className="max-h-[72vh] w-full flex items-center justify-center pt-2 overflow-auto">
-            {modalViewer && (() => {
-              const cur = modalViewer.items[modalViewer.index]
-              if (!cur) return null
-              if (cur.fileBase64) {
-                return (
-                  <img
-                    src={cur.fileBase64}
-                    alt={`Comprobante ${modalViewer.index + 1}`}
-                    className="max-h-[68vh] w-auto max-w-full object-contain rounded-xl shadow-md block"
-                  />
-                )
-              }
-              return (
-                <ProtectedImage
-                  endpoint={`/payment-validation/proofs/${cur.id}/image`}
-                  alt={`Comprobante ${modalViewer.index + 1}`}
-                  className="max-h-[68vh] w-auto max-w-full object-contain rounded-xl shadow-md block"
-                />
-              )
-            })()}
+          {/* Visor de comprobante con zoom y desplazamiento */}
+          <div
+            className="relative mt-2 min-h-0 w-full flex-1 overflow-auto overscroll-contain rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-base)]"
+            onWheel={(event) => {
+              if (!event.ctrlKey) return
+              event.preventDefault()
+              changeProofZoom(event.deltaY < 0 ? 0.25 : -0.25)
+            }}
+          >
+            <div className="sticky right-3 top-3 z-20 ml-auto mr-3 flex w-fit items-center gap-1 rounded-xl border border-[var(--border-default)] bg-[var(--bg-panel)]/95 p-1 shadow-lg backdrop-blur">
+              <button
+                type="button"
+                onClick={() => changeProofZoom(-0.25)}
+                disabled={proofZoom <= 0.75}
+                className="flex h-8 w-8 items-center justify-center rounded-lg text-[var(--text-secondary)] transition hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] disabled:cursor-not-allowed disabled:opacity-35"
+                aria-label="Alejar comprobante"
+                title="Alejar"
+              >
+                <ZoomOut className="h-4 w-4" />
+              </button>
+              <span className="min-w-12 select-none text-center text-[11px] font-black tabular-nums text-[var(--text-primary)]">
+                {Math.round(proofZoom * 100)}%
+              </span>
+              <button
+                type="button"
+                onClick={() => changeProofZoom(0.25)}
+                disabled={proofZoom >= 3}
+                className="flex h-8 w-8 items-center justify-center rounded-lg bg-[var(--accent)] text-white shadow-sm transition hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-40"
+                aria-label="Acercar comprobante"
+                title="Acercar"
+              >
+                <ZoomIn className="h-4 w-4" />
+              </button>
+              <span className="mx-0.5 h-5 w-px bg-[var(--border-subtle)]" aria-hidden="true" />
+              <button
+                type="button"
+                onClick={() => setProofZoom(1)}
+                disabled={proofZoom === 1}
+                className="flex h-8 w-8 items-center justify-center rounded-lg text-[var(--text-secondary)] transition hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] disabled:cursor-not-allowed disabled:opacity-35"
+                aria-label="Restablecer zoom"
+                title="Restablecer zoom"
+              >
+                <RotateCcw className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div
+              className="flex min-h-full items-start justify-center px-4 pb-5 pt-1"
+              style={{ minWidth: `${proofZoom * 100}%` }}
+            >
+              <div
+                className="origin-top transition-transform duration-150 ease-out"
+                style={{ transform: `scale(${proofZoom})` }}
+                onDoubleClick={() => setProofZoom(current => current === 1 ? 2 : 1)}
+                title="Doble clic para ampliar o restablecer"
+              >
+                {modalViewer && (() => {
+                  const cur = modalViewer.items[modalViewer.index]
+                  if (!cur) return null
+                  if (cur.fileBase64) {
+                    return (
+                      <img
+                        src={cur.fileBase64}
+                        alt={`Comprobante ${modalViewer.index + 1}`}
+                        className="max-h-[68vh] w-auto max-w-full cursor-zoom-in object-contain rounded-xl shadow-md block"
+                      />
+                    )
+                  }
+                  return (
+                    <ProtectedImage
+                      endpoint={`/payment-validation/proofs/${cur.id}/image`}
+                      alt={`Comprobante ${modalViewer.index + 1}`}
+                      className="max-h-[68vh] w-auto max-w-full cursor-zoom-in object-contain rounded-xl shadow-md block"
+                    />
+                  )
+                })()}
+              </div>
+            </div>
           </div>
 
           {/* Acciones de Validación Directa dentro del Modal */}
@@ -783,6 +851,7 @@ export default function PaymentValidationPage() {
                   onClick={() => {
                     const pay = modalViewer.payment
                     setModalViewer(null)
+                    setProofZoom(1)
                     review(pay, 'validate')
                   }}
                   size="sm"
@@ -794,6 +863,7 @@ export default function PaymentValidationPage() {
                   onClick={() => {
                     const pay = modalViewer.payment
                     setModalViewer(null)
+                    setProofZoom(1)
                     review(pay, 'reject')
                   }}
                   size="sm"
