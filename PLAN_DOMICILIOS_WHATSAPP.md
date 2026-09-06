@@ -14,6 +14,7 @@ La separación no requiere duplicar productos, clientes ni infraestructura. El c
 - La toma de una conversación es atómica: si dos gestoras intentan tomarla, solo una obtiene la asignación y la otra ve quién la está atendiendo.
 - El historial de mensajes se carga en bloques de 120 con cursor para evitar descargar conversaciones completas.
 - La bandeja de conversaciones también pagina por cursor estable; los chats nuevos no desplazan páginas ni causan saltos o duplicados al cargar más.
+- Las respuestas atrasadas de búsquedas o filtros se descartan, y una reconexión conserva la consulta que la gestora está usando.
 - Abrir un chat solo envía confirmación de lectura para mensajes realmente pendientes; ya no repite todo el historial contra Meta.
 - Las búsquedas y el historial de cliente iniciados desde WhatsApp excluyen pedidos de mesa (`LOCAL`).
 - La pantalla de WhatsApp usa toda la altura y ancho disponibles, con una barra superior compacta y comportamiento móvil de bandeja/conversación.

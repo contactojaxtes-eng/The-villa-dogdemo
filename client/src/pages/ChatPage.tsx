@@ -809,6 +809,11 @@ function ChatPage() {
   const [displayLimit, setDisplayLimit] = useState(100)
   const [isMutedWa, setIsMutedWa] = useState(() => localStorage.getItem('niche_mute_wa_toasts') === 'true')
   const [realtimeStatus, setRealtimeStatus] = useState<'connecting' | 'connected' | 'disconnected'>('connecting')
+  const chatSearchRef = useRef(chatSearch)
+  const chatFilterRef = useRef(chatFilter)
+  const sessionsRequestIdRef = useRef(0)
+  const loadMoreRequestIdRef = useRef(0)
+  const sessionQueryRef = useRef({ search: '', filter: 'TODAY' })
   const tabsRef = useRef<HTMLDivElement>(null)
   const statusReloadTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -839,6 +844,14 @@ function ChatPage() {
   const hasMoreRef = useRef(true)
   const loadingMoreRef = useRef(false)
   const messagesCacheRef = useRef<Record<string, Message[]>>({})
+
+  useEffect(() => {
+    chatSearchRef.current = chatSearch
+  }, [chatSearch])
+
+  useEffect(() => {
+    chatFilterRef.current = chatFilter
+  }, [chatFilter])
 
   const scrollTabs = (direction: 'left' | 'right') => {
     if (tabsRef.current) {
@@ -1114,16 +1127,22 @@ function ChatPage() {
 
   // Fetch active sessions with optional search, filter or full historic query
   const loadSessions = async (selectId?: string, searchParam?: string, fetchAll?: boolean, targetFilter?: string) => {
+    const requestId = ++sessionsRequestIdRef.current
+    loadMoreRequestIdRef.current += 1
+    loadingMoreRef.current = false
+    setLoadingMore(false)
     setLoadingSessions(true)
     sessionCursorRef.current = null
     hasMoreRef.current = true
     setHasMore(true)
     loadStats()
     try {
-      const activeFilter = targetFilter !== undefined ? targetFilter : chatFilter
+      const activeFilter = targetFilter !== undefined ? targetFilter : chatFilterRef.current
+      const activeSearch = searchParam !== undefined ? searchParam.trim() : chatSearchRef.current.trim()
+      sessionQueryRef.current = { search: activeSearch, filter: activeFilter }
       const queryParams = new URLSearchParams()
-      if (searchParam?.trim()) {
-        queryParams.set('search', searchParam.trim())
+      if (activeSearch) {
+        queryParams.set('search', activeSearch)
       } else if (activeFilter && activeFilter !== 'ALL') {
         queryParams.set('filter', activeFilter)
       }
@@ -1136,6 +1155,7 @@ function ChatPage() {
       const queryString = queryParams.toString() ? `?${queryParams.toString()}` : ''
 
       const data = await api.get<Session[] | SessionPage>(`/whatsapp/sessions${queryString}`)
+      if (requestId !== sessionsRequestIdRef.current) return
       const safeData = Array.isArray(data) ? data : (Array.isArray(data?.items) ? data.items : [])
       if (!fetchAll) {
         const nextCursor = Array.isArray(data) ? null : data?.nextCursor || null
@@ -1158,11 +1178,12 @@ function ChatPage() {
       }
       if (selectId && !uniqueSessions.some(session => session.id === selectId)) {
         const selectedSession = await api.get<Session>(`/whatsapp/sessions/${selectId}`).catch(() => null)
+        if (requestId !== sessionsRequestIdRef.current) return
         if (selectedSession) {
           uniqueSessions.unshift({ ...selectedSession, messages: selectedSession.messages || [] })
         }
       }
-      if (!searchParam && !fetchAll && activeFilter === 'ALL') {
+      if (!activeSearch && !fetchAll && activeFilter === 'ALL') {
         setGlobalSessionsCache(uniqueSessions)
       }
       setSessions(uniqueSessions)
@@ -1189,15 +1210,17 @@ function ChatPage() {
         return null
       })
     } catch (err) {
-      console.error('Error cargando sesiones:', err)
+      if (requestId === sessionsRequestIdRef.current) console.error('Error cargando sesiones:', err)
     } finally {
-      setLoadingSessions(false)
+      if (requestId === sessionsRequestIdRef.current) setLoadingSessions(false)
     }
   }
 
   // Progressive scroll: load next 60 sessions on bottom scroll without lag
   const loadMoreSessions = async () => {
     if (loadingMoreRef.current || !hasMoreRef.current || loadingSessions) return
+    const requestId = sessionsRequestIdRef.current
+    const loadMoreRequestId = ++loadMoreRequestIdRef.current
     loadingMoreRef.current = true
     setLoadingMore(true)
     try {
@@ -1208,14 +1231,16 @@ function ChatPage() {
         return
       }
       const queryParams = new URLSearchParams()
-      if (chatSearch?.trim()) queryParams.set('search', chatSearch.trim())
-      if (chatFilter && chatFilter !== 'ALL') queryParams.set('filter', chatFilter)
+      const activeQuery = sessionQueryRef.current
+      if (activeQuery.search) queryParams.set('search', activeQuery.search)
+      if (activeQuery.filter && activeQuery.filter !== 'ALL') queryParams.set('filter', activeQuery.filter)
       queryParams.set('pagination', 'cursor')
       queryParams.set('cursor', cursor)
       queryParams.set('limit', '60')
       const queryString = `?${queryParams.toString()}`
 
       const data = await api.get<SessionPage>(`/whatsapp/sessions${queryString}`)
+      if (requestId !== sessionsRequestIdRef.current || loadMoreRequestId !== loadMoreRequestIdRef.current) return
       const safeData = Array.isArray(data?.items) ? data.items : []
       sessionCursorRef.current = data?.nextCursor || null
       hasMoreRef.current = Boolean(data?.nextCursor)
@@ -1244,10 +1269,12 @@ function ChatPage() {
         setHasMore(false)
       }
     } catch (err) {
-      console.error('Error cargando más sesiones:', err)
+      if (requestId === sessionsRequestIdRef.current) console.error('Error cargando más sesiones:', err)
     } finally {
-      setLoadingMore(false)
-      loadingMoreRef.current = false
+      if (loadMoreRequestId === loadMoreRequestIdRef.current) {
+        setLoadingMore(false)
+        loadingMoreRef.current = false
+      }
     }
   }
 
@@ -1342,7 +1369,7 @@ function ChatPage() {
     let connectedOnce = false
     socket.on('connect', () => {
       setRealtimeStatus('connected')
-      if (connectedOnce) loadSessions(undefined, chatSearch.trim(), false)
+      if (connectedOnce) loadSessions()
       connectedOnce = true
     })
     socket.on('disconnect', () => setRealtimeStatus(socket.active ? 'connecting' : 'disconnected'))
