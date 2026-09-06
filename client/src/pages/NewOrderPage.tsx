@@ -12,7 +12,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { Separator } from '@/components/ui/separator'
 import { Badge } from '@/components/ui/badge'
 import { api } from '@/lib/api'
-import { formatCurrency, groupOrderItems, cleanNotes, getItemRawNote, fuzzyMatch, levenshteinDistance, formatThousandsInput, parseThousandsInput } from '@/lib/utils'
+import { cn, formatCurrency, groupOrderItems, cleanNotes, getItemRawNote, fuzzyMatch, levenshteinDistance, formatThousandsInput, parseThousandsInput } from '@/lib/utils'
 import { printComandaSmart, getPrinterSettings } from '@/lib/printer'
 import { alerts } from '@/lib/alerts'
 import type { ComandaOrder } from '@/components/orders/ComandaPrint'
@@ -426,14 +426,47 @@ const cleanupStaleChatDrafts = () => {
 let globalCategoriesCache: Category[] = []
 let globalZonesCache: Zone[] = []
 
-export default function NewOrderPage() {
+export type EmbeddedOrderParams = {
+  editOrderId?: string | null
+  chatSessionId: string
+  phone?: string
+  name?: string
+  address?: string
+  zone?: string
+}
+
+type NewOrderPageProps = {
+  embedded?: boolean
+  embeddedParams?: EmbeddedOrderParams | null
+  onClose?: () => void
+  onOrderSaved?: (order: ComandaOrder) => void
+}
+
+export default function NewOrderPage({
+  embedded = false,
+  embeddedParams = null,
+  onClose,
+  onOrderSaved,
+}: NewOrderPageProps = {}) {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
-  const editOrderId = searchParams.get('edit')
-  const chatSessionId = searchParams.get('chatSessionId')
+  const editOrderId = embedded ? (embeddedParams?.editOrderId || null) : searchParams.get('edit')
+  const chatSessionId = embedded ? (embeddedParams?.chatSessionId || null) : searchParams.get('chatSessionId')
+  const initialPhone = embedded ? (embeddedParams?.phone || '') : (searchParams.get('phone') || '')
+  const initialName = embedded ? (embeddedParams?.name || '') : (searchParams.get('name') || '')
+  const initialAddress = embedded ? (embeddedParams?.address || '') : (searchParams.get('address') || '')
+  const initialZone = embedded ? (embeddedParams?.zone || '') : (searchParams.get('zone') || '')
   const activeDraftKey = chatSessionId ? `${draftKey}:chat:${chatSessionId}` : draftKey
   const chatReturnPath = chatSessionId ? `/chat?session=${encodeURIComponent(chatSessionId)}` : '/chat'
   const { user } = useAuth()
+
+  const closeOrderPanel = () => {
+    if (embedded) {
+      onClose?.()
+      return
+    }
+    navigate('/orders')
+  }
 
   const [step, setStep] = useState<'menu' | 'delivery'>('menu')
   const [categories, setCategories] = useState<Category[]>(globalCategoriesCache)
@@ -690,7 +723,7 @@ export default function NewOrderPage() {
           setCustomerName(order.customerName || '')
           let oPhone = (order.customerPhone || '').trim()
           if ((!oPhone || oPhone === '3000000000' || oPhone === '0000000000') && order.orderType === 'DELIVERY') {
-            const urlP = searchParams.get('phone')
+            const urlP = initialPhone
             if (urlP && urlP !== '3000000000' && urlP !== '0000000000') {
               oPhone = urlP
             } else if (order.customer?.phone && order.customer.phone !== '3000000000') {
@@ -748,7 +781,7 @@ export default function NewOrderPage() {
         })
         .finally(() => setLoading(false))
     }
-  }, [editOrderId])
+  }, [editOrderId, initialPhone])
 
   useEffect(() => {
     if (editOrderId) return
@@ -927,10 +960,10 @@ export default function NewOrderPage() {
 
   useEffect(() => {
     if (editOrderId || !draftLoaded || loadedDraftKey !== activeDraftKey) return
-    const phone = searchParams.get('phone')
-    const name = searchParams.get('name')
-    const urlAddress = searchParams.get('address')
-    const urlZone = searchParams.get('zone')
+    const phone = initialPhone
+    const name = initialName
+    const urlAddress = initialAddress
+    const urlZone = initialZone
 
     if (phone || chatSessionId) {
       if (phone) {
@@ -966,7 +999,7 @@ export default function NewOrderPage() {
         }
       }
     }
-  }, [searchParams, draftLoaded, loadedDraftKey, activeDraftKey, zones])
+  }, [initialPhone, initialName, initialAddress, initialZone, chatSessionId, draftLoaded, loadedDraftKey, activeDraftKey, zones, editOrderId])
 
   useEffect(() => {
     if (showChatDrawer && chatDrawerScrollRef.current) {
@@ -1499,10 +1532,10 @@ export default function NewOrderPage() {
     if (chatSessionId && categories.length > 0 && lastParsedSessionIdRef.current !== chatSessionId) {
       lastParsedSessionIdRef.current = chatSessionId
       
-      const initialUrlAddress = searchParams.get('address')
-      const initialUrlZone = searchParams.get('zone')
-      const initialUrlName = searchParams.get('name')
-      const initialUrlPhone = searchParams.get('phone')
+      const initialUrlAddress = initialAddress
+      const initialUrlZone = initialZone
+      const initialUrlName = initialName
+      const initialUrlPhone = initialPhone
 
       // Limpiar el carrito y datos previos para esta orden nueva desde el chat de WhatsApp
       setCart([])
@@ -1795,7 +1828,7 @@ export default function NewOrderPage() {
         })
         .catch(err => console.error('Error fetching chat messages for autocomplete:', err))
     }
-  }, [chatSessionId, categories, editOrderLoaded, editOrderId, draftLoaded, loadedDraftKey, activeDraftKey, hasRestoredDraft])
+  }, [chatSessionId, categories, editOrderLoaded, editOrderId, draftLoaded, loadedDraftKey, activeDraftKey, hasRestoredDraft, initialAddress, initialZone, initialName, initialPhone])
 
   useEffect(() => {
     if (editOrderId || !draftLoaded || loadedDraftKey !== activeDraftKey) return
@@ -2501,7 +2534,7 @@ export default function NewOrderPage() {
         const cClean = custMatch.phone.replace(/\D/g, '')
         effectivePhone = (cClean.length === 12 && cClean.startsWith('57')) ? cClean.slice(2) : cClean
       } else {
-        const urlP = (searchParams.get('phone') || '').replace(/\D/g, '')
+        const urlP = initialPhone.replace(/\D/g, '')
         if (urlP && urlP !== '3000000000' && urlP !== '0000000000') {
           effectivePhone = (urlP.length === 12 && urlP.startsWith('57')) ? urlP.slice(2) : urlP
         }
@@ -2593,7 +2626,10 @@ export default function NewOrderPage() {
       }
 
       localStorage.removeItem(activeDraftKey)
-      if (chatSessionId) {
+      if (embedded) {
+        onOrderSaved?.(savedOrder)
+        onClose?.()
+      } else if (chatSessionId) {
         navigate(chatReturnPath)
       } else {
         navigate('/dispatch')
@@ -2608,7 +2644,7 @@ export default function NewOrderPage() {
 
   const clearDraft = () => {
     if (editOrderId) {
-      navigate('/orders')
+      closeOrderPanel()
       return
     }
     localStorage.removeItem(activeDraftKey)
@@ -3630,7 +3666,7 @@ const renderDeliveryCard = () => {
 
   if (initialLoading) {
     return (
-      <div className="flex items-center justify-center min-h-[60vh]">
+      <div className={cn("flex items-center justify-center", embedded ? "h-full min-h-0" : "min-h-[60vh]")}>
         <div className="flex flex-col items-center gap-4">
           <Loader2 className="h-10 w-10 animate-spin text-[var(--accent)]" />
           <p className="text-sm font-semibold text-[var(--text-secondary)]">Cargando menú...</p>
@@ -3640,27 +3676,35 @@ const renderDeliveryCard = () => {
   }
 
   return (
-    <div className="flex flex-col gap-3 min-h-[calc(100dvh-120px)] md:h-[calc(100vh-70px)] min-h-0 w-full">
-      <div className="flex items-center justify-between gap-3 shrink-0 flex-wrap">
+    <div className={cn(
+      "flex min-h-0 w-full flex-col gap-3",
+      embedded ? "relative h-full overflow-hidden bg-[var(--bg-base)] p-2 sm:p-3" : "min-h-[calc(100dvh-120px)] md:h-[calc(100vh-70px)]"
+    )}>
+      <div className="flex items-center justify-between gap-2 shrink-0 flex-wrap">
         <div className="flex items-center gap-2">
           <Button 
             variant="ghost" 
             size="icon" 
-            onClick={() => navigate('/orders')} 
+            onClick={closeOrderPanel}
             className="rounded-xl hover:bg-[var(--bg-panel)] hover:text-[var(--text-primary)] text-[var(--text-secondary)] h-9 w-9 cursor-pointer"
-            title="Volver a la lista de pedidos"
+            title={embedded ? 'Cerrar pedido y volver al chat' : 'Volver a la lista de pedidos'}
           >
-            <ArrowLeft className="h-5 w-5" />
+            {embedded ? <X className="h-5 w-5" /> : <ArrowLeft className="h-5 w-5" />}
           </Button>
           <div>
-            <h2 className="antifont text-2xl md:text-3xl tracking-wider text-[var(--text-primary)] leading-none">
-              {editOrderId ? 'EDITAR PEDIDO' : 'NUEVO PEDIDO'}
+            <h2 className={cn("antifont tracking-wider text-[var(--text-primary)] leading-none", embedded ? "text-xl sm:text-2xl" : "text-2xl md:text-3xl")}>
+              {editOrderId ? 'EDITAR PEDIDO' : embedded ? 'PEDIDO RÁPIDO' : 'NUEVO PEDIDO'}
             </h2>
+            {embedded && (
+              <p className="mt-1 max-w-[56vw] truncate text-[10px] font-semibold text-[var(--text-muted)]">
+                {customerName || initialName ? `Para ${customerName || initialName} · ` : ''}el borrador se guarda automáticamente
+              </p>
+            )}
           </div>
         </div>
 
         <div className="flex items-center gap-2">
-          <Button 
+          {!embedded && <Button
             variant="outline" 
             size="sm"
             onClick={() => navigate(chatReturnPath)}
@@ -3669,9 +3713,9 @@ const renderDeliveryCard = () => {
           >
             <MessageCircle className="h-4 w-4 text-emerald-500" />
             <span>← Volver al Chat</span>
-          </Button>
+          </Button>}
 
-          <Button 
+          {!embedded && <Button
             size="sm"
             onClick={handleOpenChatDrawer}
             className="bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-fg)] font-bold rounded-xl text-xs h-9 px-3 cursor-pointer flex items-center gap-1.5 shadow-md shadow-[var(--accent)]/10"
@@ -3679,7 +3723,7 @@ const renderDeliveryCard = () => {
           >
             <Sparkles className="h-3.5 w-3.5" />
             <span>💬 Ver Chat en Vivo</span>
-          </Button>
+          </Button>}
 
           <Button 
             variant="outline" 
@@ -3725,9 +3769,12 @@ const renderDeliveryCard = () => {
       </div>
 
       {/* ── DESKTOP VIEW (hidden on mobile) ── */}
-      <div className="hidden md:grid min-h-0 flex-1 gap-4 lg:grid-cols-3 md:grid-cols-2 overflow-hidden">
+      <div className={cn(
+        "hidden md:grid min-h-0 flex-1 gap-4 overflow-hidden",
+        embedded ? "grid-cols-[minmax(0,1.35fr)_minmax(18rem,0.65fr)]" : "md:grid-cols-2 lg:grid-cols-3"
+      )}>
         {/* Columna 1: Menú (Ampliada) */}
-        <div className="min-h-0 h-full flex flex-col lg:col-span-2">
+        <div className={cn("min-h-0 h-full flex flex-col", !embedded && "lg:col-span-2")}>
           {renderMenuCard()}
         </div>
         
@@ -3761,7 +3808,7 @@ const renderDeliveryCard = () => {
 
       {/* Mobile Floating Cart Bar */}
       {step === 'menu' && cart.length > 0 && !isCartDrawerOpen && (
-        <div className="fixed bottom-4 left-4 right-4 z-40 md:hidden">
+        <div className={cn("bottom-4 left-4 right-4 z-40 md:hidden", embedded ? "absolute" : "fixed")}>
           <motion.div
             initial={{ y: 50, opacity: 0 }}
             animate={{ y: 0, opacity: 1 }}
@@ -3792,7 +3839,7 @@ const renderDeliveryCard = () => {
       )}
       {/* FLOATING LIVE WHATSAPP CHAT DRAWER */}
       <AnimatePresence>
-        {showChatDrawer && (
+        {!embedded && showChatDrawer && (
           <div 
             className="fixed inset-0 z-50 flex justify-end bg-black/40 backdrop-blur-xs cursor-pointer"
             onClick={() => setShowChatDrawer(false)}

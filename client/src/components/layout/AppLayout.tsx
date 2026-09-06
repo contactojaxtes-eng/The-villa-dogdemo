@@ -76,7 +76,7 @@ export function AppLayout() {
   }
 
   return (
-    <div className="flex h-screen overflow-hidden bg-[var(--bg-base)]">
+    <div className="flex h-screen h-[100dvh] overflow-hidden bg-[var(--bg-base)]">
       {/* Desktop Sidebar: Oculta en modo Cocinero dedicado (Tablet KITCHEN) y para Meseras (WAITER) */}
       {!isDedicatedKitchen && !isWaiter && (
         <div className="hidden md:flex shrink-0 overflow-visible">

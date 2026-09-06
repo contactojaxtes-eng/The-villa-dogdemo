@@ -16,13 +16,16 @@ import { Badge } from '@/components/ui/badge'
 import { 
   MessageCircle, Send, UserCheck, UserPlus, UserX, PlusCircle, User, 
   Phone, Clock, AlertCircle, AlertTriangle, ArrowLeft, Loader2, Trash2, Paperclip, FileText,
-  Camera, Mic, MicOff, Check, CheckCheck, Pencil, Search, Lock,
+  Mic, MicOff, Check, CheckCheck, Pencil, Search, Lock,
   ChevronDown, Copy, ChevronLeft, ChevronRight, MapPin, ExternalLink, Download, Forward, QrCode, Reply, X,
   MessageSquareText, Bell, BellOff,
   Eye, RotateCw, ZoomIn, ZoomOut
 } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Mp3Recorder } from '@/lib/mp3Recorder'
+import type { EmbeddedOrderParams } from './NewOrderPage'
+
+const EmbeddedNewOrderPage = React.lazy(() => import('./NewOrderPage'))
 
 type Session = {
   id: string
@@ -505,7 +508,6 @@ interface ChatInputBarProps {
   onSendPaymentQr: () => void
   sendingPaymentQr: boolean
   fileInputRef: React.RefObject<HTMLInputElement | null>
-  cameraInputRef: React.RefObject<HTMLInputElement | null>
   handleFileChange: (e: React.ChangeEvent<HTMLInputElement>) => void
   uploadingMedia: boolean
   isRecording: boolean
@@ -528,7 +530,6 @@ const ChatInputBar = React.memo(({
   onSendPaymentQr,
   sendingPaymentQr,
   fileInputRef,
-  cameraInputRef,
   handleFileChange,
   uploadingMedia,
   isRecording,
@@ -568,78 +569,62 @@ const ChatInputBar = React.memo(({
         </button>
       </div>
     )}
-    <form onSubmit={handleSubmit} className="p-3 bg-[var(--bg-panel)] border-t border-[var(--border-subtle)] flex items-center gap-2">
+    <form
+      onSubmit={handleSubmit}
+      className="border-t border-[var(--border-subtle)] bg-[var(--bg-panel)] p-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] sm:p-3 sm:pb-3 flex min-w-0 flex-col gap-2 lg:flex-row lg:items-center"
+    >
       <input type="file" ref={fileInputRef} onChange={handleFileChange} className="hidden" />
-      <input type="file" ref={cameraInputRef} onChange={handleFileChange} accept="image/*" className="hidden" />
+      <div className="flex min-w-0 items-center gap-1.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden lg:shrink-0">
+        <Button
+          type="button"
+          variant="outline"
+          size="icon"
+          className="h-9 w-9 rounded-xl border-[var(--border-subtle)] hover:bg-[var(--bg-hover)] text-[var(--text-secondary)] shrink-0 flex items-center justify-center cursor-pointer"
+          onClick={() => fileInputRef.current?.click()}
+          disabled={disabled || uploadingMedia || isRecording || sendingMenu || sendingPaymentQr}
+          title="Adjuntar foto, video, audio o documento"
+        >
+          {uploadingMedia ? <Loader2 className="h-4 w-4 animate-spin text-[var(--accent)]" /> : <Paperclip className="h-4 w-4" />}
+        </Button>
 
-      <Button
-        type="button"
-        variant="outline"
-        size="icon"
-        className="h-11 w-11 rounded-xl border-[var(--border-subtle)] hover:bg-[var(--bg-hover)] text-[var(--text-secondary)] shrink-0 flex items-center justify-center cursor-pointer"
-        onClick={() => fileInputRef.current?.click()}
-        disabled={disabled || uploadingMedia || isRecording || sendingMenu || sendingPaymentQr}
-        title="Adjuntar Archivo"
-      >
-        {uploadingMedia ? <Loader2 className="h-4 w-4 animate-spin text-[var(--accent)]" /> : <Paperclip className="h-4 w-4" />}
-      </Button>
+        <Button
+          type="button"
+          variant="outline"
+          size="icon"
+          className="h-9 w-9 rounded-xl border-[var(--border-subtle)] hover:bg-[var(--bg-hover)] text-[var(--text-secondary)] shrink-0 flex items-center justify-center cursor-pointer"
+          onClick={onSendLocation}
+          disabled={disabled || uploadingMedia || isRecording || sendingMenu || sendingPaymentQr || sendingLocation}
+          title="Enviar ubicación"
+        >
+          {sendingLocation ? <Loader2 className="h-4 w-4 animate-spin text-[var(--accent)]" /> : <MapPin className="h-4 w-4" />}
+        </Button>
 
-      <Button
-        type="button"
-        variant="outline"
-        size="icon"
-        className="h-11 w-11 rounded-xl border-[var(--border-subtle)] hover:bg-[var(--bg-hover)] text-[var(--text-secondary)] shrink-0 flex items-center justify-center cursor-pointer"
-        onClick={() => cameraInputRef.current?.click()}
-        disabled={disabled || uploadingMedia || isRecording || sendingMenu || sendingPaymentQr}
-        title="Enviar Foto"
-      >
-        <Camera className="h-4 w-4" />
-      </Button>
+        <Button
+          type="button"
+          className="h-9 px-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white font-extrabold text-[10px] shrink-0 flex items-center gap-1 cursor-pointer shadow-sm transition-all border-0"
+          onClick={onSendMenuCarta}
+          disabled={disabled || uploadingMedia || isRecording || sendingMenu || sendingPaymentQr}
+          title="Enviar carta al cliente"
+        >
+          {sendingMenu ? <Loader2 className="h-3.5 w-3.5 animate-spin text-white" /> : <FileText className="h-3.5 w-3.5 text-white" />}
+          <span>Carta</span>
+        </Button>
 
-      <Button
-        type="button"
-        variant="outline"
-        size="icon"
-        className="h-11 w-11 rounded-xl border-[var(--border-subtle)] hover:bg-[var(--bg-hover)] text-[var(--text-secondary)] shrink-0 flex items-center justify-center cursor-pointer"
-        onClick={onSendLocation}
-        disabled={disabled || uploadingMedia || isRecording || sendingMenu || sendingPaymentQr || sendingLocation}
-        title="Enviar Ubicación"
-      >
-        {sendingLocation ? <Loader2 className="h-4 w-4 animate-spin text-[var(--accent)]" /> : <MapPin className="h-4 w-4" />}
-      </Button>
+        <Button
+          type="button"
+          className="h-9 px-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 active:scale-95 text-white font-extrabold text-[10px] shrink-0 flex items-center gap-1 cursor-pointer shadow-sm shadow-indigo-600/20 transition-all border-0"
+          onClick={onSendPaymentQr}
+          disabled={disabled || uploadingMedia || isRecording || sendingMenu || sendingPaymentQr}
+          title="Enviar código QR de pago al cliente"
+        >
+          {sendingPaymentQr ? <Loader2 className="h-3.5 w-3.5 animate-spin text-white" /> : <QrCode className="h-3.5 w-3.5 text-white" />}
+          <span>QR</span>
+        </Button>
+      </div>
 
-      <Button
-        type="button"
-        className="h-11 px-3.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white font-extrabold text-xs shrink-0 flex items-center gap-1.5 cursor-pointer shadow-md transition-all border-0"
-        onClick={onSendMenuCarta}
-        disabled={disabled || uploadingMedia || isRecording || sendingMenu || sendingPaymentQr}
-        title="Enviar Carta / Menú de Precios al cliente"
-      >
-        {sendingMenu ? (
-          <Loader2 className="h-4 w-4 animate-spin text-white" />
-        ) : (
-          <FileText className="h-4 w-4 text-white" />
-        )}
-        <span>Enviar Carta</span>
-      </Button>
-
-      <Button
-        type="button"
-        className="h-11 px-3.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 active:scale-95 text-white font-extrabold text-xs shrink-0 flex items-center gap-1.5 cursor-pointer shadow-md shadow-indigo-600/20 transition-all border-0"
-        onClick={onSendPaymentQr}
-        disabled={disabled || uploadingMedia || isRecording || sendingMenu || sendingPaymentQr}
-        title="Enviar Código QR de Pago al cliente"
-      >
-        {sendingPaymentQr ? (
-          <Loader2 className="h-4 w-4 animate-spin text-white" />
-        ) : (
-          <QrCode className="h-4 w-4 text-white" />
-        )}
-        <span>Enviar QR</span>
-      </Button>
-
+      <div className="flex min-w-0 flex-1 items-center gap-2">
       {isRecording ? (
-        <div className="flex-1 flex items-center justify-between bg-red-500/10 border border-red-500/20 rounded-xl px-4 h-11 text-red-500 text-xs font-bold animate-pulse">
+        <div className="min-w-0 flex-1 flex items-center justify-between bg-red-500/10 border border-red-500/20 rounded-xl px-3 h-10 sm:h-11 text-red-500 text-xs font-bold animate-pulse">
           <div className="flex items-center gap-2">
             <div className="h-2 w-2 rounded-full bg-red-500" />
             <span>Grabando Nota de Voz: {Math.floor(recordingTime / 60)}:{(recordingTime % 60).toString().padStart(2, '0')}</span>
@@ -655,11 +640,14 @@ const ChatInputBar = React.memo(({
         </div>
       ) : (
         <Input
-          className="flex-1 h-11 rounded-xl bg-[var(--bg-elevated)] border-[var(--border-subtle)] text-[var(--text-primary)] text-xs px-4"
+          className="min-w-0 flex-1 h-10 sm:h-11 rounded-xl bg-[var(--bg-elevated)] border-[var(--border-subtle)] text-[var(--text-primary)] text-base sm:text-xs px-3 sm:px-4"
           value={localText}
           onChange={e => setLocalText(e.target.value)}
           placeholder={placeholder}
           disabled={disabled || uploadingMedia}
+          inputMode="text"
+          autoComplete="off"
+          enterKeyHint="send"
         />
       )}
 
@@ -668,7 +656,7 @@ const ChatInputBar = React.memo(({
           type="button"
           variant="outline"
           size="icon"
-          className="h-11 w-11 rounded-xl border-[var(--border-subtle)] hover:bg-[var(--bg-hover)] text-[var(--text-secondary)] shrink-0 flex items-center justify-center cursor-pointer"
+          className="h-10 w-10 sm:h-11 sm:w-11 rounded-xl border-[var(--border-subtle)] hover:bg-[var(--bg-hover)] text-[var(--text-secondary)] shrink-0 flex items-center justify-center cursor-pointer"
           onClick={startRecording}
           disabled={disabled || uploadingMedia}
           title="Grabar Nota de Voz"
@@ -680,7 +668,7 @@ const ChatInputBar = React.memo(({
       {isRecording && (
         <Button
           type="button"
-          className="h-11 w-11 rounded-xl bg-red-500 hover:bg-red-600 text-white shrink-0 flex items-center justify-center shadow-lg shadow-red-500/15 animate-bounce cursor-pointer"
+          className="h-10 w-10 sm:h-11 sm:w-11 rounded-xl bg-red-500 hover:bg-red-600 text-white shrink-0 flex items-center justify-center shadow-lg shadow-red-500/15 animate-bounce cursor-pointer"
           onClick={stopRecording}
           title="Enviar Nota de Voz"
         >
@@ -691,13 +679,14 @@ const ChatInputBar = React.memo(({
       {localText.trim() !== '' && !isRecording && (
         <Button
           type="submit"
-          className="h-11 w-11 rounded-xl bg-[var(--accent)] hover:bg-[var(--accent)]/90 text-[var(--accent-fg)] shrink-0 flex items-center justify-center shadow-lg shadow-[var(--accent)]/15 cursor-pointer"
+          className="h-10 w-10 sm:h-11 sm:w-11 rounded-xl bg-[var(--accent)] hover:bg-[var(--accent)]/90 text-[var(--accent-fg)] shrink-0 flex items-center justify-center shadow-lg shadow-[var(--accent)]/15 cursor-pointer"
           disabled={disabled || uploadingMedia}
           title="Enviar Mensaje"
         >
           <Send className="h-4 w-4" />
         </Button>
       )}
+      </div>
     </form>
     </div>
   )
@@ -801,6 +790,7 @@ function ChatPage() {
   const [loadingMessages, setLoadingMessages] = useState(false)
   const [sending, setSending] = useState(false)
   const [activeOrder, setActiveOrder] = useState<any | null>(null)
+  const [embeddedOrder, setEmbeddedOrder] = useState<EmbeddedOrderParams | null>(null)
   const [recording, setRecording] = useState(false)
   const [audioUrl, setAudioUrl] = useState<string | null>(null)
   
@@ -1045,7 +1035,6 @@ function ChatPage() {
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const messagesViewportRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const cameraInputRef = useRef<HTMLInputElement>(null)
   const [uploadingMedia, setUploadingMedia] = useState(false)
 
   // Voice recording states
@@ -2422,12 +2411,13 @@ function ChatPage() {
       finalPhone = ''
     }
 
-    const nameParam = encodeURIComponent(extractedName)
-    const phoneParam = encodeURIComponent(finalPhone)
-    const addressParam = encodeURIComponent(extractedAddress)
-    const zoneParam = encodeURIComponent(extractedZone)
-
-    navigate(`/orders/new?phone=${phoneParam}&name=${nameParam}&address=${addressParam}&zone=${zoneParam}&chatSessionId=${activeSession.id}`)
+    setEmbeddedOrder({
+      chatSessionId: activeSession.id,
+      phone: finalPhone,
+      name: extractedName,
+      address: extractedAddress,
+      zone: extractedZone,
+    })
   }
 
   return (
@@ -2550,7 +2540,7 @@ function ChatPage() {
       {/* ÁREA PRINCIPAL DE CHATS */}
       <div className="flex min-h-0 flex-1 gap-1.5 sm:gap-2">
         {/* SESSIONS PANEL (LEFT) */}
-        <Card className={`w-full md:w-84 lg:w-96 shrink-0 border-[var(--border-subtle)] bg-[var(--bg-panel)] rounded-3xl flex flex-col overflow-hidden shadow-xl ${activeSession ? 'hidden md:flex' : 'flex'}`}>
+        <Card className={`w-full md:w-84 lg:w-96 shrink-0 border-[var(--border-subtle)] bg-[var(--bg-panel)] rounded-3xl flex flex-col overflow-hidden shadow-xl ${embeddedOrder ? 'hidden' : activeSession ? 'hidden md:flex' : 'flex'}`}>
           <div className="flex-none p-3 border-b border-[var(--border-subtle)] relative z-10 bg-[var(--bg-base)]/80 backdrop-blur-md">
             <div className="relative flex items-center">
               <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-[var(--text-secondary)] pointer-events-none" />
@@ -2796,12 +2786,17 @@ function ChatPage() {
         </Card>
 
         {/* CHAT BOARD PANEL (RIGHT) */}
-        <Card className={`flex-1 border-[var(--border-subtle)] bg-[var(--bg-panel)] rounded-2xl flex flex-col overflow-hidden ${!activeSession ? 'hidden md:flex' : 'flex'}`}>
+        <Card className={cn(
+          "border-[var(--border-subtle)] bg-[var(--bg-panel)] rounded-2xl flex flex-col overflow-hidden",
+          embeddedOrder
+            ? "hidden lg:flex lg:w-[44%] lg:flex-none"
+            : `flex-1 ${!activeSession ? 'hidden md:flex' : 'flex'}`
+        )}>
           {activeSession ? (
             <>
               {/* CHAT HEADER */}
-              <div className="p-4 border-b border-[var(--border-subtle)]/40 flex items-center justify-between gap-2 shrink-0 bg-[var(--bg-elevated)]/30">
-                <div className="flex items-center gap-3 min-w-0">
+              <div className="p-2.5 sm:p-4 border-b border-[var(--border-subtle)]/40 flex items-center justify-between gap-2 shrink-0 bg-[var(--bg-elevated)]/30 flex-wrap">
+                <div className="flex min-w-0 flex-1 items-center gap-2 sm:gap-3">
                   <Button 
                     variant="ghost" 
                     size="icon" 
@@ -2895,7 +2890,7 @@ function ChatPage() {
                   </div>
                 </div>
 
-                <div className="flex items-center gap-2">
+                <div className="flex w-full sm:w-auto items-center justify-end gap-1.5 sm:gap-2 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
                   {/* Create or Edit Order Button */}
                   {activeOrder && (
                     <Button 
@@ -2903,7 +2898,12 @@ function ChatPage() {
                       className="h-8 bg-amber-500 hover:bg-amber-600 text-white font-extrabold text-[10px] uppercase tracking-wider rounded-lg flex items-center gap-1.5 shadow-md shadow-amber-500/20 px-2 sm:px-3 border border-amber-600/30 shrink-0 cursor-pointer"
                       onClick={() => {
                         const sessionRealPhone = (activeSession.customerPhone && activeSession.customerPhone !== '3000000000' ? activeSession.customerPhone : activeSession.phone) || ''
-                        navigate(`/orders/new?edit=${activeOrder.id}&chatSessionId=${activeSession.id}&phone=${encodeURIComponent(sessionRealPhone)}&name=${encodeURIComponent(activeSession.customerName || '')}`)
+                        setEmbeddedOrder({
+                          editOrderId: activeOrder.id,
+                          chatSessionId: activeSession.id,
+                          phone: sessionRealPhone,
+                          name: activeSession.customerName || '',
+                        })
                       }}
                       title={`Editar Pedido #${activeOrder.orderNumber} (${activeOrder.status})`}
                     >
@@ -2999,7 +2999,7 @@ function ChatPage() {
 
               {/* LIVE ATTENTION STATUS BANNER */}
               {activeAssignedInfo.isMine ? (
-                <div className="px-4 py-2 bg-emerald-500/10 border-b border-emerald-500/20 flex items-center justify-between text-xs font-bold text-emerald-600 dark:text-emerald-400 shrink-0 animate-in fade-in duration-150">
+                <div className="px-4 py-2 bg-emerald-500/10 border-b border-emerald-500/20 flex items-center text-xs font-bold text-emerald-600 dark:text-emerald-400 shrink-0 animate-in fade-in duration-150">
                   <div className="flex items-center gap-2">
                     <span className="relative flex h-2 w-2">
                       <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
@@ -3007,14 +3007,6 @@ function ChatPage() {
                     </span>
                     <span>Estás atendiendo este chat en tiempo real ({user?.name || 'Tú'})</span>
                   </div>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={handleReleaseSession}
-                    className="h-6 px-2.5 text-[10px] font-extrabold border-emerald-500/30 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/20 rounded-md cursor-pointer"
-                  >
-                    Soltar Chat
-                  </Button>
                 </div>
               ) : activeAssignedInfo.isAssigned ? (
                 <div className="px-4 py-2 bg-amber-500/15 border-b border-amber-500/25 flex items-center justify-between text-xs font-bold text-amber-700 dark:text-amber-300 shrink-0 animate-in fade-in duration-150">
@@ -3367,7 +3359,6 @@ function ChatPage() {
                 onSendPaymentQr={handleSendPaymentQr}
                 sendingPaymentQr={sendingPaymentQr}
                 fileInputRef={fileInputRef}
-                cameraInputRef={cameraInputRef}
                 handleFileChange={handleFileChange}
                 uploadingMedia={uploadingMedia}
                 isRecording={isRecording}
@@ -3406,6 +3397,39 @@ function ChatPage() {
             </div>
           )}
         </Card>
+
+        {embeddedOrder && (
+          <section className="relative flex min-w-0 flex-1 flex-col overflow-hidden rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-base)] shadow-2xl">
+            <React.Suspense fallback={(
+              <div className="flex h-full items-center justify-center gap-2 text-xs font-semibold text-[var(--text-secondary)]">
+                <Loader2 className="h-5 w-5 animate-spin text-[var(--accent)]" />
+                Abriendo pedido...
+              </div>
+            )}>
+              <EmbeddedNewOrderPage
+                key={`${embeddedOrder.chatSessionId}:${embeddedOrder.editOrderId || 'new'}`}
+                embedded
+                embeddedParams={embeddedOrder}
+                onClose={() => setEmbeddedOrder(null)}
+                onOrderSaved={(savedOrder) => {
+                  const orderSummary = {
+                    id: savedOrder.id || embeddedOrder.editOrderId || '',
+                    orderNumber: savedOrder.orderNumber || 0,
+                    status: savedOrder.status || 'PENDING',
+                    total: savedOrder.total,
+                  }
+                  setActiveOrder(savedOrder)
+                  setActiveSession(prev => prev ? { ...prev, activeOrder: orderSummary } : prev)
+                  setSessions(prev => prev.map(session => session.id === embeddedOrder.chatSessionId
+                    ? { ...session, activeOrder: orderSummary }
+                    : session
+                  ))
+                  void loadSessions(undefined, chatSearchRef.current, false, chatFilterRef.current)
+                }}
+              />
+            </React.Suspense>
+          </section>
+        )}
       </div>
 
       {/* Modal para Editar Mensaje */}
