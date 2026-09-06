@@ -204,12 +204,14 @@ export class WhatsappController {
   async getSessionMessages(
     @Param('id') id: string,
     @Query('before') before?: string,
+    @Query('beforeId') beforeId?: string,
     @Query('limit') limit?: string,
   ) {
     return this.whatsappService.getSessionMessages(
       id,
       before,
       limit ? parseInt(limit, 10) : undefined,
+      beforeId,
     );
   }
 

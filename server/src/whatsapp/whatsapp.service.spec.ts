@@ -83,6 +83,16 @@ describe('WhatsApp advisor concurrency', () => {
       take: 120,
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
     }));
+
+    await service.getSessionMessages('chat-1', '2026-09-05T14:00:00.000Z', 120, 'm1');
+    expect(prisma.whatsAppMessage.findMany).toHaveBeenLastCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        OR: [
+          { createdAt: { lt: new Date('2026-09-05T14:00:00.000Z') } },
+          { createdAt: new Date('2026-09-05T14:00:00.000Z'), id: { lt: 'm1' } },
+        ],
+      }),
+    }));
   });
 
   it('paginates the conversation inbox with a stable timestamp and id cursor', async () => {

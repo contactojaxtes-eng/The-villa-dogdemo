@@ -844,6 +844,8 @@ function ChatPage() {
   const hasMoreRef = useRef(true)
   const loadingMoreRef = useRef(false)
   const messagesCacheRef = useRef<Record<string, Message[]>>({})
+  const messagesRequestIdRef = useRef(0)
+  const olderMessagesRequestIdRef = useRef(0)
 
   useEffect(() => {
     chatSearchRef.current = chatSearch
@@ -1293,6 +1295,9 @@ function ChatPage() {
 
   // Fetch message history for selected session with instant 0ms in-memory cache
   const loadMessages = async (sessionId: string, initialSession?: Session | null) => {
+    const requestId = ++messagesRequestIdRef.current
+    olderMessagesRequestIdRef.current += 1
+    setLoadingOlderMessages(false)
     // 1. Si ya tenemos mensajes cacheados en memoria, renderizar al instante sin spinner
     const cached = messagesCacheRef.current[sessionId]
     if (cached && cached.length > 0) {
@@ -1307,51 +1312,73 @@ function ChatPage() {
 
     try {
       const data = await api.get<Message[]>(`/whatsapp/sessions/${sessionId}/messages?limit=120`)
+      if (requestId !== messagesRequestIdRef.current || activeSessionRef.current?.id !== sessionId) return
       const safeMessages = Array.isArray(data) ? data : []
       setHasOlderMessages(safeMessages.length === 120)
-      messagesCacheRef.current[sessionId] = safeMessages
-      setMessages(safeMessages)
+      setMessages(current => {
+        const knownIds = new Set(safeMessages.map(item => item.id))
+        const knownWaIds = new Set(safeMessages.map(item => item.waMessageId).filter(Boolean))
+        const serverOutgoingContent = new Set(safeMessages.filter(item => item.direction === 'OUT').map(item => item.content))
+        const currentOnly = current.filter(item => {
+          if (knownIds.has(item.id) || (item.waMessageId && knownWaIds.has(item.waMessageId))) return false
+          const isOptimistic = String(item.id).startsWith('temp-') || String(item.id).startsWith('opt-')
+          return !(isOptimistic && item.direction === 'OUT' && serverOutgoingContent.has(item.content))
+        })
+        const merged = [...safeMessages, ...currentOnly]
+          .sort((a, b) => {
+            const byDate = new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+            return byDate || a.id.localeCompare(b.id)
+          })
+        messagesCacheRef.current[sessionId] = merged
+        return merged
+      })
       if (safeMessages.length > 0) {
         const newest = safeMessages[safeMessages.length - 1]
         setSessions(prev => prev.map(s => s.id === sessionId ? {
           ...s,
-          lastMessageAt: newest.createdAt || s.lastMessageAt,
+          lastMessageAt: new Date(newest.createdAt).getTime() > new Date(s.lastMessageAt || 0).getTime() ? newest.createdAt : s.lastMessageAt,
           messages: [newest, ...(s.messages?.filter(m => m.id !== newest.id) || [])]
         } : s))
       }
     } catch (err) {
-      console.error('Error cargando mensajes:', err)
+      if (requestId === messagesRequestIdRef.current) console.error('Error cargando mensajes:', err)
     } finally {
-      setLoadingMessages(false)
+      if (requestId === messagesRequestIdRef.current) setLoadingMessages(false)
     }
   }
 
   const loadOlderMessages = async () => {
     if (!activeSession || loadingOlderMessages || !hasOlderMessages || messages.length === 0) return
     const oldest = messages[0]?.createdAt
-    if (!oldest) return
+    const oldestId = messages[0]?.id
+    if (!oldest || !oldestId) return
+    const sessionId = activeSession.id
+    const requestId = ++olderMessagesRequestIdRef.current
     const viewport = messagesViewportRef.current
     const previousHeight = viewport?.scrollHeight || 0
     setLoadingOlderMessages(true)
     try {
       const older = await api.get<Message[]>(
-        `/whatsapp/sessions/${activeSession.id}/messages?limit=120&before=${encodeURIComponent(oldest)}`
+        `/whatsapp/sessions/${sessionId}/messages?limit=120&before=${encodeURIComponent(oldest)}&beforeId=${encodeURIComponent(oldestId)}`
       )
+      if (requestId !== olderMessagesRequestIdRef.current || activeSessionRef.current?.id !== sessionId) return
       const safeOlder = Array.isArray(older) ? older : []
       setHasOlderMessages(safeOlder.length === 120)
       setMessages(current => {
         const known = new Set(current.map(item => item.id))
         const merged = [...safeOlder.filter(item => !known.has(item.id)), ...current]
-        messagesCacheRef.current[activeSession.id] = merged
+        messagesCacheRef.current[sessionId] = merged
         return merged
       })
       requestAnimationFrame(() => requestAnimationFrame(() => {
         if (viewport) viewport.scrollTop += viewport.scrollHeight - previousHeight
       }))
     } catch (err: any) {
-      alerts.error('No se pudo cargar el historial', err?.message || 'Inténtalo nuevamente.')
+      if (requestId === olderMessagesRequestIdRef.current && activeSessionRef.current?.id === sessionId) {
+        alerts.error('No se pudo cargar el historial', err?.message || 'Inténtalo nuevamente.')
+      }
     } finally {
-      setLoadingOlderMessages(false)
+      if (requestId === olderMessagesRequestIdRef.current) setLoadingOlderMessages(false)
     }
   }
 
@@ -1757,6 +1784,8 @@ function ChatPage() {
     if (activeSession) {
       loadMessages(activeSession.id, activeSession)
     } else {
+      messagesRequestIdRef.current += 1
+      olderMessagesRequestIdRef.current += 1
       setMessages([])
       setHasOlderMessages(false)
     }

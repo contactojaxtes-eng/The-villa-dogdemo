@@ -2035,7 +2035,7 @@ export class WhatsappService {
     return updated;
   }
 
-  async getSessionMessages(sessionId: string, before?: string, requestedLimit?: number) {
+  async getSessionMessages(sessionId: string, before?: string, requestedLimit?: number, beforeId?: string) {
     const session = await this.prisma.whatsAppSession.findUnique({ where: { id: sessionId } });
     if (!session) return [];
 
@@ -2046,6 +2046,7 @@ export class WhatsappService {
     if (before) {
       const parsed = new Date(before);
       if (Number.isNaN(parsed.getTime())) throw new BadRequestException('Cursor de mensajes inválido');
+      if (beforeId && beforeId.length > 128) throw new BadRequestException('Cursor de mensajes inválido');
       beforeDate = parsed;
     }
 
@@ -2072,10 +2073,21 @@ export class WhatsappService {
     const sessionIds = matchingSessions.map(s => s.id);
     if (!sessionIds.includes(sessionId)) sessionIds.push(sessionId);
 
+    const messageCursor = beforeDate
+      ? beforeId
+        ? {
+            OR: [
+              { createdAt: { lt: beforeDate } },
+              { createdAt: beforeDate, id: { lt: beforeId } },
+            ],
+          }
+        : { createdAt: { lt: beforeDate } }
+      : {};
+
     const messages = await this.prisma.whatsAppMessage.findMany({
       where: {
         sessionId: { in: sessionIds },
-        ...(beforeDate ? { createdAt: { lt: beforeDate } } : {}),
+        ...messageCursor,
       },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: limit,
