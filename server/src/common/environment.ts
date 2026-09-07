@@ -1,9 +1,20 @@
+function toOrigin(value?: string) {
+  const raw = String(value || '').trim();
+  if (!raw) return undefined;
+  try {
+    return new URL(raw).origin;
+  } catch {
+    return raw.replace(/\/$/, '');
+  }
+}
+
 export function isAllowedOrigin(origin?: string) {
   if (!origin) return true;
   const configured = [
     ...(process.env.ALLOWED_ORIGINS || '').split(','),
-    process.env.CLIENT_URL,
-    process.env.RAILWAY_PUBLIC_DOMAIN ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}` : undefined,
+    toOrigin(process.env.CLIENT_URL),
+    toOrigin(process.env.PUBLIC_MENU_URL),
+    toOrigin(process.env.RAILWAY_PUBLIC_DOMAIN ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}` : undefined),
   ].filter((value): value is string => !!value).map(value => value.trim().replace(/\/$/, ''));
   const local = ['http://localhost:5173', 'http://127.0.0.1:5173', 'http://localhost:3000', 'http://127.0.0.1:3000'];
   return [...configured, ...(process.env.NODE_ENV === 'production' ? [] : local)].includes(origin);

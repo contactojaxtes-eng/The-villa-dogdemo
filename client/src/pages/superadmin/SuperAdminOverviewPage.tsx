@@ -50,7 +50,6 @@ export default function SuperAdminOverviewPage() {
   const [data, setData] = useState<Overview | null>(null)
   const [users, setUsers] = useState<UserData[]>([])
   const [loading, setLoading] = useState(true)
-  const [refreshing, setRefreshing] = useState(false)
   const [impersonatingId, setImpersonatingId] = useState<string | null>(null)
   const [supportQuery, setSupportQuery] = useState('')
   const [supportRole, setSupportRole] = useState('ALL')
@@ -78,25 +77,6 @@ export default function SuperAdminOverviewPage() {
     const timer = window.setTimeout(() => { void loadDashboard() }, 0)
     return () => window.clearTimeout(timer)
   }, [loadDashboard])
-
-  const handleBroadcastRefresh = async () => {
-    const ok = await alerts.confirm(
-      '¿Sincronizar las pantallas abiertas?',
-      'Los usuarios conectados recibirán una actualización para aplicar cambios recientes.',
-      'Sincronizar',
-      'Cancelar'
-    )
-    if (!ok) return
-    setRefreshing(true)
-    try {
-      const result = await api.post<{ clientsNotified: number }>('/superadmin/broadcast-refresh')
-      alerts.success('Sincronización enviada', `${result.clientsNotified} pantalla(s) conectada(s) recibirán la actualización.`)
-    } catch (error) {
-      alerts.error('No se pudo sincronizar', getErrorMessage(error))
-    } finally {
-      setRefreshing(false)
-    }
-  }
 
   const handleImpersonate = async (user: UserData) => {
     const ok = await alerts.confirm(
@@ -144,7 +124,7 @@ export default function SuperAdminOverviewPage() {
       <div className="relative space-y-5">
         <header className="flex flex-col gap-4 border-b border-[var(--border-subtle)] pb-5 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex items-start gap-3"><span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-[var(--accent)]/10 text-[var(--accent)]"><Crown className="h-5 w-5" /></span><div><p className="text-[10px] font-black uppercase tracking-[0.18em] text-[var(--accent)]">Panel SuperAdministrador</p><h1 className="mt-1 text-3xl font-black tracking-tight sm:text-4xl">Centro de control</h1><p className="mt-1 text-xs text-[var(--text-muted)]">Resumen operativo, salud del sistema y soporte de usuarios.</p></div></div>
-          <div className="flex flex-wrap items-center gap-2"><span className={`inline-flex h-9 items-center gap-2 rounded-xl px-3 text-xs font-black ${hasErrors ? 'bg-red-500/10 text-red-600' : 'bg-emerald-500/10 text-emerald-600'}`}><span className={`h-2 w-2 rounded-full ${hasErrors ? 'bg-red-500' : 'bg-emerald-500'}`} />{hasErrors ? `${data?.errorLogsLast24h} alerta(s) reciente(s)` : 'Operación estable'}</span><span className="hidden text-[10px] font-bold text-[var(--text-muted)] sm:inline">{lastUpdated ? `Actualizado ${lastUpdated.toLocaleTimeString('es-CO')}` : ''}</span><button type="button" onClick={() => void loadDashboard()} disabled={loading} className="inline-flex h-10 items-center gap-2 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] px-3 text-xs font-black text-[var(--text-secondary)] transition hover:border-[var(--accent)] hover:text-[var(--accent)]"><RefreshCw className="h-4 w-4" /> Actualizar</button><button type="button" onClick={() => void handleBroadcastRefresh()} disabled={refreshing} className="inline-flex h-10 items-center gap-2 rounded-xl bg-[var(--accent)] px-3 text-xs font-black text-[var(--accent-fg)] transition hover:opacity-90 disabled:opacity-60"><RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} /> Sincronizar pantallas</button></div>
+          <div className="flex flex-wrap items-center gap-2"><span className={`inline-flex h-9 items-center gap-2 rounded-xl px-3 text-xs font-black ${hasErrors ? 'bg-red-500/10 text-red-600' : 'bg-emerald-500/10 text-emerald-600'}`}><span className={`h-2 w-2 rounded-full ${hasErrors ? 'bg-red-500' : 'bg-emerald-500'}`} />{hasErrors ? `${data?.errorLogsLast24h} alerta(s) reciente(s)` : 'Operación estable'}</span><span className="hidden text-[10px] font-bold text-[var(--text-muted)] sm:inline">{lastUpdated ? `Actualizado ${lastUpdated.toLocaleTimeString('es-CO')}` : ''}</span><button type="button" onClick={() => void loadDashboard()} disabled={loading} className="inline-flex h-10 items-center gap-2 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] px-3 text-xs font-black text-[var(--text-secondary)] transition hover:border-[var(--accent)] hover:text-[var(--accent)]"><RefreshCw className="h-4 w-4" /> Actualizar datos</button></div>
         </header>
 
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">{stats.map(stat => { const Icon = stat.icon; const tone = stat.tone === 'accent' ? 'border-[var(--accent)]/25 bg-[var(--accent)]/5 text-[var(--accent)]' : stat.tone === 'green' ? 'border-emerald-500/20 bg-emerald-500/5 text-emerald-600' : stat.tone === 'red' ? 'border-red-500/25 bg-red-500/5 text-red-600' : 'border-[var(--border-subtle)] bg-[var(--bg-panel)] text-[var(--text-primary)]'; return <div key={stat.label} className={`rounded-2xl border p-4 transition hover:-translate-y-0.5 sm:p-5 ${tone}`}><div className="flex items-start justify-between gap-2"><div><p className="text-[11px] font-bold text-[var(--text-muted)]">{stat.label}</p><p className="mt-2 text-2xl font-black sm:text-3xl">{stat.value.toLocaleString('es-CO')}</p><p className="mt-1 text-[10px] font-medium text-[var(--text-muted)]">{stat.helper}</p></div><Icon className="h-5 w-5 opacity-80" /></div></div> })}</div>

@@ -338,8 +338,8 @@ export default function ModuleSettingsPage() {
   }
 
   const saveWhatsapp = async () => {
-    const menuUrl = whatsapp.digitalMenuUrl.trim() || `${window.location.origin}/menu`
-    if (!/^https?:\/\//i.test(menuUrl)) {
+    const menuUrl = whatsapp.digitalMenuUrl.trim()
+    if (menuUrl && !/^https?:\/\//i.test(menuUrl)) {
       alerts.warning('Enlace incompleto', 'La dirección de la carta debe comenzar por http:// o https://.')
       return
     }
@@ -356,7 +356,7 @@ export default function ModuleSettingsPage() {
       setWhatsapp(current => ({
         ...current,
         chatbotEnabled: updated.chatbotEnabled === true,
-        digitalMenuUrl: updated.digitalMenuUrl || menuUrl,
+        digitalMenuUrl: updated.digitalMenuUrl || menuUrl || current.digitalMenuUrl,
         menuShareMessage: updated.menuShareMessage || current.menuShareMessage,
         paymentQrMode: updated.paymentQrMode === 'IMAGE' ? 'IMAGE' : 'ACCOUNT',
         paymentAccountText: updated.paymentAccountText || '',
@@ -712,7 +712,7 @@ export default function ModuleSettingsPage() {
               <button type="button" onClick={() => setWhatsapp(current => ({ ...current, chatbotEnabled: !current.chatbotEnabled }))} className={cn('h-9 rounded-xl border px-3 text-xs font-black transition', whatsapp.chatbotEnabled ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-600' : 'border-slate-400/30 bg-slate-500/10 text-[var(--text-secondary)]')}>{whatsapp.chatbotEnabled ? 'Activo' : 'Pausado'}</button>
             </div>
             <div className="space-y-4">
-              <label className="block"><span className="mb-1.5 flex items-center gap-1.5 text-xs font-bold text-[var(--text-secondary)]"><Link2 className="h-3.5 w-3.5" /> Enlace de la carta viva</span><div className="flex gap-2"><input value={whatsapp.digitalMenuUrl} onChange={event => setWhatsapp(current => ({ ...current, digitalMenuUrl: event.target.value }))} className={fieldClass} placeholder="https://tu-dominio.com/menu" /><a href={whatsapp.digitalMenuUrl || '/menu'} target="_blank" rel="noreferrer" className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-[var(--border-subtle)] text-[var(--text-secondary)] hover:text-[var(--accent)]" title="Abrir carta"><ExternalLink className="h-4 w-4" /></a></div></label>
+              <label className="block"><span className="mb-1.5 flex items-center gap-1.5 text-xs font-bold text-[var(--text-secondary)]"><Link2 className="h-3.5 w-3.5" /> Enlace público de la carta</span><div className="flex gap-2"><input value={whatsapp.digitalMenuUrl} onChange={event => setWhatsapp(current => ({ ...current, digitalMenuUrl: event.target.value }))} className={fieldClass} placeholder="https://menu.tu-dominio.com/menu" /><a href={whatsapp.digitalMenuUrl || '/menu'} target="_blank" rel="noreferrer" className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-[var(--border-subtle)] text-[var(--text-secondary)] hover:text-[var(--accent)]" title="Abrir carta"><ExternalLink className="h-4 w-4" /></a></div><span className="mt-1.5 block text-[10px] leading-4 text-[var(--text-muted)]">Es el enlace que reciben los clientes. En producción usa un dominio o subdominio separado de la consola y del backend, por ejemplo <strong>menu.tu-dominio.com/menu</strong>. Si lo dejas vacío, se usará el dominio público configurado en Railway.</span></label>
               <label className="block"><span className="mb-1.5 block text-xs font-bold text-[var(--text-secondary)]">Mensaje que acompaña la carta</span><textarea value={whatsapp.menuShareMessage} onChange={event => setWhatsapp(current => ({ ...current, menuShareMessage: event.target.value }))} className={textAreaClass} placeholder="Escribe el mensaje. Puedes usar {url}." /><span className="mt-1 block text-[10px] text-[var(--text-muted)]">Si escribes <strong>{'{url}'}</strong>, el enlace se insertará ahí. Si no, se agrega al final.</span></label>
               <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-3 text-xs text-emerald-700 dark:text-emerald-300"><p className="font-bold">Carta sincronizada con Productos y Menú</p><p className="mt-0.5 opacity-80">Ya no se enviarán PDF ni imágenes viejas. Los cambios del catálogo aparecen en vivo mediante Socket.IO.</p></div>
             </div>

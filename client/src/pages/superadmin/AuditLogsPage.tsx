@@ -40,7 +40,7 @@ const actionLabels: Record<string, string> = {
 }
 
 const roleLabels: Record<string, string> = { SUPERADMIN: 'SuperAdmin', ADMIN: 'Administrador' }
-const actionLabel = (action: string) => actionLabels[action] || action.replaceAll('_', ' ').toLowerCase().replace(/(^|\s)\S/g, letter => letter.toUpperCase())
+const actionLabel = (action: string) => actionLabels[action] || action.replace(/_/g, ' ').toLowerCase().replace(/(^|\s)\S/g, (letter: string) => letter.toUpperCase())
 const getErrorMessage = (error: unknown) => error instanceof Error ? error.message : 'No se pudo cargar la auditoría.'
 
 export default function AuditLogsPage() {
@@ -63,7 +63,9 @@ export default function AuditLogsPage() {
         if (tab === 'audit') setAudit(data as Paginated<AuditLog>)
         else setErrors(data as Paginated<ErrorLog>)
       })
-      .catch(error => active && alerts.error('No se pudo cargar el registro', getErrorMessage(error)))
+      .catch(error => {
+        if (active) alerts.error('No se pudo cargar el registro', getErrorMessage(error))
+      })
       .finally(() => active && setLoading(false))
     return () => { active = false }
   }, [tab, page, actionFilter])

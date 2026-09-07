@@ -94,7 +94,7 @@ export class WhatsappService implements OnModuleInit {
       geminiModel: map.gemini_model || 'gemini-flash-lite-latest',
       aiInstructions: map.chatbot_ai_instructions || '',
       geminiRequestsToday,
-      digitalMenuUrl: map.digital_menu_url || this.getDefaultDigitalMenuUrl(),
+      digitalMenuUrl: this.resolveDigitalMenuUrl(map.digital_menu_url),
       businessHoursEnabled: map.business_hours_enabled === 'true',
       outOfServiceEnabled: map.out_of_service_enabled === 'true',
       outOfServiceMessage: map.out_of_service_message || '',
@@ -102,12 +102,47 @@ export class WhatsappService implements OnModuleInit {
     };
   }
 
+  /**
+   * URL pública que se comparte con los clientes para consultar la carta.
+   * PUBLIC_MENU_URL permite alojarla en un dominio/subdominio separado del
+   * backend (por ejemplo https://menu.tudominio.com/menu). CLIENT_URL y
+   * Railway son únicamente respaldos para instalaciones que aún no lo han
+   * configurado.
+   */
+  private getConfiguredPublicMenuUrl(): string | null {
+    const raw = String(this.config.get('PUBLIC_MENU_URL') || '').trim().replace(/\/+$/, '');
+    if (!raw) return null;
+    return /\/menu$/i.test(raw) ? raw : `${raw}/menu`;
+  }
+
+  private getMenuUrlFromBase(base: string | null | undefined): string | null {
+    const normalized = String(base || '').trim().replace(/\/+$/, '');
+    return normalized ? `${normalized}/menu` : null;
+  }
+
+  private getLegacyDigitalMenuUrls(): string[] {
+    const urls = [
+      this.getMenuUrlFromBase(this.config.get('CLIENT_URL')),
+      this.getMenuUrlFromBase(this.config.get('RAILWAY_PUBLIC_DOMAIN') ? `https://${this.config.get('RAILWAY_PUBLIC_DOMAIN')}` : null),
+      'http://localhost:5173/menu',
+    ];
+    return urls.filter((url): url is string => Boolean(url));
+  }
+
+  private resolveDigitalMenuUrl(configured?: string | null): string {
+    const stored = String(configured || '').trim().replace(/\/+$/, '');
+    const publicUrl = this.getConfiguredPublicMenuUrl();
+    // Si antes se guardó automáticamente la URL de Railway/CLIENT_URL, la
+    // migramos al nuevo dominio público sin pisar una URL personalizada.
+    if (publicUrl && stored && this.getLegacyDigitalMenuUrls().includes(stored)) return publicUrl;
+    return stored || this.getDefaultDigitalMenuUrl();
+  }
+
   private getDefaultDigitalMenuUrl() {
-    const clientUrl = String(this.config.get('CLIENT_URL') || '').trim().replace(/\/$/, '');
-    if (clientUrl) return `${clientUrl}/menu`;
-    const railwayDomain = String(this.config.get('RAILWAY_PUBLIC_DOMAIN') || '').trim();
-    if (railwayDomain) return `https://${railwayDomain}/menu`;
-    return 'http://localhost:5173/menu';
+    return this.getConfiguredPublicMenuUrl()
+      || this.getMenuUrlFromBase(this.config.get('CLIENT_URL'))
+      || this.getMenuUrlFromBase(this.config.get('RAILWAY_PUBLIC_DOMAIN') ? `https://${this.config.get('RAILWAY_PUBLIC_DOMAIN')}` : null)
+      || 'http://localhost:5173/menu';
   }
 
   private buildMetaRecipient(target: string): { to?: string; recipient?: string } {
@@ -587,7 +622,7 @@ export class WhatsappService implements OnModuleInit {
       where: { key: { in: ['digital_menu_url', 'chatbot_menu_share_message'] } },
     });
     const values = Object.fromEntries(rows.map(row => [row.key, row.value])) as Record<string, string>;
-    const link = String(values.digital_menu_url || this.getDefaultDigitalMenuUrl()).trim();
+    const link = this.resolveDigitalMenuUrl(values.digital_menu_url);
     const customMessage = String(values.chatbot_menu_share_message || '').trim();
     const intro = customMessage || '🍽️ *CARTA DIGITAL THE VILLA DOG*\n\nMira nuestra carta actualizada y arma tu pedido aquí:';
     const message = intro.includes('{url}')
@@ -4844,7 +4879,8 @@ ${menuSummary}
     const cached = this.settingCache.get(key);
     if (cached && cached.expiresAt > Date.now()) return cached.value;
     const s = await this.prisma.appSetting.findUnique({ where: { key } });
-    const value = s?.value || this.config.get(key.toUpperCase()) || null;
+    const rawValue = s?.value || this.config.get(key.toUpperCase()) || null;
+    const value = key === 'digital_menu_url' ? this.resolveDigitalMenuUrl(rawValue) : rawValue;
     this.settingCache.set(key, { value, expiresAt: Date.now() + 60_000 });
     return value;
   }
