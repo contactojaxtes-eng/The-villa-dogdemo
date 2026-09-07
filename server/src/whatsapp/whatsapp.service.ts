@@ -4098,15 +4098,28 @@ Restaurante (Tú):
     let workingKey = '';
     for (const apiKey of keys.slice(0, 10)) {
       try {
-        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(apiKey)}`, {
-          signal: AbortSignal.timeout(8000),
-        });
-        if (!response.ok) {
-          const errorBody: any = await response.json().catch(() => null);
-          lastError = this.sanitizeGeminiError(errorBody?.error?.message || `Gemini respondió HTTP ${response.status}`, keys);
-          continue;
-        }
-        payload = await response.json();
+        const models: any[] = [];
+        let pageToken = '';
+        let page = 0;
+        do {
+          const params = new URLSearchParams({ key: apiKey, pageSize: '1000' });
+          if (pageToken) params.set('pageToken', pageToken);
+          const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?${params.toString()}`, {
+            signal: AbortSignal.timeout(8000),
+          });
+          if (!response.ok) {
+            const errorBody: any = await response.json().catch(() => null);
+            lastError = this.sanitizeGeminiError(errorBody?.error?.message || `Gemini respondió HTTP ${response.status}`, keys);
+            break;
+          }
+          const pagePayload: any = await response.json();
+          if (Array.isArray(pagePayload?.models)) models.push(...pagePayload.models);
+          pageToken = String(pagePayload?.nextPageToken || '');
+          page += 1;
+        } while (pageToken && page < 20);
+
+        if (lastError && models.length === 0) continue;
+        payload = { models };
         workingKey = apiKey;
         break;
       } catch (error) {
@@ -4129,10 +4142,27 @@ Restaurante (Tú):
         supportedGenerationMethods: entry.supportedGenerationMethods,
       }))
       .filter((entry: any) => entry.name)
+      .reduce((unique: any[], entry: any) => unique.some(item => item.name === entry.name) ? unique : [...unique, entry], [])
       .sort((a: any, b: any) => a.name.localeCompare(b.name));
 
     const configuredModel = this.normalizeGeminiModel(model || String(await this.getSetting('gemini_model') || ''));
-    const selected = availableModels.find((entry: any) => entry.name === configuredModel) || availableModels[0] || null;
+    const productionCandidates = availableModels.filter((entry: any) => {
+      const name = String(entry.name || '').toLowerCase();
+      return !/(embedding|image|imagen|tts|audio|live|robotics|computer|deep-research|veo|lyria)/i.test(name)
+        && !/(preview|experimental|exp|latest)/i.test(name);
+    });
+    const preferredNames = [
+      'gemini-3.5-flash-lite',
+      'gemini-3.1-flash-lite',
+      'gemini-2.5-flash-lite',
+      'gemini-3.6-flash',
+      'gemini-2.5-flash',
+    ];
+    const recommended = preferredNames.map(name => productionCandidates.find((entry: any) => entry.name === name)).find(Boolean)
+      || productionCandidates.find((entry: any) => /flash/i.test(entry.name))
+      || availableModels[0]
+      || null;
+    const selected = availableModels.find((entry: any) => entry.name === configuredModel) || recommended;
     const requestsToday = await this.getGeminiUsageToday();
 
     return {
