@@ -373,8 +373,8 @@ export class WhatsappController {
   @Post('test-gemini')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('ADMIN', 'SUPERADMIN')
-  async testGemini(@Body('key') key: string) {
-    return this.whatsappService.testGeminiConnection(key);
+  async testGemini(@Body() body: { key?: string; prompt?: string; model?: string }) {
+    return this.whatsappService.testGeminiConnection(body?.key, body?.prompt, body?.model);
   }
 
   @Post('parse-order')

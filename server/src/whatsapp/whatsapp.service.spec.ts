@@ -156,3 +156,72 @@ describe('WhatsApp live menu sharing', () => {
     });
   });
 });
+
+describe('WhatsApp Gemini settings', () => {
+  const createService = () => new WhatsappService(
+    {} as any,
+    { get: jest.fn() } as any,
+    { emitWhatsApp: jest.fn() } as any,
+  );
+
+  it('keeps masked keys matched by suffix when their order changes', () => {
+    const service = createService();
+    const existing = ['first-secret-AB12', 'second-secret-CD34'];
+
+    const resolved = (service as any).resolveGeminiKeys(
+      ['••••••••CD34', 'new-secret-EF56', '••••••••AB12'],
+      existing,
+    );
+
+    expect(resolved).toEqual(['second-secret-CD34', 'new-secret-EF56', 'first-secret-AB12']);
+  });
+
+  it('rejects model names that could alter the provider URL', () => {
+    const service = createService();
+
+    expect(() => (service as any).normalizeGeminiModel('../invalid?key=value'))
+      .toThrow('El nombre del modelo de Gemini no es válido');
+  });
+
+  it('returns a safe diagnostic from a real provider-shaped response', async () => {
+    const apiKey = 'test-secret-key-AB12';
+    const prisma: any = {
+      appSetting: {
+        findUnique: jest.fn().mockImplementation(({ where }: any) => {
+          if (where.key === 'gemini_api_key') return { value: apiKey };
+          if (where.key === 'gemini_model') return { value: 'gemini-flash-latest' };
+          return null;
+        }),
+        upsert: jest.fn().mockResolvedValue(null),
+        findMany: jest.fn().mockResolvedValue([]),
+        delete: jest.fn().mockResolvedValue(null),
+      },
+    };
+    const service = new WhatsappService(
+      prisma,
+      { get: jest.fn() } as any,
+      { emitWhatsApp: jest.fn() } as any,
+    );
+    const fetchSpy = jest.spyOn(global, 'fetch').mockResolvedValue({
+      ok: true,
+      json: jest.fn().mockResolvedValue({
+        candidates: [{ content: { parts: [{ text: 'Conexión correcta' }] } }],
+      }),
+    } as any);
+
+    const result = await service.testGeminiConnection('••••AB12', 'Prueba', 'gemini-flash-latest');
+
+    expect(result).toEqual(expect.objectContaining({
+      success: true,
+      validKeys: 1,
+      model: 'gemini-flash-latest',
+      reply: 'Conexión correcta',
+    }));
+    expect(JSON.stringify(result)).not.toContain(apiKey);
+    expect(fetchSpy).toHaveBeenCalledWith(
+      expect.stringContaining('/models/gemini-flash-latest:generateContent'),
+      expect.any(Object),
+    );
+    fetchSpy.mockRestore();
+  });
+});

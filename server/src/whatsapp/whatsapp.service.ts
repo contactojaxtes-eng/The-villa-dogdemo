@@ -50,6 +50,8 @@ export class WhatsappService implements OnModuleInit {
       'chatbot_payment_qr_mode',
       'chatbot_payment_account_text',
       'gemini_api_key',
+      'gemini_model',
+      'chatbot_ai_instructions',
       'digital_menu_url',
       'business_hours_enabled',
       'out_of_service_enabled',
@@ -70,6 +72,11 @@ export class WhatsappService implements OnModuleInit {
       }
     }
     const geminiRequestsToday = await this.getGeminiUsageToday();
+    const geminiKeyCount = (settings.find(s => s.key === 'gemini_api_key')?.value || '')
+      .split(',')
+      .map(key => key.trim())
+      .filter(Boolean)
+      .length;
     return {
       phoneId: map.whatsapp_phone_id || '',
       businessPhone: map.whatsapp_business_phone || '',
@@ -83,6 +90,9 @@ export class WhatsappService implements OnModuleInit {
       paymentQrMode: map.chatbot_payment_qr_mode || (map.chatbot_payment_qr_name ? 'IMAGE' : 'ACCOUNT'),
       paymentAccountText: map.chatbot_payment_account_text || '',
       geminiApiKey: map.gemini_api_key || '',
+      geminiKeyCount,
+      geminiModel: map.gemini_model || 'gemini-flash-lite-latest',
+      aiInstructions: map.chatbot_ai_instructions || '',
       geminiRequestsToday,
       digitalMenuUrl: map.digital_menu_url || this.getDefaultDigitalMenuUrl(),
       businessHoursEnabled: map.business_hours_enabled === 'true',
@@ -689,6 +699,8 @@ export class WhatsappService implements OnModuleInit {
     businessPhone?: string; 
     chatbotEnabled?: boolean; 
     geminiApiKey?: string; 
+    geminiModel?: string;
+    aiInstructions?: string;
     digital_menu_url?: string;
     menuShareMessage?: string;
     paymentQrMode?: 'IMAGE' | 'ACCOUNT';
@@ -715,21 +727,25 @@ export class WhatsappService implements OnModuleInit {
         const existingKeys = (existingSetting?.value || '').split(',').map(k => k.trim()).filter(Boolean);
         const incomingTokens = incomingRaw.split(',').map(k => k.trim()).filter(Boolean);
         
-        const mergedKeys: string[] = [];
-        incomingTokens.forEach((token, idx) => {
-          if (token.includes('••') || token.startsWith('••••')) {
-            if (existingKeys[idx]) {
-              mergedKeys.push(existingKeys[idx]);
-            }
-          } else if (token.length >= 10) {
-            mergedKeys.push(token);
-          }
-        });
-
-        if (mergedKeys.length > 0) {
-          updates.push({ key: 'gemini_api_key', value: mergedKeys.join(', ') });
+        const mergedKeys = this.resolveGeminiKeys(incomingTokens, existingKeys);
+        if (mergedKeys.length === 0) {
+          throw new BadRequestException('No se pudo reconocer ninguna llave válida de Gemini');
         }
+        updates.push({ key: 'gemini_api_key', value: mergedKeys.join(', ') });
       }
+    }
+
+    if (data.geminiModel !== undefined) {
+      const geminiModel = this.normalizeGeminiModel(data.geminiModel);
+      if (!geminiModel) throw new BadRequestException('El modelo de Gemini es obligatorio');
+      updates.push({ key: 'gemini_model', value: geminiModel });
+    }
+    if (data.aiInstructions !== undefined) {
+      const aiInstructions = String(data.aiInstructions).trim();
+      if (aiInstructions.length > 4000) {
+        throw new BadRequestException('Las instrucciones de la IA no pueden superar 4.000 caracteres');
+      }
+      updates.push({ key: 'chatbot_ai_instructions', value: aiInstructions });
     }
 
     if (data.digital_menu_url !== undefined) {
@@ -3223,10 +3239,22 @@ The Villa Dog • Montería`;
         queueDelayMinutes = 15;
       }
 
-        const digitalMenuUrl = await this.getSetting('digital_menu_url');
-        const displayMenuUrl = digitalMenuUrl ? digitalMenuUrl.replace(/^https?:\/\//i, '') : '';
-        const digitalMenuInstruction = digitalMenuUrl 
-          ? `\nREGLA DE ENLACE DIGITAL AL FINAL: Siempre que presentes el menú o una categoría de productos, OBLIGATORIAMENTE incluye al final de tu respuesta la opción digital: "También puedes ver nuestro menú digital interactivo y pedir directamente por aquí: ${displayMenuUrl}"` 
+        const [configuredMenuUrl, restaurantHours, aiInstructions, paymentQrMode, paymentAccountText] = await Promise.all([
+          this.getSetting('digital_menu_url'),
+          this.getSetting('restaurant_hours'),
+          this.getSetting('chatbot_ai_instructions'),
+          this.getSetting('chatbot_payment_qr_mode'),
+          this.getSetting('chatbot_payment_account_text'),
+        ]);
+        const digitalMenuUrl = configuredMenuUrl || this.getDefaultDigitalMenuUrl();
+        const displayMenuUrl = digitalMenuUrl;
+        const paymentInstruction = paymentQrMode === 'IMAGE'
+          ? 'El cobro por transferencia se comparte mediante el QR oficial. No inventes números de cuenta; indica que el asesor enviará el QR cuando corresponda.'
+          : paymentAccountText
+            ? `Los únicos datos oficiales para transferencias son:\n${paymentAccountText}`
+            : 'No hay datos de transferencia configurados. No inventes cuentas ni teléfonos; transfiere la conversación a un asesor para confirmar el pago.';
+        const customInstructionsBlock = aiInstructions?.trim()
+          ? `\nINSTRUCCIONES ADICIONALES CONFIGURADAS POR ADMINISTRACIÓN:\n${aiInstructions.trim()}\n`
           : '';
 
         const conversationPrompt = messagesChronological.map(m => 
@@ -3235,6 +3263,7 @@ The Villa Dog • Montería`;
 
         const systemPrompt = `
 Eres la persona encargada de atender de forma directa el WhatsApp del restaurante "The Villa Dog" en Montería, Colombia. Habla con un tono humano, cercano, natural y muy sencillo. Evita a toda costa sonar como un robot, una máquina de soporte técnico o un asistente de inteligencia artificial genérico. Habla como un asesor amable del restaurante.
+${customInstructionsBlock}
 
 PAUTAS DE ESTILO OBLIGATORIAS:
 - TEXTO CORTO Y DIRECTO: Mantén tus respuestas en un máximo de 1 o 2 párrafos muy breves. Al cliente no le gusta leer bloques de texto largos. (EXCEPCIÓN: Cuando el cliente pida los precios de una categoría de comida, SÍ puedes y DEBES enviar la lista completa de todos los productos y precios de esa categoría en el chat).
@@ -3248,9 +3277,8 @@ ${recentOrdersSummary}
 Menú del restaurante:
 ${menuSummary}
 
-Horarios:
-- Martes a Domingo: 5:30 PM a 11:30 PM.
-- Lunes: Cerrado.
+Horario configurado por el restaurante:
+${restaurantHours || 'Horario por confirmar con un asesor.'}
 
 Cobertura y tarifas de domicilios según el barrio en Montería:
 ${zonesSummary}
@@ -3292,8 +3320,8 @@ También puedes ver nuestro menú digital interactivo y pedir directamente por a
 
     6. MANEJO DE DATOS Y TOMAR PEDIDOS (REGLAS DE ORO):
        - NOMBRE DEL CLIENTE: El nombre registrado de la persona es "${session.customerName || 'No especificado aún'}". Si ya conoces su nombre (por ejemplo, "${session.customerName || ''}" o si viene en el texto como "Nombre: Juan Martinez"), ESTÁ ABSOLUTAMENTE PROHIBIDO VOLVER A PREGUNTAR SU NOMBRE. Llámalo por su nombre directamente (ej: "¡Hola Juan!").
-       - CUENTAS DE TRANSFERENCIA (NEQUI / BANCOLOMBIA): Si el cliente elige pagar por Transferencia, la ÚNICA cuenta oficial del restaurante THE VILLA DOG para Nequi o Bancolombia es la línea oficial del restaurante (300 3229261). PROHIBIDO ABSOLUTAMENTE DECIRLE AL CLIENTE QUE TRANSFIERA A SU PROPIO NÚMERO DE TELÉFONO.
-       - PEDIDO PARA PASAR A RECOGER (PICKUP): Si el tipo de pedido es "PASAR A RECOGER EN RESTAURANTE" (o Recoger en el local), NUNCA JAMÁS PREGUNTES POR EL BARRIO NI POR LA DIRECCIÓN. Es totalmente ilógico pedir barrio a quien va a retirar en la sede. Únicamente confirma sus productos, el método de pago (si es transferencia entrega Nequi/Bancolombia al número oficial del restaurante 300 3229261) y dile que con gusto estará listo para su llegada.
+       - CUENTAS DE TRANSFERENCIA: ${paymentInstruction}
+       - PEDIDO PARA PASAR A RECOGER (PICKUP): Si el tipo de pedido es "PASAR A RECOGER EN RESTAURANTE" (o Recoger en el local), NUNCA JAMÁS PREGUNTES POR EL BARRIO NI POR LA DIRECCIÓN. Únicamente confirma sus productos y el método de pago. Para transferencias aplica exactamente la regla de cuenta o QR anterior.
        - PEDIDO A DOMICILIO: Únicamente si el cliente indica que su pedido es a Domicilio, solicita la Dirección y el Barrio para liquidar la tarifa de entrega.
        - TARIFA DE DOMICILIO - REGLA CRÍTICA ABSOLUTA: La lista de barrios y tarifas que tienes disponible arriba es la lista OFICIAL. Si el barrio del cliente NO APARECE en esa lista oficial, o si no tiene precio asignado, ESTÁ ABSOLUTAMENTE PROHIBIDO DECIR QUE EL DOMICILIO ES "GRATIS", "$0" O INVENTAR UN VALOR. Jamás digas que un domicilio es gratis. En esos casos, DEBES responder exactamente: "Perfecto. El valor del domicilio a tu barrio será verificado y confirmado directamente por nuestro asesor al procesar tu pedido." e incluir [TRANSFERIR_ASESOR].
 
@@ -3317,15 +3345,7 @@ Restaurante (Tú):
 
       let lastError = null;
       let data = null;
-      const modelsToTry = [
-        'gemini-flash-lite-latest',
-        'gemini-3.5-flash-lite',
-        'gemini-flash-latest',
-        'gemini-3.1-flash-lite',
-        'gemini-3.5-flash',
-        'gemini-3.7-flash',
-        'gemini-3.6-flash'
-      ];
+      const modelsToTry = await this.getGeminiModels();
 
       for (const key of apiKeys) {
         for (const model of modelsToTry) {
@@ -3401,8 +3421,8 @@ Restaurante (Tú):
     try {
       // Verificar si el chatbot está habilitado en los ajustes
       const chatbotEnabled = await this.getSetting('chatbot_enabled');
-      if (chatbotEnabled === 'false') {
-        this.logger.log(`Chatbot desactivado, ignorando mensaje de ${session.phone}`);
+      if (chatbotEnabled !== 'true') {
+        this.logger.log(`Chatbot desactivado o sin configurar, ignorando mensaje de ${session.phone}`);
         return;
       }
 
@@ -3897,20 +3917,74 @@ Restaurante (Tú):
     }
   }
 
-  async testGeminiConnection(key?: string) {
+  private resolveGeminiKeys(incomingTokens: string[], existingKeys: string[]): string[] {
+    const resolved: string[] = [];
+    const usedExisting = new Set<number>();
+
+    incomingTokens.forEach((rawToken, index) => {
+      const token = String(rawToken || '').trim();
+      if (!token) return;
+
+      if (token.includes('•')) {
+        const suffix = token.replace(/•/g, '').trim().slice(-4);
+        let existingIndex = suffix
+          ? existingKeys.findIndex((existing, candidateIndex) => !usedExisting.has(candidateIndex) && existing.endsWith(suffix))
+          : -1;
+        if (existingIndex < 0 && existingKeys[index] && !usedExisting.has(index)) {
+          existingIndex = index;
+        }
+        if (existingIndex >= 0) {
+          resolved.push(existingKeys[existingIndex]);
+          usedExisting.add(existingIndex);
+        }
+        return;
+      }
+
+      if (token.length >= 10) resolved.push(token);
+    });
+
+    return Array.from(new Set(resolved));
+  }
+
+  private isValidGeminiModel(model: string): boolean {
+    return /^[a-zA-Z0-9._-]{3,100}$/.test(model);
+  }
+
+  private normalizeGeminiModel(value: string): string {
+    const model = String(value || '').trim().replace(/^models\//i, '');
+    if (model && !this.isValidGeminiModel(model)) {
+      throw new BadRequestException('El nombre del modelo de Gemini no es válido');
+    }
+    return model;
+  }
+
+  private async getGeminiModels(override?: string): Promise<string[]> {
+    const requested = override === undefined ? '' : this.normalizeGeminiModel(override);
+    const configured = String(await this.getSetting('gemini_model') || '').trim().replace(/^models\//i, '');
+    return Array.from(new Set([
+      requested,
+      this.isValidGeminiModel(configured) ? configured : '',
+      'gemini-flash-lite-latest',
+      'gemini-flash-latest',
+    ].filter(Boolean)));
+  }
+
+  private sanitizeGeminiError(error: unknown, keys: string[]): string {
+    let message = error instanceof Error ? error.message : String(error || 'Error desconocido del proveedor');
+    for (const key of keys) {
+      if (key) message = message.split(key).join('[llave oculta]');
+    }
+    return message.replace(/https?:\/\/\S+/gi, '[URL del proveedor]').slice(0, 240);
+  }
+
+  async testGeminiConnection(key?: string, prompt?: string, model?: string) {
     const existingSetting = await this.prisma.appSetting.findUnique({ where: { key: 'gemini_api_key' } });
     const existingKeys = (existingSetting?.value || '').split(',').map(k => k.trim()).filter(Boolean);
 
     let keysToTest: string[] = [];
     if (key && key.trim()) {
       const tokens = key.split(',').map(k => k.trim()).filter(Boolean);
-      tokens.forEach((token, idx) => {
-        if (token.includes('••') || token.startsWith('••••')) {
-          if (existingKeys[idx]) keysToTest.push(existingKeys[idx]);
-        } else if (token.length >= 10) {
-          keysToTest.push(token);
-        }
-      });
+      keysToTest = this.resolveGeminiKeys(tokens, existingKeys);
     }
 
     if (keysToTest.length === 0) {
@@ -3918,54 +3992,100 @@ Restaurante (Tú):
     }
 
     if (keysToTest.length === 0) {
-      return { success: false, message: 'No hay ninguna clave API configurada para probar.' };
+      return {
+        success: false,
+        message: 'No hay ninguna llave API configurada para probar.',
+        testedKeys: 0,
+        validKeys: 0,
+        results: [],
+      };
     }
 
-    let validCount = 0;
-    let lastError = '';
+    if (keysToTest.length > 10) {
+      throw new BadRequestException('Puedes probar máximo 10 llaves a la vez');
+    }
 
-    const modelsToTry = [
-      'gemini-flash-lite-latest',
-      'gemini-3.5-flash-lite',
-      'gemini-flash-latest',
-      'gemini-3.1-flash-lite',
-      'gemini-3.5-flash',
-      'gemini-3.7-flash',
-      'gemini-3.6-flash'
-    ];
+    const testPrompt = String(prompt || 'Responde únicamente: Conexión correcta').trim();
+    if (!testPrompt) throw new BadRequestException('Escribe un mensaje de prueba');
+    if (testPrompt.length > 500) throw new BadRequestException('El mensaje de prueba no puede superar 500 caracteres');
+
+    const modelsToTry = await this.getGeminiModels(model);
+    const results: Array<{
+      key: string;
+      ok: boolean;
+      model?: string;
+      latencyMs: number;
+      reply?: string;
+      error?: string;
+    }> = [];
 
     for (const apiKey of keysToTest) {
-      try {
-        for (const model of modelsToTry) {
-          const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+      const startedAt = Date.now();
+      let result: (typeof results)[number] | null = null;
+      let lastError = 'El proveedor no devolvió una respuesta válida';
+
+      for (const candidateModel of modelsToTry) {
+        try {
+          const url = `https://generativelanguage.googleapis.com/v1beta/models/${candidateModel}:generateContent?key=${apiKey}`;
           const res = await fetch(url, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ contents: [{ parts: [{ text: "Hola" }] }] }),
+            body: JSON.stringify({
+              contents: [{ parts: [{ text: testPrompt }] }],
+              generationConfig: { temperature: 0, maxOutputTokens: 100 },
+            }),
             signal: AbortSignal.timeout(6000)
           });
           if (res.ok) {
-            validCount++;
+            const data: any = await res.json();
+            const reply = String(data?.candidates?.[0]?.content?.parts?.[0]?.text || '').trim();
+            await this.incrementGeminiUsage();
+            result = {
+              key: `••••${apiKey.slice(-4)}`,
+              ok: true,
+              model: candidateModel,
+              latencyMs: Date.now() - startedAt,
+              reply: reply.slice(0, 500),
+            };
             break;
-          } else {
-            const errJson = await res.json().catch(() => null);
-            lastError = errJson?.error?.message || `HTTP ${res.status}`;
           }
+
+          const errJson: any = await res.json().catch(() => null);
+          lastError = this.sanitizeGeminiError(
+            errJson?.error?.message || `Gemini respondió HTTP ${res.status}`,
+            keysToTest,
+          );
+          if (res.status === 403 || res.status === 429) break;
+        } catch (error) {
+          lastError = this.sanitizeGeminiError(error, keysToTest);
         }
-      } catch (e: any) {
-        lastError = e.message || 'Error de red';
       }
+
+      results.push(result || {
+        key: `••••${apiKey.slice(-4)}`,
+        ok: false,
+        latencyMs: Date.now() - startedAt,
+        error: lastError,
+      });
     }
 
-    if (validCount > 0) {
-      const capacity = validCount * 1500;
-      return { 
-        success: true, 
-        message: `¡Conexión exitosa! ${validCount} de ${keysToTest.length} clave(s) API verificada(s) correctamente y 100% activas. Capacidad diaria total: ${capacity.toLocaleString('de-DE')} peticiones/día.` 
-      };
-    } else {
-      return { success: false, message: `Error probando clave(s) API de Gemini: ${lastError}` };
-    }
+    const successful = results.filter(result => result.ok);
+    const firstSuccessful = successful[0];
+    const requestsToday = await this.getGeminiUsageToday();
+
+    return {
+      success: successful.length > 0,
+      message: successful.length > 0
+        ? `${successful.length} de ${keysToTest.length} llave(s) respondieron correctamente.`
+        : 'Ninguna llave respondió correctamente. Revisa el detalle de la prueba.',
+      testedKeys: keysToTest.length,
+      validKeys: successful.length,
+      model: firstSuccessful?.model || modelsToTry[0],
+      latencyMs: firstSuccessful?.latencyMs,
+      reply: firstSuccessful?.reply || '',
+      requestsToday,
+      results,
+    };
   }
 
   async parseOrderWithGemini(text: string) {
@@ -4139,15 +4259,7 @@ Responde SOLO con el JSON válido.`;
 
       let data: any = null;
       let lastError: any = null;
-      const modelsToTry = [
-        'gemini-flash-lite-latest',
-        'gemini-3.5-flash-lite',
-        'gemini-flash-latest',
-        'gemini-3.1-flash-lite',
-        'gemini-3.5-flash',
-        'gemini-3.7-flash',
-        'gemini-3.6-flash'
-      ];
+      const modelsToTry = await this.getGeminiModels();
 
       for (const key of apiKeys) {
         for (const model of modelsToTry) {
@@ -4441,9 +4553,21 @@ Responde SOLO con el JSON válido.`;
       const base64Audio = media.buffer.toString('base64');
       const mimeType = media.contentType.split(';')[0].trim() || 'audio/ogg';
 
-      const digitalMenuUrl = await this.getSetting('digital_menu_url');
-      const digitalMenuInstruction = digitalMenuUrl 
-        ? `\n4. SI EL CLIENTE PIDE EL MENÚ O LA CARTA EN EL AUDIO: Incluye obligatoriamente el enlace a nuestra carta digital interactiva con fotos: ${digitalMenuUrl}`
+      const [configuredMenuUrl, restaurantHours, aiInstructions, paymentQrMode, paymentAccountText] = await Promise.all([
+        this.getSetting('digital_menu_url'),
+        this.getSetting('restaurant_hours'),
+        this.getSetting('chatbot_ai_instructions'),
+        this.getSetting('chatbot_payment_qr_mode'),
+        this.getSetting('chatbot_payment_account_text'),
+      ]);
+      const digitalMenuUrl = configuredMenuUrl || this.getDefaultDigitalMenuUrl();
+      const paymentInstruction = paymentQrMode === 'IMAGE'
+        ? 'Para transferencias se utiliza el QR oficial. No inventes números de cuenta; indica que un asesor enviará el QR.'
+        : paymentAccountText
+          ? `Datos oficiales para transferencias:\n${paymentAccountText}`
+          : 'No hay datos de transferencia configurados. No inventes cuentas y pide apoyo a un asesor.';
+      const customInstructionsBlock = aiInstructions?.trim()
+        ? `\nINSTRUCCIONES ADICIONALES CONFIGURADAS POR ADMINISTRACIÓN:\n${aiInstructions.trim()}\n`
         : '';
 
       const dbItems = await this.prisma.menuItem.findMany({
@@ -4465,6 +4589,7 @@ Responde SOLO con el JSON válido.`;
       const systemPrompt = `
 Eres la persona encargada de atender de forma directa el WhatsApp del restaurante "The Villa Dog" en Montería, Colombia.
 Estás escuchando una NOTA DE VOZ que envió un cliente por WhatsApp.
+${customInstructionsBlock}
 
 INSTRUCCIONES CRÍTICAS:
 1. Escucha atentamente la nota de voz adjunta.
@@ -4475,20 +4600,18 @@ INSTRUCCIONES CRÍTICAS:
 - SI EL CLIENTE PREGUNTA QUÉ LE RECOMIENDAS O PIDE SUGERENCIA EN EL AUDIO: No mandes la lista de categorías. Recomienda con entusiasmo 2 o 3 platos estrellas (ej: Salchipapa Especial, Pizza de la Casa, Suizo Gratinado) Y al final incluye el enlace digital.
 - SI EL CLIENTE MENCIONA UNA CATEGORÍA ESPECÍFICA (ej: "pizzas", "perros", "hamburguesas", "salchipapas"): Muestra los platos y precios de esa categoría en el chat Y al final incluye el enlace digital.
 
+HORARIO CONFIGURADO:
+${restaurantHours || 'Horario por confirmar con un asesor.'}
+
+PAGOS:
+${paymentInstruction}
+
 Menú del restaurante:
 ${menuSummary}
 `;
 
       let replyText: string | null = null;
-      const modelsToTry = [
-        'gemini-flash-lite-latest',
-        'gemini-3.5-flash-lite',
-        'gemini-flash-latest',
-        'gemini-3.1-flash-lite',
-        'gemini-3.5-flash',
-        'gemini-3.7-flash',
-        'gemini-3.6-flash'
-      ];
+      const modelsToTry = await this.getGeminiModels();
 
       for (const key of apiKeys) {
         for (const model of modelsToTry) {
@@ -4568,7 +4691,7 @@ ${menuSummary}
       }
 
       const chatbotEnabled = await this.getSetting('chatbot_enabled');
-      if (chatbotEnabled === 'false') return;
+      if (chatbotEnabled !== 'true') return;
 
       if (type === 'audio') {
         const handledByAi = await this.handleAudioWithGemini(session, mediaId);

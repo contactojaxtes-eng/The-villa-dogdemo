@@ -1,10 +1,31 @@
-import { useEffect, useState } from 'react'
-import { motion } from 'framer-motion'
+import { useEffect, useMemo, useState } from 'react'
+import { Link } from 'react-router-dom'
+import type { LucideIcon } from 'lucide-react'
+import {
+  Activity,
+  ArrowLeft,
+  Bot,
+  CheckCircle2,
+  Clock3,
+  KeyRound,
+  Loader2,
+  Mail,
+  MessageCircle,
+  Plus,
+  Printer,
+  Save,
+  Send,
+  Server,
+  ShieldCheck,
+  Sparkles,
+  Trash2,
+  XCircle,
+} from 'lucide-react'
+import { Button } from '@/components/ui/button'
+import { Card } from '@/components/ui/card'
 import { api } from '@/lib/api'
 import { alerts } from '@/lib/alerts'
 import { cn } from '@/lib/utils'
-import { Mail, MessageCircle, Loader2, CheckCircle2, Send, ShieldCheck, Terminal, Save, Lock, ArrowLeft, Trash2, Key, Headphones, AlertTriangle, Activity, PlusCircle } from 'lucide-react'
-import { Link } from 'react-router-dom'
 
 interface SmtpConfig {
   host: string
@@ -19,473 +40,412 @@ interface WhatsappCoreConfig {
   businessPhone: string
   configured: boolean
   verifyTokenConfigured: boolean
-  chatbotEnabled?: boolean
-  geminiApiKey?: string
-  geminiRequestsToday?: number
+  chatbotEnabled: boolean
+  geminiApiKey: string
+  geminiKeyCount: number
+  geminiModel: string
+  aiInstructions: string
+  geminiRequestsToday: number
 }
 
-const containerVariants = {
-  hidden: { opacity: 0 },
-  visible: { opacity: 1, transition: { staggerChildren: 0.1 } }
+interface GeminiKeyResult {
+  key: string
+  ok: boolean
+  model?: string
+  latencyMs: number
+  reply?: string
+  error?: string
 }
 
-const itemVariants = {
-  hidden: { opacity: 0, y: 15 },
-  visible: { opacity: 1, y: 0, transition: { duration: 0.5 } }
+interface GeminiTestResult {
+  success: boolean
+  message: string
+  testedKeys: number
+  validKeys: number
+  model?: string
+  latencyMs?: number
+  reply?: string
+  requestsToday?: number
+  results: GeminiKeyResult[]
+}
+
+type ConfigTab = 'AI' | 'META' | 'EMAIL'
+
+const fieldClass = 'h-11 w-full rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] px-3 text-sm text-[var(--text-primary)] outline-none transition placeholder:text-[var(--text-muted)] focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent)]/10'
+const textAreaClass = 'w-full resize-y rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] px-3 py-3 text-sm text-[var(--text-primary)] outline-none transition placeholder:text-[var(--text-muted)] focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent)]/10'
+
+const getErrorMessage = (error: unknown, fallback: string) => error instanceof Error ? error.message : fallback
+
+function SectionTitle({ icon: Icon, title, description }: { icon: LucideIcon; title: string; description: string }) {
+  return (
+    <div className="flex items-start gap-3">
+      <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[var(--accent)]/10 text-[var(--accent)]">
+        <Icon className="h-5 w-5" />
+      </span>
+      <div>
+        <h2 className="text-base font-black text-[var(--text-primary)]">{title}</h2>
+        <p className="mt-0.5 text-xs leading-relaxed text-[var(--text-muted)]">{description}</p>
+      </div>
+    </div>
+  )
 }
 
 export default function SuperAdminConfigPage() {
+  const [activeTab, setActiveTab] = useState<ConfigTab>('AI')
   const [loading, setLoading] = useState(true)
   const [smtp, setSmtp] = useState<SmtpConfig>({ host: '', port: 587, user: '', from: '', passConfigured: false })
   const [smtpPass, setSmtpPass] = useState('')
   const [savingSmtp, setSavingSmtp] = useState(false)
   const [testEmail, setTestEmail] = useState('')
   const [testingEmail, setTestingEmail] = useState(false)
-
-  const [wa, setWa] = useState<WhatsappCoreConfig>({ phoneId: '', businessPhone: '', configured: false, verifyTokenConfigured: false, chatbotEnabled: true, geminiApiKey: '', geminiRequestsToday: 0 })
+  const [wa, setWa] = useState<WhatsappCoreConfig>({
+    phoneId: '',
+    businessPhone: '',
+    configured: false,
+    verifyTokenConfigured: false,
+    chatbotEnabled: false,
+    geminiApiKey: '',
+    geminiKeyCount: 0,
+    geminiModel: 'gemini-flash-lite-latest',
+    aiInstructions: '',
+    geminiRequestsToday: 0,
+  })
   const [waToken, setWaToken] = useState('')
   const [waVerifyToken, setWaVerifyToken] = useState('')
-  const [savingWa, setSavingWa] = useState(false)
-
+  const [geminiKeys, setGeminiKeys] = useState<string[]>([''])
+  const [savingMeta, setSavingMeta] = useState(false)
+  const [savingAi, setSavingAi] = useState(false)
   const [testingGemini, setTestingGemini] = useState(false)
+  const [testPrompt, setTestPrompt] = useState('Saluda brevemente como asesor de The Villa Dog.')
+  const [testResult, setTestResult] = useState<GeminiTestResult | null>(null)
 
-  const handleTestGemini = async () => {
-    const keysJoined = geminiKeys.map(k => k.trim()).filter(Boolean).join(',');
-    if (!keysJoined) {
-      alerts.warning('Ingresa al menos una clave API de Gemini antes de probar.')
+  const setWhatsappResponse = (settings: WhatsappCoreConfig) => {
+    setWa(settings)
+    const keys = settings.geminiApiKey
+      ? settings.geminiApiKey.split(',').map(key => key.trim()).filter(Boolean)
+      : []
+    setGeminiKeys(keys.length ? keys : [''])
+  }
+
+  useEffect(() => {
+    let active = true
+    Promise.all([
+      api.get<SmtpConfig>('/superadmin/config/smtp'),
+      api.get<WhatsappCoreConfig>('/whatsapp/settings'),
+    ])
+      .then(([smtpData, whatsappData]) => {
+        if (!active) return
+        setSmtp(smtpData)
+        setWhatsappResponse(whatsappData)
+      })
+      .catch(error => alerts.error('No se pudo cargar la configuración', getErrorMessage(error, 'Inténtalo nuevamente.')))
+      .finally(() => active && setLoading(false))
+    return () => { active = false }
+  }, [])
+
+  const localKeyCount = useMemo(
+    () => geminiKeys.filter(key => key.trim().length >= 10 || key.includes('•')).length,
+    [geminiKeys],
+  )
+
+  const updateKey = (index: number, value: string) => {
+    setGeminiKeys(current => current.map((key, keyIndex) => keyIndex === index ? value : key))
+    setTestResult(null)
+  }
+
+  const removeKey = (index: number) => {
+    setGeminiKeys(current => {
+      const next = current.filter((_, keyIndex) => keyIndex !== index)
+      return next.length ? next : ['']
+    })
+    setTestResult(null)
+  }
+
+  const saveAi = async () => {
+    const combinedKeys = geminiKeys.map(key => key.trim()).filter(Boolean).join(', ')
+    if (combinedKeys && geminiKeys.some(key => key.trim() && !key.includes('•') && key.trim().length < 10)) {
+      alerts.warning('Revisa las llaves de Gemini: hay una llave demasiado corta.')
+      return
+    }
+    setSavingAi(true)
+    try {
+      const updated = await api.put<WhatsappCoreConfig>('/whatsapp/settings', {
+        chatbotEnabled: wa.chatbotEnabled,
+        geminiApiKey: combinedKeys,
+        geminiModel: wa.geminiModel,
+        aiInstructions: wa.aiInstructions,
+      })
+      setWhatsappResponse(updated)
+      setTestResult(null)
+      alerts.success('Configuración de IA guardada')
+    } catch (error) {
+      alerts.error('No se pudo guardar la IA', getErrorMessage(error, 'Revisa los datos e inténtalo nuevamente.'))
+    } finally {
+      setSavingAi(false)
+    }
+  }
+
+  const testGemini = async () => {
+    const combinedKeys = geminiKeys.map(key => key.trim()).filter(Boolean).join(', ')
+    if (!combinedKeys) {
+      alerts.warning('Agrega al menos una llave de Gemini para ejecutar la prueba.')
       return
     }
     setTestingGemini(true)
+    setTestResult(null)
     try {
-      const res = await api.post<{ success: boolean; message: string }>('/whatsapp/test-gemini', {
-        key: keysJoined
+      const result = await api.post<GeminiTestResult>('/whatsapp/test-gemini', {
+        key: combinedKeys,
+        prompt: testPrompt,
+        model: wa.geminiModel,
       })
-      if (res.success) {
-        alerts.success(res.message)
-      } else {
-        alerts.error(res.message)
+      setTestResult(result)
+      if (typeof result.requestsToday === 'number') {
+        setWa(current => ({ ...current, geminiRequestsToday: result.requestsToday || 0 }))
       }
-    } catch (err: any) {
-      alerts.error('Error al probar conexión: ' + (err.message || err))
+      if (result.success) alerts.success('La IA respondió correctamente')
+    } catch (error) {
+      const message = getErrorMessage(error, 'No se pudo completar la prueba.')
+      setTestResult({ success: false, message, testedKeys: 0, validKeys: 0, results: [] })
     } finally {
       setTestingGemini(false)
     }
   }
 
-  const [geminiKeys, setGeminiKeys] = useState<string[]>([''])
-
-  useEffect(() => {
-    Promise.all([
-      api.get<SmtpConfig>('/superadmin/config/smtp'),
-      api.get<WhatsappCoreConfig>('/whatsapp/settings'),
-    ])
-      .then(([smtpData, waData]) => { 
-        setSmtp(smtpData); 
-        setWa(waData);
-        const keysArr = waData.geminiApiKey ? waData.geminiApiKey.split(',').map(k => k.trim()).filter(Boolean) : [''];
-        setGeminiKeys(keysArr.length > 0 ? keysArr : ['']);
-      })
-      .catch(console.error)
-      .finally(() => setLoading(false))
-  }, [])
-
-  const handleKeyChange = (index: number, val: string) => {
-    setGeminiKeys(prev => {
-      const next = [...prev];
-      next[index] = val;
-      return next;
-    });
-  }
-
-  const handleAddKey = () => {
-    setGeminiKeys(prev => [...prev, '']);
-  }
-
-  const handleRemoveKey = (index: number) => {
-    setGeminiKeys(prev => {
-      const next = prev.filter((_, i) => i !== index);
-      const finalKeys = next.length > 0 ? next : [''];
-      return finalKeys;
-    });
+  const saveMeta = async () => {
+    setSavingMeta(true)
+    try {
+      const payload: Record<string, unknown> = {
+        phoneId: wa.phoneId,
+        businessPhone: wa.businessPhone,
+      }
+      if (waToken.trim()) payload.token = waToken.trim()
+      if (waVerifyToken.trim()) payload.verifyToken = waVerifyToken.trim()
+      const updated = await api.put<WhatsappCoreConfig>('/whatsapp/settings', payload)
+      setWa(current => ({ ...current, ...updated }))
+      setWaToken('')
+      setWaVerifyToken('')
+      alerts.success('Conexión de WhatsApp guardada')
+    } catch (error) {
+      alerts.error('No se pudo guardar WhatsApp', getErrorMessage(error, 'Revisa las credenciales.'))
+    } finally {
+      setSavingMeta(false)
+    }
   }
 
   const saveSmtp = async () => {
     setSavingSmtp(true)
     try {
-      const payload: any = { host: smtp.host, port: smtp.port, user: smtp.user, from: smtp.from }
+      const payload: Record<string, unknown> = { host: smtp.host, port: smtp.port, user: smtp.user, from: smtp.from }
       if (smtpPass) payload.pass = smtpPass
       const updated = await api.put<SmtpConfig>('/superadmin/config/smtp', payload)
       setSmtp(updated)
       setSmtpPass('')
-      alerts.success('Configuración SMTP guardada')
-    } catch (err: any) {
-      alerts.error('Error al guardar SMTP', err.message)
+      alerts.success('Configuración de correo guardada')
+    } catch (error) {
+      alerts.error('No se pudo guardar el correo', getErrorMessage(error, 'Revisa los datos.'))
     } finally {
       setSavingSmtp(false)
     }
   }
 
-  const sendTest = async () => {
-    if (!testEmail) return
+  const sendEmailTest = async () => {
+    if (!testEmail.trim()) return
     setTestingEmail(true)
     try {
-      const res = await api.post<{ message: string }>('/superadmin/config/smtp/test', { to: testEmail })
-      alerts.success('Correo enviado', res.message)
-    } catch (err: any) {
-      alerts.error('No se pudo enviar el correo de prueba', err.message)
+      const result = await api.post<{ message: string }>('/superadmin/config/smtp/test', { to: testEmail.trim() })
+      alerts.success('Correo enviado', result.message)
+    } catch (error) {
+      alerts.error('No se pudo enviar el correo', getErrorMessage(error, 'Revisa la configuración SMTP.'))
     } finally {
       setTestingEmail(false)
     }
   }
 
-  const saveWhatsapp = async () => {
-    setSavingWa(true)
-    try {
-      const combinedKeys = geminiKeys.map(k => k.trim()).filter(Boolean).join(', ');
-      const payload: any = { 
-        phoneId: wa.phoneId, 
-        businessPhone: wa.businessPhone, 
-        chatbotEnabled: wa.chatbotEnabled, 
-        geminiApiKey: combinedKeys 
-      }
-      if (waToken) payload.token = waToken
-      if (waVerifyToken) payload.verifyToken = waVerifyToken
-      const updated = await api.put<WhatsappCoreConfig>('/whatsapp/settings', payload)
-      setWa(updated)
-      setWaToken('')
-      setWaVerifyToken('')
-      const keysArr = updated.geminiApiKey ? updated.geminiApiKey.split(',').map(k => k.trim()).filter(Boolean) : [''];
-      setGeminiKeys(keysArr.length > 0 ? keysArr : ['']);
-      alerts.success('Configuración de WhatsApp y llaves de Gemini guardadas correctamente')
-    } catch (err: any) {
-      alerts.error('Error al guardar WhatsApp', err.message)
-    } finally {
-      setSavingWa(false)
-    }
-  }
+  const tabs: Array<{ id: ConfigTab; label: string; description: string; icon: LucideIcon }> = [
+    { id: 'AI', label: 'Inteligencia artificial', description: 'Bot, modelo y prueba', icon: Sparkles },
+    { id: 'META', label: 'WhatsApp Meta', description: 'Número, token y webhook', icon: MessageCircle },
+    { id: 'EMAIL', label: 'Correo', description: 'Servidor y prueba SMTP', icon: Mail },
+  ]
 
   if (loading) {
     return (
-      <div className="flex flex-col items-center justify-center py-32 text-[#64748B] min-h-[80vh] bg-[#F6F7F9] rounded-[2rem] border border-[#E5E7EB]">
-        <Loader2 className="h-8 w-8 animate-spin text-[#7A1F2B]" />
-        <p className="mt-4 text-xs font-mono uppercase tracking-widest text-[#7A1F2B]/50 animate-pulse">Loading Configurations...</p>
+      <div className="flex min-h-[60vh] flex-col items-center justify-center gap-3 rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] text-[var(--text-muted)]">
+        <Loader2 className="h-7 w-7 animate-spin text-[var(--accent)]" />
+        <p className="text-sm font-bold">Cargando configuración…</p>
       </div>
     )
   }
 
   return (
-    <div className="min-h-[85vh] bg-[#F6F7F9] rounded-[2rem] border border-[#E5E7EB] p-4 md:p-8 text-[#334155] relative overflow-hidden shadow-2xl">
-      <div className="absolute top-0 left-0 w-full h-[500px] bg-gradient-to-b from-[#7A1F2B]/5 to-transparent pointer-events-none" />
-      <div className="absolute top-0 right-0 w-[500px] h-[500px] bg-[radial-gradient(circle_at_top_right,rgba(249,115,22,0.05),transparent_50%)] pointer-events-none" />
-      
-      <motion.div variants={containerVariants} initial="hidden" animate="visible" className="relative z-10 space-y-8">
-        
-        {/* Header */}
-        <motion.div variants={itemVariants} className="flex flex-col md:flex-row md:items-end justify-between gap-4 border-b border-[#E2E8F0] pb-6">
+    <div className="mx-auto max-w-[1450px] space-y-4 pb-8">
+      <Card className="flex flex-col gap-4 rounded-2xl border-[var(--border-subtle)] bg-[var(--bg-panel)] p-4 shadow-sm sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex items-center gap-3">
+          <Link to="/superadmin" className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-[var(--border-subtle)] text-[var(--text-secondary)] transition hover:border-[var(--accent)] hover:text-[var(--accent)]" aria-label="Volver al panel">
+            <ArrowLeft className="h-4 w-4" />
+          </Link>
+          <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-[var(--accent)] text-[var(--accent-fg)]">
+            <ShieldCheck className="h-5 w-5" />
+          </span>
           <div>
-            <div className="flex items-center gap-2 mb-2">
-              <Link to="/superadmin">
-                <button className="flex items-center justify-center h-6 w-6 rounded-md bg-[#F1F5F9] hover:bg-[#E2E8F0] text-[#64748B] hover:text-[#0F172A] transition-colors cursor-pointer mr-2">
-                  <ArrowLeft className="h-3.5 w-3.5" />
-                </button>
-              </Link>
-              <ShieldCheck className="h-5 w-5 text-[#B45309]" />
-              <span className="text-[10px] font-mono tracking-[0.2em] text-[#B45309] uppercase font-bold">CORE CONFIG</span>
-            </div>
-            <h1 className="text-3xl md:text-4xl font-black text-[#0F172A] tracking-tight uppercase flex items-center gap-3">
-              Configuración Técnica
-            </h1>
-            <p className="text-xs text-[#64748B] font-mono mt-1">Variables de entorno sensibles // The Villa Dog NO tiene acceso</p>
+            <h1 className="text-xl font-black text-[var(--text-primary)] sm:text-2xl">Configuración técnica</h1>
+            <p className="text-xs text-[var(--text-muted)]">Conexiones externas y comportamiento de la atención automática.</p>
           </div>
-        </motion.div>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <span className={cn('inline-flex h-9 items-center gap-2 rounded-xl px-3 text-xs font-bold', wa.configured ? 'bg-emerald-500/10 text-emerald-600' : 'bg-amber-500/10 text-amber-600')}>
+            <MessageCircle className="h-4 w-4" /> {wa.configured ? 'WhatsApp conectado' : 'WhatsApp pendiente'}
+          </span>
+          <span className={cn('inline-flex h-9 items-center gap-2 rounded-xl px-3 text-xs font-bold', wa.chatbotEnabled ? 'bg-emerald-500/10 text-emerald-600' : 'bg-slate-500/10 text-[var(--text-secondary)]')}>
+            <Bot className="h-4 w-4" /> Bot {wa.chatbotEnabled ? 'activo' : 'pausado'}
+          </span>
+        </div>
+      </Card>
 
-        <div className="grid lg:grid-cols-2 gap-6">
-          
-          {/* SMTP Config */}
-          <motion.div variants={itemVariants} className="bg-[#FFFFFF] rounded-2xl border border-[#E2E8F0] shadow-sm overflow-hidden flex flex-col">
-            <div className="p-4 border-b border-[#E5E7EB] bg-[#F6F7F9]/50 flex items-center gap-3">
-              <div className="p-2 bg-[#7A1F2B]/10 rounded-lg text-[#7A1F2B]">
-                <Mail className="h-5 w-5" />
-              </div>
-              <div>
-                <h2 className="text-sm font-bold text-[#0F172A] uppercase tracking-widest">Servidor SMTP</h2>
-                <p className="text-[10px] font-mono text-[#64748B]">Notificaciones de stock y recuperación de contraseñas</p>
-              </div>
-            </div>
-            
-            <div className="p-6 space-y-4 flex-1">
-              <div className="space-y-1.5">
-                <label className="text-[10px] font-mono text-[#64748B] uppercase tracking-wider">Host SMTP</label>
-                <input type="text" className="w-full h-10 px-3 bg-[#F6F7F9] border border-[#E2E8F0] rounded-xl text-sm font-mono text-[#0F172A] focus:outline-none focus:border-[#7A1F2B]/50 transition-colors" value={smtp.host} onChange={e => setSmtp(p => ({ ...p, host: e.target.value }))} placeholder="smtp.gmail.com" />
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-1.5">
-                  <label className="text-[10px] font-mono text-[#64748B] uppercase tracking-wider">Port</label>
-                  <input type="number" className="w-full h-10 px-3 bg-[#F6F7F9] border border-[#E2E8F0] rounded-xl text-sm font-mono text-[#0F172A] focus:outline-none focus:border-[#7A1F2B]/50 transition-colors" value={smtp.port} onChange={e => setSmtp(p => ({ ...p, port: Number(e.target.value) }))} />
-                </div>
-                <div className="space-y-1.5">
-                  <label className="text-[10px] font-mono text-[#64748B] uppercase tracking-wider">Usuario (Email)</label>
-                  <input type="text" className="w-full h-10 px-3 bg-[#F6F7F9] border border-[#E2E8F0] rounded-xl text-sm font-mono text-[#0F172A] focus:outline-none focus:border-[#7A1F2B]/50 transition-colors" value={smtp.user} onChange={e => setSmtp(p => ({ ...p, user: e.target.value }))} placeholder="correo@gmail.com" />
-                </div>
-              </div>
-              <div className="space-y-1.5">
-                <label className="text-[10px] font-mono text-[#64748B] uppercase tracking-wider flex justify-between">
-                  <span>Contraseña / App Password</span>
-                  {smtp.passConfigured && <span className="text-[#7A1F2B] flex items-center gap-1"><Lock className="h-3 w-3" /> SECURE</span>}
-                </label>
-                <input type="password" className="w-full h-10 px-3 bg-[#F6F7F9] border border-[#E2E8F0] rounded-xl text-sm font-mono text-[#0F172A] focus:outline-none focus:border-[#7A1F2B]/50 transition-colors" value={smtpPass} onChange={e => setSmtpPass(e.target.value)} placeholder={smtp.passConfigured ? '[REDACTED] - Escribir para cambiar' : '••••••••'} />
-              </div>
-              <div className="space-y-1.5">
-                <label className="text-[10px] font-mono text-[#64748B] uppercase tracking-wider">Correo Remitente (FROM)</label>
-                <input type="text" className="w-full h-10 px-3 bg-[#F6F7F9] border border-[#E2E8F0] rounded-xl text-sm font-mono text-[#0F172A] focus:outline-none focus:border-[#7A1F2B]/50 transition-colors" value={smtp.from} onChange={e => setSmtp(p => ({ ...p, from: e.target.value }))} placeholder="notificaciones@thevilladog.local" />
-              </div>
-            </div>
-            
-            <div className="p-4 bg-[#F6F7F9]/30 border-t border-[#E5E7EB] space-y-4">
-              <button onClick={saveSmtp} disabled={savingSmtp} className="w-full h-10 flex items-center justify-center gap-2 bg-[#7A1F2B]/10 hover:bg-[#7A1F2B]/20 text-[#7A1F2B] border border-[#7A1F2B]/30 font-mono font-bold rounded-xl text-xs uppercase tracking-wider transition-colors cursor-pointer">
-                {savingSmtp ? <Loader2 className="h-4 w-4 animate-spin" /> : <><Save className="h-4 w-4" /> COMMIT SMTP CHANGES</>}
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+        {tabs.map(tab => {
+          const Icon = tab.icon
+          const selected = tab.id === activeTab
+          return (
+            <button key={tab.id} type="button" onClick={() => setActiveTab(tab.id)} className={cn('flex items-center gap-3 rounded-2xl border p-3 text-left transition', selected ? 'border-[var(--accent)] bg-[var(--accent)]/5 shadow-sm' : 'border-[var(--border-subtle)] bg-[var(--bg-panel)] hover:border-[var(--border-default)]')}>
+              <span className={cn('flex h-9 w-9 shrink-0 items-center justify-center rounded-xl', selected ? 'bg-[var(--accent)] text-[var(--accent-fg)]' : 'bg-[var(--bg-elevated)] text-[var(--text-secondary)]')}><Icon className="h-4 w-4" /></span>
+              <span className="min-w-0"><span className="block truncate text-sm font-black text-[var(--text-primary)]">{tab.label}</span><span className="block truncate text-[10px] text-[var(--text-muted)]">{tab.description}</span></span>
+            </button>
+          )
+        })}
+      </div>
+
+      {activeTab === 'AI' && (
+        <div className="grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(360px,0.8fr)]">
+          <Card className="rounded-2xl border-[var(--border-subtle)] bg-[var(--bg-panel)] p-4 shadow-sm sm:p-5">
+            <div className="flex flex-col gap-3 border-b border-[var(--border-subtle)] pb-4 sm:flex-row sm:items-center sm:justify-between">
+              <SectionTitle icon={Bot} title="Asistente de WhatsApp" description="Controla cuándo responde y con qué instrucciones atiende." />
+              <button type="button" role="switch" aria-checked={wa.chatbotEnabled} onClick={() => setWa(current => ({ ...current, chatbotEnabled: !current.chatbotEnabled }))} className={cn('inline-flex h-10 shrink-0 items-center gap-2 rounded-xl border px-3 text-xs font-black transition', wa.chatbotEnabled ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-600' : 'border-[var(--border-subtle)] bg-[var(--bg-elevated)] text-[var(--text-secondary)]')}>
+                <span className={cn('h-2.5 w-2.5 rounded-full', wa.chatbotEnabled ? 'bg-emerald-500' : 'bg-slate-400')} />
+                {wa.chatbotEnabled ? 'Respuestas activas' : 'Bot pausado'}
               </button>
-              
-              <div className="flex gap-2">
-                <input type="text" className="flex-1 h-9 px-3 bg-[#F6F7F9] border border-[#E2E8F0] rounded-lg text-xs font-mono text-[#0F172A] focus:outline-none" value={testEmail} onChange={e => setTestEmail(e.target.value)} placeholder="test@email.com" />
-                <button onClick={sendTest} disabled={testingEmail || !testEmail} className="h-9 px-4 flex items-center gap-2 bg-[#F1F5F9] hover:bg-[#E2E8F0] border border-[#E2E8F0] text-[#0F172A] font-mono rounded-lg text-[10px] uppercase transition-colors cursor-pointer disabled:opacity-50">
-                  {testingEmail ? <Loader2 className="h-3 w-3 animate-spin" /> : <><Send className="h-3 w-3" /> PING</>}
-                </button>
-              </div>
             </div>
-          </motion.div>
 
-          {/* WhatsApp Config */}
-          <motion.div variants={itemVariants} className="bg-[#FFFFFF] rounded-2xl border border-[#E2E8F0] shadow-sm overflow-hidden flex flex-col">
-            <div className="p-4 border-b border-[#E5E7EB] bg-[#F6F7F9]/50 flex items-center gap-3">
-              <div className="p-2 bg-[#7A1F2B]/10 rounded-lg text-[#7A1F2B]">
-                <MessageCircle className="h-5 w-5" />
-              </div>
-              <div className="flex-1">
-                <h2 className="text-sm font-bold text-[#0F172A] uppercase tracking-widest">WhatsApp Cloud API</h2>
-                <p className="text-[10px] font-mono text-[#64748B]">Conexión con Meta / Graph API</p>
-              </div>
-              {wa.configured && (
-                <div className="flex items-center gap-1.5 text-[9px] font-mono font-bold text-[#7A1F2B] border border-[#7A1F2B]/30 bg-[#7A1F2B]/10 px-2 py-1 rounded">
-                  <CheckCircle2 className="h-3 w-3" /> CONNECTED
-                </div>
-              )}
-            </div>
-            
-            <div className="p-6 space-y-4 flex-1">
-              {/* Chatbot Toggle Switch */}
-              <label className="flex cursor-pointer items-center justify-between rounded-xl border border-[#E2E8F0] bg-[#F6F7F9] px-4 py-3 hover:bg-[#F1F5F9] transition-colors">
-                <div className="space-y-0.5">
-                  <p className="text-xs font-bold text-[#0F172A] uppercase tracking-wide">Habilitar Chatbot IA</p>
-                  <p className="text-[10px] text-[#64748B] font-medium">Responder automáticamente vía WhatsApp.</p>
-                </div>
-                <input
-                  type="checkbox"
-                  checked={wa.chatbotEnabled !== false}
-                  onChange={e => setWa(p => ({ ...p, chatbotEnabled: e.target.checked }))}
-                  className="h-5 w-5 accent-[#7A1F2B] rounded cursor-pointer shrink-0 ml-4"
-                />
+            <div className="mt-5 space-y-5">
+              <label className="block">
+                <span className="mb-1.5 block text-xs font-bold text-[var(--text-secondary)]">Modelo principal</span>
+                <input list="gemini-models" value={wa.geminiModel} onChange={event => { setWa(current => ({ ...current, geminiModel: event.target.value })); setTestResult(null) }} className={fieldClass} placeholder="gemini-flash-lite-latest" />
+                <datalist id="gemini-models"><option value="gemini-flash-lite-latest" /><option value="gemini-flash-latest" /></datalist>
+                <span className="mt-1.5 block text-[11px] text-[var(--text-muted)]">Si el modelo principal no está disponible, el servidor intenta los respaldos configurados.</span>
               </label>
 
-              <div className="space-y-1.5">
-                <label className="text-[10px] font-mono text-[#64748B] uppercase tracking-wider flex items-center gap-1">
-                  <Key className="h-3 w-3 text-[#7A1F2B]" /> Phone Number ID
-                </label>
-                <div className="relative">
-                  <Terminal className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-[#94A3B8]" />
-                  <input type="text" className="w-full h-10 pl-9 pr-3 bg-[#F6F7F9] border border-[#E2E8F0] rounded-xl text-sm font-mono text-[#0F172A] focus:outline-none focus:border-[#7A1F2B]/50 transition-colors" value={wa.phoneId} onChange={e => setWa(p => ({ ...p, phoneId: e.target.value }))} />
-                </div>
-              </div>
-              <div className="space-y-1.5">
-                <label className="text-[10px] font-mono text-[#64748B] uppercase tracking-wider flex items-center gap-1">
-                  <Headphones className="h-3 w-3 text-[#7A1F2B]" /> Teléfono Comercial
-                </label>
-                <input type="text" className="w-full h-10 px-3 bg-[#F6F7F9] border border-[#E2E8F0] rounded-xl text-sm font-mono text-[#0F172A] focus:outline-none focus:border-[#7A1F2B]/50 transition-colors" value={wa.businessPhone} onChange={e => setWa(p => ({ ...p, businessPhone: e.target.value }))} />
-              </div>
-              <div className="space-y-1.5">
-                <label className="text-[10px] font-mono text-[#64748B] uppercase tracking-wider flex justify-between">
-                  <span>Graph API Access Token</span>
-                  <span className="text-[#94A3B8]">BEARER</span>
-                </label>
-                <input type="password" className="w-full h-10 px-3 bg-[#F6F7F9] border border-[#E2E8F0] rounded-xl text-sm font-mono text-[#7A1F2B] focus:outline-none focus:border-[#7A1F2B]/50 transition-colors" value={waToken} onChange={e => setWaToken(e.target.value)} placeholder="[REDACTED] - Escribir nuevo token" />
-              </div>
-              <div className="space-y-1.5">
-                <label className="text-[10px] font-mono text-[#64748B] uppercase tracking-wider flex justify-between">
-                  <span>Webhook Verify Token</span>
-                  {wa.verifyTokenConfigured && <span className="text-[#7A1F2B] flex items-center gap-1"><Lock className="h-3 w-3" /> SECURE</span>}
-                </label>
-                <input type="password" className="w-full h-10 px-3 bg-[#F6F7F9] border border-[#E2E8F0] rounded-xl text-sm font-mono text-[#7A1F2B] focus:outline-none focus:border-[#7A1F2B]/50 transition-colors" value={waVerifyToken} onChange={e => setWaVerifyToken(e.target.value)} placeholder="[REDACTED] - Escribir para cambiar" />
-              </div>
+              <label className="block">
+                <span className="mb-1.5 flex items-center justify-between gap-3 text-xs font-bold text-[var(--text-secondary)]"><span>Instrucciones del negocio</span><span className="font-normal text-[var(--text-muted)]">{wa.aiInstructions.length}/4000</span></span>
+                <textarea value={wa.aiInstructions} maxLength={4000} onChange={event => setWa(current => ({ ...current, aiInstructions: event.target.value }))} className={cn(textAreaClass, 'min-h-32')} placeholder="Ejemplo: usa un tono cercano, informa la promoción vigente y deriva a un asesor cuando el cliente pida una excepción." />
+                <span className="mt-1.5 block text-[11px] text-[var(--text-muted)]">El menú, los horarios y los datos de cobro se toman automáticamente de la configuración actual.</span>
+              </label>
 
-              <div className="space-y-3 pt-3 border-t border-[#E2E8F0]">
-                <div className="flex items-center justify-between">
-                  <label className="text-[10px] font-mono text-[#64748B] uppercase tracking-wider flex items-center gap-1.5 text-[#7A1F2B] font-bold">
-                    <Key className="h-3.5 w-3.5" /> GEMINI API KEYS (Soporte Multi-Cuenta)
-                  </label>
-                  <button
-                    type="button"
-                    onClick={handleTestGemini}
-                    disabled={testingGemini}
-                    className="h-8 px-3 rounded-lg border border-[#7A1F2B]/30 hover:bg-[#7A1F2B]/20 text-[#7A1F2B] text-[10px] uppercase font-bold transition-colors cursor-pointer flex items-center gap-1 shrink-0"
-                  >
-                    {testingGemini ? <Loader2 className="h-3 w-3 animate-spin" /> : 'Probar Llaves'}
-                  </button>
+              <div>
+                <div className="mb-2 flex items-center justify-between gap-3">
+                  <div><p className="text-xs font-bold text-[var(--text-secondary)]">Llaves de Gemini</p><p className="text-[11px] text-[var(--text-muted)]">Puedes dejar una principal y otras de respaldo.</p></div>
+                  <Button type="button" variant="outline" onClick={() => setGeminiKeys(current => [...current, ''])} className="h-9 rounded-xl text-xs font-bold"><Plus className="mr-1.5 h-4 w-4" /> Agregar</Button>
                 </div>
-
                 <div className="space-y-2">
-                  {geminiKeys.map((keyVal, idx) => {
-                    const isMasked = keyVal.includes('•') || keyVal.startsWith('••••');
-                    const isNewValid = !isMasked && keyVal.trim().length >= 15;
-                    const isInvalidFormat = !isMasked && keyVal.trim().length > 0 && keyVal.trim().length < 15;
-
+                  {geminiKeys.map((keyValue, index) => {
+                    const masked = keyValue.includes('•')
+                    const invalid = Boolean(keyValue.trim() && !masked && keyValue.trim().length < 10)
                     return (
-                      <div key={idx} className="space-y-1">
-                        <div className="flex items-center gap-2">
-                          <div className="h-10 px-2.5 flex items-center justify-center rounded-xl bg-[#F1F5F9] text-[10px] font-mono text-[#64748B] border border-[#E2E8F0] shrink-0 font-bold">
-                            Key #{idx + 1}
-                          </div>
-                          <input 
-                            className={cn(
-                              "flex-1 h-10 px-3 rounded-xl bg-[#F6F7F9] border text-xs font-mono transition-colors focus:outline-none",
-                              isInvalidFormat 
-                                ? "border-red-500 text-red-600 focus:border-red-500" 
-                                : isMasked 
-                                ? "border-emerald-500/40 text-emerald-700 dark:text-emerald-400 font-bold focus:border-emerald-500"
-                                : isNewValid
-                                ? "border-blue-500/40 text-blue-700 dark:text-blue-400 focus:border-blue-500"
-                                : "border-[#E2E8F0] text-[#0F172A] focus:border-[#7A1F2B]/50"
-                            )} 
-                            type="text" 
-                            value={keyVal} 
-                            onChange={e => handleKeyChange(idx, e.target.value)} 
-                            placeholder={idx === 0 ? "Clave API Gemini (Correo 1)" : `Clave API Gemini Reserva ${idx} (Otro Correo)`} 
-                          />
-                          {geminiKeys.length > 1 && (
-                            <button
-                              type="button"
-                              onClick={() => handleRemoveKey(idx)}
-                              className="h-10 w-10 flex items-center justify-center rounded-xl border border-red-200 text-red-600 hover:bg-red-500/20 transition-colors shrink-0 cursor-pointer"
-                              title="Eliminar esta llave"
-                            >
-                              <Trash2 className="h-3.5 w-3.5" />
-                            </button>
-                          )}
+                      <div key={`${index}-${masked ? keyValue.slice(-4) : 'new'}`}>
+                        <div className="flex gap-2">
+                          <span className="flex h-11 min-w-20 items-center justify-center rounded-xl bg-[var(--bg-elevated)] px-2 text-[11px] font-bold text-[var(--text-muted)]">Llave {index + 1}</span>
+                          <input type="text" autoComplete="off" value={keyValue} onChange={event => updateKey(index, event.target.value)} className={cn(fieldClass, 'min-w-0 flex-1 font-mono text-xs', masked && 'border-emerald-500/30 text-emerald-600', invalid && 'border-red-500 text-red-600')} placeholder="Pega aquí la llave API" />
+                          <button type="button" onClick={() => removeKey(index)} className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-red-500/20 text-red-500 transition hover:bg-red-500/10" aria-label={`Eliminar llave ${index + 1}`}><Trash2 className="h-4 w-4" /></button>
                         </div>
-                        {isMasked && (
-                          <p className="text-[10px] text-emerald-600 dark:text-emerald-400 font-mono pl-14 flex items-center gap-1 font-bold">
-                            ✓ Llave activa en el servidor (termina en ...{keyVal.slice(-4)})
-                          </p>
-                        )}
-                        {isNewValid && (
-                          <p className="text-[10px] text-blue-600 dark:text-blue-400 font-mono pl-14 flex items-center gap-1 font-bold">
-                            ✓ Nueva clave ingresada. Haz clic en "COMMIT META CONFIG" para guardar.
-                          </p>
-                        )}
-                        {isInvalidFormat && (
-                          <p className="text-[10px] text-red-600 font-mono pl-14 flex items-center gap-1">
-                            ⚠️ La clave ingresada es muy corta (menos de 15 caracteres). Copia la clave completa desde Google AI Studio.
-                          </p>
-                        )}
+                        {masked && <p className="mt-1 pl-[5.5rem] text-[10px] font-bold text-emerald-600">Guardada · termina en {keyValue.slice(-4)}</p>}
+                        {invalid && <p className="mt-1 pl-[5.5rem] text-[10px] font-bold text-red-500">La llave parece incompleta.</p>}
                       </div>
                     )
                   })}
                 </div>
-
-                <button
-                  type="button"
-                  onClick={handleAddKey}
-                  className="w-full h-9 rounded-xl border border-dashed border-[#7A1F2B]/40 hover:bg-[#7A1F2B]/10 text-[#7A1F2B] text-xs font-bold font-mono flex items-center justify-center gap-1.5 transition-colors cursor-pointer mt-1"
-                >
-                  <PlusCircle className="h-4 w-4 text-[#7A1F2B]" /> + AGREGAR OTRA API KEY (OTRO CORREO)
-                </button>
-
-                <p className="text-[10px] text-[#64748B] leading-tight pt-1">
-                  💡 <strong>Cada Llave API te da 1.500 msgs/día.</strong> Agrega las llaves que quieras de otros correos de Google para tener 3.000, 4.500 o más mensajes diarios gratis.
-                </p>
-
-                {/* MONITOR DE USO EN TIEMPO REAL */}
-                {(() => {
-                  const validKeys = geminiKeys.filter(k => k.trim().length > 0);
-                  const keysCount = validKeys.length;
-                  const totalCapacity = keysCount * 1500;
-                  const usedToday = wa.geminiRequestsToday || 0;
-                  const remainingToday = Math.max(0, totalCapacity - usedToday);
-                  const percentageUsed = totalCapacity > 0 ? Math.min(100, Math.round((usedToday / totalCapacity) * 100)) : 0;
-
-                  return (
-                    <div className="p-3 rounded-xl bg-[#F6F7F9]/80 border border-[#E2E8F0] space-y-2 mt-2">
-                      <div className="flex items-center justify-between text-xs font-mono">
-                        <span className="text-[#334155] font-bold flex items-center gap-1.5">
-                          <Activity className="h-3.5 w-3.5 text-[#7A1F2B] animate-pulse" />
-                          Uso de IA Hoy:
-                        </span>
-                        <span className="text-[#7A1F2B] font-extrabold">
-                          {keysCount > 0 ? `${usedToday.toLocaleString('de-DE')} / ${totalCapacity.toLocaleString('de-DE')} sol.` : '0 / 0 sol.'}
-                        </span>
-                      </div>
-
-                      {/* Progress bar */}
-                      <div className="w-full h-2 rounded-full bg-[#E2E8F0] overflow-hidden">
-                        <div 
-                          className={`h-full transition-all duration-500 ${
-                            percentageUsed > 85 ? 'bg-red-500' : percentageUsed > 60 ? 'bg-amber-500' : 'bg-[#7A1F2B]'
-                          }`}
-                          style={{ width: `${keysCount > 0 ? Math.max(3, percentageUsed) : 0}%` }}
-                        />
-                      </div>
-
-                      <div className="flex items-center justify-between text-[10px] text-[#64748B] font-mono">
-                        <span>{keysCount} Llave(s) activa(s)</span>
-                        <span className="text-[#7A1F2B] font-bold">
-                          {keysCount > 0 ? `${remainingToday.toLocaleString('de-DE')} disponibles hoy` : 'Sin llaves de Gemini'}
-                        </span>
-                      </div>
-                    </div>
-                  );
-                })()}
               </div>
 
-
-            </div>
-            
-            <div className="p-4 bg-[#F6F7F9]/30 border-t border-[#E5E7EB]">
-              <button onClick={saveWhatsapp} disabled={savingWa} className="w-full h-10 flex items-center justify-center gap-2 bg-[#7A1F2B]/10 hover:bg-[#7A1F2B]/20 text-[#7A1F2B] border border-[#7A1F2B]/30 font-mono font-bold rounded-xl text-xs uppercase tracking-wider transition-colors cursor-pointer">
-                {savingWa ? <Loader2 className="h-4 w-4 animate-spin" /> : <><Save className="h-4 w-4" /> COMMIT META CONFIG</>}
-              </button>
-            </div>
-          </motion.div>
-
-
-          {/* Deploy Config */}
-          <motion.div variants={itemVariants} className="bg-[#FFFFFF] rounded-2xl border border-[#E2E8F0] shadow-sm overflow-hidden flex flex-col md:col-span-2 lg:col-span-1">
-            <div className="p-4 border-b border-[#E5E7EB] bg-[#F6F7F9]/50 flex items-center gap-3">
-              <div className="p-2 bg-[#F1F5F9] rounded-lg text-[#64748B]">
-                <AlertTriangle className="h-5 w-5" />
+              <div className="grid gap-2 rounded-2xl bg-[var(--bg-elevated)] p-3 sm:grid-cols-3">
+                <div className="rounded-xl bg-[var(--bg-panel)] p-3"><KeyRound className="mb-2 h-4 w-4 text-[var(--accent)]" /><p className="text-xl font-black text-[var(--text-primary)]">{localKeyCount}</p><p className="text-[10px] text-[var(--text-muted)]">Llaves en el formulario</p></div>
+                <div className="rounded-xl bg-[var(--bg-panel)] p-3"><Activity className="mb-2 h-4 w-4 text-blue-500" /><p className="text-xl font-black text-[var(--text-primary)]">{wa.geminiRequestsToday.toLocaleString('es-CO')}</p><p className="text-[10px] text-[var(--text-muted)]">Solicitudes exitosas hoy</p></div>
+                <div className="rounded-xl bg-[var(--bg-panel)] p-3"><Clock3 className="mb-2 h-4 w-4 text-amber-500" /><p className="truncate text-sm font-black text-[var(--text-primary)]">Según proveedor</p><p className="text-[10px] text-[var(--text-muted)]">La cuota no es fija</p></div>
               </div>
-              <div>
-                <h2 className="text-sm font-bold text-[#0F172A] uppercase tracking-widest">Deploy & Impresoras</h2>
-                <p className="text-[10px] font-mono text-[#64748B]">Producción e integraciones locales</p>
-              </div>
+
+              <Button type="button" onClick={saveAi} disabled={savingAi} className="h-11 w-full rounded-xl bg-[var(--accent)] font-black text-[var(--accent-fg)]">
+                {savingAi ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />} Guardar configuración de IA
+              </Button>
             </div>
-            
-            <div className="p-6 space-y-4 flex-1 text-xs text-[#64748B] leading-relaxed">
-              <p>
-                <strong className="text-[#0F172A] font-bold uppercase tracking-wider text-[10px] block mb-0.5">Frontend (Vite + React)</strong>
-                Desplegado en la nube. Compatible con WebUSB.
-              </p>
-              <p>
-                <strong className="text-[#0F172A] font-bold uppercase tracking-wider text-[10px] block mb-0.5">Servidor e Impresora Local</strong>
-                Para imprimir de forma directa por IP local, el servidor API debe correr dentro de la misma red WiFi local.
-              </p>
-              <p>
-                <strong className="text-[#0F172A] font-bold uppercase tracking-wider text-[10px] block mb-0.5">Alternativa Híbrida (WebUSB)</strong>
-                Puedes usar la impresora directamente conectada a cualquier computador sin importar si el backend está en la nube.
-              </p>
+          </Card>
+
+          <Card className="h-fit rounded-2xl border-[var(--border-subtle)] bg-[var(--bg-panel)] p-4 shadow-sm sm:p-5">
+            <SectionTitle icon={Sparkles} title="Prueba real" description="Envía un mensaje corto al modelo y comprueba cada llave sin activar el bot." />
+            <div className="mt-5 space-y-3">
+              <label className="block"><span className="mb-1.5 block text-xs font-bold text-[var(--text-secondary)]">Mensaje de prueba</span><textarea value={testPrompt} maxLength={500} onChange={event => { setTestPrompt(event.target.value); setTestResult(null) }} className={cn(textAreaClass, 'min-h-24')} /></label>
+              <Button type="button" onClick={testGemini} disabled={testingGemini || !testPrompt.trim()} className="h-11 w-full rounded-xl bg-[var(--accent)] font-black text-[var(--accent-fg)]">
+                {testingGemini ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Send className="mr-2 h-4 w-4" />} {testingGemini ? 'Probando conexión…' : 'Probar IA ahora'}
+              </Button>
+
+              {!testResult && <div className="rounded-2xl border border-dashed border-[var(--border-default)] p-5 text-center"><Server className="mx-auto mb-2 h-6 w-6 text-[var(--text-muted)]" /><p className="text-xs font-bold text-[var(--text-secondary)]">Aún no se ha ejecutado una prueba</p><p className="mt-1 text-[11px] text-[var(--text-muted)]">Verás aquí la respuesta, el modelo usado y el tiempo de conexión.</p></div>}
+
+              {testResult && (
+                <div className={cn('space-y-3 rounded-2xl border p-4', testResult.success ? 'border-emerald-500/30 bg-emerald-500/5' : 'border-red-500/30 bg-red-500/5')}>
+                  <div className="flex items-start gap-2">{testResult.success ? <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-emerald-500" /> : <XCircle className="mt-0.5 h-5 w-5 shrink-0 text-red-500" />}<div><p className="text-sm font-black text-[var(--text-primary)]">{testResult.success ? 'Conexión correcta' : 'La prueba falló'}</p><p className="text-[11px] text-[var(--text-muted)]">{testResult.message}</p></div></div>
+                  {testResult.reply && <div className="rounded-xl bg-[var(--bg-panel)] p-3"><p className="mb-1 text-[10px] font-bold uppercase tracking-wide text-[var(--text-muted)]">Respuesta</p><p className="text-sm text-[var(--text-primary)]">{testResult.reply}</p></div>}
+                  <div className="flex flex-wrap gap-2 text-[10px] font-bold text-[var(--text-secondary)]">{testResult.model && <span className="rounded-lg bg-[var(--bg-panel)] px-2 py-1">Modelo: {testResult.model}</span>}{typeof testResult.latencyMs === 'number' && <span className="rounded-lg bg-[var(--bg-panel)] px-2 py-1">Latencia: {testResult.latencyMs} ms</span>}<span className="rounded-lg bg-[var(--bg-panel)] px-2 py-1">Llaves: {testResult.validKeys}/{testResult.testedKeys}</span></div>
+                  {testResult.results.length > 0 && <div className="space-y-1.5 border-t border-[var(--border-subtle)] pt-3">{testResult.results.map(result => <div key={result.key} className="flex items-start justify-between gap-3 text-[11px]"><span className="font-mono font-bold text-[var(--text-secondary)]">{result.key}</span><span className={cn('text-right font-bold', result.ok ? 'text-emerald-600' : 'text-red-500')}>{result.ok ? `${result.model} · ${result.latencyMs} ms` : result.error}</span></div>)}</div>}
+                </div>
+              )}
             </div>
-          </motion.div>
+          </Card>
         </div>
+      )}
 
-      </motion.div>
+      {activeTab === 'META' && (
+        <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_380px]">
+          <Card className="rounded-2xl border-[var(--border-subtle)] bg-[var(--bg-panel)] p-4 shadow-sm sm:p-5">
+            <div className="flex flex-col gap-3 border-b border-[var(--border-subtle)] pb-4 sm:flex-row sm:items-center sm:justify-between">
+              <SectionTitle icon={MessageCircle} title="Conexión con WhatsApp Cloud API" description="Datos técnicos entregados por Meta para enviar y recibir mensajes." />
+              <span className={cn('inline-flex h-9 items-center gap-2 rounded-xl px-3 text-xs font-black', wa.configured ? 'bg-emerald-500/10 text-emerald-600' : 'bg-amber-500/10 text-amber-600')}>{wa.configured ? <CheckCircle2 className="h-4 w-4" /> : <Clock3 className="h-4 w-4" />}{wa.configured ? 'Conectado' : 'Pendiente'}</span>
+            </div>
+            <div className="mt-5 grid gap-4 md:grid-cols-2">
+              <label className="block"><span className="mb-1.5 block text-xs font-bold text-[var(--text-secondary)]">Phone Number ID</span><input value={wa.phoneId} onChange={event => setWa(current => ({ ...current, phoneId: event.target.value }))} className={fieldClass} /></label>
+              <label className="block"><span className="mb-1.5 block text-xs font-bold text-[var(--text-secondary)]">Teléfono comercial</span><input value={wa.businessPhone} onChange={event => setWa(current => ({ ...current, businessPhone: event.target.value }))} className={fieldClass} placeholder="+57…" /></label>
+              <label className="block"><span className="mb-1.5 block text-xs font-bold text-[var(--text-secondary)]">Token de acceso de Meta</span><input type="password" value={waToken} onChange={event => setWaToken(event.target.value)} className={fieldClass} placeholder={wa.configured ? 'Guardado · escribe solo para cambiarlo' : 'Pega el token permanente'} /></label>
+              <label className="block"><span className="mb-1.5 block text-xs font-bold text-[var(--text-secondary)]">Token de verificación del webhook</span><input type="password" value={waVerifyToken} onChange={event => setWaVerifyToken(event.target.value)} className={fieldClass} placeholder={wa.verifyTokenConfigured ? 'Guardado · escribe solo para cambiarlo' : 'Define el token del webhook'} /></label>
+            </div>
+            <Button type="button" onClick={saveMeta} disabled={savingMeta} className="mt-5 h-11 w-full rounded-xl bg-[var(--accent)] font-black text-[var(--accent-fg)]">{savingMeta ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />} Guardar conexión</Button>
+          </Card>
+
+          <Card className="h-fit rounded-2xl border-[var(--border-subtle)] bg-[var(--bg-panel)] p-4 shadow-sm sm:p-5">
+            <SectionTitle icon={Printer} title="Impresión local" description="Railway administra la cola; el computador del negocio hace la impresión dentro de la red." />
+            <div className="mt-4 space-y-3 text-xs leading-relaxed text-[var(--text-secondary)]">
+              <p className="rounded-xl bg-[var(--bg-elevated)] p-3">El puente se ejecuta en segundo plano en el computador del negocio y se conecta por HTTPS hacia Railway. La impresora no necesita quedar expuesta a Internet.</p>
+              <p className="rounded-xl bg-[var(--bg-elevated)] p-3">Si cambia la IP de una impresora, se actualiza desde Configuración → Cocina domicilios; no hay que editar el programa local.</p>
+              <Link to="/settings/modules" className="flex h-10 items-center justify-center rounded-xl border border-[var(--border-subtle)] font-black text-[var(--accent)] transition hover:border-[var(--accent)]">Abrir configuración operativa</Link>
+            </div>
+          </Card>
+        </div>
+      )}
+
+      {activeTab === 'EMAIL' && (
+        <Card className="mx-auto max-w-4xl rounded-2xl border-[var(--border-subtle)] bg-[var(--bg-panel)] p-4 shadow-sm sm:p-5">
+          <div className="flex flex-col gap-3 border-b border-[var(--border-subtle)] pb-4 sm:flex-row sm:items-center sm:justify-between">
+            <SectionTitle icon={Mail} title="Servidor de correo" description="Notificaciones y recuperación de contraseñas." />
+            {smtp.passConfigured && <span className="inline-flex h-9 items-center gap-2 rounded-xl bg-emerald-500/10 px-3 text-xs font-black text-emerald-600"><CheckCircle2 className="h-4 w-4" /> Contraseña guardada</span>}
+          </div>
+          <div className="mt-5 grid gap-4 md:grid-cols-2">
+            <label className="block"><span className="mb-1.5 block text-xs font-bold text-[var(--text-secondary)]">Servidor SMTP</span><input value={smtp.host} onChange={event => setSmtp(current => ({ ...current, host: event.target.value }))} className={fieldClass} placeholder="smtp.gmail.com" /></label>
+            <label className="block"><span className="mb-1.5 block text-xs font-bold text-[var(--text-secondary)]">Puerto</span><input type="number" value={smtp.port} onChange={event => setSmtp(current => ({ ...current, port: Number(event.target.value) }))} className={fieldClass} /></label>
+            <label className="block"><span className="mb-1.5 block text-xs font-bold text-[var(--text-secondary)]">Usuario</span><input value={smtp.user} onChange={event => setSmtp(current => ({ ...current, user: event.target.value }))} className={fieldClass} placeholder="correo@dominio.com" /></label>
+            <label className="block"><span className="mb-1.5 block text-xs font-bold text-[var(--text-secondary)]">Correo remitente</span><input value={smtp.from} onChange={event => setSmtp(current => ({ ...current, from: event.target.value }))} className={fieldClass} placeholder="notificaciones@dominio.com" /></label>
+            <label className="block md:col-span-2"><span className="mb-1.5 block text-xs font-bold text-[var(--text-secondary)]">Contraseña o App Password</span><input type="password" value={smtpPass} onChange={event => setSmtpPass(event.target.value)} className={fieldClass} placeholder={smtp.passConfigured ? 'Guardada · escribe solo para cambiarla' : 'Escribe la contraseña'} /></label>
+          </div>
+          <Button type="button" onClick={saveSmtp} disabled={savingSmtp} className="mt-5 h-11 w-full rounded-xl bg-[var(--accent)] font-black text-[var(--accent-fg)]">{savingSmtp ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />} Guardar correo</Button>
+          <div className="mt-5 rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-3 sm:flex sm:items-end sm:gap-3">
+            <label className="block flex-1"><span className="mb-1.5 block text-xs font-bold text-[var(--text-secondary)]">Enviar correo de prueba a</span><input type="email" value={testEmail} onChange={event => setTestEmail(event.target.value)} className={fieldClass} placeholder="destino@correo.com" /></label>
+            <Button type="button" variant="outline" onClick={sendEmailTest} disabled={testingEmail || !testEmail.trim()} className="mt-3 h-11 w-full rounded-xl font-black sm:mt-0 sm:w-auto">{testingEmail ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Send className="mr-2 h-4 w-4" />} Enviar prueba</Button>
+          </div>
+        </Card>
+      )}
     </div>
   )
 }
