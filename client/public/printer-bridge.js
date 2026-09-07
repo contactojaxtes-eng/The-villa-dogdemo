@@ -15,7 +15,9 @@ const defaultUrl = "http://localhost:3000";
 
 // Default config
 let config = {
-  backendUrl: defaultUrl
+  backendUrl: defaultUrl,
+  bridgeToken: '',
+  pollIntervalMs: 3000
 };
 
 // Load or create config
@@ -27,6 +29,10 @@ if (fs.existsSync(configPath)) {
     } else {
       config.backendUrl = defaultUrl;
       fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf8');
+    }
+    if (typeof loaded.bridgeToken === 'string') config.bridgeToken = loaded.bridgeToken.trim();
+    if (Number.isFinite(Number(loaded.pollIntervalMs))) {
+      config.pollIntervalMs = Math.max(1000, Number(loaded.pollIntervalMs));
     }
     console.log(`Configuración cargada de ${configPath}`);
   } catch (e) {
@@ -47,9 +53,13 @@ if (fs.existsSync(configPath)) {
 if (!config.backendUrl || typeof config.backendUrl !== 'string') {
   config.backendUrl = defaultUrl;
 }
+config.bridgeToken = String(process.env.PRINT_BRIDGE_TOKEN || config.bridgeToken || '').trim();
 
 console.log(`Conectando con Servidor Nube: ${config.backendUrl}`);
-console.log('Puente de Impresión Local THE VILLA DOG iniciado. Buscando trabajos cada 3 segundos...');
+console.log(`Puente de Impresión Local THE VILLA DOG iniciado. Consultando cada ${config.pollIntervalMs} ms...`);
+if (!config.bridgeToken) {
+  console.error('Falta bridgeToken en config.json. El servidor rechazará la cola de impresión.');
+}
 
 // Helper for HTTP/S requests
 function makeRequest(urlStr, options = {}) {
@@ -160,18 +170,19 @@ async function pollPrintQueue() {
     const getUrl = `${backendApiUrl}/api/imprimir/cola`;
     
     // 1. Obtener trabajos pendientes
-    const jobs = await makeRequest(getUrl);
+    const authHeaders = config.bridgeToken ? { 'x-print-token': config.bridgeToken } : {};
+    const jobs = await makeRequest(getUrl, { headers: authHeaders });
     
     if (jobs && jobs.length > 0) {
       console.log(`[${new Date().toLocaleTimeString()}] Detectados ${jobs.length} trabajos de impresión en cola.`);
       const printedIds = [];
-      const errorIds = [];
+      let failedCount = 0;
       
       for (const job of jobs) {
         try {
           // Resolver puerto opcional si la IP tiene formato IP:puerto
           let ip = job.impresora_ip || '';
-          let port = 9100;
+          let port = Number(job.port || job.impresora_puerto) || 9100;
           if (ip.includes(':') && !ip.startsWith('USB:')) {
             const parts = ip.split(':');
             ip = parts[0];
@@ -179,10 +190,12 @@ async function pollPrintQueue() {
           }
           
           // Validar que la IP es una dirección válida (no un nombre como "caja" o "cocina")
-          const isValidIp = /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(ip) || ip === 'localhost' || ip === '127.0.0.1';
+          const ipParts = ip.split('.');
+          const isIpv4 = ipParts.length === 4 && ipParts.every(part => /^\d{1,3}$/.test(part) && Number(part) <= 255);
+          const isValidIp = isIpv4 || ip === 'localhost' || ip.startsWith('USB:');
           if (!ip || !isValidIp) {
-            console.error(`  ⚠ Trabajo ID ${job.id} tiene IP inválida: "${job.impresora_ip}" — Removiendo de cola.`);
-            errorIds.push(job.id);
+            console.error(`  ⚠ Trabajo ID ${job.id} espera una IP válida en Configuración: "${job.impresora_ip}".`);
+            failedCount += 1;
             continue;
           }
           
@@ -194,40 +207,35 @@ async function pollPrintQueue() {
           printedIds.push(job.id);
         } catch (printErr) {
           console.error(`  ✗ Error imprimiendo trabajo ID ${job.id}:`, printErr.message);
-          // Si el error es de red (host no encontrado, conexión rechazada), remover de cola
-          if (printErr.code === 'ENOTFOUND' || printErr.code === 'ECONNREFUSED' || printErr.code === 'ETIMEDOUT') {
-            console.error(`    → Error de red permanente, removiendo trabajo ID ${job.id} de la cola.`);
-            errorIds.push(job.id);
-          } else {
-            // Otros errores (timeout transitorio, etc.): remover también para evitar bucles
-            errorIds.push(job.id);
-          }
+          console.error(`    → El trabajo queda pendiente para reintentar; no se perderá la comanda.`);
+          failedCount += 1;
         }
       }
       
-      // 2. Confirmar todos los trabajos procesados (exitosos + errores permanentes)
-      const allProcessedIds = [...printedIds, ...errorIds];
-      if (allProcessedIds.length > 0) {
+      // 2. Confirmar únicamente trabajos realmente impresos. Los fallidos siguen
+      // pendientes para que un cambio de IP o la reconexión de la impresora los recupere.
+      if (printedIds.length > 0) {
         try {
           const confirmUrl = `${backendApiUrl}/api/imprimir/cola`;
           await makeRequest(confirmUrl, {
             method: 'POST',
-            body: { ids: allProcessedIds }
+            headers: authHeaders,
+            body: { ids: printedIds }
           });
           if (printedIds.length > 0) console.log(`  ✓ ${printedIds.length} trabajos confirmados exitosamente.`);
-          if (errorIds.length > 0) console.log(`  ⚠ ${errorIds.length} trabajos con error removidos de la cola.`);
         } catch (confirmErr) {
           console.error(`  ✗ Error confirmando trabajos:`, confirmErr.message);
           console.error(`    → Los trabajos podrían reaparecer en el próximo ciclo. Verifica la conexión al servidor.`);
         }
       }
+      if (failedCount > 0) console.log(`  ⚠ ${failedCount} trabajos siguen pendientes para un nuevo intento.`);
     }
   } catch (err) {
     console.error(`[${new Date().toLocaleTimeString()}] Error de conexión o procesamiento:`, err.message);
   }
   
   // Continuar polling en 3 segundos
-  setTimeout(pollPrintQueue, 3000);
+  setTimeout(pollPrintQueue, config.pollIntervalMs);
 }
 
 // Start polling

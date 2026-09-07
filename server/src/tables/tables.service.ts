@@ -1,7 +1,7 @@
 import { receiptSummary, validateReceipt } from './receipt';
 import { Prisma } from '@prisma/client';
 import { lockOperation, operationTransaction } from '../common/operation-lock';
-import { BadRequestException, Injectable, NotFoundException, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException, OnModuleInit, OnModuleDestroy, Inject, forwardRef } from '@nestjs/common';
 import { existsSync } from 'fs';
 import { randomUUID } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
@@ -19,7 +19,7 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
   constructor(
     private prisma: PrismaService,
     private socketGateway: SocketGateway,
-    private ordersService: OrdersService,
+    @Inject(forwardRef(() => OrdersService)) private ordersService: OrdersService,
   ) {}
 
   onModuleInit() {
@@ -475,26 +475,61 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
   }
 
   async getKitchenSettings(db: Prisma.TransactionClient = this.prisma) {
-    const setting = await db.appSetting.findUnique({ where: { key: 'kitchen_routing_settings' } });
-    if (setting) {
-      try {
-        return JSON.parse(setting.value);
-      } catch (e) {}
-    }
-    return {
+    const defaults = {
       smartDrinkRouting: false,
       multiStationDrinkTarget: 'none',
       splitByChannel: true,
+      deliveryKitchenMode: 'PRINT',
+      deliveryAutoPrint: true,
+      stationChannels: {} as Record<string, 'DINING' | 'DELIVERY' | 'BOTH'>,
     };
+    const setting = await db.appSetting.findUnique({ where: { key: 'kitchen_routing_settings' } });
+    if (setting) {
+      try {
+        const parsed = JSON.parse(setting.value);
+        return { ...defaults, ...(parsed && typeof parsed === 'object' ? parsed : {}) };
+      } catch (e) {}
+    }
+    return defaults;
   }
 
   async updateKitchenSettings(data: any) {
+    const current = await this.getKitchenSettings();
+    const allowedMode = ['PRINT', 'TABLET', 'BOTH'].includes(data?.deliveryKitchenMode)
+      ? data.deliveryKitchenMode
+      : current.deliveryKitchenMode;
+    const stationChannels = data?.stationChannels && typeof data.stationChannels === 'object'
+      ? Object.fromEntries(
+          Object.entries(data.stationChannels)
+            .filter(([, value]) => ['DINING', 'DELIVERY', 'BOTH'].includes(String(value))),
+        )
+      : current.stationChannels;
+    if (data?.splitByChannel !== false && Object.keys(stationChannels || {}).length > 0) {
+      const activeStations = await this.prisma.kitchenStation.findMany({ where: { active: true }, select: { id: true } });
+      const hasDiningStation = activeStations.some(station => ['DINING', 'BOTH'].includes(stationChannels[station.id]));
+      const hasDeliveryStation = activeStations.some(station => ['DELIVERY', 'BOTH'].includes(stationChannels[station.id]));
+      if (!hasDiningStation) throw new BadRequestException('Debe quedar al menos una estación activa para el salón.');
+      if (['TABLET', 'BOTH'].includes(allowedMode) && !hasDeliveryStation) {
+        throw new BadRequestException('Asigna al menos una estación activa a Domicilios antes de usar tablets.');
+      }
+    }
+    const next = {
+      ...current,
+      ...(typeof data?.smartDrinkRouting === 'boolean' ? { smartDrinkRouting: data.smartDrinkRouting } : {}),
+      ...(typeof data?.splitByChannel === 'boolean' ? { splitByChannel: data.splitByChannel } : {}),
+      ...(typeof data?.multiStationDrinkTarget === 'string' ? { multiStationDrinkTarget: data.multiStationDrinkTarget } : {}),
+      deliveryKitchenMode: allowedMode,
+      ...(typeof data?.deliveryAutoPrint === 'boolean' ? { deliveryAutoPrint: data.deliveryAutoPrint } : {}),
+      stationChannels,
+    };
     const updated = await this.prisma.appSetting.upsert({
       where: { key: 'kitchen_routing_settings' },
-      update: { value: JSON.stringify(data) },
-      create: { key: 'kitchen_routing_settings', value: JSON.stringify(data) },
+      update: { value: JSON.stringify(next) },
+      create: { key: 'kitchen_routing_settings', value: JSON.stringify(next) },
     });
-    return JSON.parse(updated.value);
+    const result = JSON.parse(updated.value);
+    this.socketGateway.server.emit('kitchenSettingsUpdated', result);
+    return result;
   }
 
   async checkExpiredCookBreaks() {
@@ -666,12 +701,12 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
     return { success: true };
   }
 
-  async createKitchenTickets(orderId: string, actorId: string, isEdited = false, changeSummary?: string, changeMap?: Map<string, any>, removedCandidateItems?: any[], db: Prisma.TransactionClient = this.prisma, events?: any[]) {
+  async createKitchenTickets(orderId: string, actorId?: string, isEdited = false, changeSummary?: string, changeMap?: Map<string, any>, removedCandidateItems?: any[], db: Prisma.TransactionClient = this.prisma, events?: any[]) {
     const order = await db.order.findUnique({
       where: { id: orderId },
       include: { items: { include: { menuItem: { include: { category: true } } } }, diningTable: true, waiter: true },
     });
-    if (!order) throw new NotFoundException('Pedido de mesa no encontrado');
+    if (!order) throw new NotFoundException('Pedido no encontrado');
 
     const isSalon = !!(order.tableId || order.orderType === 'DINE_IN');
     const allActiveStations = await this.getStations(db);
@@ -680,12 +715,22 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
     // 1. Filtrar estaciones según canal (Salón vs Domicilios) si existen diferenciadas
     let eligibleStations = allActiveStations;
     if (settings.splitByChannel !== false) {
-      const channelPattern = isSalon ? /sal[oó]n/i : /domicilio/i;
-      const channelStations = allActiveStations.filter(s => channelPattern.test(s.name));
-      if (channelStations.length > 0) {
-        eligibleStations = allActiveStations.filter(
-          s => channelPattern.test(s.name) || (!/sal[oó]n/i.test(s.name) && !/domicilio/i.test(s.name))
-        );
+      const desiredChannel = isSalon ? 'DINING' : 'DELIVERY';
+      const configuredChannels = settings.stationChannels || {};
+      const explicitlyEligible = allActiveStations.filter(station => {
+        const channel = configuredChannels[station.id];
+        return channel === desiredChannel || channel === 'BOTH';
+      });
+      if (Object.keys(configuredChannels).length > 0) {
+        eligibleStations = explicitlyEligible;
+      } else {
+        const channelPattern = isSalon ? /sal[oó]n/i : /domicilio/i;
+        const channelStations = allActiveStations.filter(s => channelPattern.test(s.name));
+        if (channelStations.length > 0) {
+          eligibleStations = allActiveStations.filter(
+            s => channelPattern.test(s.name) || (!/sal[oó]n/i.test(s.name) && !/domicilio/i.test(s.name))
+          );
+        }
       }
     }
 
@@ -921,6 +966,7 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
     });
 
     if (isEdited) {
+      if (!actorId) throw new BadRequestException('No se pudo identificar quién editó el pedido.');
       await db.orderChangeLog.create({
         data: {
           orderId,
@@ -932,6 +978,36 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
       if (!events) this.socketGateway.server.emit('tableOrderEdited', { orderId, changeSummary });
     }
     return tickets;
+  }
+
+  async syncDeliveryKitchenTickets(orderId: string, actorId: string, beforeItems: any[]) {
+    const events: any[] = [];
+    await this.prisma.$transaction(async tx => {
+      await lockOperation(tx);
+      const currentOrder = await tx.order.findUnique({
+        where: { id: orderId },
+        include: { items: { include: { menuItem: { include: { category: true } } } } },
+      });
+      if (!currentOrder) throw new NotFoundException('Pedido no encontrado');
+
+      const menuIds = [...new Set((beforeItems || []).map(item => item.menuItemId).filter(Boolean))];
+      const previousMenuItems = menuIds.length
+        ? await tx.menuItem.findMany({ where: { id: { in: menuIds } }, include: { category: true } })
+        : [];
+      const previousMenuMap = new Map(previousMenuItems.map(item => [item.id, item]));
+      const enrichedBefore = (beforeItems || []).map(item => ({
+        ...item,
+        menuItem: item.menuItem || previousMenuMap.get(item.menuItemId),
+      }));
+      const { summary, changeMap } = await this.buildChangeSummary(enrichedBefore, currentOrder.items, tx);
+      await this.createKitchenTickets(orderId, actorId, true, summary, changeMap, enrichedBefore, tx, events);
+    }, operationTransaction);
+
+    for (const event of events) {
+      if (event.isEdited) this.socketGateway.emitKitchenTicketEdited(event.ticket);
+      else if (event.created) this.socketGateway.emitKitchenTicketCreated(event.ticket);
+      else this.socketGateway.emitKitchenTicketUpdated(event.ticket);
+    }
   }
 
   async updateKitchenTicket(ticketId: string, status: string, user: any) {

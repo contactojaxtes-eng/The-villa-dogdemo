@@ -3,7 +3,7 @@ import { motion } from 'framer-motion'
 import { api } from '@/lib/api'
 import { alerts } from '@/lib/alerts'
 import { cn } from '@/lib/utils'
-import { Mail, MessageCircle, Loader2, CheckCircle2, Send, Server, ShieldCheck, Terminal, Save, Lock, ArrowLeft, Upload, FileText, Trash2, Key, Headphones, AlertTriangle, Activity, PlusCircle } from 'lucide-react'
+import { Mail, MessageCircle, Loader2, CheckCircle2, Send, ShieldCheck, Terminal, Save, Lock, ArrowLeft, Trash2, Key, Headphones, AlertTriangle, Activity, PlusCircle } from 'lucide-react'
 import { Link } from 'react-router-dom'
 
 interface SmtpConfig {
@@ -20,8 +20,6 @@ interface WhatsappCoreConfig {
   configured: boolean
   verifyTokenConfigured: boolean
   chatbotEnabled?: boolean
-  menuFileName?: string | null
-  menuFileMime?: string | null
   geminiApiKey?: string
   geminiRequestsToday?: number
 }
@@ -44,14 +42,12 @@ export default function SuperAdminConfigPage() {
   const [testEmail, setTestEmail] = useState('')
   const [testingEmail, setTestingEmail] = useState(false)
 
-  const [wa, setWa] = useState<WhatsappCoreConfig>({ phoneId: '', businessPhone: '', configured: false, verifyTokenConfigured: false, chatbotEnabled: true, menuFileName: null, menuFileMime: null, geminiApiKey: '', geminiRequestsToday: 0 })
+  const [wa, setWa] = useState<WhatsappCoreConfig>({ phoneId: '', businessPhone: '', configured: false, verifyTokenConfigured: false, chatbotEnabled: true, geminiApiKey: '', geminiRequestsToday: 0 })
   const [waToken, setWaToken] = useState('')
   const [waVerifyToken, setWaVerifyToken] = useState('')
   const [savingWa, setSavingWa] = useState(false)
 
-
   const [testingGemini, setTestingGemini] = useState(false)
-  const [uploadingMenu, setUploadingMenu] = useState(false)
 
   const handleTestGemini = async () => {
     const keysJoined = geminiKeys.map(k => k.trim()).filter(Boolean).join(',');
@@ -73,46 +69,6 @@ export default function SuperAdminConfigPage() {
       alerts.error('Error al probar conexión: ' + (err.message || err))
     } finally {
       setTestingGemini(false)
-    }
-  }
-
-  const handleUploadMenu = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (!file) return
-    setUploadingMenu(true)
-    try {
-      const fd = new FormData()
-      fd.append('file', file)
-      const res = await api.post<{ ok: boolean; name: string; mimeType: string }>('/whatsapp/settings/menu-file', fd)
-      if (res.ok) {
-        setWa(p => ({
-          ...p,
-          menuFileName: res.name,
-          menuFileMime: res.mimeType
-        }))
-        alerts.success('Menú subido correctamente.')
-      } else {
-        alerts.error('Error al subir menú.')
-      }
-    } catch (err: any) {
-      alerts.error(err.message || 'Error al subir menú.')
-    } finally {
-      setUploadingMenu(false)
-    }
-  }
-
-  const handleDeleteMenu = async () => {
-    if (!confirm('¿Estás seguro de eliminar el menú subido? Se volverá al comportamiento por defecto (solo enlace).')) return
-    try {
-      await api.delete('/whatsapp/settings/menu-file')
-      setWa(p => ({
-        ...p,
-        menuFileName: null,
-        menuFileMime: null
-      }))
-      alerts.success('Menú eliminado.')
-    } catch (err: any) {
-      alerts.error('Error al eliminar menú.')
     }
   }
 

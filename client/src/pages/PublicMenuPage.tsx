@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
+import { io as connect } from 'socket.io-client'
 import { api } from '../lib/api'
 import { BrandLogo } from '@/components/brand/BrandLogo'
 import { ShoppingCart, Plus, Minus, X, Info, Send, Check, ChevronDown, ListFilter, MessageSquare, Edit3, PlusCircle, Bike, Store } from 'lucide-react'
@@ -131,25 +132,48 @@ export default function PublicMenuPage() {
   }, [customerInfo, customNeighborhood])
 
   useEffect(() => {
+    let active = true
+    const applyCategories = (catRes: Category[]) => {
+      if (!active) return
+      const activeCats = (catRes || []).filter(c => c.items && c.items.some(i => i.active))
+      setCategories(activeCats)
+      setActiveCategory(current => activeCats.some(category => category.id === current) ? current : (activeCats[0]?.id || ''))
+    }
+
     Promise.all([
-      api.get<Category[]>('/public/menu/categories'),
+      api.get<Category[]>('/public/menu/categories', { force: true }),
       api.get<Zone[]>('/public/zones'),
       api.get<{ whatsappPhone: string }>('/public/menu/info').catch(() => null)
     ])
     .then(([catRes, zoneRes, infoRes]) => {
-      const activeCats = (catRes || []).filter(c => c.items && c.items.some(i => i.active))
-      setCategories(activeCats)
-      if (activeCats.length > 0) setActiveCategory(activeCats[0].id)
+      if (!active) return
+      applyCategories(catRes || [])
       setZones(zoneRes || [])
       if (infoRes && infoRes.whatsappPhone) {
         setRestaurantPhone(infoRes.whatsappPhone)
       }
     })
     .catch(err => console.error("Error cargando menú", err))
-    .finally(() => setLoading(false))
+    .finally(() => { if (active) setLoading(false) })
 
     const token = localStorage.getItem('token')
     if (token) setIsAdmin(true)
+
+    const socketUrl = import.meta.env.VITE_API_URL || window.location.origin
+    const menuSocket = connect(`${socketUrl}/public-menu`, {
+      transports: ['websocket', 'polling'],
+      reconnection: true,
+    })
+    menuSocket.on('menuUpdated', () => {
+      api.get<Category[]>('/public/menu/categories', { force: true })
+        .then(applyCategories)
+        .catch(err => console.error('Error sincronizando la carta', err))
+    })
+
+    return () => {
+      active = false
+      menuSocket.disconnect()
+    }
   }, [])
 
   // Extract addition items from any category containing "Adicion" or "Adicional"

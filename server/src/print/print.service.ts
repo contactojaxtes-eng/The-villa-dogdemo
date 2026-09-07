@@ -15,6 +15,18 @@ export class PrintService {
     private ordersService: OrdersService,
   ) {}
 
+  private isIpv4(value: string) {
+    const parts = value.split('.');
+    return parts.length === 4 && parts.every(part => /^\d{1,3}$/.test(part) && Number(part) <= 255);
+  }
+
+  private isLocalPrinterAddress(value: string) {
+    const [host, rawPort, ...extra] = value.split(':');
+    const validPort = rawPort === undefined || (/^\d+$/.test(rawPort) && Number(rawPort) >= 1 && Number(rawPort) <= 65535);
+    return value.startsWith('USB:')
+      || ((this.isIpv4(host) || host === 'localhost') && extra.length === 0 && validPort);
+  }
+
   async getPrinterSettings() {
     const keys = [
       'caja_printer_mode', 'caja_printer_ip', 'caja_printer_port', 'caja_printer_paper', 'caja_printer_name',
@@ -844,13 +856,9 @@ export class PrintService {
   private async dispatchPrintJob(target: string, text: string, printerConfig: any, kickDrawer = false) {
     if (!text || !text.trim()) return { ok: false, error: 'Texto de impresión vacío' };
 
-    let targetIp = (printerConfig?.ip || '').trim();
-    if (!/^\d+\.\d+\.\d+\.\d+/.test(targetIp) && !targetIp.startsWith('USB:')) {
-      if (target.toLowerCase().includes('pizza') || printerConfig?.name?.toLowerCase().includes('pizza')) {
-        targetIp = '192.168.1.140';
-      } else if (target.toLowerCase().includes('cocina') || printerConfig?.name?.toLowerCase().includes('cocina')) {
-        targetIp = '192.168.1.150';
-      }
+    const targetIp = (printerConfig?.ip || '').trim();
+    if (['local_bridge', 'network'].includes(printerConfig?.mode) && !this.isLocalPrinterAddress(targetIp)) {
+      return { ok: false, error: `Configura una IP válida para la impresora ${printerConfig?.name || target}` };
     }
 
     if (this.socketGateway) {
@@ -873,7 +881,7 @@ export class PrintService {
       const payload = buffer.toString('base64');
       await this.prisma.printJob.create({
         data: {
-          impresoraIp: targetIp || printerConfig.ip || '192.168.1.150',
+          impresoraIp: printerConfig?.id || target,
           payload,
           tipo: target,
         },
@@ -1265,20 +1273,15 @@ export class PrintService {
       if (printer) {
         printerConfig = printer;
       } else if (target.toLowerCase().includes('pizza')) {
-        printerConfig = settings.printers.find(p => p.name?.toLowerCase().includes('pizza')) || { name: 'Pizzas', ip: '192.168.1.140', port: 9100, paper: '80', mode: 'local_bridge' };
+        printerConfig = settings.printers.find(p => p.name?.toLowerCase().includes('pizza'));
       } else {
-        printerConfig = settings.printers.find(p => p.name?.toLowerCase().includes('cocina')) || settings.cocina || { name: 'Cocina', ip: '192.168.1.150', port: 9100, paper: '80', mode: 'local_bridge' };
+        printerConfig = settings.printers.find(p => p.name?.toLowerCase().includes('cocina')) || settings.cocina;
       }
     }
 
-    let targetIp = (printerConfig?.ip || '').trim();
-    if (!/^\d+\.\d+\.\d+\.\d+/.test(targetIp) && !targetIp.startsWith('USB:')) {
-      if (target.toLowerCase().includes('pizza') || printerConfig?.name?.toLowerCase().includes('pizza')) {
-        targetIp = '192.168.1.140';
-      } else if (target.toLowerCase().includes('cocina') || printerConfig?.name?.toLowerCase().includes('cocina')) {
-        targetIp = '192.168.1.150';
-      }
-    }
+    if (!printerConfig) return { ok: false, error: `Impresora "${target}" no encontrada` };
+    const targetIp = (printerConfig.ip || '').trim();
+    if (!this.isLocalPrinterAddress(targetIp)) return { ok: false, error: `Configura primero una IP válida para ${printerConfig.name || target}` };
 
     const text = `THE VILLA DOG - Prueba de impresion (${(printerConfig.name || target).toUpperCase()})\nMonteria, Cordoba\n========================\nSi ves esto, la impresora funciona.\n`;
 
@@ -1297,7 +1300,7 @@ export class PrintService {
     const payload = buffer.toString('base64');
     await this.prisma.printJob.create({
       data: {
-        impresoraIp: targetIp || printerConfig.ip || '192.168.1.150',
+        impresoraIp: printerConfig.id || target,
         payload,
         tipo: target,
       },

@@ -1,8 +1,9 @@
-import { Injectable, NotFoundException, BadRequestException, ConflictException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ConflictException, Optional } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CacheService } from '../cache/cache.service';
 import { SocketGateway } from '../socket/socket.gateway';
 import { CreateCategoryDto, UpdateCategoryDto, CreateItemDto, UpdateItemDto } from './dto';
+import { PublicMenuGateway } from './public-menu.gateway';
 
 @Injectable()
 export class MenuService {
@@ -10,6 +11,7 @@ export class MenuService {
     private prisma: PrismaService,
     private cache: CacheService,
     private socketGateway: SocketGateway,
+    @Optional() private publicMenuGateway?: PublicMenuGateway,
   ) {}
 
   async findAllCategories(includeInactive = false) {
@@ -61,6 +63,7 @@ export class MenuService {
   private invalidateCache() {
     this.cache.invalidateByPrefix('menu_');
     this.socketGateway.server.emit('menuUpdated');
+    this.publicMenuGateway?.emitMenuUpdated();
   }
 
   async createCategory(data: CreateCategoryDto) {

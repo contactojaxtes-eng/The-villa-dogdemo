@@ -115,34 +115,16 @@ export class WhatsappController {
     return this.whatsappService.updateSettings(body);
   }
 
-  @Post('settings/menu-file')
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('ADMIN', 'SUPERADMIN')
-  @UseInterceptors(FileInterceptor('file'))
-  async uploadMenuFile(@UploadedFile() file: any) {
-    if (!file) {
-      throw new BadRequestException('Archivo no provisto');
-    }
-    const base64 = file.buffer.toString('base64');
-    await this.whatsappService.saveMenuFile(base64, file.originalname, file.mimetype);
-    return { ok: true, name: file.originalname, mimeType: file.mimetype };
-  }
-
-  @Delete('settings/menu-file')
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('ADMIN', 'SUPERADMIN')
-  async deleteMenuFile() {
-    await this.whatsappService.deleteMenuFile();
-    return { ok: true };
-  }
-
   @Post('settings/payment-qr-file')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('ADMIN', 'SUPERADMIN')
-  @UseInterceptors(FileInterceptor('file'))
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 5 * 1024 * 1024 } }))
   async uploadPaymentQrFile(@UploadedFile() file: any) {
     if (!file) {
       throw new BadRequestException('Archivo no provisto');
+    }
+    if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.mimetype)) {
+      throw new BadRequestException('El QR debe ser una imagen JPG, PNG o WEBP');
     }
     const base64 = file.buffer.toString('base64');
     await this.whatsappService.savePaymentQrFile(base64, file.originalname, file.mimetype);

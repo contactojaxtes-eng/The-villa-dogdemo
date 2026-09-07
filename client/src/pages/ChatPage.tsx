@@ -18,7 +18,7 @@ import {
   Phone, Clock, AlertCircle, AlertTriangle, ArrowLeft, Loader2, Trash2, Paperclip, FileText,
   Mic, MicOff, Check, CheckCheck, Pencil, Search, Lock,
   ChevronDown, Copy, ChevronLeft, ChevronRight, MapPin, ExternalLink, Download, Forward, QrCode, Reply, X,
-  MessageSquareText, Bell, BellOff,
+  MessageSquareText, Bell, BellOff, Bot, BotOff,
   Eye, RotateCw, ZoomIn, ZoomOut
 } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
@@ -598,10 +598,10 @@ const ChatInputBar = React.memo(({
           className="h-9 px-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 active:scale-95 text-white font-extrabold text-[10px] shrink-0 flex items-center gap-1 cursor-pointer shadow-sm shadow-indigo-600/20 transition-all border-0"
           onClick={onSendPaymentQr}
           disabled={disabled || uploadingMedia || isRecording || sendingMenu || sendingPaymentQr}
-          title="Enviar código QR de pago al cliente"
+          title="Enviar QR o datos de pago configurados"
         >
           {sendingPaymentQr ? <Loader2 className="h-3.5 w-3.5 animate-spin text-white" /> : <QrCode className="h-3.5 w-3.5 text-white" />}
-          <span>QR</span>
+          <span>Cobro</span>
         </Button>
       </div>
 
@@ -792,6 +792,8 @@ function ChatPage() {
   const [displayLimit, setDisplayLimit] = useState(100)
   const [isMutedWa, setIsMutedWa] = useState(() => localStorage.getItem('niche_mute_wa_toasts') === 'true')
   const [realtimeStatus, setRealtimeStatus] = useState<'connecting' | 'connected' | 'disconnected'>('connecting')
+  const [chatbotEnabled, setChatbotEnabled] = useState<boolean | null>(null)
+  const [togglingChatbot, setTogglingChatbot] = useState(false)
   const chatSearchRef = useRef(chatSearch)
   const chatFilterRef = useRef(chatFilter)
   const sessionsRequestIdRef = useRef(0)
@@ -1042,6 +1044,30 @@ function ChatPage() {
       }
       return next
     })
+  }
+
+  const canManageChatbot = ['ADMIN', 'SUPERADMIN'].includes(user?.role || '')
+
+  useEffect(() => {
+    if (!canManageChatbot) return
+    api.get<{ chatbotEnabled?: boolean }>('/whatsapp/settings')
+      .then(settings => setChatbotEnabled(settings.chatbotEnabled === true))
+      .catch(() => setChatbotEnabled(null))
+  }, [canManageChatbot])
+
+  const toggleChatbot = async () => {
+    if (chatbotEnabled === null || togglingChatbot) return
+    const next = !chatbotEnabled
+    setTogglingChatbot(true)
+    try {
+      const updated = await api.put<{ chatbotEnabled?: boolean }>('/whatsapp/settings', { chatbotEnabled: next })
+      setChatbotEnabled(updated.chatbotEnabled === true)
+      alerts.toast(next ? 'Chatbot activado' : 'Chatbot pausado')
+    } catch (err: any) {
+      alerts.error('No se pudo cambiar el chatbot', err?.message || 'Inténtalo nuevamente.')
+    } finally {
+      setTogglingChatbot(false)
+    }
   }
 
   const messagesEndRef = useRef<HTMLDivElement>(null)
@@ -1409,6 +1435,9 @@ function ChatPage() {
     socket.on('connect_error', () => setRealtimeStatus(socket.active ? 'connecting' : 'disconnected'))
     socket.io.on('reconnect_attempt', () => setRealtimeStatus('connecting'))
     socket.io.on('reconnect_failed', () => setRealtimeStatus('disconnected'))
+    socket.on('whatsappSettingsUpdated', (settings: { chatbotEnabled?: boolean }) => {
+      if (typeof settings?.chatbotEnabled === 'boolean') setChatbotEnabled(settings.chatbotEnabled)
+    })
     socket.on('chatSessionAssigned', (payload: any) => {
       if (!payload || !payload.sessionId) return
       const payloadDigits = (payload.phone || '').replace(/\D/g, '')
@@ -2513,11 +2542,11 @@ function ChatPage() {
         <div ref={tabsRef} className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
           {([
             ['TODAY', 'Hoy', tabCounts.countToday],
+            ['ALL', 'Todos', tabCounts.countAll],
             ['UNASSIGNED', 'Sin asignar', tabCounts.countUnassigned],
             ['UNREAD', 'No leídos', tabCounts.countUnread],
             ['WAITING', 'En espera', tabCounts.countWaiting],
             ['MINE', 'Míos', tabCounts.countMine],
-            ['ALL', 'Todos', tabCounts.countAll],
           ] as const).map(([filter, label, count]) => (
             <button
               key={filter}
@@ -2574,6 +2603,23 @@ function ChatPage() {
             >
               <UserX className="h-3.5 w-3.5" />
               <span className="hidden 2xl:inline">Liberar</span>
+            </button>
+          )}
+          {canManageChatbot && (
+            <button
+              type="button"
+              onClick={toggleChatbot}
+              disabled={chatbotEnabled === null || togglingChatbot}
+              className={cn(
+                "flex h-8 items-center gap-1.5 rounded-lg border px-2 text-[10px] font-black transition-colors disabled:cursor-wait disabled:opacity-60",
+                chatbotEnabled
+                  ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-600 hover:bg-emerald-500/15"
+                  : "border-slate-400/30 bg-slate-500/10 text-[var(--text-secondary)] hover:bg-slate-500/15"
+              )}
+              title={chatbotEnabled ? 'Pausar respuestas automáticas' : 'Activar respuestas automáticas'}
+            >
+              {chatbotEnabled ? <Bot className="h-3.5 w-3.5" /> : <BotOff className="h-3.5 w-3.5" />}
+              <span className="hidden 2xl:inline">IA {chatbotEnabled ? 'activa' : 'pausada'}</span>
             </button>
           )}
           <button

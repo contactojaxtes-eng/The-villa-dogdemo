@@ -1,4 +1,4 @@
-import { Injectable, Logger, BadRequestException, ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, BadRequestException, ConflictException, ForbiddenException, NotFoundException, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
 import { SocketGateway } from '../socket/socket.gateway';
@@ -12,7 +12,7 @@ type CachedMedia = {
 };
 
 @Injectable()
-export class WhatsappService {
+export class WhatsappService implements OnModuleInit {
   private readonly logger = new Logger(WhatsappService.name);
   private readonly settingCache = new Map<string, { value: string | null; expiresAt: number }>();
   private readonly mediaCache = new Map<string, CachedMedia>();
@@ -28,6 +28,14 @@ export class WhatsappService {
     private socketGateway: SocketGateway,
   ) {}
 
+  async onModuleInit() {
+    try {
+      await this.purgeLegacyMenuFile();
+    } catch (error) {
+      this.logger.warn('No se pudo limpiar la carta estática anterior al iniciar', error);
+    }
+  }
+
   async getSettings() {
     const keys = [
       'whatsapp_phone_id',
@@ -35,12 +43,12 @@ export class WhatsappService {
       'whatsapp_verify_token',
       'whatsapp_business_phone',
       'chatbot_enabled',
-      'chatbot_menu_file_name',
-      'chatbot_menu_file_mimetype',
-      'chatbot_menu_file_caption',
+      'chatbot_menu_share_message',
       'chatbot_payment_qr_name',
       'chatbot_payment_qr_mimetype',
       'chatbot_payment_qr_caption',
+      'chatbot_payment_qr_mode',
+      'chatbot_payment_account_text',
       'gemini_api_key',
       'digital_menu_url',
       'business_hours_enabled',
@@ -68,20 +76,28 @@ export class WhatsappService {
       verifyTokenConfigured: !!settings.find(s => s.key === 'whatsapp_verify_token'),
       chatbotEnabled: map.chatbot_enabled === 'true', // Estricto: solo true si explícitamente se guardó como 'true'
       configured: !!(map.whatsapp_phone_id && settings.find(s => s.key === 'whatsapp_token')),
-      menuFileName: map.chatbot_menu_file_name || null,
-      menuFileMime: map.chatbot_menu_file_mimetype || null,
-      menuFileCaption: map.chatbot_menu_file_caption || '',
+      menuShareMessage: map.chatbot_menu_share_message || 'Mira nuestra carta actualizada y arma tu pedido aquí:',
       paymentQrName: map.chatbot_payment_qr_name || null,
       paymentQrMime: map.chatbot_payment_qr_mimetype || null,
       paymentQrCaption: map.chatbot_payment_qr_caption || '',
+      paymentQrMode: map.chatbot_payment_qr_mode || (map.chatbot_payment_qr_name ? 'IMAGE' : 'ACCOUNT'),
+      paymentAccountText: map.chatbot_payment_account_text || '',
       geminiApiKey: map.gemini_api_key || '',
       geminiRequestsToday,
-      digitalMenuUrl: map.digital_menu_url || 'http://localhost:5173/menu',
+      digitalMenuUrl: map.digital_menu_url || this.getDefaultDigitalMenuUrl(),
       businessHoursEnabled: map.business_hours_enabled === 'true',
       outOfServiceEnabled: map.out_of_service_enabled === 'true',
       outOfServiceMessage: map.out_of_service_message || '',
       restaurantHours: map.restaurant_hours || '12:00 PM - 11:00 PM',
     };
+  }
+
+  private getDefaultDigitalMenuUrl() {
+    const clientUrl = String(this.config.get('CLIENT_URL') || '').trim().replace(/\/$/, '');
+    if (clientUrl) return `${clientUrl}/menu`;
+    const railwayDomain = String(this.config.get('RAILWAY_PUBLIC_DOMAIN') || '').trim();
+    if (railwayDomain) return `https://${railwayDomain}/menu`;
+    return 'http://localhost:5173/menu';
   }
 
   private buildMetaRecipient(target: string): { to?: string; recipient?: string } {
@@ -329,63 +345,9 @@ export class WhatsappService {
     return session;
   }
 
-  async saveMenuFile(base64: string, fileName: string, mimeType: string) {
-    await this.prisma.appSetting.upsert({
-      where: { key: 'chatbot_menu_file_base64' },
-      create: { key: 'chatbot_menu_file_base64', value: base64 },
-      update: { value: base64 },
-    });
-    await this.prisma.appSetting.upsert({
-      where: { key: 'chatbot_menu_file_name' },
-      create: { key: 'chatbot_menu_file_name', value: fileName },
-      update: { value: fileName },
-    });
-    await this.prisma.appSetting.upsert({
-      where: { key: 'chatbot_menu_file_mimetype' },
-      create: { key: 'chatbot_menu_file_mimetype', value: mimeType },
-      update: { value: mimeType },
-    });
-
-    // Subir a Meta en segundo plano de inmediato para pre-cachear el media_id
-    (async () => {
-      try {
-        const phoneId = await this.getSetting('whatsapp_phone_id');
-        const token = await this.getSetting('whatsapp_token');
-        if (!phoneId || !token) return;
-
-        const buffer = Buffer.from(base64, 'base64');
-        const formData = new FormData();
-        const blob = new Blob([new Uint8Array(buffer)], { type: mimeType });
-        formData.append('file', blob, fileName);
-        formData.append('type', mimeType);
-        formData.append('messaging_product', 'whatsapp');
-
-        const uploadRes = await fetch(`https://graph.facebook.com/v18.0/${phoneId}/media`, {
-          method: 'POST',
-          headers: { Authorization: `Bearer ${token}` },
-          body: formData,
-        });
-
-        if (uploadRes.ok) {
-          const uploadData = await uploadRes.json();
-          if (uploadData.id) {
-            await this.prisma.appSetting.upsert({
-              where: { key: 'chatbot_menu_meta_media_id' },
-              create: { key: 'chatbot_menu_meta_media_id', value: uploadData.id },
-              update: { value: uploadData.id },
-            });
-            this.logger.log(`Carta pre-cacheada con éxito en Meta Media ID: ${uploadData.id}`);
-          }
-        }
-      } catch (e) {
-        this.logger.error('Error pre-cacheando carta en Meta:', e);
-      }
-    })();
-  }
-
-  async deleteMenuFile() {
+  private async purgeLegacyMenuFile() {
     await this.prisma.appSetting.deleteMany({
-      where: { key: { in: ['chatbot_menu_file_base64', 'chatbot_menu_file_name', 'chatbot_menu_file_mimetype', 'chatbot_menu_meta_media_id'] } },
+      where: { key: { in: ['chatbot_menu_file_base64', 'chatbot_menu_file_name', 'chatbot_menu_file_mimetype', 'chatbot_menu_file_caption', 'chatbot_menu_meta_media_id'] } },
     });
   }
 
@@ -405,6 +367,18 @@ export class WhatsappService {
       create: { key: 'chatbot_payment_qr_mimetype', value: mimeType },
       update: { value: mimeType },
     });
+    await this.prisma.appSetting.upsert({
+      where: { key: 'chatbot_payment_qr_mode' },
+      create: { key: 'chatbot_payment_qr_mode', value: 'IMAGE' },
+      update: { value: 'IMAGE' },
+    });
+    // Un identificador de Meta pertenece a los bytes anteriores. Se elimina antes
+    // de precargar la nueva imagen para impedir que se envíe un QR obsoleto.
+    await this.prisma.appSetting.deleteMany({
+      where: { key: 'chatbot_payment_qr_meta_media_id' },
+    });
+    this.settingCache.delete('chatbot_payment_qr_mode');
+    this.socketGateway.emitWhatsApp('whatsappSettingsUpdated', await this.getSettings());
 
     // Pre-cachear QR en Meta Media API de inmediato
     (async () => {
@@ -447,6 +421,13 @@ export class WhatsappService {
     await this.prisma.appSetting.deleteMany({
       where: { key: { in: ['chatbot_payment_qr_base64', 'chatbot_payment_qr_name', 'chatbot_payment_qr_mimetype', 'chatbot_payment_qr_meta_media_id'] } },
     });
+    await this.prisma.appSetting.upsert({
+      where: { key: 'chatbot_payment_qr_mode' },
+      create: { key: 'chatbot_payment_qr_mode', value: 'ACCOUNT' },
+      update: { value: 'ACCOUNT' },
+    });
+    this.settingCache.delete('chatbot_payment_qr_mode');
+    this.socketGateway.emitWhatsApp('whatsappSettingsUpdated', await this.getSettings());
   }
 
   async sendPaymentQr(phone: string) {
@@ -461,37 +442,48 @@ export class WhatsappService {
     }
     this.paymentQrSendingLocks.set(cleanPhone, now);
 
-    const fileSetting = await this.prisma.appSetting.findUnique({
-      where: { key: 'chatbot_payment_qr_base64' },
+    const qrRows = await this.prisma.appSetting.findMany({
+      where: {
+        key: {
+          in: [
+            'chatbot_payment_qr_mode',
+            'chatbot_payment_account_text',
+            'chatbot_payment_qr_base64',
+            'chatbot_payment_qr_name',
+            'chatbot_payment_qr_mimetype',
+            'chatbot_payment_qr_meta_media_id',
+            'chatbot_payment_qr_caption',
+          ],
+        },
+      },
     });
+    const qrSettings = Object.fromEntries(qrRows.map(row => [row.key, row.value])) as Record<string, string>;
+    const mode = String(qrSettings.chatbot_payment_qr_mode || (qrSettings.chatbot_payment_qr_base64 ? 'IMAGE' : 'ACCOUNT')).toUpperCase();
+    const accountText = String(qrSettings.chatbot_payment_account_text || '').trim();
 
-    if (!fileSetting || !fileSetting.value) {
-      return this.sendMessage(cleanPhone, `💳 *DATOS DE TRANSFERENCIA THE VILLA DOG*\n\nPuedes transferir a nuestras cuentas oficiales Nequi / Bancolombia / Daviplata.`);
+    if (mode === 'ACCOUNT') {
+      if (!accountText) {
+        throw new BadRequestException('Configura primero los datos de la cuenta en Configuración > WhatsApp y envíos.');
+      }
+      return this.sendMessage(cleanPhone, accountText);
     }
 
-    const nameSetting = await this.prisma.appSetting.findUnique({
-      where: { key: 'chatbot_payment_qr_name' },
-    });
-    const mimeSetting = await this.prisma.appSetting.findUnique({
-      where: { key: 'chatbot_payment_qr_mimetype' },
-    });
-    const cachedMediaIdSetting = await this.prisma.appSetting.findUnique({
-      where: { key: 'chatbot_payment_qr_meta_media_id' },
-    });
-    const captionSetting = await this.prisma.appSetting.findUnique({
-      where: { key: 'chatbot_payment_qr_caption' },
-    });
-    const caption = captionSetting?.value?.trim() || '';
+    const fileValue = qrSettings.chatbot_payment_qr_base64;
+    if (!fileValue) {
+      if (accountText) return this.sendMessage(cleanPhone, accountText);
+      throw new BadRequestException('Configura primero una imagen QR o los datos de la cuenta.');
+    }
 
-    const fileName = nameSetting?.value || 'QR_Pago_THE VILLA DOG.png';
-    const mimeType = mimeSetting?.value || 'image/png';
-    const type = 'image';
+    const caption = String(qrSettings.chatbot_payment_qr_caption || '').trim();
+    const fileName = qrSettings.chatbot_payment_qr_name || 'QR_Pago_THE_VILLA_DOG.png';
+    const mimeType = qrSettings.chatbot_payment_qr_mimetype || 'image/png';
+    const cachedMediaId = qrSettings.chatbot_payment_qr_meta_media_id;
     const phoneId = await this.getSetting('whatsapp_phone_id');
     const token = await this.getSetting('whatsapp_token');
 
     // 1. Envío instantáneo 0.05s usando ID cacheado
-    if (cachedMediaIdSetting?.value && phoneId && token) {
-      const mediaId = cachedMediaIdSetting.value;
+    if (cachedMediaId && phoneId && token) {
+      const mediaId = cachedMediaId;
       const recipientObj = this.buildMetaRecipient(cleanPhone);
       const sendBody: any = {
         messaging_product: 'whatsapp',
@@ -562,7 +554,7 @@ export class WhatsappService {
     }
 
     // 2. Si no estaba cacheado, subirlo y guardar ID
-    const buffer = Buffer.from(fileSetting.value, 'base64');
+    const buffer = Buffer.from(fileValue, 'base64');
     return this.sendMediaMessage(cleanPhone, buffer, fileName, mimeType, 'image', caption);
   }
 
@@ -571,7 +563,7 @@ export class WhatsappService {
 
   async sendMenuCarta(phone: string) {
     const targetSession = await this.resolveSessionForDispatch(phone);
-    const { recipientPhone, lastInWaId, isId } = await this.resolveActiveRecipient(targetSession, phone);
+    const { recipientPhone } = await this.resolveActiveRecipient(targetSession, phone);
     const cleanPhone = this.formatRecipient(recipientPhone);
     const now = Date.now();
     const lastSent = this.menuSendingLocks.get(cleanPhone) || 0;
@@ -581,116 +573,20 @@ export class WhatsappService {
     }
     this.menuSendingLocks.set(cleanPhone, now);
 
-    const fileSetting = await this.prisma.appSetting.findUnique({
-      where: { key: 'chatbot_menu_file_base64' },
+    const rows = await this.prisma.appSetting.findMany({
+      where: { key: { in: ['digital_menu_url', 'chatbot_menu_share_message'] } },
     });
+    const values = Object.fromEntries(rows.map(row => [row.key, row.value])) as Record<string, string>;
+    const link = String(values.digital_menu_url || this.getDefaultDigitalMenuUrl()).trim();
+    const customMessage = String(values.chatbot_menu_share_message || '').trim();
+    const intro = customMessage || '🍽️ *CARTA DIGITAL THE VILLA DOG*\n\nMira nuestra carta actualizada y arma tu pedido aquí:';
+    const message = intro.includes('{url}')
+      ? intro.replaceAll('{url}', link)
+      : `${intro}\n👉 ${link}`;
 
-    if (!fileSetting || !fileSetting.value) {
-      const digitalUrlSetting = await this.prisma.appSetting.findUnique({
-        where: { key: 'digital_menu_url' },
-      });
-      const link = digitalUrlSetting?.value || 'http://localhost:5173/menu';
-      return this.sendMessage(cleanPhone, `🍽️ *CARTA Y MENÚ DIGITAL THE VILLA DOG*\n\nPuedes ver nuestra carta completa con precios aquí:\n👉 ${link}`);
-    }
-
-    const nameSetting = await this.prisma.appSetting.findUnique({
-      where: { key: 'chatbot_menu_file_name' },
-    });
-    const mimeSetting = await this.prisma.appSetting.findUnique({
-      where: { key: 'chatbot_menu_file_mimetype' },
-    });
-    const cachedMediaIdSetting = await this.prisma.appSetting.findUnique({
-      where: { key: 'chatbot_menu_meta_media_id' },
-    });
-    const captionSetting = await this.prisma.appSetting.findUnique({
-      where: { key: 'chatbot_menu_file_caption' },
-    });
-    const caption = captionSetting?.value?.trim() || '';
-
-    const fileName = nameSetting?.value || 'Menu_THE VILLA DOG.pdf';
-    const mimeType = mimeSetting?.value || 'application/pdf';
-    const type = mimeType.startsWith('image/') ? 'image' : 'document';
-    const phoneId = await this.getSetting('whatsapp_phone_id');
-    const token = await this.getSetting('whatsapp_token');
-
-    // 1. Envío ULTRA-RÁPIDO en 0.05s usando el ID de Meta pre-cacheado
-    if (cachedMediaIdSetting?.value && phoneId && token) {
-      const mediaId = cachedMediaIdSetting.value;
-      const recipientObj = this.buildMetaRecipient(cleanPhone);
-      const sendBody: any = {
-        messaging_product: 'whatsapp',
-        recipient_type: 'individual',
-        ...recipientObj,
-        type: type,
-      };
-      if (isId || recipientObj.recipient || cleanPhone.length >= 13 || cleanPhone.startsWith('CO.')) {
-        if (lastInWaId) {
-          sendBody.context = { message_id: lastInWaId };
-        }
-      }
-      if (type === 'image') sendBody.image = { id: mediaId, ...(caption ? { caption } : {}) };
-      else sendBody.document = { id: mediaId, filename: fileName, ...(caption ? { caption } : {}) };
-
-      try {
-        const sendRes = await fetch(`https://graph.facebook.com/v26.0/${phoneId}/messages`, {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${token}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify(sendBody),
-        });
-
-        let ok = sendRes.ok;
-        let sendData = await sendRes.json();
-
-        if (!ok && (sendData?.error?.code === 131047 || sendData?.error?.code === 131026 || sendData?.error?.code === 470)) {
-          this.logger.warn(`Ventana de 24h cerrada para ${cleanPhone} en Carta. Enviando plantilla de reactivación...`);
-          const tmplResult = await this.sendTemplate(cleanPhone, 'actualizacion_sistema_niche', 'es_CO', []);
-          if (tmplResult.sent) return { sent: true, data: tmplResult.data };
-        }
-
-        if (ok) {
-          const session = targetSession || await this.findOrCreateSession(cleanPhone);
-          await this.prisma.whatsAppSession.update({ where: { id: session.id }, data: { lastMessageAt: new Date() } });
-
-          const msgContent = caption ? `${mediaId}|${caption}` : mediaId;
-
-          const newMsg = await this.prisma.whatsAppMessage.create({
-            data: {
-              waMessageId: sendData.messages?.[0]?.id || `out-${Date.now()}`,
-              sessionId: session.id,
-              direction: 'OUT',
-              content: msgContent,
-              messageType: type,
-              status: 'sent',
-            },
-          });
-
-          this.socketGateway.emitWhatsApp('whatsappMessage', {
-            id: newMsg.id,
-            waMessageId: newMsg.waMessageId,
-            sessionId: session.id,
-            phone: cleanPhone,
-            customerName: session.customerName || cleanPhone,
-            content: msgContent,
-            messageType: type,
-            direction: 'OUT',
-            status: newMsg.status || 'sent',
-            assignedTo: session.assignedToId,
-          });
-
-          return { sent: true, data: sendData };
-        }
-      } catch (err) {
-        this.logger.warn('Fallo con media_id cacheado, reintentando subida...', err);
-      }
-    }
-
-    // 2. Si no estaba cacheado, subirlo y guardar el ID para los próximos envíos
-    const buffer = Buffer.from(fileSetting.value, 'base64');
-    const result = await this.sendMediaMessage(cleanPhone, buffer, fileName, mimeType, type, caption);
-    return result;
+    // La carta es siempre el catálogo vivo. Los PDF e imágenes antiguos dejan de
+    // tener prioridad, por lo que un cambio de producto o precio no queda obsoleto.
+    return this.sendMessage(cleanPhone, message);
   }
 
   // Reenvío Directo en el Servidor (0.05s, sin descargar ni re-subir bytes)
@@ -794,6 +690,10 @@ export class WhatsappService {
     chatbotEnabled?: boolean; 
     geminiApiKey?: string; 
     digital_menu_url?: string;
+    menuShareMessage?: string;
+    paymentQrMode?: 'IMAGE' | 'ACCOUNT';
+    paymentAccountText?: string;
+    paymentQrCaption?: string;
     businessHoursEnabled?: boolean;
     outOfServiceEnabled?: boolean;
     outOfServiceMessage?: string;
@@ -832,13 +732,42 @@ export class WhatsappService {
       }
     }
 
-    if (data.digital_menu_url !== undefined) updates.push({ key: 'digital_menu_url', value: data.digital_menu_url });
+    if (data.digital_menu_url !== undefined) {
+      const menuUrl = String(data.digital_menu_url).trim();
+      if (menuUrl.length > 500) throw new BadRequestException('El enlace de la carta es demasiado largo');
+      if (menuUrl) {
+        try {
+          const parsed = new URL(menuUrl);
+          if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error('protocol');
+        } catch {
+          throw new BadRequestException('El enlace de la carta debe ser una URL http o https válida');
+        }
+      }
+      updates.push({ key: 'digital_menu_url', value: menuUrl });
+    }
+    if (data.menuShareMessage !== undefined) {
+      const menuShareMessage = String(data.menuShareMessage).trim();
+      if (menuShareMessage.length > 3500) throw new BadRequestException('El mensaje de la carta es demasiado largo');
+      updates.push({ key: 'chatbot_menu_share_message', value: menuShareMessage });
+    }
+    if (data.paymentQrMode !== undefined) {
+      if (!['IMAGE', 'ACCOUNT'].includes(data.paymentQrMode)) throw new BadRequestException('Modo de cobro inválido');
+      updates.push({ key: 'chatbot_payment_qr_mode', value: data.paymentQrMode });
+    }
+    if (data.paymentAccountText !== undefined) {
+      const paymentAccountText = String(data.paymentAccountText).trim();
+      if (paymentAccountText.length > 4096) throw new BadRequestException('Los datos de la cuenta son demasiado largos');
+      updates.push({ key: 'chatbot_payment_account_text', value: paymentAccountText });
+    }
     if (data.businessHoursEnabled !== undefined) updates.push({ key: 'business_hours_enabled', value: String(data.businessHoursEnabled) });
     if (data.outOfServiceEnabled !== undefined) updates.push({ key: 'out_of_service_enabled', value: String(data.outOfServiceEnabled) });
     if (data.outOfServiceMessage !== undefined) updates.push({ key: 'out_of_service_message', value: data.outOfServiceMessage });
     if (data.restaurantHours !== undefined) updates.push({ key: 'restaurant_hours', value: data.restaurantHours });
-    if ((data as any).menuFileCaption !== undefined) updates.push({ key: 'chatbot_menu_file_caption', value: (data as any).menuFileCaption });
-    if ((data as any).paymentQrCaption !== undefined) updates.push({ key: 'chatbot_payment_qr_caption', value: (data as any).paymentQrCaption });
+    if (data.paymentQrCaption !== undefined) {
+      const paymentQrCaption = String(data.paymentQrCaption).trim();
+      if (paymentQrCaption.length > 1024) throw new BadRequestException('El texto del QR es demasiado largo');
+      updates.push({ key: 'chatbot_payment_qr_caption', value: paymentQrCaption });
+    }
 
     for (const u of updates) {
       await this.prisma.appSetting.upsert({
@@ -847,6 +776,9 @@ export class WhatsappService {
         update: { value: u.value },
       });
       this.settingCache.delete(u.key);
+    }
+    if (data.digital_menu_url !== undefined || data.menuShareMessage !== undefined) {
+      await this.purgeLegacyMenuFile();
     }
     const currentSettings = await this.getSettings();
     if (this.socketGateway) {

@@ -42,30 +42,56 @@ export class AppController {
       orderBy: { id: 'asc' },
     });
 
+    // La impresora consulta esta ruta cada pocos segundos. Si no hay trabajos,
+    // evitamos leer también la configuración para mantener el sondeo liviano.
+    if (jobs.length === 0) return [];
+
     let customPrinters: any[] = [];
+    let cashPrinterIp = '';
+    let cashPrinterPort = 9100;
     try {
-      const row = await this.prisma.appSetting.findUnique({ where: { key: 'custom_prep_printers' } });
-      if (row?.value) customPrinters = JSON.parse(row.value);
+      const rows = await this.prisma.appSetting.findMany({
+        where: { key: { in: ['custom_prep_printers', 'caja_printer_ip', 'caja_printer_port'] } },
+      });
+      const values = Object.fromEntries(rows.map(row => [row.key, row.value]));
+      if (values.custom_prep_printers) {
+        const parsed = JSON.parse(values.custom_prep_printers);
+        customPrinters = Array.isArray(parsed) ? parsed : [];
+      }
+      cashPrinterIp = String(values.caja_printer_ip || '').trim();
+      cashPrinterPort = Number(values.caja_printer_port) || 9100;
     } catch {}
 
-    const cocinaIp = customPrinters.find(p => p.name?.toLowerCase().includes('cocina') && p.ip)?.ip || '192.168.1.150';
-    const pizzasIp = customPrinters.find(p => p.name?.toLowerCase().includes('pizza') && p.ip)?.ip || '192.168.1.140';
+    const normalize = (value: unknown) => String(value || '').trim().toLowerCase();
 
     return jobs.map(j => {
-      let resolvedIp = (j.impresoraIp || '').trim();
-      if (!/^\d+\.\d+\.\d+\.\d+/.test(resolvedIp) && !resolvedIp.startsWith('USB:')) {
-        if (resolvedIp.toLowerCase().includes('pizza') || j.tipo?.toLowerCase().includes('pizza')) {
-          resolvedIp = pizzasIp;
-        } else {
-          resolvedIp = cocinaIp;
+      const storedTarget = (j.impresoraIp || '').trim();
+      const targetKeys = new Set([normalize(storedTarget), normalize(j.tipo)]);
+      let configuredPrinter = customPrinters.find(printer =>
+        printer.enabled !== false && (targetKeys.has(normalize(printer.id)) || targetKeys.has(normalize(printer.name))),
+      );
+      if (!configuredPrinter) {
+        const combinedTarget = [...targetKeys].join(' ');
+        if (combinedTarget.includes('pizza')) {
+          configuredPrinter = customPrinters.find(printer => printer.enabled !== false && normalize(printer.name).includes('pizza'));
+        } else if (combinedTarget.includes('cocina')) {
+          configuredPrinter = customPrinters.find(printer => printer.enabled !== false && normalize(printer.name).includes('cocina'));
         }
       }
+
+      const isCashJob = normalize(j.tipo) === 'caja' || normalize(storedTarget) === 'caja';
+      const resolvedIp = String(
+        configuredPrinter?.ip || (isCashJob ? cashPrinterIp : '') || storedTarget,
+      ).trim();
+      const resolvedPort = Number(configuredPrinter?.port || (isCashJob ? cashPrinterPort : 0)) || 9100;
       return {
         id: j.id,
         impresora_ip: resolvedIp,
         impresoraIp: resolvedIp,
         ip: resolvedIp,
         printer_ip: resolvedIp,
+        port: resolvedPort,
+        impresora_puerto: resolvedPort,
         payload: j.payload,
         data: j.payload,
         tipo: j.tipo,

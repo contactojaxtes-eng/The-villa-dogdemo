@@ -1,10 +1,11 @@
 import { Prisma } from '@prisma/client';
 import { lockOperation, operationTransaction } from '../common/operation-lock';
-import { Injectable, NotFoundException, BadRequestException, Logger, ForbiddenException, OnModuleInit, Inject, forwardRef } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, Logger, ForbiddenException, OnModuleInit, Inject, forwardRef, Optional } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { SocketGateway } from '../socket/socket.gateway';
 import { WhatsappService } from '../whatsapp/whatsapp.service';
 import { PrintService } from '../print/print.service';
+import { TablesService } from '../tables/tables.service';
 import { dashboardRange } from './dashboard-range';
 
 @Injectable()
@@ -16,7 +17,20 @@ export class OrdersService implements OnModuleInit {
     private socketGateway: SocketGateway,
     private whatsappService: WhatsappService,
     @Inject(forwardRef(() => PrintService)) private printService: PrintService,
+    @Optional() @Inject(forwardRef(() => TablesService)) private tablesService?: TablesService,
   ) {}
+
+  private isDeliveryKitchenOrder(order: any) {
+    return ['DELIVERY', 'PICKUP'].includes(String(order?.orderType || '').toUpperCase());
+  }
+
+  private printerAcceptsOrder(printer: any, order: any) {
+    // Las impresoras existentes se consideran de salón hasta que un administrador
+    // las asigne de forma explícita. Así un despliegue no mezcla domicilios con mesas.
+    const channel = String(printer?.channel || 'DINING').toUpperCase();
+    const orderChannel = this.isDeliveryKitchenOrder(order) ? 'DELIVERY' : 'DINING';
+    return channel === 'BOTH' || channel === orderChannel;
+  }
 
   private formatPaymentMethodName(pm?: string | null): string {
     if (!pm) return 'Efectivo';
@@ -703,6 +717,22 @@ export class OrdersService implements OnModuleInit {
     this.socketGateway.emitNewOrder(order);
     this.socketGateway.server.emit('whatsappSessionUpdated', { orderCreated: true, phone: order.customerPhone, orderNumber: order.orderNumber, status: order.status });
 
+    let deliveryKitchenMode = 'PRINT';
+    let deliveryAutoPrint = true;
+    if (this.isDeliveryKitchenOrder(order) && this.tablesService) {
+      try {
+        const kitchenSettings = await this.tablesService.getKitchenSettings();
+        deliveryKitchenMode = String(kitchenSettings?.deliveryKitchenMode || 'PRINT').toUpperCase();
+        deliveryAutoPrint = kitchenSettings?.deliveryAutoPrint !== false;
+        if (['TABLET', 'BOTH'].includes(deliveryKitchenMode)) {
+          const actorId = order.waiterId || order.assignedTo;
+          await this.tablesService.createKitchenTickets(order.id, actorId || undefined);
+        }
+      } catch (kitchenErr) {
+        this.logger.warn(`No se pudo enviar el pedido #${order.orderNumber} a la cocina de domicilios:`, kitchenErr);
+      }
+    }
+
     try {
       if (this.isSendableWhatsAppPhone(order.customerPhone, order.orderType, order.customerName)) {
         const rawPhone = order.customerPhone.trim();
@@ -756,7 +786,10 @@ export class OrdersService implements OnModuleInit {
 
     try {
       const printerSettings = await this.printService.getPrinterSettings();
-      if (printerSettings?.autoPrint === true) {
+      const shouldPrint = this.isDeliveryKitchenOrder(order)
+        ? deliveryAutoPrint && ['PRINT', 'BOTH'].includes(deliveryKitchenMode)
+        : printerSettings?.autoPrint === true;
+      if (shouldPrint) {
         const fullOrder = await this.prisma.order.findUnique({
           where: { id: order.id },
           include: {
@@ -770,6 +803,7 @@ export class OrdersService implements OnModuleInit {
         if (fullOrder) {
           for (const p of printerSettings.printers || []) {
             if (p.enabled === false || p.type === 'caja') continue;
+            if (!this.printerAcceptsOrder(p, fullOrder)) continue;
             const ticketText = this.printService.formatCocinaTicketText(
               fullOrder,
               p.name,
@@ -777,14 +811,15 @@ export class OrdersService implements OnModuleInit {
               printerSettings.printers,
               p.paper
             );
-            let targetIp = (p.ip || '').trim();
+            const targetIp = (p.ip || '').trim();
             if (!targetIp) continue;
             if (ticketText) {
               const buffer = this.printService.buildEscPos(ticketText, p.paper);
               const payload = buffer.toString('base64');
               await this.prisma.printJob.create({
                 data: {
-                  impresoraIp: targetIp,
+                  // Resolver por id mantiene la cola ligada a la IP vigente en Configuración.
+                  impresoraIp: p.id || p.name,
                   payload,
                   tipo: p.id || p.name,
                 },
@@ -1069,10 +1104,29 @@ export class OrdersService implements OnModuleInit {
       .join('|');
     const itemsActuallyChanged = oldItemsSignature !== newItemsSignature;
 
+    let deliveryKitchenMode = 'PRINT';
+    let deliveryAutoPrint = true;
+    if (this.isDeliveryKitchenOrder(updated) && this.tablesService) {
+      try {
+        const kitchenSettings = await this.tablesService.getKitchenSettings();
+        deliveryKitchenMode = String(kitchenSettings?.deliveryKitchenMode || 'PRINT').toUpperCase();
+        deliveryAutoPrint = kitchenSettings?.deliveryAutoPrint !== false;
+        if (itemsActuallyChanged && ['TABLET', 'BOTH'].includes(deliveryKitchenMode)) {
+          const actorId = updated.waiterId || updated.assignedTo;
+          if (actorId) await this.tablesService.syncDeliveryKitchenTickets(updated.id, actorId, existing.items || []);
+        }
+      } catch (kitchenErr) {
+        this.logger.warn(`No se pudo sincronizar la cocina del pedido #${updated.orderNumber}:`, kitchenErr);
+      }
+    }
+
     try {
       if (itemsActuallyChanged) {
         const printerSettings = await this.printService.getPrinterSettings();
-        if (printerSettings?.autoPrint === true) {
+        const shouldPrint = this.isDeliveryKitchenOrder(updated)
+          ? deliveryAutoPrint && ['PRINT', 'BOTH'].includes(deliveryKitchenMode)
+          : printerSettings?.autoPrint === true;
+        if (shouldPrint) {
           const fullOrder = await this.prisma.order.findUnique({
             where: { id: updated.id },
             include: {
@@ -1087,6 +1141,7 @@ export class OrdersService implements OnModuleInit {
             (fullOrder as any).isEdited = true;
             for (const p of printerSettings.printers || []) {
               if (p.enabled === false || p.type === 'caja') continue;
+              if (!this.printerAcceptsOrder(p, fullOrder)) continue;
               const ticketText = this.printService.formatCocinaTicketText(
                 fullOrder,
                 p.name,
@@ -1094,14 +1149,14 @@ export class OrdersService implements OnModuleInit {
                 printerSettings.printers,
                 p.paper
               );
-              let targetIp = (p.ip || '').trim();
+              const targetIp = (p.ip || '').trim();
               if (!targetIp) continue;
               if (ticketText) {
                 const buffer = this.printService.buildEscPos(ticketText, p.paper);
                 const payload = buffer.toString('base64');
                 await this.prisma.printJob.create({
                   data: {
-                    impresoraIp: targetIp,
+                    impresoraIp: p.id || p.name,
                     payload,
                     tipo: p.id || p.name,
                   },
@@ -1322,18 +1377,18 @@ export class OrdersService implements OnModuleInit {
       where: { orderId: id },
       data: { status: 'REJECTED' },
     });
+    await this.prisma.kitchenTicket.updateMany({
+      where: { orderId: id },
+      data: { status: 'CANCELLED', changeSummary: `Cancelado: ${reason || 'Por administración'}` },
+    });
+    const cancelledTickets = await this.prisma.kitchenTicket.findMany({
+      where: { orderId: id },
+      include: { station: { include: { users: { select: { id: true, name: true, role: true } } } }, assignedTo: { select: { id: true, name: true } }, items: true, order: { include: { waiter: true, diningTable: true } } },
+    });
+    for (const ticket of cancelledTickets) {
+      this.socketGateway.emitKitchenTicketUpdated(ticket);
+    }
     if (order.tableId) {
-      await this.prisma.kitchenTicket.updateMany({
-        where: { orderId: id },
-        data: { status: 'CANCELLED', changeSummary: `Cancelado: ${reason || 'Por administración'}` },
-      });
-      const tickets = await this.prisma.kitchenTicket.findMany({
-        where: { orderId: id },
-        include: { station: { include: { users: { select: { id: true, name: true, role: true } } } }, assignedTo: { select: { id: true, name: true } }, items: true, order: { include: { waiter: true, diningTable: true } } },
-      });
-      for (const t of tickets) {
-        this.socketGateway.emitKitchenTicketUpdated(t);
-      }
       const table = await this.prisma.diningTable.findUnique({
         where: { id: order.tableId },
         include: { openedBy: true, orders: { include: { items: true, kitchenTickets: true } } },
@@ -1409,18 +1464,18 @@ export class OrdersService implements OnModuleInit {
       data: { status: 'REJECTED' },
     });
 
+    await this.prisma.kitchenTicket.updateMany({
+      where: { orderId: id },
+      data: { status: 'CANCELLED', changeSummary: `Cancelación aprobada: ${order.cancellationReason || 'Por administración'}` },
+    });
+    const resolvedTickets = await this.prisma.kitchenTicket.findMany({
+      where: { orderId: id },
+      include: { station: { include: { users: { select: { id: true, name: true, role: true } } } }, assignedTo: { select: { id: true, name: true } }, items: true, order: { include: { waiter: true, diningTable: true } } },
+    });
+    for (const ticket of resolvedTickets) {
+      this.socketGateway.emitKitchenTicketUpdated(ticket);
+    }
     if (order.tableId) {
-      await this.prisma.kitchenTicket.updateMany({
-        where: { orderId: id },
-        data: { status: 'CANCELLED', changeSummary: `Cancelación aprobada: ${order.cancellationReason || 'Por administración'}` },
-      });
-      const tickets = await this.prisma.kitchenTicket.findMany({
-        where: { orderId: id },
-        include: { station: { include: { users: { select: { id: true, name: true, role: true } } } }, assignedTo: { select: { id: true, name: true } }, items: true, order: { include: { waiter: true, diningTable: true } } },
-      });
-      for (const t of tickets) {
-        this.socketGateway.emitKitchenTicketUpdated(t);
-      }
       const table = await this.prisma.diningTable.findUnique({
         where: { id: order.tableId },
         include: { openedBy: true, orders: { include: { items: true, kitchenTickets: true } } },

@@ -198,6 +198,10 @@ class ApiClient {
       this.invalidateCache('/whatsapp/')
       return
     }
+    if (event.startsWith('menu')) {
+      this.invalidateCache(['/menu/', '/public/menu/'])
+      return
+    }
     if (event.includes('Payment') || event.startsWith('payment') || event.startsWith('cash')) {
       this.invalidateCache(['/payments', '/payment-validation', '/orders', '/tables', '/orders/dashboard-stats'])
       return
