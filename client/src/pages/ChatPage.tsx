@@ -801,6 +801,7 @@ function ChatPage() {
   const sessionQueryRef = useRef({ search: '', filter: 'TODAY' })
   const tabsRef = useRef<HTMLDivElement>(null)
   const statusReloadTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const readSyncTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
 
   const toggleMuteWa = () => {
     const next = !isMutedWa
@@ -1470,6 +1471,10 @@ function ChatPage() {
     })
 
     socket.on('whatsappSessionUpdated', (payload: any) => {
+      if (typeof payload?.totalUnread === 'number') {
+        setStats(prev => ({ ...prev, unread: payload.totalUnread }))
+      }
+
       if (payload?.unassignedAll || payload?.cashClosed || payload?.cashOpened) {
         loadSessions()
         return
@@ -1534,6 +1539,7 @@ function ChatPage() {
             ...current,
             ...(payload.customerName ? { customerName: payload.customerName } : {}),
             ...(payload.lastMessageAt ? { lastMessageAt: payload.lastMessageAt } : {}),
+            ...(typeof payload.unreadCount === 'number' ? { unreadCount: payload.unreadCount } : {}),
             ...(payload.assignedToId !== undefined ? { assignedToId: payload.assignedToId } : {}),
             ...(payload.assignedTo !== undefined ? { assignedTo: payload.assignedTo } : {}),
             ...(payload.waitingForAdvisor !== undefined ? { waitingForAdvisor: payload.waitingForAdvisor } : {}),
@@ -1560,6 +1566,8 @@ function ChatPage() {
       replyToDirection?: 'IN' | 'OUT' | null
     }) => {
       // 1. Reload/update session list
+      const isIncoming = payload.direction === 'IN'
+      const isActiveIncoming = isIncoming && activeSessionRef.current?.id === payload.sessionId
       setSessions(prev => {
         const payloadPhone = (payload.phone || '').trim()
         const cleanPayloadDigits = payloadPhone.replace(/\D/g, '')
@@ -1587,7 +1595,6 @@ function ChatPage() {
           replyToDirection: payload.replyToDirection || null,
         }
 
-        const isIncoming = payload.direction === 'IN'
         const payloadAssignedId = payload.assignedToId || (typeof payload.assignedTo === 'string' ? payload.assignedTo : payload.assignedTo?.id) || null
         const payloadAssignedObj = (payload.assignedTo && typeof payload.assignedTo === 'object') ? payload.assignedTo : null
 
@@ -1617,7 +1624,9 @@ function ChatPage() {
             ...target,
             customerName: payload.customerName || target.customerName,
             lastMessageAt: payload.createdAt || new Date().toISOString(),
-            unreadCount: isIncoming ? currentUnread + 1 : currentUnread,
+            // Si la conversación está abierta, el mensaje se marca como leído
+            // en el servidor y no debe volver a aparecer como pendiente en la lista.
+            unreadCount: isActiveIncoming ? 0 : (isIncoming ? currentUnread + 1 : currentUnread),
             messages: updatedMsgs,
             ...(payloadAssignedId !== undefined ? { assignedToId: payloadAssignedId } : {}),
             ...(payloadAssignedObj !== null ? { assignedTo: payloadAssignedObj } : {})
@@ -1641,12 +1650,24 @@ function ChatPage() {
             lastMessageAt: payload.createdAt || new Date().toISOString(),
             assignedToId: payloadAssignedId,
             assignedTo: payloadAssignedObj,
-            unreadCount: isIncoming ? 1 : 0,
+            unreadCount: isActiveIncoming ? 0 : (isIncoming ? 1 : 0),
             messages: [updatedMsg]
           }
           return [newSession, ...filteredPrev]
         }
       })
+
+      // Agrupar los mensajes que llegan mientras la asesora está dentro del
+      // chat evita una petición por mensaje y mantiene el estado leído para
+      // todas las pestañas conectadas.
+      if (isActiveIncoming) {
+        const previousTimer = readSyncTimersRef.current[payload.sessionId]
+        if (previousTimer) clearTimeout(previousTimer)
+        readSyncTimersRef.current[payload.sessionId] = setTimeout(() => {
+          delete readSyncTimersRef.current[payload.sessionId]
+          api.post(`/whatsapp/sessions/${payload.sessionId}/read`).catch(() => {})
+        }, 180)
+      }
 
       // 2. If it's the active chat, update active session and append message
       setActiveSession(current => {
@@ -1710,7 +1731,8 @@ function ChatPage() {
             return {
               ...current,
               customerName: payload.customerName || current.customerName,
-              lastMessageAt: payload.createdAt || new Date().toISOString()
+              lastMessageAt: payload.createdAt || new Date().toISOString(),
+              ...(isActiveIncoming ? { unreadCount: 0 } : {})
             }
           }
         }
@@ -1808,6 +1830,8 @@ function ChatPage() {
 
     return () => {
       socketRef.current = null
+      Object.values(readSyncTimersRef.current).forEach(timer => clearTimeout(timer))
+      readSyncTimersRef.current = {}
       socket.disconnect()
     }
   }, [])

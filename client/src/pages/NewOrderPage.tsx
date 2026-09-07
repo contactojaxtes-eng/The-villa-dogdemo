@@ -504,7 +504,7 @@ export default function NewOrderPage({
   const [hasRestoredDraft, setHasRestoredDraft] = useState(false)
   const [error, setError] = useState('')
   const [clientMutationId, setClientMutationId] = useState(createClientMutationId)
-  const [orderType, setOrderType] = useState<'delivery' | 'pickup' | 'mostrador'>('delivery')
+  const [orderType, setOrderType] = useState<'delivery' | 'pickup'>('delivery')
   const [mapSearch, setMapSearch] = useState('')
 
   const [addedItemId, setAddedItemId] = useState<string | null>(null)
@@ -734,7 +734,9 @@ export default function NewOrderPage({
           }
           setCustomerPhone(oPhone)
           setExactAddress(order.customerAddress === 'Recoger en restaurante' || order.customerAddress === 'Consumo en restaurante / Mostrador' ? '' : (order.customerAddress || ''))
-          setOrderType(order.orderType === 'LOCAL' ? 'mostrador' : (order.orderType === 'PICKUP' ? 'pickup' : 'delivery'))
+          // Los pedidos LOCAL antiguos se conservan como "Pasar a recoger"
+          // dentro del flujo de WhatsApp. El modo Mostrador ya no se ofrece.
+          setOrderType(order.orderType === 'PICKUP' || order.orderType === 'LOCAL' ? 'pickup' : 'delivery')
           setNotes((order.notes || '').replace(/^\[MOSTRADOR\]\s*/i, '').replace(/^\[PICKUP\]\s*/i, '').trim())
           setPaymentMethod(order.paymentMethod || 'CASH')
           setPaymentReference(order.paymentReference || '')
@@ -838,7 +840,7 @@ export default function NewOrderPage({
           lineId: i.lineId || `line-${Math.random().toString(36).substring(2, 9)}`
         }))
         setCart(consolidateCart(cartWithIds))
-        setOrderType(draft.orderType || 'delivery')
+        setOrderType(draft.orderType === 'pickup' || draft.orderType === 'mostrador' ? 'pickup' : 'delivery')
         if (draft.clientMutationId) setClientMutationId(draft.clientMutationId)
         setHasRestoredDraft(true)
       } catch {
@@ -2501,10 +2503,8 @@ export default function NewOrderPage({
     }
     submittingRef.current = true
     
-    const isMostrador = orderType === 'mostrador' || (customerName === 'Cliente Mostrador' && customerPhone === '3000000000')
-    const isPickup = orderType === 'pickup' && !isMostrador
+    const isPickup = orderType === 'pickup'
     const isDelivery = orderType === 'delivery'
-    const isMostradorOrPickup = isMostrador || isPickup
     
     const trimmedPhone = customerPhone.trim()
     const cleanDigits = trimmedPhone.replace(/\D/g, '')
@@ -2526,7 +2526,9 @@ export default function NewOrderPage({
     }
 
     const rawTypedName = (customerName || customerSearchQuery || '').trim()
-    const effectiveName = rawTypedName || (isMostrador ? 'Cliente Mostrador' : (isPickup ? 'Cliente Recoger' : (cleanDigits.length >= 4 ? `Cliente ${cleanDigits.slice(-4)}` : 'Cliente Domicilio')))
+    const effectiveName = (rawTypedName && rawTypedName !== 'Cliente Mostrador')
+      ? rawTypedName
+      : (isPickup ? 'Cliente Recoger' : (cleanDigits.length >= 4 ? `Cliente ${cleanDigits.slice(-4)}` : 'Cliente Domicilio'))
     let effectivePhone = isId ? trimmedPhone : cleanDigits
     if (isDelivery && (!effectivePhone || effectivePhone === '3000000000' || effectivePhone === '0000000000')) {
       const custMatch = dbCustomers.find(c => (customerId && c.id === customerId) || (rawTypedName && c.name?.toLowerCase() === rawTypedName.toLowerCase()))
@@ -2541,13 +2543,13 @@ export default function NewOrderPage({
       }
     }
     if (!effectivePhone) {
-      effectivePhone = isMostrador ? '3000000000' : (isPickup ? '3000000000' : '3000000000')
+      effectivePhone = '3000000000'
     }
 
     setError('')
     setLoading(true)
     try {
-      const addressRef = isMostradorOrPickup
+      const addressRef = isPickup
         ? undefined
         : (selectedZone
             ? (addressReference || undefined)
@@ -2557,11 +2559,9 @@ export default function NewOrderPage({
               )
           )
 
-      const finalAddress = isMostrador 
-        ? 'Consumo en restaurante / Mostrador' 
-        : (isPickup ? 'Recoger en restaurante' : exactAddress)
+      const finalAddress = isPickup ? 'Recoger en restaurante' : exactAddress
 
-      const finalOrderType = isMostrador ? 'LOCAL' : (isPickup ? 'PICKUP' : 'DELIVERY')
+      const finalOrderType = isPickup ? 'PICKUP' : 'DELIVERY'
       const finalNotes = notes.trim() || undefined
 
       const payload = {
@@ -2570,8 +2570,8 @@ export default function NewOrderPage({
         customerAddress: finalAddress,
         addressReference: addressRef,
         waiterId: user?.id || '',
-        zoneId: isMostradorOrPickup ? undefined : (zoneId || undefined),
-        zoneName: isMostradorOrPickup ? undefined : (zoneSearch || undefined),
+        zoneId: isPickup ? undefined : (zoneId || undefined),
+        zoneName: isPickup ? undefined : (zoneSearch || undefined),
         paymentMethod,
         cashAmount: paymentMethod === 'MIXED' ? (parseFloat(cashAmountInput) || 0) : undefined,
         transferAmount: paymentMethod === 'MIXED' ? (parseFloat(transferAmountInput) || 0) : undefined,
@@ -2579,10 +2579,10 @@ export default function NewOrderPage({
         orderType: finalOrderType,
         notes: finalNotes,
         items: cart.map(item => ({ menuItemId: item.menuItemId, quantity: item.quantity, notes: item.notes, isCourtesy: item.isCourtesy || false })),
-        deliveryFee: (isMostradorOrPickup || isGlobalCourtesy) ? 0 : (parseFloat(zoneRateEdit) || 0),
+        deliveryFee: (isPickup || isGlobalCourtesy) ? 0 : (parseFloat(zoneRateEdit) || 0),
         tax: tax,
-        latitude: isMostradorOrPickup ? undefined : (latitude || undefined),
-        longitude: isMostradorOrPickup ? undefined : (longitude || undefined),
+        latitude: isPickup ? undefined : (latitude || undefined),
+        longitude: isPickup ? undefined : (longitude || undefined),
         customerId: customerId || undefined,
         chatSessionId: chatSessionId || undefined,
         clientMutationId: editOrderId ? undefined : clientMutationId,
@@ -3060,10 +3060,7 @@ const renderDeliveryCard = () => {
             <CardDescription className="text-xs text-[var(--text-secondary)] mt-0.5">Define los detalles del cliente y método de entrega</CardDescription>
           </div>
 
-          {(() => {
-            const isMostrador = orderType === 'mostrador' || (customerName === 'Cliente Mostrador' && customerPhone === '3000000000');
-            return (
-              <>
+          <>
                 <div className="flex rounded-xl bg-[var(--bg-base)] p-1 border border-[var(--border-default)] gap-1">
                   <button
                     type="button"
@@ -3085,7 +3082,7 @@ const renderDeliveryCard = () => {
                   <button
                     type="button"
                     className={`flex-1 flex items-center justify-center gap-1.5 rounded-lg py-2 text-xs font-bold transition-all cursor-pointer ${
-                      orderType === 'pickup' && !isMostrador
+                      orderType === 'pickup'
                         ? 'bg-[var(--purple)] text-white shadow-md' 
                         : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
                     }`}
@@ -3099,26 +3096,9 @@ const renderDeliveryCard = () => {
                   >
                     <Store className="h-3.5 w-3.5" /> Pasar a Recoger
                   </button>
-                  <button
-                    type="button"
-                    className={`flex-1 flex items-center justify-center gap-1.5 rounded-lg py-2 text-xs font-bold transition-all cursor-pointer ${
-                      isMostrador
-                        ? 'bg-emerald-600 text-white shadow-md' 
-                        : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
-                    }`}
-                    onClick={() => {
-                      setOrderType('mostrador')
-                      setCustomerName('Cliente Mostrador')
-                      setCustomerPhone('3000000000')
-                      setCustomerId('')
-                    }}
-                  >
-                    <Store className="h-3.5 w-3.5" /> Mostrador
-                  </button>
                 </div>
 
-                {!isMostrador ? (
-                  <div className="space-y-4 animate-fade-in">
+                <div className="space-y-4 animate-fade-in">
                     {/* BUSCADOR DE CLIENTES */}
                     <div className="space-y-1.5 relative">
                       <Label className="text-xs font-semibold text-[var(--text-secondary)] uppercase flex items-center gap-1">
@@ -3234,25 +3214,14 @@ const renderDeliveryCard = () => {
                       )}
                     </div>
                   </div>
-                ) : (
-                  <div className="flex items-center gap-3 rounded-2xl border border-emerald-500/20 bg-emerald-500/5 p-4 animate-fade-in">
-                    <CheckCircle2 className="h-5 w-5 text-emerald-500 shrink-0" />
-                    <div>
-                      <p className="text-xs font-bold text-emerald-500">Venta Rápida (Mostrador)</p>
-                      <p className="text-[10px] text-[var(--text-secondary)] mt-0.5">El pedido se registrará sin datos de cliente. Ideal para atención rápida.</p>
-                    </div>
-                  </div>
-                )}
 
-                {orderType === 'pickup' && !isMostrador && (
+                {orderType === 'pickup' && (
                   <div className="flex items-center gap-3 rounded-2xl border border-[var(--purple)]/20 bg-[var(--purple)]/5 p-4">
                     <Store className="h-5 w-5 text-[var(--purple)]" />
                     <span className="text-xs font-semibold text-[var(--purple)]">El cliente recogerá en el local (The Villa Dog)</span>
                   </div>
                 )}
-              </>
-            );
-          })()}
+          </>
 
           {orderType === 'delivery' && (
             <div className="space-y-4">

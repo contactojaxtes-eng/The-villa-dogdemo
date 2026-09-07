@@ -2273,10 +2273,26 @@ export class WhatsappService implements OnModuleInit {
       data: { status: 'read' },
     });
 
+    // El contador de la bandeja representa conversaciones con mensajes sin leer.
+    // Calcularlo aquí permite que todas las asesoras actualicen la misma cifra por
+    // WebSocket sin tener que recargar las 400+ conversaciones de la bandeja.
+    const recentLimit = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+    const unreadSessions = await this.prisma.whatsAppMessage.groupBy({
+      by: ['sessionId'],
+      where: {
+        createdAt: { gte: recentLimit },
+        direction: 'IN',
+        status: { not: 'read' },
+      },
+      _count: { id: true },
+    });
+
     // 2. Emitir actualización a los clientes por WebSockets
     this.socketGateway.emitWhatsApp('whatsappSessionUpdated', {
       id: sessionId,
       sessionId,
+      unreadCount: 0,
+      totalUnread: unreadSessions.length,
     });
 
     // 3. Notificar a Meta WhatsApp Graph API en segundo plano (Fire-and-forget asíncrono sin bloquear la interfaz)
