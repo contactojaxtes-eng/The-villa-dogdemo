@@ -2,6 +2,7 @@ import { Injectable, Logger, BadRequestException, ConflictException, ForbiddenEx
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
 import { SocketGateway } from '../socket/socket.gateway';
+import { buildMessagingMenuText } from '../menu/menu-text';
 
 type CachedMedia = {
   buffer: Buffer;
@@ -44,6 +45,7 @@ export class WhatsappService implements OnModuleInit {
       'whatsapp_business_phone',
       'chatbot_enabled',
       'chatbot_menu_share_message',
+      'chatbot_menu_text',
       'chatbot_payment_qr_name',
       'chatbot_payment_qr_mimetype',
       'chatbot_payment_qr_caption',
@@ -71,6 +73,15 @@ export class WhatsappService implements OnModuleInit {
         map[s.key] = (s.key.includes('token') || s.key.includes('key')) ? '••••••••' : s.value;
       }
     }
+    let menuText = map.chatbot_menu_text || '';
+    if (!menuText) {
+      try {
+        menuText = await this.buildMessagingMenuText();
+      } catch (error) {
+        this.logger.warn('No se pudo generar la carta de WhatsApp al leer la configuración', error);
+        menuText = '📋 *MENÚ Y PRECIOS VILLA DOG*';
+      }
+    }
     const geminiRequestsToday = await this.getGeminiUsageToday();
     const geminiKeyCount = (settings.find(s => s.key === 'gemini_api_key')?.value || '')
       .split(',')
@@ -84,6 +95,7 @@ export class WhatsappService implements OnModuleInit {
       chatbotEnabled: map.chatbot_enabled === 'true', // Estricto: solo true si explícitamente se guardó como 'true'
       configured: !!(map.whatsapp_phone_id && settings.find(s => s.key === 'whatsapp_token')),
       menuShareMessage: map.chatbot_menu_share_message || 'Mira nuestra carta actualizada y arma tu pedido aquí:',
+      menuText,
       paymentQrName: map.chatbot_payment_qr_name || null,
       paymentQrMime: map.chatbot_payment_qr_mimetype || null,
       paymentQrCaption: map.chatbot_payment_qr_caption || '',
@@ -167,20 +179,7 @@ export class WhatsappService implements OnModuleInit {
 
   private async buildMessagingMenuText(): Promise<string> {
     const categories = await this.getMessagingMenuCategories();
-    const lines = ['📋 *MENÚ Y PRECIOS VILLA DOG*'];
-    for (const category of categories) {
-      const displayName = /gaseosa|bebida/i.test(category.name)
-        ? 'GASEOSAS'
-        : /jugo|agua/i.test(category.name)
-          ? 'JUGOS'
-          : category.name.toUpperCase();
-      lines.push('', `*${displayName}*`);
-      for (const item of category.items) {
-        lines.push(`- ${item.name}: $${item.price.toLocaleString('es-CO')}`);
-      }
-    }
-    lines.push('', '🛵 ¿Qué se te antoja pedir? Cuéntanos qué productos deseas y te tomamos el pedido.');
-    return lines.join('\n');
+    return buildMessagingMenuText(categories);
   }
 
   private getDefaultDigitalMenuUrl() {

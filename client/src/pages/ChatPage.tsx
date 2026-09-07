@@ -765,6 +765,29 @@ export function getSessionDisplayName(session?: Session | null): string {
   return name
 }
 
+const normalizeSearchValue = (value: string) => value
+  .toLowerCase()
+  .normalize('NFD')
+  .replace(/[\u0300-\u036f]/g, '')
+
+const getSearchSuggestionReason = (session: Session, query: string) => {
+  const rawQuery = query.trim()
+  const isOrderQuery = /^(#|pedido\s*|orden\s*|factura\s*)/i.test(rawQuery)
+  const normalizedQuery = normalizeSearchValue(rawQuery.replace(/^(#|pedido\s*|orden\s*|factura\s*)/i, ''))
+  const name = normalizeSearchValue(session.customerName || '')
+  const latestMessage = normalizeSearchValue(session.messages?.[0]?.content || '')
+  const digits = normalizedQuery.replace(/\D/g, '')
+  const phone = (session.phone || '').replace(/\D/g, '')
+  const customerPhone = (session.customerPhone || '').replace(/\D/g, '')
+
+  if (isOrderQuery || !normalizedQuery) return '#pedido'
+  if (digits && (phone.includes(digits) || customerPhone.includes(digits))) return 'teléfono'
+  if (name.includes(normalizedQuery)) return 'cliente'
+  if (latestMessage.includes(normalizedQuery)) return 'mensaje'
+  if (/^\d+$/.test(normalizedQuery)) return '#pedido'
+  return 'coincidencia'
+}
+
 function ChatPage() {
   const { user } = useAuth()
   const navigate = useNavigate()
@@ -788,6 +811,7 @@ function ChatPage() {
   const [audioUrl, setAudioUrl] = useState<string | null>(null)
   
   const [chatSearch, setChatSearch] = useState('')
+  const [searchFocused, setSearchFocused] = useState(false)
   const [chatFilter, setChatFilter] = useState<'TODAY' | 'ALL' | 'UNREAD' | 'WAITING' | 'MINE' | 'UNASSIGNED'>('TODAY')
   const [displayLimit, setDisplayLimit] = useState(100)
   const [isMutedWa, setIsMutedWa] = useState(() => localStorage.getItem('niche_mute_wa_toasts') === 'true')
@@ -802,6 +826,7 @@ function ChatPage() {
   const tabsRef = useRef<HTMLDivElement>(null)
   const statusReloadTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const readSyncTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
+  const searchBlurTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const toggleMuteWa = () => {
     const next = !isMutedWa
@@ -1002,6 +1027,17 @@ function ChatPage() {
       return false
     })
   }, [sessions, chatSearch, chatFilter, user])
+
+  const searchSuggestions = useMemo(() => {
+    const query = chatSearch.trim()
+    if (!query) return []
+    return filteredSessions.slice(0, 6).map(session => ({
+      session,
+      name: getSessionDisplayName(session),
+      phone: formatSessionPhone(getCallablePhoneNumber(session) || session.customerPhone || session.phone),
+      reason: getSearchSuggestionReason(session, query),
+    }))
+  }, [chatSearch, filteredSessions])
 
   const tabCounts = useMemo(() => {
     return {
@@ -2674,6 +2710,13 @@ function ChatPage() {
                 className="w-full bg-[var(--bg-elevated)] border border-[var(--border-subtle)] rounded-2xl pl-10 pr-9 py-2.5 text-xs sm:text-sm font-medium focus:outline-none focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent)]/15 transition-all shadow-inner placeholder:text-[var(--text-muted)]"
                 value={chatSearch}
                 onChange={e => setChatSearch(e.target.value)}
+                onFocus={() => {
+                  if (searchBlurTimerRef.current) clearTimeout(searchBlurTimerRef.current)
+                  setSearchFocused(true)
+                }}
+                onBlur={() => {
+                  searchBlurTimerRef.current = setTimeout(() => setSearchFocused(false), 160)
+                }}
               />
               {chatSearch && (
                 <button
@@ -2686,6 +2729,35 @@ function ChatPage() {
                 </button>
               )}
             </div>
+            {searchFocused && chatSearch.trim() && (
+              <div className="absolute left-3 right-3 top-[3.85rem] z-50 overflow-hidden rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] shadow-2xl">
+                {searchSuggestions.length > 0 ? searchSuggestions.map(({ session, name, phone, reason }) => (
+                  <button
+                    key={session.id}
+                    type="button"
+                    onMouseDown={event => event.preventDefault()}
+                    onClick={() => {
+                      setChatSearch(name === 'Cliente' ? (session.phone || chatSearch) : name)
+                      setSearchFocused(false)
+                    }}
+                    className="flex w-full items-center gap-2.5 border-b border-[var(--border-subtle)]/60 px-3 py-2.5 text-left last:border-b-0 hover:bg-[var(--bg-hover)]"
+                  >
+                    <Avatar className="h-8 w-8 shrink-0">
+                      <AvatarFallback className="bg-[var(--accent)] text-[var(--accent-fg)] text-[10px] font-black">{name.slice(0, 2).toUpperCase()}</AvatarFallback>
+                    </Avatar>
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-xs font-bold text-[var(--text-primary)]">{name}</span>
+                      <span className="block truncate text-[10px] text-[var(--text-muted)]">{phone || 'Sin teléfono'} · {reason}</span>
+                    </span>
+                    {session.unreadCount ? <span className="rounded-full bg-[var(--accent)] px-1.5 py-0.5 text-[9px] font-black text-[var(--accent-fg)]">{session.unreadCount}</span> : null}
+                  </button>
+                )) : (
+                  <div className="px-3 py-3 text-[11px] text-[var(--text-muted)]">
+                    Busca por nombre, una palabra del mensaje, teléfono, <strong>#pedido</strong> o <strong>@identificador</strong>.
+                  </div>
+                )}
+              </div>
+            )}
             {chatSearch.trim() && (
               <div className="flex items-center justify-between mt-2 px-1 text-[11px] font-semibold text-[var(--text-secondary)]">
                 <span>Resultados: <strong className="text-[var(--text-primary)]">{filteredSessions.length}</strong> encontrados</span>

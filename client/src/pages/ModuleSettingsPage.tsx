@@ -65,6 +65,7 @@ interface WhatsappSettings {
   chatbotEnabled: boolean
   digitalMenuUrl: string
   menuShareMessage: string
+  menuText: string
   paymentQrMode: 'IMAGE' | 'ACCOUNT'
   paymentAccountText: string
   paymentQrName?: string | null
@@ -166,6 +167,7 @@ const defaultWhatsappSettings = (): WhatsappSettings => ({
   chatbotEnabled: false,
   digitalMenuUrl: '',
   menuShareMessage: '🍽️ *CARTA DIGITAL THE VILLA DOG*\n\nMira nuestra carta actualizada y arma tu pedido aquí:',
+  menuText: '📋 *MENÚ Y PRECIOS VILLA DOG*\n\nLa carta se generará automáticamente desde Productos y Menú.',
   paymentQrMode: 'ACCOUNT',
   paymentAccountText: '',
   paymentQrCaption: '',
@@ -253,6 +255,7 @@ export default function ModuleSettingsPage() {
           chatbotEnabled: wa.chatbotEnabled === true,
           digitalMenuUrl,
           menuShareMessage: wa.menuShareMessage || fallback.menuShareMessage,
+          menuText: wa.menuText || fallback.menuText,
           paymentQrMode: wa.paymentQrMode === 'IMAGE' ? 'IMAGE' : 'ACCOUNT',
           paymentAccountText: wa.paymentAccountText || '',
           paymentQrName: wa.paymentQrName || null,
@@ -296,6 +299,7 @@ export default function ModuleSettingsPage() {
         ...(typeof updated?.chatbotEnabled === 'boolean' ? { chatbotEnabled: updated.chatbotEnabled } : {}),
         ...(updated?.digitalMenuUrl !== undefined ? { digitalMenuUrl: updated.digitalMenuUrl } : {}),
         ...(updated?.menuShareMessage ? { menuShareMessage: updated.menuShareMessage } : {}),
+        ...(updated?.menuText !== undefined ? { menuText: updated.menuText } : {}),
         ...(updated?.paymentQrMode ? { paymentQrMode: updated.paymentQrMode } : {}),
         ...(updated?.paymentAccountText !== undefined ? { paymentAccountText: updated.paymentAccountText } : {}),
         ...(updated?.paymentQrCaption !== undefined ? { paymentQrCaption: updated.paymentQrCaption } : {}),
@@ -360,6 +364,7 @@ export default function ModuleSettingsPage() {
         chatbotEnabled: updated.chatbotEnabled === true,
         digitalMenuUrl: updated.digitalMenuUrl !== undefined ? updated.digitalMenuUrl : (menuUrl || current.digitalMenuUrl),
         menuShareMessage: updated.menuShareMessage || current.menuShareMessage,
+        menuText: updated.menuText || current.menuText,
         paymentQrMode: updated.paymentQrMode === 'IMAGE' ? 'IMAGE' : 'ACCOUNT',
         paymentAccountText: updated.paymentAccountText || '',
         paymentQrName: updated.paymentQrName || current.paymentQrName,
@@ -716,7 +721,8 @@ export default function ModuleSettingsPage() {
             <div className="space-y-4">
               <label className="block"><span className="mb-1.5 flex items-center gap-1.5 text-xs font-bold text-[var(--text-secondary)]"><Link2 className="h-3.5 w-3.5" /> Enlace público de la carta</span><div className="flex gap-2"><input value={whatsapp.digitalMenuUrl} onChange={event => setWhatsapp(current => ({ ...current, digitalMenuUrl: event.target.value }))} className={fieldClass} placeholder="https://menu.tu-dominio.com/menu" /><a href={whatsapp.digitalMenuUrl || '/menu'} target="_blank" rel="noreferrer" className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-[var(--border-subtle)] text-[var(--text-secondary)] hover:text-[var(--accent)]" title="Abrir carta"><ExternalLink className="h-4 w-4" /></a></div><span className="mt-1.5 block text-[10px] leading-4 text-[var(--text-muted)]">Es el enlace que reciben los clientes. En producción usa un dominio o subdominio separado de la consola y del backend, por ejemplo <strong>menu.tu-dominio.com/menu</strong>. Si lo dejas vacío, WhatsApp enviará solo la lista de precios hasta que configures <strong>PUBLIC_MENU_URL</strong>.</span></label>
               <label className="block"><span className="mb-1.5 block text-xs font-bold text-[var(--text-secondary)]">Mensaje que acompaña la carta</span><textarea value={whatsapp.menuShareMessage} onChange={event => setWhatsapp(current => ({ ...current, menuShareMessage: event.target.value }))} className={textAreaClass} placeholder="Escribe el mensaje. Puedes usar {url}." /><span className="mt-1 block text-[10px] text-[var(--text-muted)]">Si escribes <strong>{'{url}'}</strong>, el enlace se insertará ahí. Si no, se agrega al final.</span></label>
-              <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-3 text-xs text-emerald-700 dark:text-emerald-300"><p className="font-bold">Carta sincronizada con Productos y Menú</p><p className="mt-0.5 opacity-80">Ya no se enviarán PDF ni imágenes viejas. Los cambios del catálogo aparecen en vivo mediante Socket.IO.</p></div>
+              <label className="block"><span className="mb-1.5 flex items-center justify-between gap-2 text-xs font-bold text-[var(--text-secondary)]"><span>Texto de la carta que se enviará</span><span className="rounded-full bg-emerald-500/10 px-2 py-1 text-[10px] font-black text-emerald-600">Sincronizado</span></span><textarea value={whatsapp.menuText} readOnly className={`${textAreaClass} min-h-64 cursor-default font-mono text-xs leading-5`} aria-label="Texto de la carta sincronizado" /><span className="mt-1 block text-[10px] text-[var(--text-muted)]">Este texto se actualiza y guarda solo cuando agregas, editas, desactivas o reordenas un producto en Productos y Menú. No necesitas pegarlo ni editar código.</span></label>
+              <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-3 text-xs text-emerald-700 dark:text-emerald-300"><p className="font-bold">Carta sincronizada con Productos y Menú</p><p className="mt-0.5 opacity-80">El botón Carta de WhatsApp usa exactamente este contenido y recibe los cambios en vivo mediante Socket.IO.</p></div>
             </div>
           </Card>
 

@@ -1,18 +1,29 @@
-import { Injectable, NotFoundException, BadRequestException, ConflictException, Optional } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ConflictException, Optional, OnModuleInit, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CacheService } from '../cache/cache.service';
 import { SocketGateway } from '../socket/socket.gateway';
 import { CreateCategoryDto, UpdateCategoryDto, CreateItemDto, UpdateItemDto } from './dto';
 import { PublicMenuGateway } from './public-menu.gateway';
+import { buildMessagingMenuText } from './menu-text';
 
 @Injectable()
-export class MenuService {
+export class MenuService implements OnModuleInit {
+  private readonly logger = new Logger(MenuService.name);
+
   constructor(
     private prisma: PrismaService,
     private cache: CacheService,
     private socketGateway: SocketGateway,
     @Optional() private publicMenuGateway?: PublicMenuGateway,
   ) {}
+
+  async onModuleInit() {
+    try {
+      await this.syncWhatsappMenuText();
+    } catch (error) {
+      this.logger.warn('No se pudo sincronizar la carta de WhatsApp al iniciar', error);
+    }
+  }
 
   async findAllCategories(includeInactive = false) {
     const key = `menu_categories_inactive_${includeInactive}`;
@@ -60,9 +71,40 @@ export class MenuService {
     }, 300_000); // 5 min
   }
 
-  private invalidateCache() {
+  private async syncWhatsappMenuText() {
+    const categories = await this.prisma.menuCategory.findMany({
+      where: { active: true },
+      include: {
+        items: {
+          where: { active: true },
+          orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
+          select: { name: true, price: true },
+        },
+      },
+      orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
+    });
+    const menuText = buildMessagingMenuText(categories);
+    await this.prisma.appSetting.upsert({
+      where: { key: 'chatbot_menu_text' },
+      create: { key: 'chatbot_menu_text', value: menuText },
+      update: { value: menuText },
+    });
+    if (this.socketGateway.server) {
+      this.socketGateway.emitWhatsApp('whatsappSettingsUpdated', { menuText });
+    }
+    return menuText;
+  }
+
+  private async invalidateCache() {
     this.cache.invalidateByPrefix('menu_');
-    this.socketGateway.server.emit('menuUpdated');
+    try {
+      await this.syncWhatsappMenuText();
+    } catch (error) {
+      // El catálogo ya se guardó; una falla puntual al actualizar la vista de
+      // WhatsApp no debe hacer fallar la creación o edición del producto.
+      this.logger.warn('No se pudo actualizar el texto guardado de la carta de WhatsApp', error);
+    }
+    this.socketGateway.server?.emit('menuUpdated');
     this.publicMenuGateway?.emitMenuUpdated();
   }
 
@@ -72,7 +114,7 @@ export class MenuService {
       data.sortOrder = (maxOrder._max.sortOrder ?? 0) + 1;
     }
     const result = await this.prisma.menuCategory.create({ data });
-    this.invalidateCache();
+    await this.invalidateCache();
     return result;
   }
 
@@ -80,7 +122,7 @@ export class MenuService {
     const cat = await this.prisma.menuCategory.findUnique({ where: { id } });
     if (!cat) throw new NotFoundException('Categoría no encontrada');
     const result = await this.prisma.menuCategory.update({ where: { id }, data });
-    this.invalidateCache();
+    await this.invalidateCache();
     return result;
   }
 
@@ -124,7 +166,7 @@ export class MenuService {
       result = { success: true, hardDeleted: false, message: 'La categoría fue desactivada ya que posee productos con ventas históricas asociadas.' };
     }
 
-    this.invalidateCache();
+    await this.invalidateCache();
     return result;
   }
 
@@ -147,7 +189,7 @@ export class MenuService {
     }
 
     const result = await this.prisma.menuItem.create({ data: payload, include: { category: true } });
-    this.invalidateCache();
+    await this.invalidateCache();
     return result;
   }
 
@@ -175,7 +217,7 @@ export class MenuService {
     }
 
     const result = await this.prisma.menuItem.update({ where: { id }, data: payload, include: { category: true } });
-    this.invalidateCache();
+    await this.invalidateCache();
     return result;
   }
 
@@ -200,7 +242,7 @@ export class MenuService {
       });
       result = { success: true, hardDeleted: false, message: 'El producto fue deshabilitado ya que posee ventas históricas asociadas.' };
     }
-    this.invalidateCache();
+    await this.invalidateCache();
     return result;
   }
 
@@ -213,7 +255,7 @@ export class MenuService {
         })
       )
     );
-    this.invalidateCache();
+    await this.invalidateCache();
     return { success: true };
   }
 
@@ -226,7 +268,7 @@ export class MenuService {
         })
       )
     );
-    this.invalidateCache();
+    await this.invalidateCache();
     return { success: true };
   }
 }
