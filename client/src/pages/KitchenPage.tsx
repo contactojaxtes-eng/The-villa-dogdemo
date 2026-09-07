@@ -30,6 +30,7 @@ import { alerts } from '@/lib/alerts'
 import { useAuth } from '@/hooks/useAuth'
 import { getErrorMessage, type KitchenTicketItemSummary, type KitchenTicketSummary } from '@/lib/tableTypes'
 import { playUrgentBell } from '@/lib/sound'
+import { cn } from '@/lib/utils'
 
 type KitchenTab = 'ALL_ACTIVE' | 'NEW' | 'PREPARING' | 'READY' | 'HISTORY'
 
@@ -1025,174 +1026,74 @@ export default function KitchenPage() {
                     </div>
                   )}
 
-                  {/* Lista de items: si el pedido fue editado, mostrar EXCLUSIVAMENTE lo nuevo agregado/modificado en letra GRANDE sin mezclar lo anterior */}
+                  {/* En ediciones se conserva el pedido completo y se resaltan los cambios dentro de la misma tarjeta. */}
                   {(() => {
                     const isEditedTicket = ticket.isEdited || (ticket.items || []).some(i => i.changeType === 'ADDED' || i.changeType === 'REMOVED' || i.changeType === 'MODIFIED')
                     const actionItems = isEditedTicket
                       ? (ticket.items || []).filter(i => i.changeType === 'ADDED' || i.changeType === 'REMOVED' || (i.changeType === 'MODIFIED' && ((i.previousQty ?? i.quantity) !== i.quantity || i.notes !== i.previousNotes)))
                       : []
 
-                    // Si fue editado y estamos en pestañas activas (no en HISTORIAL): destacar exclusivamente lo nuevo/editado sin enredos
+                    // En una edición la tarjeta sigue representando el pedido completo.
+                    // Solo se resaltan los cambios dentro de esa misma tarjeta para no
+                    // hacer que cocina confunda una adición con un pedido separado.
                     if (isEditedTicket && !isFullyCancelled && activeTab !== 'HISTORY') {
-                      if (actionItems.length === 0) {
-                        return (
-                          <div className="mt-2.5 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-center text-xs font-bold text-amber-800 dark:text-amber-200">
-                            ℹ️ Pedido editado sin cambios de productos para esta estación.
-                          </div>
-                        )
-                      }
-
-                      const hasOnlyRemoved = actionItems.every(i => i.changeType === 'REMOVED' || (i.changeType === 'MODIFIED' && i.quantity < (i.previousQty ?? i.quantity)))
-                      const hasOnlyAdded = actionItems.every(i => i.changeType === 'ADDED' || (i.changeType === 'MODIFIED' && i.quantity > (i.previousQty ?? i.quantity)))
+                      const currentItems = (ticket.items || []).filter(item => item.changeType !== 'REMOVED')
+                      const removedItems = (ticket.items || []).filter(item => item.changeType === 'REMOVED')
+                      const hasAdded = actionItems.some(item => {
+                        const previousQty = item.previousQty ?? 0
+                        return item.changeType === 'ADDED' || item.quantity > previousQty
+                      })
+                      const hasReduced = actionItems.some(item => item.changeType === 'REMOVED' || (item.previousQty !== null && item.previousQty !== undefined && item.quantity < item.previousQty))
+                      const hasNoteChange = actionItems.some(item => item.changeType === 'MODIFIED' && item.quantity === (item.previousQty ?? item.quantity) && item.notes !== item.previousNotes)
 
                       return (
                         <div className="mt-2.5 space-y-2.5">
-                          {/* Banner limpio y directo según el tipo de cambio */}
-                          {hasOnlyRemoved ? (
-                            <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-rose-500/20 border-2 border-rose-500/40 text-rose-950 dark:text-rose-200 text-xs font-black uppercase tracking-wider">
-                              <XCircle className="h-4 w-4 text-rose-600 dark:text-rose-400 animate-pulse" />
-                              <span>❌ SE CANCELÓ (¡NO PREPARAR!):</span>
-                            </div>
-                          ) : hasOnlyAdded ? (
-                            <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-500/20 border-2 border-emerald-500/40 text-emerald-950 dark:text-emerald-200 text-xs font-black uppercase tracking-wider">
-                              <Flame className="h-4 w-4 text-emerald-600 dark:text-emerald-400 animate-pulse" />
-                              <span>✨ SE AGREGÓ A PREPARAR:</span>
-                            </div>
-                          ) : (
-                            <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-500/20 border-2 border-amber-500/40 text-amber-900 dark:text-amber-200 text-xs font-black uppercase tracking-wider">
-                              <Flame className="h-4 w-4 text-amber-600 dark:text-amber-400 animate-pulse" />
-                              <span>🔥 LO NUEVO / EDITADO A PREPARAR:</span>
-                            </div>
-                          )}
+                          <div className={cn(
+                            'flex items-center gap-1.5 rounded-xl border-2 px-3 py-1.5 text-xs font-black uppercase tracking-wider',
+                            hasAdded
+                              ? 'border-emerald-500/40 bg-emerald-500/15 text-emerald-950 dark:text-emerald-200'
+                              : hasReduced
+                              ? 'border-rose-500/40 bg-rose-500/10 text-rose-950 dark:text-rose-200'
+                              : 'border-amber-500/40 bg-amber-500/10 text-amber-950 dark:text-amber-200',
+                          )}>
+                            <Flame className={cn('h-4 w-4', hasAdded ? 'text-emerald-600 dark:text-emerald-400' : hasReduced ? 'text-rose-600 dark:text-rose-400' : 'text-amber-600 dark:text-amber-400')} />
+                            <span>PEDIDO COMPLETO ACTUALIZADO</span>
+                          </div>
 
-                          {/* Items agregados, modificados o eliminados con letra GRANDE y clara */}
-                          <div className="space-y-2.5">
-                            {actionItems.map((item: KitchenTicketItemSummary) => {
-                              const isTakeaway = (item.notes || '').toLowerCase().includes('llevar')
+                          {hasAdded && <p className="rounded-lg bg-emerald-500/10 px-2.5 py-1.5 text-[11px] font-bold text-emerald-800 dark:text-emerald-300">Lo agregado está marcado en verde. Se prepara dentro de esta misma tarjeta.</p>}
+                          {hasReduced && <p className="rounded-lg bg-rose-500/10 px-2.5 py-1.5 text-[11px] font-bold text-rose-800 dark:text-rose-300">Las reducciones están marcadas en rojo. No prepares las unidades retiradas.</p>}
+                          {hasNoteChange && <p className="rounded-lg bg-amber-500/10 px-2.5 py-1.5 text-[11px] font-bold text-amber-800 dark:text-amber-300">La indicación de preparación cambió dentro del pedido.</p>}
+
+                          <div className="space-y-1.5">
+                            {currentItems.map((item: KitchenTicketItemSummary) => {
+                              const previousQty = item.previousQty ?? (item.changeType === 'ADDED' ? 0 : item.quantity)
+                              const qtyDiff = item.changeType === 'ADDED' ? item.quantity : item.quantity - previousQty
+                              const noteChanged = item.changeType === 'MODIFIED' && item.notes !== item.previousNotes
+                              const isAdded = qtyDiff > 0
+                              const isReduced = qtyDiff < 0
                               const cleanNotes = (item.notes || '').replace(/\[PARA LLEVAR\]/gi, '').replace(/\[MESA\]/gi, '').trim()
-                              const prevQty = item.previousQty ?? item.quantity
-                              const qtyDiff = item.changeType === 'ADDED' 
-                                ? item.quantity 
-                                : item.changeType === 'REMOVED' 
-                                ? -item.quantity 
-                                : (item.quantity - prevQty)
+                              const isTakeaway = (item.notes || '').toLowerCase().includes('llevar')
 
-                              // 1. ELIMINADO TOTALMENTE
-                              if (item.changeType === 'REMOVED') {
-                                return (
-                                  <div key={item.id} className="rounded-2xl border-2 border-rose-500 bg-rose-500/15 p-3.5 shadow-sm">
-                                    <div className="flex items-center justify-between gap-1 mb-1">
-                                      <span className="font-black px-2.5 py-1 rounded-lg bg-rose-600 text-white text-xs tracking-wider uppercase">
-                                        SE ELIMINÓ ❌
-                                      </span>
-                                      <span className="text-xs font-black text-rose-600 dark:text-rose-400">
-                                        ¡NO PREPARAR!
-                                      </span>
-                                    </div>
-                                    <div className="text-lg sm:text-xl font-black text-rose-800 dark:text-rose-300 line-through leading-tight mt-1">
-                                      -{item.quantity}x {item.nameSnapshot}
-                                    </div>
-                                    {cleanNotes && (
-                                      <p className="text-xs text-rose-700/80 dark:text-rose-400 mt-1 line-through">
-                                        ({cleanNotes})
-                                      </p>
-                                    )}
-                                  </div>
-                                )
-                              }
-
-                              // 2. SE REDUJO CANTIDAD (ej: eran 3 y ahora son 2)
-                              if (qtyDiff < 0) {
-                                const reducedCount = Math.abs(qtyDiff)
-                                return (
-                                  <div key={item.id} className="rounded-2xl border-2 border-rose-500 bg-rose-500/15 p-3.5 shadow-sm">
-                                    <div className="flex items-center justify-between gap-1 mb-1">
-                                      <span className="font-black px-2.5 py-1 rounded-lg bg-rose-600 text-white text-xs tracking-wider uppercase">
-                                        SE REDUJO ❌
-                                      </span>
-                                      <span className="text-xs font-black text-rose-600 dark:text-rose-400">
-                                        ¡NO PREPARAR ESTAS UNIDADES!
-                                      </span>
-                                    </div>
-                                    <div className="text-lg sm:text-xl font-black text-rose-800 dark:text-rose-300 line-through leading-tight mt-1">
-                                      -{reducedCount}x {item.nameSnapshot}
-                                    </div>
-                                    <div className="text-xs font-black text-rose-700 dark:text-rose-300 mt-1">
-                                      (Quedan solo {item.quantity} un. en cuenta)
-                                    </div>
-                                    {cleanNotes && (
-                                      <p className="text-xs text-rose-700/80 dark:text-rose-400 mt-1">
-                                        Nota: {cleanNotes}
-                                      </p>
-                                    )}
-                                  </div>
-                                )
-                              }
-
-                              // 3. SOLO CAMBIO DE PREPARACIÓN / NOTA (Cantidad no cambió, qtyDiff === 0)
-                              if (qtyDiff === 0) {
-                                return (
-                                  <div key={item.id} className="rounded-2xl border-2 border-amber-500 bg-amber-500/15 p-3.5 shadow-md">
-                                    <div className="flex items-center justify-between gap-1 mb-1.5">
-                                      <span className="font-black px-2.5 py-1 rounded-lg bg-amber-600 text-white text-xs tracking-wider uppercase">
-                                        ✏️ CAMBIO DE PREPARACIÓN
-                                      </span>
-                                      <span className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-black tracking-wider ${isTakeaway ? 'bg-amber-500 text-slate-950' : 'bg-blue-600 text-white'}`}>
-                                        {isTakeaway ? '🥡 LLEVAR' : '🍽️ MESA'}
-                                      </span>
-                                    </div>
-
-                                    <div className="text-xl sm:text-2xl font-black text-[var(--text-primary)] leading-tight mt-1">
-                                      {item.quantity}x {item.nameSnapshot}
-                                    </div>
-
-                                    <div className="text-xs font-extrabold text-amber-800 dark:text-amber-300 mt-1">
-                                      (Misma cantidad: {item.quantity} un. — Cambió la forma de preparar)
-                                    </div>
-
-                                    {cleanNotes ? (
-                                      <p className="text-sm font-black text-amber-950 dark:text-amber-100 mt-2 pl-2.5 border-l-4 border-amber-500 bg-amber-500/20 py-2 rounded-r leading-tight">
-                                        👉 NUEVA INDICACIÓN: {cleanNotes}
-                                      </p>
-                                    ) : (
-                                      <p className="text-xs font-bold text-amber-800 dark:text-amber-300 mt-1 italic">
-                                        (Se retiraron las notas anteriores)
-                                      </p>
-                                    )}
-                                  </div>
-                                )
-                              }
-
-                              // 4. SE AGREGÓ NUEVO O SE INCREMENTÓ CANTIDAD (qtyDiff > 0)
                               return (
-                                <div key={item.id} className="rounded-2xl border-2 border-emerald-500 bg-emerald-500/15 p-3.5 shadow-md">
-                                  <div className="flex items-center justify-between gap-1 mb-1.5">
-                                    <span className="font-black px-2.5 py-1 rounded-lg bg-emerald-600 text-white text-xs tracking-wider uppercase animate-pulse">
-                                      ✨ ¡SE AGREGÓ!
-                                    </span>
-                                    <span className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-black tracking-wider ${isTakeaway ? 'bg-amber-500 text-slate-950' : 'bg-blue-600 text-white'}`}>
-                                      {isTakeaway ? '🥡 LLEVAR' : '🍽️ MESA'}
-                                    </span>
+                                <div key={item.id} className={cn('rounded-xl border p-2.5', isAdded ? 'border-emerald-500/50 bg-emerald-500/15' : isReduced ? 'border-rose-500/50 bg-rose-500/10' : noteChanged ? 'border-amber-500/40 bg-amber-500/10' : 'border-transparent bg-[var(--bg-elevated)]')}>
+                                  <div className="flex items-start justify-between gap-2">
+                                    <div className="min-w-0 flex-1">
+                                      <div className="flex flex-wrap items-center gap-1.5">
+                                        <span className="text-base font-black leading-tight text-[var(--text-primary)]">{item.quantity}x {item.nameSnapshot}</span>
+                                        {isAdded && <span className="rounded-md bg-emerald-600 px-1.5 py-0.5 text-[9px] font-black text-white">+{qtyDiff} AGREGADO · ANTES {previousQty}</span>}
+                                        {isReduced && <span className="rounded-md bg-rose-600 px-1.5 py-0.5 text-[9px] font-black text-white">-{Math.abs(qtyDiff)} RETIRADO · ANTES {previousQty}</span>}
+                                        {noteChanged && !isAdded && !isReduced && <span className="rounded-md bg-amber-600 px-1.5 py-0.5 text-[9px] font-black text-white">NOTA ACTUALIZADA</span>}
+                                      </div>
+                                      {cleanNotes && <p className="mt-1 border-l-2 border-amber-500 bg-amber-500/10 py-0.5 pl-1.5 text-xs font-bold text-amber-700 dark:text-amber-300">👉 {cleanNotes}</p>}
+                                    </div>
+                                    <span className={cn('shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-black tracking-wider', isTakeaway ? 'bg-amber-500 text-slate-950' : 'bg-blue-500/10 text-blue-700 dark:text-blue-300')}>{isTakeaway ? '🥡 LLEVAR' : '🍽️ MESA'}</span>
                                   </div>
-
-                                  {/* Nombre y cantidad agregada con letra EXTRA GRANDE y destacada para cocina */}
-                                  <div className="text-xl sm:text-2xl font-black text-[var(--text-primary)] leading-tight mt-1">
-                                    +{qtyDiff}x {item.nameSnapshot}
-                                  </div>
-
-                                  <div className="text-xs font-extrabold text-emerald-800 dark:text-emerald-300 mt-1">
-                                    (Total en cuenta: {item.quantity} un.)
-                                  </div>
-
-                                  {cleanNotes && (
-                                    <p className="text-sm font-black text-amber-800 dark:text-amber-200 mt-2 pl-2.5 border-l-4 border-amber-500 bg-amber-500/15 py-1.5 rounded-r leading-tight">
-                                      👉 {cleanNotes}
-                                    </p>
-                                  )}
                                 </div>
                               )
                             })}
                           </div>
+
+                          {removedItems.length > 0 && <div className="space-y-1 rounded-xl border border-rose-500/30 bg-rose-500/10 p-2"><p className="text-[10px] font-black uppercase tracking-wider text-rose-700 dark:text-rose-300">Retirado del pedido · no preparar</p>{removedItems.map(item => <p key={item.id} className="text-xs font-black text-rose-800 line-through dark:text-rose-200">-{item.quantity}x {item.nameSnapshot}</p>)}</div>}
                         </div>
                       )
                     }
