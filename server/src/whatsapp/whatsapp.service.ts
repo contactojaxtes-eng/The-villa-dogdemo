@@ -94,7 +94,9 @@ export class WhatsappService implements OnModuleInit {
       geminiModel: map.gemini_model || 'gemini-flash-lite-latest',
       aiInstructions: map.chatbot_ai_instructions || '',
       geminiRequestsToday,
-      digitalMenuUrl: this.resolveDigitalMenuUrl(map.digital_menu_url),
+      // Mientras no exista un dominio público explícito, no mostramos ni
+      // compartimos la URL interna de Railway como parte de la carta.
+      digitalMenuUrl: this.getShareableDigitalMenuUrl(map.digital_menu_url) || '',
       businessHoursEnabled: map.business_hours_enabled === 'true',
       outOfServiceEnabled: map.out_of_service_enabled === 'true',
       outOfServiceMessage: map.out_of_service_message || '',
@@ -136,6 +138,49 @@ export class WhatsappService implements OnModuleInit {
     // migramos al nuevo dominio público sin pisar una URL personalizada.
     if (publicUrl && stored && this.getLegacyDigitalMenuUrls().includes(stored)) return publicUrl;
     return stored || this.getDefaultDigitalMenuUrl();
+  }
+
+  private getShareableDigitalMenuUrl(configured?: string | null): string | null {
+    const stored = String(configured || '').trim().replace(/\/+$/, '');
+    const publicUrl = this.getConfiguredPublicMenuUrl();
+    if (publicUrl) return publicUrl;
+    if (!stored || this.getLegacyDigitalMenuUrls().includes(stored) || /^https?:\/\/[^/]+\.up\.railway\.app\/menu$/i.test(stored)) return null;
+    return stored;
+  }
+
+  private async getMessagingMenuCategories() {
+    const categories = await this.prisma.menuCategory.findMany({
+      where: { active: true },
+      include: {
+        items: {
+          where: { active: true },
+          orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
+        },
+      },
+      orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
+    });
+
+    // Las adiciones se eligen dentro del pedido; no forman parte de la carta
+    // principal que se envía como lista por WhatsApp.
+    return categories.filter(category => category.items.length > 0 && !/^adiciones?$/i.test(category.name.trim()));
+  }
+
+  private async buildMessagingMenuText(): Promise<string> {
+    const categories = await this.getMessagingMenuCategories();
+    const lines = ['📋 *MENÚ Y PRECIOS VILLA DOG*'];
+    for (const category of categories) {
+      const displayName = /gaseosa|bebida/i.test(category.name)
+        ? 'GASEOSAS'
+        : /jugo|agua/i.test(category.name)
+          ? 'JUGOS'
+          : category.name.toUpperCase();
+      lines.push('', `*${displayName}*`);
+      for (const item of category.items) {
+        lines.push(`- ${item.name}: $${item.price.toLocaleString('es-CO')}`);
+      }
+    }
+    lines.push('', '🛵 ¿Qué se te antoja pedir? Cuéntanos qué productos deseas y te tomamos el pedido.');
+    return lines.join('\n');
   }
 
   private getDefaultDigitalMenuUrl() {
@@ -622,12 +667,15 @@ export class WhatsappService implements OnModuleInit {
       where: { key: { in: ['digital_menu_url', 'chatbot_menu_share_message'] } },
     });
     const values = Object.fromEntries(rows.map(row => [row.key, row.value])) as Record<string, string>;
-    const link = this.resolveDigitalMenuUrl(values.digital_menu_url);
+    const link = this.getShareableDigitalMenuUrl(values.digital_menu_url);
     const customMessage = String(values.chatbot_menu_share_message || '').trim();
-    const intro = customMessage || '🍽️ *CARTA DIGITAL THE VILLA DOG*\n\nMira nuestra carta actualizada y arma tu pedido aquí:';
-    const message = intro.includes('{url}')
-      ? intro.replaceAll('{url}', link)
-      : `${intro}\n👉 ${link}`;
+    const menuText = await this.buildMessagingMenuText();
+    const intro = customMessage || 'Aquí tienes nuestra carta actualizada:';
+    const introWithoutPlaceholder = intro.replaceAll('{url}', '').replace(/\n{3,}/g, '\n\n').trim();
+    const linkText = link
+      ? `\n\nTambién puedes verla y armar tu pedido directamente aquí:\n👉 ${link}`
+      : '';
+    const message = `${introWithoutPlaceholder}\n\n${menuText}${linkText}`;
 
     // La carta es siempre el catálogo vivo. Los PDF e imágenes antiguos dejan de
     // tener prioridad, por lo que un cambio de producto o precio no queda obsoleto.
@@ -3281,8 +3329,16 @@ The Villa Dog • Montería`;
           this.getSetting('chatbot_payment_qr_mode'),
           this.getSetting('chatbot_payment_account_text'),
         ]);
-        const digitalMenuUrl = configuredMenuUrl || this.getDefaultDigitalMenuUrl();
-        const displayMenuUrl = digitalMenuUrl;
+        const displayMenuUrl = this.getShareableDigitalMenuUrl(configuredMenuUrl);
+        const menuGeneralRule = displayMenuUrl
+          ? `Muestra la lista limpia de categorías principales y al final incluye el enlace digital: ${displayMenuUrl}.`
+          : 'Muestra la lista limpia de categorías principales en el chat. Todavía no hay un enlace público configurado; no inventes ni incluyas ninguna URL.';
+        const menuCategoryRule = displayMenuUrl
+          ? `Muestra la lista de platos con sus precios correspondientes a esa categoría. Al final puedes incluir la carta digital: ${displayMenuUrl}.`
+          : 'Muestra la lista de platos con sus precios correspondientes a esa categoría. No incluyas enlaces hasta que administración configure el dominio público.';
+        const menuFollowupRule = displayMenuUrl
+          ? `- PROHIBIDO REPETIR EL ENLACE AL MENÚ DIGITAL ("${displayMenuUrl}") en preguntas de seguimiento o dudas específicas.`
+          : '- No inventes enlaces ni menciones una carta digital que todavía no tiene dominio configurado.';
         const paymentInstruction = paymentQrMode === 'IMAGE'
           ? 'El cobro por transferencia se comparte mediante el QR oficial. No inventes números de cuenta; indica que el asesor enviará el QR cuando corresponda.'
           : paymentAccountText
@@ -3323,17 +3379,15 @@ Estado actual de la cocina (Carga de trabajo en tiempo real):
 
     Reglas críticas de interacción:
     1. SI EL CLIENTE PIDE "EL MENÚ" O "LA CARTA" EN GENERAL:
-       Muestra la lista limpia de categorías principales y al final incluye el enlace digital usando este formato exacto:
-       "¡Claro que sí! Aquí tienes nuestras categorías principales para que elijas tu favorito:
+       ${menuGeneralRule}
+       Responde con un formato claro y organizado, usando líneas separadas por categoría.
 
 ${dynamicCategoriesString}
 
 ¿Te gustaría que te detalle los precios de alguna categoría en específico o ya sabes qué quieres pedir? ¡Dime y lo armamos de una!
 
-También puedes ver nuestro menú digital interactivo y pedir directamente por aquí: ${displayMenuUrl}"
-
     2. SI EL CLIENTE PIDE VER UNA CATEGORÍA COMPLETA (Pizzas, Perros, Hamburguesas, Salchipapas, Suizos, Asados, Patacones, Bebidas):
-       Muestra la lista de platos con sus precios correspondientes a esa categoría. Al final de mostrar por primera vez la categoría completa, puedes incluir: "También puedes consultar nuestra carta digital aquí: ${displayMenuUrl}".
+       ${menuCategoryRule}
 
     3. SI EL CLIENTE PREGUNTA QUÉ LE RECOMIENDAS O PIDE SUGERENCIA DEL MENÚ:
        ¡ABSOLUTAMENTE PROHIBIDO ENVIAR TEXTO DE CORRIDO NI LA LISTA COMPLETA DE CATEGORÍAS! DEBES presentar 2 o 3 opciones estrellas organizadas OBLIGATORIAMENTE EN PUNTOS DESGLOSADOS (BULLET POINTS) CON LÍNEAS SEPARADAS.
@@ -3347,7 +3401,7 @@ También puedes ver nuestro menú digital interactivo y pedir directamente por a
 ¿Cuál de estos se te antoja probar hoy?"
 
     4. REGLA FUNDAMENTAL DE CERO REPETICIÓN DEL MENÚ DIGITAL:
-       - PROHIBIDO REPETIR EL ENLACE AL MENÚ DIGITAL ("${displayMenuUrl}") en preguntas de seguimiento o dudas específicas (ej: "¿Qué ingredientes trae el suizo?", "Y con papas a la francesa?", "¿Cuántos gramos trae?", "¿Tienen Coca Cola?").
+       ${menuFollowupRule} (ej: "¿Qué ingredientes trae el suizo?", "Y con papas a la francesa?", "¿Cuántos gramos trae?", "¿Tienen Coca Cola?")
        - En todas las preguntas de aclaración, ingredientes, gramos o seguimiento, RESPONDE ÚNICAMENTE LA RESPUESTA DIRECTA A LA INQUIETUD DEL CLIENTE DE FORMA CORDIAL Y CORTA. NO agregues el enlace del menú digital al final de cada mensaje.
 
     5. TIEMPO DE ESPERA Y DEMORA:
@@ -3710,13 +3764,10 @@ Restaurante (Tú):
 
       if (normalized === '1' || isAskingForMenu) {
         // Generar lista de categorías activas
-        const activeCategories = await this.prisma.menuCategory.findMany({
-          where: { active: true },
-          include: { items: { where: { active: true } } },
-          orderBy: { sortOrder: 'asc' }
-        });
+        const activeCategories = await this.getMessagingMenuCategories();
         
-        const digitalMenuUrl = await this.getSetting('digital_menu_url');
+        const configuredMenuUrl = await this.getSetting('digital_menu_url');
+        const digitalMenuUrl = this.getShareableDigitalMenuUrl(configuredMenuUrl);
         let fullMenuUrl = digitalMenuUrl;
         if (digitalMenuUrl) {
           const cleanedPhone = (session.phone.startsWith('57') && session.phone.length === 12) ? session.phone.substring(2) : session.phone;
@@ -3745,11 +3796,9 @@ Restaurante (Tú):
             `¿Deseas pedir alguna de estas opciones? Escríbenos directamente lo que deseas ordenar.${digitalMenuLine}\n\n` +
             `Responde *0* para volver al menú principal.`;
         } else {
-          const categoriesList = activeCategories.map(c => `- *${c.name}*`).join('\n');
+          const liveMenuText = await this.buildMessagingMenuText();
           menuText = 
-            `*¡Aquí tienes nuestras categorías principales!*\n\n` +
-            `${categoriesList}\n\n` +
-            `¿Ya sabes qué quieres pedir? Escríbenos directamente lo que deseas ordenar y un asesor tomará tu pedido de inmediato.${digitalMenuLine}\n\n` +
+            `${liveMenuText}${digitalMenuLine}\n\n` +
             `Responde *0* para volver al menú principal.`;
         }
           
@@ -4670,7 +4719,10 @@ Responde SOLO con el JSON válido.`;
         this.getSetting('chatbot_payment_qr_mode'),
         this.getSetting('chatbot_payment_account_text'),
       ]);
-      const digitalMenuUrl = configuredMenuUrl || this.getDefaultDigitalMenuUrl();
+      const digitalMenuUrl = this.getShareableDigitalMenuUrl(configuredMenuUrl);
+      const audioMenuLinkRule = digitalMenuUrl
+        ? `Si pide el menú o una categoría, muestra los productos y precios y puedes añadir este enlace al final: ${digitalMenuUrl}.`
+        : 'Si pide el menú o una categoría, muestra los productos y precios directamente en el chat. No incluyas enlaces porque todavía no hay un dominio público configurado.';
       const paymentInstruction = paymentQrMode === 'IMAGE'
         ? 'Para transferencias se utiliza el QR oficial. No inventes números de cuenta; indica que un asesor enviará el QR.'
         : paymentAccountText
@@ -4706,9 +4758,9 @@ INSTRUCCIONES CRÍTICAS:
 2. Responde a la inquietud o pedido del cliente de forma muy amable, humana y clara.
 3. PAUTAS DE ESTILO Y MENÚ DUAL:
 - ABSOLUTAMENTE PROHIBIDO USAR EMOJIS. No uses caritas ni símbolos. Solo texto normal con puntuación estándar.
-- SI EL CLIENTE PIDE EL MENÚ O LA CARTA EN EL AUDIO: Muestra de inmediato la lista de categorías principales en texto para elegir en el chat Y al final incluye el enlace: "También puedes ver nuestro menú digital interactivo y pedir directamente por aquí: ${digitalMenuUrl}"
-- SI EL CLIENTE PREGUNTA QUÉ LE RECOMIENDAS O PIDE SUGERENCIA EN EL AUDIO: No mandes la lista de categorías. Recomienda con entusiasmo 2 o 3 platos estrellas (ej: Salchipapa Especial, Pizza de la Casa, Suizo Gratinado) Y al final incluye el enlace digital.
-- SI EL CLIENTE MENCIONA UNA CATEGORÍA ESPECÍFICA (ej: "pizzas", "perros", "hamburguesas", "salchipapas"): Muestra los platos y precios de esa categoría en el chat Y al final incluye el enlace digital.
+- ${audioMenuLinkRule}
+- SI EL CLIENTE PREGUNTA QUÉ LE RECOMIENDAS O PIDE SUGERENCIA EN EL AUDIO: No mandes la lista de categorías. Recomienda con entusiasmo 2 o 3 platos estrellas usando únicamente el menú oficial.
+- SI EL CLIENTE MENCIONA UNA CATEGORÍA ESPECÍFICA (ej: "pizzas", "perros", "hamburguesas", "salchipapas"): Muestra los platos y precios de esa categoría en el chat.
 
 HORARIO CONFIGURADO:
 ${restaurantHours || 'Horario por confirmar con un asesor.'}

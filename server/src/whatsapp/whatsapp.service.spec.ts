@@ -130,12 +130,24 @@ describe('WhatsApp advisor concurrency', () => {
 });
 
 describe('WhatsApp live menu sharing', () => {
-  it('sends the configured live menu URL in the configurable message', async () => {
+  it('sends the live text menu and appends a configured URL when available', async () => {
     const prisma: any = {
       appSetting: {
         findMany: jest.fn().mockResolvedValue([
           { key: 'digital_menu_url', value: 'https://pedidos.example/menu' },
           { key: 'chatbot_menu_share_message', value: 'Carta actualizada: {url}' },
+        ]),
+      },
+      menuCategory: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            name: 'Perros Calientes',
+            items: [{ name: 'Perro Sencillo', price: 3500, sortOrder: 1 }],
+          },
+          {
+            name: 'Adiciones',
+            items: [{ name: 'Adición de Queso', price: 1500, sortOrder: 1 }],
+          },
         ]),
       },
     };
@@ -150,10 +162,46 @@ describe('WhatsApp live menu sharing', () => {
 
     await service.sendMenuCarta('3001234567');
 
-    expect(send).toHaveBeenCalledWith('573001234567', 'Carta actualizada: https://pedidos.example/menu');
+    expect(send).toHaveBeenCalledWith(
+      '573001234567',
+      expect.stringContaining('Carta actualizada:\n\n📋 *MENÚ Y PRECIOS VILLA DOG*'),
+    );
+    const sentMessage = send.mock.calls[0][1] as string;
+    expect(sentMessage).toContain('- Perro Sencillo: $3.500');
+    expect(sentMessage).not.toContain('Adición de Queso');
+    expect(sentMessage).toContain('https://pedidos.example/menu');
     expect(prisma.appSetting.findMany).toHaveBeenCalledWith({
       where: { key: { in: ['digital_menu_url', 'chatbot_menu_share_message'] } },
     });
+  });
+
+  it('does not share the Railway fallback before a public domain is configured', async () => {
+    const prisma: any = {
+      appSetting: {
+        findMany: jest.fn().mockResolvedValue([
+          { key: 'digital_menu_url', value: 'https://the-villa-dog-backend-production.up.railway.app/menu' },
+        ]),
+      },
+      menuCategory: {
+        findMany: jest.fn().mockResolvedValue([
+          { name: 'Perros Calientes', items: [{ name: 'Perro Sencillo', price: 3500, sortOrder: 1 }] },
+        ]),
+      },
+    };
+    const service = new WhatsappService(
+      prisma,
+      { get: jest.fn() } as any,
+      { emitWhatsApp: jest.fn() } as any,
+    );
+    jest.spyOn(service as any, 'resolveSessionForDispatch').mockResolvedValue({ id: 'chat-1' });
+    jest.spyOn(service as any, 'resolveActiveRecipient').mockResolvedValue({ recipientPhone: '3001234567' });
+    const send = jest.spyOn(service, 'sendMessage').mockResolvedValue({ sent: true } as any);
+
+    await service.sendMenuCarta('3001234567');
+
+    const sentMessage = send.mock.calls[0][1] as string;
+    expect(sentMessage).toContain('- Perro Sencillo: $3.500');
+    expect(sentMessage).not.toContain('railway.app');
   });
 });
 
