@@ -720,7 +720,7 @@ export default function NewOrderPage({
       api.get<any>(`/orders/${editOrderId}`)
         .then(order => {
           if (!order) return
-          setCustomerName(order.customerName || '')
+          setCustomerName(order.customerName === 'Cliente Mostrador' ? '' : (order.customerName || ''))
           let oPhone = (order.customerPhone || '').trim()
           if ((!oPhone || oPhone === '3000000000' || oPhone === '0000000000') && order.orderType === 'DELIVERY') {
             const urlP = initialPhone
@@ -3152,7 +3152,7 @@ const renderDeliveryCard = () => {
 
                     <div className="grid grid-cols-1 gap-3.5">
                       <div className="space-y-1">
-                        <Label className="text-xs font-semibold text-[var(--text-secondary)] uppercase">Teléfono o ID de Contacto *</Label>
+                        <Label className="text-xs font-semibold text-[var(--text-secondary)] uppercase">Teléfono o ID de Contacto {orderType === 'delivery' ? '*' : '(Opcional)'}</Label>
                         <Input 
                           value={customerPhone} 
                           onChange={e => {
