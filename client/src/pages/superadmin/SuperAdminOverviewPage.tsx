@@ -1,10 +1,9 @@
-import { useEffect, useState } from 'react'
-import { motion } from 'framer-motion'
-import { api } from '@/lib/api'
-import { Crown, Users, ShoppingBag, Database, AlertTriangle, MessageCircle, Loader2, Server, Activity, ArrowRight, LogIn, RefreshCw, ShieldCheck, Settings2 } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { useAuth } from '@/hooks/useAuth'
+import { Activity, AlertTriangle, ArrowRight, CheckCircle2, Crown, Database, Loader2, LogIn, Mail, MessageCircle, RefreshCw, Search, Server, Settings2, ShieldCheck, Users } from 'lucide-react'
+import { api } from '@/lib/api'
 import { alerts } from '@/lib/alerts'
+import { useAuth } from '@/hooks/useAuth'
 
 interface Overview {
   usersByRole: { role: string; count: number }[]
@@ -36,233 +35,131 @@ const roleLabels: Record<string, string> = {
   ACCOUNTING_ASSISTANT: 'Auxiliar Contable',
 }
 
-const containerVariants = {
-  hidden: { opacity: 0 },
-  visible: { opacity: 1, transition: { staggerChildren: 0.1 } }
+const roleColors: Record<string, string> = {
+  SUPERADMIN: 'bg-violet-500',
+  ADMIN: 'bg-orange-500',
+  CASHIER: 'bg-blue-500',
+  DELIVERY_MANAGER: 'bg-emerald-500',
+  WAITER: 'bg-sky-500',
+  KITCHEN: 'bg-rose-500',
 }
 
-const itemVariants = {
-  hidden: { opacity: 0, y: 15 },
-  visible: { opacity: 1, y: 0, transition: { duration: 0.5 } }
-}
+const getErrorMessage = (error: unknown) => error instanceof Error ? error.message : 'No se pudo cargar el panel.'
 
 export default function SuperAdminOverviewPage() {
   const [data, setData] = useState<Overview | null>(null)
   const [users, setUsers] = useState<UserData[]>([])
   const [loading, setLoading] = useState(true)
-  const { startImpersonation, user: currentUser } = useAuth()
-  const [impersonatingId, setImpersonatingId] = useState<string | null>(null)
   const [refreshing, setRefreshing] = useState(false)
+  const [impersonatingId, setImpersonatingId] = useState<string | null>(null)
+  const [supportQuery, setSupportQuery] = useState('')
+  const [supportRole, setSupportRole] = useState('ALL')
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
+  const { startImpersonation, user: currentUser } = useAuth()
+
+  const loadDashboard = useCallback(async () => {
+    setLoading(true)
+    try {
+      const [overviewData, usersData] = await Promise.all([
+        api.get<Overview>('/superadmin/overview', { force: true }),
+        api.get<UserData[]>('/users', { force: true }),
+      ])
+      setData(overviewData)
+      setUsers(usersData.filter(user => user.active && user.id !== currentUser?.id && user.role !== 'SUPERADMIN'))
+      setLastUpdated(new Date())
+    } catch (error) {
+      alerts.error('No se pudo cargar el panel', getErrorMessage(error))
+    } finally {
+      setLoading(false)
+    }
+  }, [currentUser?.id])
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => { void loadDashboard() }, 0)
+    return () => window.clearTimeout(timer)
+  }, [loadDashboard])
 
   const handleBroadcastRefresh = async () => {
     const ok = await alerts.confirm(
-      '¿Refrescar todos los clientes?',
-      'Todos los usuarios con la página abierta verán una recarga automática en unos segundos para aplicar los últimos cambios.',
-      'Refrescar ahora',
+      '¿Sincronizar las pantallas abiertas?',
+      'Los usuarios conectados recibirán una actualización para aplicar cambios recientes.',
+      'Sincronizar',
       'Cancelar'
     )
     if (!ok) return
     setRefreshing(true)
     try {
-      const res = await api.post<{ ok: boolean; clientsNotified: number }>('/superadmin/broadcast-refresh')
-      alerts.success('Refresco enviado', `${res.clientsNotified} cliente(s) conectados recibirán la actualización.`)
-    } catch (err: any) {
-      alerts.error('No se pudo enviar el refresco', err.message || 'Intenta nuevamente')
+      const result = await api.post<{ clientsNotified: number }>('/superadmin/broadcast-refresh')
+      alerts.success('Sincronización enviada', `${result.clientsNotified} pantalla(s) conectada(s) recibirán la actualización.`)
+    } catch (error) {
+      alerts.error('No se pudo sincronizar', getErrorMessage(error))
     } finally {
       setRefreshing(false)
     }
   }
 
-  useEffect(() => {
-    Promise.all([
-      api.get<Overview>('/superadmin/overview'),
-      api.get<UserData[]>('/users')
-    ])
-      .then(([overviewData, usersData]) => {
-        setData(overviewData)
-        setUsers(usersData.filter(u => u.active && u.id !== currentUser?.id && u.role !== 'SUPERADMIN'))
-      })
-      .catch(console.error)
-      .finally(() => setLoading(false))
-  }, [currentUser?.id])
-
-  const handleImpersonate = async (u: UserData) => {
+  const handleImpersonate = async (user: UserData) => {
     const ok = await alerts.confirm(
-      `¿Entrar como ${u.name}?`,
-      'Vas a iniciar sesión con los permisos de este usuario. Podrás regresar a tu cuenta desde el menú principal.',
-      'Entrar',
+      `¿Entrar como ${user.name}?`,
+      'Esta función es solo para soporte. Podrás volver a tu cuenta desde el menú principal.',
+      'Entrar a soporte',
       'Cancelar'
     )
     if (!ok) return
-    setImpersonatingId(u.id)
+    setImpersonatingId(user.id)
     try {
-      await startImpersonation(u.id)
-    } catch (err: any) {
-      alerts.error('No se pudo iniciar sesión', err.message || 'Intenta nuevamente')
+      await startImpersonation(user.id)
+    } catch (error) {
+      alerts.error('No se pudo iniciar soporte', getErrorMessage(error))
       setImpersonatingId(null)
     }
   }
 
+  const filteredUsers = useMemo(() => {
+    const query = supportQuery.trim().toLowerCase()
+    return users.filter(user => {
+      const matchesRole = supportRole === 'ALL' || user.role === supportRole
+      const matchesQuery = !query || `${user.name} ${user.email}`.toLowerCase().includes(query)
+      return matchesRole && matchesQuery
+    })
+  }, [supportQuery, supportRole, users])
+
   if (loading) {
-    return (
-      <div className="flex flex-col items-center justify-center py-32 text-[#64748B] min-h-[80vh] bg-[#FFFFFF] rounded-3xl border border-[#E5E7EB]">
-        <Loader2 className="h-8 w-8 animate-spin text-[#7A1F2B]" />
-        <p className="mt-4 text-sm font-medium text-[#64748B]">Cargando Panel de Control...</p>
-      </div>
-    )
+    return <div className="flex min-h-[70vh] flex-col items-center justify-center gap-3 rounded-3xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] text-[var(--text-muted)]"><Loader2 className="h-8 w-8 animate-spin text-[var(--accent)]" /><p className="text-sm font-bold">Cargando panel de control…</p></div>
   }
 
   const hasErrors = (data?.errorLogsLast24h ?? 0) > 0
-  const stats = [
-    { label: 'Pedidos Hoy', value: data?.ordersToday ?? 0, icon: ShoppingBag, color: 'from-[#7A1F2B]/15 to-transparent', text: 'text-[#7A1F2B]', border: 'border-[#7A1F2B]/20' },
-    { label: 'Pedidos Totales', value: data?.ordersTotal ?? 0, icon: Activity, color: 'from-[#7A1F2B]/15 to-transparent', text: 'text-[#0F172A]', border: 'border-[#E2E8F0]' },
-    { label: 'Sesiones WhatsApp', value: data?.whatsappSessionsActive ?? 0, icon: MessageCircle, color: 'from-[#7A1F2B]/15 to-transparent', text: 'text-[#0F172A]', border: 'border-[#E2E8F0]' },
-    { label: 'Errores (24h)', value: data?.errorLogsLast24h ?? 0, icon: AlertTriangle, color: hasErrors ? 'from-red-500/15 to-transparent' : 'from-[#7A1F2B]/15 to-transparent', text: hasErrors ? 'text-red-600' : 'text-[#0F172A]', border: hasErrors ? 'border-red-200' : 'border-[#E2E8F0]' },
-  ]
   const activeUsers = data?.usersByRole.reduce((total, item) => total + item.count, 0) ?? 0
+  const maxRoleCount = Math.max(...(data?.usersByRole.map(item => item.count) || [1]), 1)
+  const stats = [
+    { label: 'Pedidos hoy', value: data?.ordersToday ?? 0, helper: 'Actividad del día', icon: Activity, tone: 'accent' },
+    { label: 'Pedidos acumulados', value: data?.ordersTotal ?? 0, helper: 'Historial completo', icon: Database, tone: 'slate' },
+    { label: 'Chats activos', value: data?.whatsappSessionsActive ?? 0, helper: 'WhatsApp en atención', icon: MessageCircle, tone: 'green' },
+    { label: 'Errores recientes', value: data?.errorLogsLast24h ?? 0, helper: 'Últimas 24 horas', icon: AlertTriangle, tone: hasErrors ? 'red' : 'slate' },
+  ]
 
   return (
-    <div className="min-h-[85vh] bg-[#F6F7F9] rounded-[2rem] border border-[#E5E7EB] p-4 md:p-8 text-[#334155] relative overflow-hidden shadow-2xl">
-      {/* Background Soft Gradients */}
-      <div className="absolute top-0 left-0 w-full h-[500px] bg-gradient-to-b from-[#7A1F2B]/5 to-transparent pointer-events-none" />
-      <div className="absolute top-0 right-0 w-[500px] h-[500px] bg-[radial-gradient(circle_at_top_right,rgba(249,115,22,0.05),transparent_50%)] pointer-events-none" />
-      
-      <motion.div variants={containerVariants} initial="hidden" animate="visible" className="relative z-10 space-y-8">
-        
-        {/* Header */}
-        <motion.div variants={itemVariants} className="flex flex-col md:flex-row md:items-end justify-between gap-4 border-b border-[#E5E7EB] pb-6">
-          <div>
-            <div className="flex items-center gap-2 mb-2">
-              <Crown className="h-5 w-5 text-[#B45309]" />
-              <span className="text-[10px] font-mono tracking-[0.2em] text-[#B45309] uppercase font-bold">Panel Super Administrador</span>
-            </div>
-            <h1 className="text-3xl md:text-4xl font-black text-[#0F172A] tracking-tight">
-              Panel de control
-            </h1>
-            <p className="text-xs text-[#64748B] mt-1">Estado general, usuarios y accesos de soporte de The Villa Dog.</p>
-          </div>
-          <div className="flex items-center gap-3">
-            <button
-              onClick={handleBroadcastRefresh}
-              disabled={refreshing}
-              className="flex items-center gap-2 px-4 py-2 bg-[#7A1F2B]/10 hover:bg-[#7A1F2B]/20 border border-[#7A1F2B]/30 rounded-xl text-sm font-medium text-[#7A1F2B] transition-colors cursor-pointer disabled:opacity-50"
-              title="Recargar la página de todos los usuarios conectados"
-            >
-              <RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} /> Refrescar Sistema
-            </button>
-            <Link to="/superadmin/config">
-              <button className="flex items-center gap-2 px-4 py-2 bg-[#F1F5F9] hover:bg-[#E2E8F0] border border-[#E5E7EB] rounded-xl text-sm font-medium text-[#0F172A] transition-colors cursor-pointer">
-                <Server className="h-4 w-4 text-[#64748B]" /> Configuración
-              </button>
-            </Link>
-          </div>
-        </motion.div>
+    <div className="mx-auto min-h-[85vh] max-w-[1550px] rounded-[2rem] border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-4 text-[var(--text-primary)] shadow-sm sm:p-6 lg:p-8">
+      <div className="pointer-events-none absolute inset-x-0 top-0 h-72 bg-gradient-to-b from-[var(--accent)]/5 to-transparent" />
+      <div className="relative space-y-5">
+        <header className="flex flex-col gap-4 border-b border-[var(--border-subtle)] pb-5 lg:flex-row lg:items-center lg:justify-between">
+          <div className="flex items-start gap-3"><span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-[var(--accent)]/10 text-[var(--accent)]"><Crown className="h-5 w-5" /></span><div><p className="text-[10px] font-black uppercase tracking-[0.18em] text-[var(--accent)]">Panel SuperAdministrador</p><h1 className="mt-1 text-3xl font-black tracking-tight sm:text-4xl">Centro de control</h1><p className="mt-1 text-xs text-[var(--text-muted)]">Resumen operativo, salud del sistema y soporte de usuarios.</p></div></div>
+          <div className="flex flex-wrap items-center gap-2"><span className={`inline-flex h-9 items-center gap-2 rounded-xl px-3 text-xs font-black ${hasErrors ? 'bg-red-500/10 text-red-600' : 'bg-emerald-500/10 text-emerald-600'}`}><span className={`h-2 w-2 rounded-full ${hasErrors ? 'bg-red-500' : 'bg-emerald-500'}`} />{hasErrors ? `${data?.errorLogsLast24h} alerta(s) reciente(s)` : 'Operación estable'}</span><span className="hidden text-[10px] font-bold text-[var(--text-muted)] sm:inline">{lastUpdated ? `Actualizado ${lastUpdated.toLocaleTimeString('es-CO')}` : ''}</span><button type="button" onClick={() => void loadDashboard()} disabled={loading} className="inline-flex h-10 items-center gap-2 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] px-3 text-xs font-black text-[var(--text-secondary)] transition hover:border-[var(--accent)] hover:text-[var(--accent)]"><RefreshCw className="h-4 w-4" /> Actualizar</button><button type="button" onClick={() => void handleBroadcastRefresh()} disabled={refreshing} className="inline-flex h-10 items-center gap-2 rounded-xl bg-[var(--accent)] px-3 text-xs font-black text-[var(--accent-fg)] transition hover:opacity-90 disabled:opacity-60"><RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} /> Sincronizar pantallas</button></div>
+        </header>
 
-        {/* Top KPI Metrics */}
-        <motion.div variants={itemVariants} className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-          {stats.map((s, i) => (
-            <div key={s.label} className={`relative p-5 rounded-2xl bg-gradient-to-br ${s.color} border ${s.border} backdrop-blur-md transition-transform hover:-translate-y-1`}>
-              <div className="relative z-10 flex justify-between items-start">
-                <div>
-                  <p className="text-xs font-medium text-[#64748B]">{s.label}</p>
-                  <p className={`text-3xl font-black mt-2 ${s.text}`}>
-                    {s.value}
-                  </p>
-                </div>
-                <s.icon className={`h-6 w-6 ${s.text} opacity-80`} />
-              </div>
-            </div>
-          ))}
-        </motion.div>
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">{stats.map(stat => { const Icon = stat.icon; const tone = stat.tone === 'accent' ? 'border-[var(--accent)]/25 bg-[var(--accent)]/5 text-[var(--accent)]' : stat.tone === 'green' ? 'border-emerald-500/20 bg-emerald-500/5 text-emerald-600' : stat.tone === 'red' ? 'border-red-500/25 bg-red-500/5 text-red-600' : 'border-[var(--border-subtle)] bg-[var(--bg-panel)] text-[var(--text-primary)]'; return <div key={stat.label} className={`rounded-2xl border p-4 transition hover:-translate-y-0.5 sm:p-5 ${tone}`}><div className="flex items-start justify-between gap-2"><div><p className="text-[11px] font-bold text-[var(--text-muted)]">{stat.label}</p><p className="mt-2 text-2xl font-black sm:text-3xl">{stat.value.toLocaleString('es-CO')}</p><p className="mt-1 text-[10px] font-medium text-[var(--text-muted)]">{stat.helper}</p></div><Icon className="h-5 w-5 opacity-80" /></div></div> })}</div>
 
-        <motion.div variants={itemVariants} className="grid gap-6 lg:grid-cols-[minmax(0,1.2fr)_minmax(300px,0.8fr)]">
-          <div className="rounded-2xl border border-[#E5E7EB] bg-white p-6 shadow-lg">
-            <div className="mb-5 flex items-center justify-between gap-3"><div><h3 className="flex items-center gap-2 text-base font-bold text-[#0F172A]"><Users className="h-5 w-5 text-[#7A1F2B]" /> Usuarios activos</h3><p className="mt-1 text-xs text-[#64748B]">Distribución actual por rol · {activeUsers} en total</p></div><ShieldCheck className="h-5 w-5 text-emerald-600" /></div>
-            <div className="grid gap-2 sm:grid-cols-2">{data?.usersByRole.map(item => <div key={item.role} className="flex items-center justify-between rounded-xl bg-[#F6F7F9] px-3 py-2.5"><span className="text-xs font-medium text-[#64748B]">{roleLabels[item.role] || item.role}</span><span className="text-sm font-black text-[#0F172A]">{item.count}</span></div>)}</div>
-          </div>
-          <div className="rounded-2xl border border-[#E5E7EB] bg-white p-6 shadow-lg">
-            <h3 className="flex items-center gap-2 text-base font-bold text-[#0F172A]"><Settings2 className="h-5 w-5 text-[#7A1F2B]" /> Atajos seguros</h3>
-            <div className="mt-4 space-y-2"><Link to="/superadmin/config" className="flex items-center justify-between rounded-xl bg-[#F6F7F9] px-3 py-3 text-xs font-bold text-[#334155] transition hover:bg-[#F1F5F9]"><span>Configuración técnica</span><ArrowRight className="h-4 w-4 text-[#7A1F2B]" /></Link><Link to="/superadmin/audit-logs" className="flex items-center justify-between rounded-xl bg-[#F6F7F9] px-3 py-3 text-xs font-bold text-[#334155] transition hover:bg-[#F1F5F9]"><span>Auditoría y errores</span><ArrowRight className="h-4 w-4 text-[#7A1F2B]" /></Link><Link to="/superadmin/maintenance" className="flex items-center justify-between rounded-xl bg-[#F6F7F9] px-3 py-3 text-xs font-bold text-[#334155] transition hover:bg-[#F1F5F9]"><span>Estado de base de datos</span><ArrowRight className="h-4 w-4 text-[#7A1F2B]" /></Link></div>
-          </div>
-        </motion.div>
-
-        <div className="grid lg:grid-cols-3 gap-6">
-          
-          {/* Quick Access to Users */}
-          <motion.div variants={itemVariants} className="lg:col-span-2">
-            <div className="bg-[#FFFFFF] rounded-2xl border border-[#E5E7EB] p-6 h-full shadow-lg">
-              <div className="flex items-center justify-between mb-6">
-                <h3 className="text-base font-bold text-[#0F172A] flex items-center gap-2">
-                  <Users className="h-5 w-5 text-[#7A1F2B]" /> Acceso rápido de soporte
-                </h3>
-              </div>
-              
-              <div className="grid sm:grid-cols-2 gap-4 max-h-[300px] overflow-y-auto pr-2 custom-scrollbar">
-                {users.length === 0 ? (
-                  <p className="text-sm text-[#64748B] col-span-2 text-center py-8">No hay usuarios activos para acceder.</p>
-                ) : (
-                  users.map((u) => (
-                    <div key={u.id} className="group flex items-center justify-between bg-[#F6F7F9] p-4 rounded-xl border border-[#E5E7EB] hover:border-[#E2E8F0] transition-all">
-                      <div className="min-w-0">
-                        <p className="text-sm font-bold text-[#0F172A] truncate">{u.name}</p>
-                        <p className="text-xs text-[#64748B] truncate mt-0.5">{roleLabels[u.role] || u.role}</p>
-                      </div>
-                      <button
-                        onClick={() => handleImpersonate(u)}
-                        disabled={impersonatingId === u.id}
-                        className="flex items-center justify-center h-8 w-8 rounded-lg bg-[#7A1F2B]/10 text-[#7A1F2B] hover:bg-[#7A1F2B] hover:text-white transition-colors shrink-0 ml-3"
-                        title={`Entrar como ${u.name}`}
-                      >
-                        {impersonatingId === u.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <LogIn className="h-4 w-4" />}
-                      </button>
-                    </div>
-                  ))
-                )}
-              </div>
-            </div>
-          </motion.div>
-
-          {/* System Health */}
-          <motion.div variants={itemVariants} className="lg:col-span-1">
-            <div className="bg-[#FFFFFF] rounded-2xl border border-[#E5E7EB] p-6 h-full shadow-lg flex flex-col">
-                <h3 className="text-base font-bold text-[#0F172A] flex items-center gap-2 mb-6">
-                  <Database className="h-5 w-5 text-[#7A1F2B]" /> Estado del Sistema
-              </h3>
-              
-              <div className="space-y-4 flex-1">
-                <div className="bg-[#F6F7F9] p-4 rounded-xl border border-[#E5E7EB]">
-                  <p className="text-xs text-[#64748B] uppercase tracking-wider mb-1">Base de Datos</p>
-                  <p className="text-lg font-medium text-[#0F172A] flex items-baseline gap-2">
-                    {data?.dbTotalSize || '0 MB'} <span className="text-xs text-[#64748B]">usado</span>
-                  </p>
-                </div>
-                
-                <div className="bg-[#F6F7F9] p-4 rounded-xl border border-[#E5E7EB] flex justify-between items-center">
-                  <p className="text-sm text-[#334155]">Servicio de Correo</p>
-                  <span className={`px-2 py-1 rounded text-xs font-medium ${data?.smtpConfigured ? 'bg-[#7A1F2B]/10 text-[#7A1F2B]' : 'bg-red-50 text-red-600'}`}>
-                    {data?.smtpConfigured ? 'Activo' : 'Inactivo'}
-                  </span>
-                </div>
-
-                <div className="bg-[#F6F7F9] p-4 rounded-xl border border-[#E5E7EB] flex justify-between items-center">
-                  <p className="text-sm text-[#334155]">API WhatsApp</p>
-                  <span className={`px-2 py-1 rounded text-xs font-medium ${data?.whatsappConfigured ? 'bg-[#7A1F2B]/10 text-[#7A1F2B]' : 'bg-red-50 text-red-600'}`}>
-                    {data?.whatsappConfigured ? 'Conectado' : 'Sin Conexión'}
-                  </span>
-                </div>
-
-              </div>
-
-              <div className="mt-6 pt-4 border-t border-[#E5E7EB]">
-                <Link to="/superadmin/maintenance" className="inline-flex items-center gap-2 text-sm text-[#64748B] hover:text-[#0F172A] transition-colors">
-                  Ver estado técnico (solo lectura) <ArrowRight className="h-4 w-4" />
-                </Link>
-              </div>
-            </div>
-          </motion.div>
+        <div className="grid gap-4 lg:grid-cols-[minmax(0,1.2fr)_minmax(290px,0.8fr)]">
+          <section className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-5 shadow-sm"><div className="mb-4 flex items-start justify-between gap-3"><div><h2 className="flex items-center gap-2 text-base font-black"><Users className="h-5 w-5 text-[var(--accent)]" /> Usuarios activos</h2><p className="mt-1 text-xs text-[var(--text-muted)]">{activeUsers} usuarios operativos distribuidos por rol.</p></div><ShieldCheck className="h-5 w-5 text-emerald-600" /></div><div className="space-y-3">{data?.usersByRole.map(item => <div key={item.role}><div className="mb-1.5 flex items-center justify-between gap-3 text-xs"><span className="font-bold text-[var(--text-secondary)]">{roleLabels[item.role] || item.role}</span><span className="font-black text-[var(--text-primary)]">{item.count}</span></div><div className="h-2 overflow-hidden rounded-full bg-[var(--bg-elevated)]"><div className={`h-full rounded-full ${roleColors[item.role] || 'bg-slate-400'}`} style={{ width: `${Math.max(8, (item.count / maxRoleCount) * 100)}%` }} /></div></div>)}</div></section>
+          <section className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-5 shadow-sm"><h2 className="flex items-center gap-2 text-base font-black"><Settings2 className="h-5 w-5 text-[var(--accent)]" /> Accesos rápidos</h2><div className="mt-4 space-y-2"><Link to="/superadmin/config" className="flex items-center justify-between rounded-xl bg-[var(--bg-elevated)] px-3 py-3 text-xs font-black text-[var(--text-secondary)] transition hover:bg-[var(--accent)]/5 hover:text-[var(--accent)]"><span>Configuración técnica</span><ArrowRight className="h-4 w-4" /></Link><Link to="/superadmin/audit-logs" className="flex items-center justify-between rounded-xl bg-[var(--bg-elevated)] px-3 py-3 text-xs font-black text-[var(--text-secondary)] transition hover:bg-[var(--accent)]/5 hover:text-[var(--accent)]"><span>Auditoría y errores</span><ArrowRight className="h-4 w-4" /></Link><Link to="/superadmin/maintenance" className="flex items-center justify-between rounded-xl bg-[var(--bg-elevated)] px-3 py-3 text-xs font-black text-[var(--text-secondary)] transition hover:bg-[var(--accent)]/5 hover:text-[var(--accent)]"><span>Estado de base de datos</span><ArrowRight className="h-4 w-4" /></Link></div><p className="mt-4 flex items-start gap-2 rounded-xl bg-emerald-500/5 p-3 text-[11px] leading-5 text-[var(--text-muted)]"><CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" /> Las acciones de mantenimiento son de solo lectura.</p></section>
         </div>
-      </motion.div>
 
+        <div className="grid gap-4 xl:grid-cols-[minmax(0,1.35fr)_minmax(300px,0.65fr)]">
+          <section className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-5 shadow-sm"><div className="flex flex-col gap-3 border-b border-[var(--border-subtle)] pb-4 sm:flex-row sm:items-center sm:justify-between"><div><h2 className="flex items-center gap-2 text-base font-black"><Users className="h-5 w-5 text-[var(--accent)]" /> Soporte de usuarios</h2><p className="mt-1 text-xs text-[var(--text-muted)]">Entra temporalmente a una cuenta para revisar un problema.</p></div><span className="rounded-lg bg-[var(--bg-elevated)] px-2 py-1 text-[10px] font-black text-[var(--text-muted)]">{filteredUsers.length} resultado(s)</span></div><div className="mt-4 flex flex-col gap-2 sm:flex-row"><label className="relative flex-1"><Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--text-muted)]" /><input value={supportQuery} onChange={event => setSupportQuery(event.target.value)} placeholder="Buscar por nombre o correo" className="h-10 w-full rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] pl-9 pr-3 text-xs font-medium text-[var(--text-primary)] outline-none focus:border-[var(--accent)]" /></label><select value={supportRole} onChange={event => setSupportRole(event.target.value)} className="h-10 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] px-3 text-xs font-bold text-[var(--text-secondary)] outline-none focus:border-[var(--accent)]"><option value="ALL">Todos los roles</option>{Array.from(new Set(users.map(user => user.role))).sort().map(role => <option key={role} value={role}>{roleLabels[role] || role}</option>)}</select></div><div className="mt-4 grid max-h-[330px] gap-2 overflow-y-auto pr-1 sm:grid-cols-2">{filteredUsers.slice(0, 10).map(user => <div key={user.id} className="flex items-center justify-between gap-3 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-3"><div className="min-w-0"><p className="truncate text-xs font-black text-[var(--text-primary)]">{user.name}</p><p className="mt-0.5 truncate text-[10px] text-[var(--text-muted)]">{roleLabels[user.role] || user.role}</p></div><button type="button" onClick={() => void handleImpersonate(user)} disabled={impersonatingId === user.id} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[var(--accent)]/10 text-[var(--accent)] transition hover:bg-[var(--accent)] hover:text-[var(--accent-fg)] disabled:opacity-50" title={`Entrar como ${user.name}`}>{impersonatingId === user.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <LogIn className="h-4 w-4" />}</button></div>)}{filteredUsers.length === 0 && <p className="col-span-2 py-10 text-center text-xs font-bold text-[var(--text-muted)]">No hay usuarios con ese filtro.</p>}</div>{filteredUsers.length > 10 && <p className="mt-3 text-[10px] font-bold text-[var(--text-muted)]">Mostrando los primeros 10 resultados. Usa la búsqueda para encontrar otro usuario.</p>}</section>
+
+          <section className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-5 shadow-sm"><h2 className="flex items-center gap-2 text-base font-black"><Server className="h-5 w-5 text-[var(--accent)]" /> Salud del sistema</h2><div className="mt-4 space-y-2"><div className="flex items-center justify-between rounded-xl bg-[var(--bg-elevated)] p-3"><span className="flex items-center gap-2 text-xs font-bold text-[var(--text-secondary)]"><Database className="h-4 w-4 text-[var(--accent)]" /> Base de datos</span><span className="text-xs font-black text-[var(--text-primary)]">{data?.dbTotalSize || 'Sin datos'}</span></div><div className="flex items-center justify-between rounded-xl bg-[var(--bg-elevated)] p-3"><span className="flex items-center gap-2 text-xs font-bold text-[var(--text-secondary)]"><Mail className="h-4 w-4 text-[var(--accent)]" /> Correo</span><span className={`rounded-lg px-2 py-1 text-[10px] font-black ${data?.smtpConfigured ? 'bg-emerald-500/10 text-emerald-600' : 'bg-amber-500/10 text-amber-600'}`}>{data?.smtpConfigured ? 'Configurado' : 'Pendiente'}</span></div><div className="flex items-center justify-between rounded-xl bg-[var(--bg-elevated)] p-3"><span className="flex items-center gap-2 text-xs font-bold text-[var(--text-secondary)]"><MessageCircle className="h-4 w-4 text-[var(--accent)]" /> WhatsApp</span><span className={`rounded-lg px-2 py-1 text-[10px] font-black ${data?.whatsappConfigured ? 'bg-emerald-500/10 text-emerald-600' : 'bg-amber-500/10 text-amber-600'}`}>{data?.whatsappConfigured ? 'Conectado' : 'Pendiente'}</span></div><div className="flex items-center justify-between rounded-xl bg-[var(--bg-elevated)] p-3"><span className="flex items-center gap-2 text-xs font-bold text-[var(--text-secondary)]"><AlertTriangle className="h-4 w-4 text-[var(--accent)]" /> Errores últimos 24 h</span><span className={`text-xs font-black ${hasErrors ? 'text-red-600' : 'text-emerald-600'}`}>{data?.errorLogsLast24h ?? 0}</span></div></div><Link to="/superadmin/maintenance" className="mt-4 flex items-center justify-between border-t border-[var(--border-subtle)] pt-4 text-xs font-black text-[var(--accent)]">Abrir estado técnico <ArrowRight className="h-4 w-4" /></Link></section>
+        </div>
+      </div>
     </div>
   )
 }
