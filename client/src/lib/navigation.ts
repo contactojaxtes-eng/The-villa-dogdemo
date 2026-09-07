@@ -64,10 +64,10 @@ export const allNavItems: NavItem[] = [
   { href: '/settings/modules', label: 'Configuracion', icon: Settings, roles: ['ADMIN', 'SUPERADMIN'], permission: 'settings.modules', section: 'Administracion', module: 'settings' },
 
   // SECCIÓN SUPERADMIN
-  { href: '/superadmin', label: 'Panel SuperAdmin', icon: Crown, roles: ['SUPERADMIN'], section: 'SuperAdmin', module: 'superadmin' },
-  { href: '/superadmin/config', label: 'Config. Tecnica', icon: Settings, roles: ['SUPERADMIN'], section: 'SuperAdmin', module: 'superadmin' },
-  { href: '/superadmin/audit-logs', label: 'Auditoria', icon: ScrollText, roles: ['SUPERADMIN'], section: 'SuperAdmin', module: 'superadmin' },
-  { href: '/superadmin/maintenance', label: 'Mantenimiento', icon: HardDrive, roles: ['SUPERADMIN'], section: 'SuperAdmin', module: 'superadmin' },
+  { href: '/superadmin', label: 'Panel', icon: Crown, roles: ['SUPERADMIN'], section: 'SuperAdmin', module: 'superadmin' },
+  { href: '/superadmin/config', label: 'Configuración técnica', icon: Settings, roles: ['SUPERADMIN'], section: 'SuperAdmin', module: 'superadmin' },
+  { href: '/superadmin/audit-logs', label: 'Auditoría y errores', icon: ScrollText, roles: ['SUPERADMIN'], section: 'SuperAdmin', module: 'superadmin' },
+  { href: '/superadmin/maintenance', label: 'Estado y mantenimiento', icon: HardDrive, roles: ['SUPERADMIN'], section: 'SuperAdmin', module: 'superadmin' },
 ]
 
 export function getHiddenModules(): string[] {

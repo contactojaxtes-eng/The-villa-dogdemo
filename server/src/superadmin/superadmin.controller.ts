@@ -8,7 +8,7 @@ import { SuperadminService } from './superadmin.service';
 @ApiTags('SuperAdmin')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles('SUPERADMIN', 'ADMIN')
+@Roles('SUPERADMIN')
 @Controller('superadmin')
 export class SuperadminController {
   constructor(
@@ -71,15 +71,4 @@ export class SuperadminController {
     return this.superadminService.broadcastRefresh(req.user);
   }
 
-  @Post('maintenance/purge-whatsapp-chats')
-  @ApiOperation({ summary: 'Purgar sesiones de WhatsApp inactivas antiguas' })
-  purgeOldWhatsappChats(@Body('olderThanDays') olderThanDays: number, @Request() req: any) {
-    return this.superadminService.purgeOldWhatsappChats(req.user, olderThanDays);
-  }
-
-  @Post('maintenance/reset-test-sales')
-  @ApiOperation({ summary: 'Limpiar todas las ventas, comandas y pedidos de prueba para iniciar operación real' })
-  resetTestSales(@Request() req: any) {
-    return this.superadminService.resetTestSales(req.user);
-  }
 }

@@ -1,8 +1,8 @@
-import { useEffect, useState } from 'react'
-import { motion, AnimatePresence } from 'framer-motion'
-import { api } from '@/lib/api'
-import { ScrollText, AlertTriangle, Loader2, ChevronLeft, ChevronRight, Activity, Zap, Terminal, ShieldAlert, ArrowLeft } from 'lucide-react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
+import { Activity, ArrowLeft, ChevronLeft, ChevronRight, Filter, Info, Loader2, RefreshCw, ScrollText, ShieldAlert, Terminal, Zap } from 'lucide-react'
+import { api } from '@/lib/api'
+import { alerts } from '@/lib/alerts'
 
 interface AuditLog {
   id: string
@@ -11,7 +11,7 @@ interface AuditLog {
   action: string
   targetType?: string | null
   targetId?: string | null
-  metadata?: any
+  metadata?: Record<string, unknown> | null
   createdAt: string
 }
 
@@ -27,199 +27,72 @@ interface ErrorLog {
 
 interface Paginated<T> { items: T[]; total: number; page: number; pageCount: number }
 
-const containerVariants = {
-  hidden: { opacity: 0 },
-  visible: { opacity: 1, transition: { staggerChildren: 0.05 } }
+const actionLabels: Record<string, string> = {
+  SYSTEM_FORCE_REFRESH: 'Refresco del sistema',
+  SMTP_TEST_EMAIL: 'Prueba de correo',
+  RESET_TEST_SALES: 'Limpieza de pruebas',
+  PURGE_WHATSAPP_CHATS: 'Purga de chats',
+  USER_CREATED: 'Usuario creado',
+  USER_UPDATED: 'Usuario actualizado',
+  USER_DELETED: 'Usuario eliminado',
+  USER_DEACTIVATED: 'Usuario desactivado',
+  IMPERSONATION_STARTED: 'Soporte como usuario',
 }
 
-const itemVariants = {
-  hidden: { opacity: 0, x: -10 },
-  visible: { opacity: 1, x: 0, transition: { duration: 0.3 } }
-}
+const roleLabels: Record<string, string> = { SUPERADMIN: 'SuperAdmin', ADMIN: 'Administrador' }
+const actionLabel = (action: string) => actionLabels[action] || action.replaceAll('_', ' ').toLowerCase().replace(/(^|\s)\S/g, letter => letter.toUpperCase())
+const getErrorMessage = (error: unknown) => error instanceof Error ? error.message : 'No se pudo cargar la auditoría.'
 
 export default function AuditLogsPage() {
   const [tab, setTab] = useState<'audit' | 'errors'>('audit')
   const [audit, setAudit] = useState<Paginated<AuditLog> | null>(null)
   const [errors, setErrors] = useState<Paginated<ErrorLog> | null>(null)
   const [page, setPage] = useState(1)
+  const [actionFilter, setActionFilter] = useState('')
   const [loading, setLoading] = useState(true)
   const [expandedError, setExpandedError] = useState<string | null>(null)
 
   useEffect(() => {
+    let active = true
     setLoading(true)
-    const endpoint = tab === 'audit' ? `/superadmin/audit-logs?page=${page}` : `/superadmin/error-logs?page=${page}`
-    api.get<Paginated<any>>(endpoint)
-      .then(data => tab === 'audit' ? setAudit(data) : setErrors(data))
-      .catch(console.error)
-      .finally(() => setLoading(false))
-  }, [tab, page])
+    const query = actionFilter ? `&action=${encodeURIComponent(actionFilter)}` : ''
+    const endpoint = tab === 'audit' ? `/superadmin/audit-logs?page=${page}${query}` : `/superadmin/error-logs?page=${page}`
+    api.get<Paginated<AuditLog> | Paginated<ErrorLog>>(endpoint, { force: true })
+      .then(data => {
+        if (!active) return
+        if (tab === 'audit') setAudit(data as Paginated<AuditLog>)
+        else setErrors(data as Paginated<ErrorLog>)
+      })
+      .catch(error => active && alerts.error('No se pudo cargar el registro', getErrorMessage(error)))
+      .finally(() => active && setLoading(false))
+    return () => { active = false }
+  }, [tab, page, actionFilter])
 
   const current = tab === 'audit' ? audit : errors
+  const actionOptions = useMemo(() => Object.entries(actionLabels).sort((a, b) => a[1].localeCompare(b[1])), [])
 
   return (
-    <div className="min-h-[85vh] bg-[#F6F7F9] rounded-[2rem] border border-[#E5E7EB] p-4 md:p-8 text-[#334155] relative overflow-hidden shadow-2xl flex flex-col">
-      <div className="absolute top-0 left-0 w-full h-[500px] bg-gradient-to-b from-[#7A1F2B]/5 to-transparent pointer-events-none" />
-      <div className="absolute top-0 right-0 w-[500px] h-[500px] bg-[radial-gradient(circle_at_top_right,rgba(249,115,22,0.05),transparent_50%)] pointer-events-none" />
-      
-      <div className="relative z-10 space-y-6 flex-1 flex flex-col">
-        
-        {/* Header */}
-        <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 border-b border-[#E2E8F0] pb-6">
-          <div>
-            <div className="flex items-center gap-2 mb-2">
-              <Link to="/superadmin">
-                <button className="flex items-center justify-center h-6 w-6 rounded-md bg-[#F1F5F9] hover:bg-[#E2E8F0] text-[#64748B] hover:text-[#0F172A] transition-colors cursor-pointer mr-2">
-                  <ArrowLeft className="h-3.5 w-3.5" />
-                </button>
-              </Link>
-              <Activity className="h-5 w-5 text-[#B45309]" />
-              <span className="text-[10px] font-mono tracking-[0.2em] text-[#B45309] uppercase font-bold">SYSTEM TELEMETRY</span>
-            </div>
-            <h1 className="text-3xl md:text-4xl font-black text-[#0F172A] tracking-tight uppercase flex items-center gap-3">
-              Logs & Auditoría
-            </h1>
-            <p className="text-xs text-[#64748B] font-mono mt-1">Historial inmutable de acciones administrativas y trazas de error</p>
-          </div>
-          
-          <div className="flex bg-[#FFFFFF] border border-[#E2E8F0] rounded-xl p-1">
-            <button
-              onClick={() => { setTab('audit'); setPage(1) }}
-              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-[10px] font-mono font-bold uppercase tracking-wider transition-colors cursor-pointer ${tab === 'audit' ? 'bg-[#7A1F2B]/10 text-[#7A1F2B]' : 'text-[#64748B] hover:text-[#334155] hover:bg-[#F1F5F9]'}`}
-            >
-              <ScrollText className="h-3.5 w-3.5" />
-              Action Logs
-            </button>
-            <button
-              onClick={() => { setTab('errors'); setPage(1) }}
-              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-[10px] font-mono font-bold uppercase tracking-wider transition-colors cursor-pointer ${tab === 'errors' ? 'bg-red-50 text-red-600' : 'text-[#64748B] hover:text-[#334155] hover:bg-[#F1F5F9]'}`}
-            >
-              <ShieldAlert className="h-3.5 w-3.5" />
-              Error Traces
-            </button>
-          </div>
+    <div className="mx-auto min-h-[85vh] max-w-[1450px] space-y-4 pb-8">
+      <div className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-4 shadow-sm sm:p-5">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+          <div className="flex items-start gap-3"><Link to="/superadmin" className="mt-1 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-[var(--border-subtle)] text-[var(--text-secondary)] transition hover:border-[var(--accent)] hover:text-[var(--accent)]" aria-label="Volver al panel"><ArrowLeft className="h-4 w-4" /></Link><span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-[var(--accent)]/10 text-[var(--accent)]"><ScrollText className="h-5 w-5" /></span><div><p className="text-[10px] font-black uppercase tracking-[0.18em] text-[var(--accent)]">SuperAdmin · Trazabilidad</p><h1 className="mt-1 text-xl font-black text-[var(--text-primary)] sm:text-2xl">Auditoría y errores</h1><p className="mt-1 max-w-2xl text-xs leading-5 text-[var(--text-muted)]">La auditoría responde quién hizo qué, sobre qué registro y cuándo. Los errores ayudan a diagnosticar fallos sin exponer credenciales.</p></div></div>
+          <div className="flex flex-wrap gap-2"><button type="button" onClick={() => { setTab('audit'); setPage(1) }} className={`inline-flex h-10 items-center gap-2 rounded-xl px-3 text-xs font-black transition ${tab === 'audit' ? 'bg-[var(--accent)] text-[var(--accent-fg)]' : 'border border-[var(--border-subtle)] bg-[var(--bg-elevated)] text-[var(--text-secondary)]'}`}><ScrollText className="h-4 w-4" /> Acciones</button><button type="button" onClick={() => { setTab('errors'); setPage(1) }} className={`inline-flex h-10 items-center gap-2 rounded-xl px-3 text-xs font-black transition ${tab === 'errors' ? 'bg-red-600 text-white' : 'border border-[var(--border-subtle)] bg-[var(--bg-elevated)] text-[var(--text-secondary)]'}`}><ShieldAlert className="h-4 w-4" /> Errores</button></div>
+        </div>
+      </div>
+
+      <div className="flex flex-col gap-3 rounded-2xl border border-sky-500/20 bg-sky-500/5 p-4 text-xs text-[var(--text-secondary)] sm:flex-row sm:items-center"><Info className="h-5 w-5 shrink-0 text-sky-600" /><p><strong className="text-[var(--text-primary)]">¿Para qué sirve?</strong> Revisa cambios de usuarios, configuraciones, pruebas de correo y soporte. Este registro no se puede borrar desde la aplicación.</p></div>
+
+      <div className="overflow-hidden rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] shadow-sm">
+        <div className="flex flex-col gap-3 border-b border-[var(--border-subtle)] p-4 sm:flex-row sm:items-center sm:justify-between sm:p-5">
+          <div className="flex items-center gap-2 text-sm font-black text-[var(--text-primary)]"><Filter className="h-4 w-4 text-[var(--accent)]" /> {tab === 'audit' ? 'Filtrar acciones' : 'Registro de errores'}</div>
+          <div className="flex flex-wrap items-center gap-2">{tab === 'audit' && <select value={actionFilter} onChange={event => { setActionFilter(event.target.value); setPage(1) }} className="h-10 min-w-56 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] px-3 text-xs font-bold text-[var(--text-secondary)] outline-none focus:border-[var(--accent)]"><option value="">Todas las acciones</option>{actionOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>}<button type="button" onClick={() => setPage(page)} className="inline-flex h-10 items-center gap-2 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] px-3 text-xs font-black text-[var(--text-secondary)] transition hover:border-[var(--accent)] hover:text-[var(--accent)]"><RefreshCw className="h-4 w-4" /> Actualizar</button></div>
         </div>
 
-        {/* Content */}
-        <div className="flex-1 bg-[#FFFFFF] border border-[#E5E7EB] rounded-2xl shadow-sm overflow-hidden flex flex-col">
-          {loading ? (
-            <div className="flex-1 flex flex-col items-center justify-center p-12">
-              <Loader2 className={`h-8 w-8 animate-spin ${tab === 'audit' ? 'text-[#7A1F2B]' : 'text-red-600'} mb-4`} />
-              <p className="text-[10px] font-mono uppercase tracking-widest text-[#64748B]">Querying Telemetry Database...</p>
-            </div>
-          ) : (
-            <div className="flex-1 overflow-y-auto p-4 md:p-6">
-              <motion.div variants={containerVariants} initial="hidden" animate="visible" className="space-y-3">
-                
-                {tab === 'audit' && audit?.items.map(log => (
-                  <motion.div variants={itemVariants} key={log.id} className="group flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 bg-[#F6F7F9] border border-[#E5E7EB] hover:border-[#7A1F2B]/30 rounded-xl transition-colors">
-                    <div className="flex items-start gap-4">
-                      <div className="mt-0.5 opacity-50 group-hover:opacity-100 transition-opacity">
-                        <Terminal className="h-4 w-4 text-[#7A1F2B]" />
-                      </div>
-                      <div>
-                        <div className="flex items-center gap-2 flex-wrap mb-1">
-                          <span className="px-1.5 py-0.5 bg-[#7A1F2B]/10 border border-[#7A1F2B]/20 text-[#7A1F2B] rounded text-[9px] font-mono font-bold uppercase">
-                            {log.action}
-                          </span>
-                          <span className="text-xs font-bold text-[#0F172A]">{log.actorName}</span>
-                          <span className="text-[10px] font-mono text-[#64748B] uppercase">[{log.actorRole}]</span>
-                        </div>
-                        {log.targetType && (
-                          <p className="text-[10px] font-mono text-[#64748B]">
-                            TARGET: <span className="text-[#334155]">{log.targetType}</span> · <span className="opacity-50">{log.targetId}</span>
-                          </p>
-                        )}
-                      </div>
-                    </div>
-                    <div className="text-right shrink-0">
-                      <span className="text-[10px] font-mono text-[#94A3B8]">{new Date(log.createdAt).toLocaleString('es-CO')}</span>
-                    </div>
-                  </motion.div>
-                ))}
-
-                {tab === 'errors' && errors?.items.map(err => (
-                  <motion.div variants={itemVariants} key={err.id} className="group p-4 bg-[#F6F7F9] border border-[#E5E7EB] hover:border-red-300 rounded-xl transition-colors space-y-2">
-                    <div className="flex items-start justify-between gap-4">
-                      <div className="flex items-start gap-3 min-w-0">
-                        <span className="px-1.5 py-0.5 bg-red-50 border border-red-200 text-red-500 rounded text-[10px] font-mono font-bold mt-0.5 shrink-0">
-                          {err.statusCode || '500'}
-                        </span>
-                        <div className="min-w-0">
-                          <p className="text-xs font-bold text-[#0F172A] mb-0.5 break-all">{err.message}</p>
-                          {err.path && (
-                            <p className="text-[10px] font-mono text-red-600/70">
-                              {err.method} {err.path}
-                            </p>
-                          )}
-                        </div>
-                      </div>
-                      <span className="text-[10px] font-mono text-[#94A3B8] shrink-0">{new Date(err.createdAt).toLocaleString('es-CO')}</span>
-                    </div>
-                    
-                    {err.stack && (
-                      <div className="pl-12 pt-1">
-                        <button
-                          onClick={() => setExpandedError(expandedError === err.id ? null : err.id)}
-                          className="flex items-center gap-1.5 text-[9px] font-mono text-red-500/60 hover:text-red-600 uppercase tracking-wider transition-colors cursor-pointer"
-                        >
-                          <Zap className="h-3 w-3" /> {expandedError === err.id ? 'HIDE TRACE' : 'SHOW STACK TRACE'}
-                        </button>
-                        
-                        <AnimatePresence>
-                          {expandedError === err.id && (
-                            <motion.div
-                              initial={{ opacity: 0, height: 0 }}
-                              animate={{ opacity: 1, height: 'auto' }}
-                              exit={{ opacity: 0, height: 0 }}
-                              className="overflow-hidden"
-                            >
-                              <pre className="mt-2 p-3 bg-white border border-red-200 rounded-lg text-[9px] font-mono text-red-600/70 overflow-x-auto whitespace-pre-wrap leading-relaxed shadow-[inset_0_0_10px_rgba(0,0,0,0.5)]">
-                                {err.stack}
-                              </pre>
-                            </motion.div>
-                          )}
-                        </AnimatePresence>
-                      </div>
-                    )}
-                  </motion.div>
-                ))}
-
-                {current?.items.length === 0 && (
-                  <div className="py-20 text-center">
-                    <Activity className="h-8 w-8 text-[#CBD5E1] mx-auto mb-3" />
-                    <p className="text-xs font-mono text-[#64748B] uppercase tracking-widest">NO TELEMETRY DATA FOUND.</p>
-                  </div>
-                )}
-                
-              </motion.div>
-            </div>
-          )}
-          
-          {/* Pagination */}
-          {current && current.pageCount > 1 && (
-            <div className="p-3 border-t border-[#E5E7EB] bg-[#F6F7F9]/50 flex items-center justify-between">
-              <span className="text-[10px] font-mono text-[#64748B] uppercase tracking-wider pl-2">
-                PAGE {current.page} / {current.pageCount}
-              </span>
-              <div className="flex gap-2">
-                <button 
-                  disabled={page <= 1} 
-                  onClick={() => setPage(p => p - 1)}
-                  className="p-1.5 bg-[#F1F5F9] hover:bg-[#E2E8F0] disabled:opacity-30 disabled:hover:bg-[#F1F5F9] rounded-md border border-[#E2E8F0] text-[#0F172A] transition-colors cursor-pointer"
-                >
-                  <ChevronLeft className="h-4 w-4" />
-                </button>
-                <button 
-                  disabled={page >= current.pageCount} 
-                  onClick={() => setPage(p => p + 1)}
-                  className="p-1.5 bg-[#F1F5F9] hover:bg-[#E2E8F0] disabled:opacity-30 disabled:hover:bg-[#F1F5F9] rounded-md border border-[#E2E8F0] text-[#0F172A] transition-colors cursor-pointer"
-                >
-                  <ChevronRight className="h-4 w-4" />
-                </button>
-              </div>
-            </div>
-          )}
+        <div className="min-h-[420px] p-4 sm:p-5">
+          {loading ? <div className="flex min-h-[360px] flex-col items-center justify-center gap-3 text-xs font-bold text-[var(--text-muted)]"><Loader2 className="h-7 w-7 animate-spin text-[var(--accent)]" /> Consultando registros…</div> : <div className="space-y-2">{tab === 'audit' && (audit?.items || []).map(log => { const details = Object.entries(log.metadata || {}).slice(0, 3).map(([key, value]) => `${key}: ${String(value)}`).join(' · '); return <div key={log.id} className="flex flex-col gap-3 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-4 transition hover:border-[var(--accent)]/40 sm:flex-row sm:items-center sm:justify-between"><div className="flex min-w-0 items-start gap-3"><span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[var(--accent)]/10 text-[var(--accent)]"><Terminal className="h-4 w-4" /></span><div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><span className="rounded-lg bg-[var(--accent)]/10 px-2 py-1 text-[10px] font-black text-[var(--accent)]">{actionLabel(log.action)}</span><span className="text-xs font-black text-[var(--text-primary)]">{log.actorName}</span><span className="text-[10px] font-bold text-[var(--text-muted)]">{roleLabels[log.actorRole] || log.actorRole}</span></div><p className="mt-1 truncate text-[11px] text-[var(--text-muted)]">{log.targetType ? `Registro: ${log.targetType}${log.targetId ? ` · ${log.targetId}` : ''}` : 'Acción general del sistema'}{details ? ` · ${details}` : ''}</p></div></div><span className="shrink-0 text-[10px] font-bold text-[var(--text-muted)]">{new Date(log.createdAt).toLocaleString('es-CO')}</span></div> })}{tab === 'errors' && (errors?.items || []).map(error => <div key={error.id} className="rounded-xl border border-red-500/20 bg-red-500/5 p-4"><div className="flex items-start justify-between gap-3"><div className="flex min-w-0 items-start gap-3"><span className="rounded-lg bg-red-500/10 px-2 py-1 text-[10px] font-black text-red-600">HTTP {error.statusCode || 500}</span><div className="min-w-0"><p className="break-words text-xs font-black text-[var(--text-primary)]">{error.message}</p>{error.path && <p className="mt-1 font-mono text-[10px] text-red-600/80">{error.method} {error.path}</p>}</div></div><span className="shrink-0 text-[10px] font-bold text-[var(--text-muted)]">{new Date(error.createdAt).toLocaleString('es-CO')}</span></div>{error.stack && <div className="mt-3"><button type="button" onClick={() => setExpandedError(expandedError === error.id ? null : error.id)} className="inline-flex items-center gap-1.5 text-[10px] font-black text-red-600"> <Zap className="h-3 w-3" /> {expandedError === error.id ? 'Ocultar detalle técnico' : 'Ver detalle técnico'}</button>{expandedError === error.id && <pre className="mt-2 max-h-56 overflow-auto rounded-xl bg-[var(--bg-panel)] p-3 text-[10px] leading-5 text-red-700">{error.stack}</pre>}</div>}</div>)}{current?.items.length === 0 && <div className="flex min-h-[340px] flex-col items-center justify-center text-center"><Activity className="mb-3 h-8 w-8 text-[var(--text-muted)]" /><p className="text-sm font-black text-[var(--text-secondary)]">No hay registros con este filtro</p><p className="mt-1 text-xs text-[var(--text-muted)]">Los nuevos eventos aparecerán aquí automáticamente.</p></div>}</div>}
         </div>
+
+        {current && current.pageCount > 1 && <div className="flex items-center justify-between border-t border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-3"><span className="text-[10px] font-black text-[var(--text-muted)]">Página {current.page} de {current.pageCount} · {current.total} registros</span><div className="flex gap-2"><button type="button" disabled={page <= 1} onClick={() => setPage(value => value - 1)} className="rounded-lg border border-[var(--border-subtle)] p-2 text-[var(--text-secondary)] disabled:opacity-30"><ChevronLeft className="h-4 w-4" /></button><button type="button" disabled={page >= current.pageCount} onClick={() => setPage(value => value + 1)} className="rounded-lg border border-[var(--border-subtle)] p-2 text-[var(--text-secondary)] disabled:opacity-30"><ChevronRight className="h-4 w-4" /></button></div></div>}
       </div>
     </div>
   )

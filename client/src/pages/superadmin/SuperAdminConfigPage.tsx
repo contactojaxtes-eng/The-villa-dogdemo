@@ -7,6 +7,8 @@ import {
   Bot,
   CheckCircle2,
   Clock3,
+  Gauge,
+  Info,
   KeyRound,
   Loader2,
   Mail,
@@ -18,6 +20,7 @@ import {
   Server,
   ShieldCheck,
   Sparkles,
+  RefreshCw,
   Trash2,
   XCircle,
 } from 'lucide-react'
@@ -69,6 +72,35 @@ interface GeminiTestResult {
   results: GeminiKeyResult[]
 }
 
+interface GeminiModelInfo {
+  provider: string
+  keySuffix: string | null
+  configuredModel: string | null
+  selectedModel: {
+    name: string
+    displayName: string
+    description: string
+    inputTokenLimit: number | null
+    outputTokenLimit: number | null
+    supportedGenerationMethods: string[]
+  } | null
+  availableModels: Array<{
+    name: string
+    displayName: string
+    description: string
+    inputTokenLimit: number | null
+    outputTokenLimit: number | null
+    supportedGenerationMethods: string[]
+  }>
+  usage: {
+    requestsToday: number
+    quotaRemaining: number | null
+    quotaSource: string
+    note: string
+  }
+  checkedAt: string
+}
+
 type ConfigTab = 'AI' | 'META' | 'EMAIL'
 
 const fieldClass = 'h-11 w-full rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] px-3 text-sm text-[var(--text-primary)] outline-none transition placeholder:text-[var(--text-muted)] focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent)]/10'
@@ -118,6 +150,9 @@ export default function SuperAdminConfigPage() {
   const [testingGemini, setTestingGemini] = useState(false)
   const [testPrompt, setTestPrompt] = useState('Saluda brevemente como asesor de The Villa Dog.')
   const [testResult, setTestResult] = useState<GeminiTestResult | null>(null)
+  const [modelInfo, setModelInfo] = useState<GeminiModelInfo | null>(null)
+  const [loadingModelInfo, setLoadingModelInfo] = useState(false)
+  const [modelInfoError, setModelInfoError] = useState('')
 
   const setWhatsappResponse = (settings: WhatsappCoreConfig) => {
     setWa(settings)
@@ -178,6 +213,7 @@ export default function SuperAdminConfigPage() {
       setWhatsappResponse(updated)
       setTestResult(null)
       alerts.success('Configuración de IA guardada')
+      void loadGeminiModelInfo(combinedKeys, wa.geminiModel)
     } catch (error) {
       alerts.error('No se pudo guardar la IA', getErrorMessage(error, 'Revisa los datos e inténtalo nuevamente.'))
     } finally {
@@ -209,6 +245,28 @@ export default function SuperAdminConfigPage() {
       setTestResult({ success: false, message, testedKeys: 0, validKeys: 0, results: [] })
     } finally {
       setTestingGemini(false)
+    }
+  }
+
+  const loadGeminiModelInfo = async (keysOverride?: string, modelOverride?: string) => {
+    const combinedKeys = keysOverride ?? geminiKeys.map(key => key.trim()).filter(Boolean).join(', ')
+    if (!combinedKeys) {
+      alerts.warning('Agrega al menos una llave de Gemini para consultar los modelos.')
+      return
+    }
+    setLoadingModelInfo(true)
+    setModelInfoError('')
+    try {
+      const result = await api.post<GeminiModelInfo>('/whatsapp/gemini-models', { key: combinedKeys, model: modelOverride ?? wa.geminiModel })
+      setModelInfo(result)
+      if (result.selectedModel?.name) setWa(current => ({ ...current, geminiModel: result.selectedModel?.name || current.geminiModel }))
+      alerts.success('Modelos consultados', `${result.availableModels.length} modelo(s) disponibles para esta llave.`)
+    } catch (error) {
+      const message = getErrorMessage(error, 'No se pudieron consultar los modelos de Gemini.')
+      setModelInfoError(message)
+      alerts.error('No se pudo consultar Gemini', message)
+    } finally {
+      setLoadingModelInfo(false)
     }
   }
 
@@ -329,9 +387,9 @@ export default function SuperAdminConfigPage() {
             <div className="mt-5 space-y-5">
               <label className="block">
                 <span className="mb-1.5 block text-xs font-bold text-[var(--text-secondary)]">Modelo principal</span>
-                <input list="gemini-models" value={wa.geminiModel} onChange={event => { setWa(current => ({ ...current, geminiModel: event.target.value })); setTestResult(null) }} className={fieldClass} placeholder="gemini-flash-lite-latest" />
-                <datalist id="gemini-models"><option value="gemini-flash-lite-latest" /><option value="gemini-flash-latest" /></datalist>
-                <span className="mt-1.5 block text-[11px] text-[var(--text-muted)]">Si el modelo principal no está disponible, el servidor intenta los respaldos configurados.</span>
+                <div className="flex flex-col gap-2 sm:flex-row"><input list="gemini-models" value={wa.geminiModel} onChange={event => { setWa(current => ({ ...current, geminiModel: event.target.value })); setTestResult(null) }} className={cn(fieldClass, 'min-w-0 flex-1')} placeholder="gemini-flash-lite-latest" /><Button type="button" variant="outline" onClick={() => void loadGeminiModelInfo()} disabled={loadingModelInfo} className="h-11 shrink-0 rounded-xl text-xs font-black">{loadingModelInfo ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-1.5 h-4 w-4" />} Consultar modelos</Button></div>
+                <datalist id="gemini-models"><option value="gemini-flash-lite-latest" /><option value="gemini-flash-latest" />{modelInfo?.availableModels.map(model => <option key={model.name} value={model.name} />)}</datalist>
+                <span className="mt-1.5 block text-[11px] text-[var(--text-muted)]">Consulta la llave para mostrar los modelos que realmente permite Google y sus límites de tokens.</span>
               </label>
 
               <label className="block">
@@ -363,6 +421,14 @@ export default function SuperAdminConfigPage() {
                   })}
                 </div>
               </div>
+
+              {modelInfoError && <div className="rounded-xl border border-red-500/20 bg-red-500/5 p-3 text-xs font-bold text-red-600">{modelInfoError}</div>}
+              {modelInfo && <div className="space-y-3 rounded-2xl border border-blue-500/20 bg-blue-500/5 p-4">
+                <div className="flex items-start gap-2"><Gauge className="mt-0.5 h-5 w-5 shrink-0 text-blue-600" /><div><p className="text-sm font-black text-[var(--text-primary)]">Capacidad publicada por Gemini</p><p className="mt-0.5 text-[11px] text-[var(--text-muted)]">Llave consultada {modelInfo.keySuffix || 'configurada'} · {new Date(modelInfo.checkedAt).toLocaleTimeString('es-CO')}</p></div></div>
+                <div className="grid gap-2 sm:grid-cols-3"><div className="rounded-xl bg-[var(--bg-panel)] p-3"><p className="text-[10px] font-bold uppercase tracking-wide text-[var(--text-muted)]">Modelo activo</p><p className="mt-1 truncate text-xs font-black text-[var(--text-primary)]">{modelInfo.selectedModel?.name || modelInfo.configuredModel || 'No encontrado'}</p></div><div className="rounded-xl bg-[var(--bg-panel)] p-3"><p className="text-[10px] font-bold uppercase tracking-wide text-[var(--text-muted)]">Entrada máxima</p><p className="mt-1 text-sm font-black text-[var(--text-primary)]">{modelInfo.selectedModel?.inputTokenLimit ? modelInfo.selectedModel.inputTokenLimit.toLocaleString('es-CO') : 'No informado'}<span className="ml-1 text-[10px] font-normal text-[var(--text-muted)]">tokens</span></p></div><div className="rounded-xl bg-[var(--bg-panel)] p-3"><p className="text-[10px] font-bold uppercase tracking-wide text-[var(--text-muted)]">Salida máxima</p><p className="mt-1 text-sm font-black text-[var(--text-primary)]">{modelInfo.selectedModel?.outputTokenLimit ? modelInfo.selectedModel.outputTokenLimit.toLocaleString('es-CO') : 'No informado'}<span className="ml-1 text-[10px] font-normal text-[var(--text-muted)]">tokens</span></p></div></div>
+                <div className="flex items-start gap-2 rounded-xl bg-[var(--bg-panel)] p-3"><Info className="mt-0.5 h-4 w-4 shrink-0 text-blue-600" /><p className="text-[11px] leading-5 text-[var(--text-secondary)]">Solicitudes registradas por esta aplicación hoy: <strong>{modelInfo.usage.requestsToday.toLocaleString('es-CO')}</strong>. La cuota restante exacta no la publica esta API; Google la administra por proyecto y plan en AI Studio o Cloud Console.</p></div>
+                <p className="text-[10px] text-[var(--text-muted)]">Modelos compatibles encontrados: {modelInfo.availableModels.length}. El servidor usa respaldos si el modelo principal falla.</p>
+              </div>}
 
               <div className="grid gap-2 rounded-2xl bg-[var(--bg-elevated)] p-3 sm:grid-cols-3">
                 <div className="rounded-xl bg-[var(--bg-panel)] p-3"><KeyRound className="mb-2 h-4 w-4 text-[var(--accent)]" /><p className="text-xl font-black text-[var(--text-primary)]">{localKeyCount}</p><p className="text-[10px] text-[var(--text-muted)]">Llaves en el formulario</p></div>

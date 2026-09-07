@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
 import { api } from '@/lib/api'
-import { Crown, Users, ShoppingBag, Database, AlertTriangle, MessageCircle, Loader2, Server, Activity, ArrowRight, LogIn, RefreshCw } from 'lucide-react'
+import { Crown, Users, ShoppingBag, Database, AlertTriangle, MessageCircle, Loader2, Server, Activity, ArrowRight, LogIn, RefreshCw, ShieldCheck, Settings2 } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { useAuth } from '@/hooks/useAuth'
 import { alerts } from '@/lib/alerts'
@@ -119,6 +119,7 @@ export default function SuperAdminOverviewPage() {
     { label: 'Sesiones WhatsApp', value: data?.whatsappSessionsActive ?? 0, icon: MessageCircle, color: 'from-[#7A1F2B]/15 to-transparent', text: 'text-[#0F172A]', border: 'border-[#E2E8F0]' },
     { label: 'Errores (24h)', value: data?.errorLogsLast24h ?? 0, icon: AlertTriangle, color: hasErrors ? 'from-red-500/15 to-transparent' : 'from-[#7A1F2B]/15 to-transparent', text: hasErrors ? 'text-red-600' : 'text-[#0F172A]', border: hasErrors ? 'border-red-200' : 'border-[#E2E8F0]' },
   ]
+  const activeUsers = data?.usersByRole.reduce((total, item) => total + item.count, 0) ?? 0
 
   return (
     <div className="min-h-[85vh] bg-[#F6F7F9] rounded-[2rem] border border-[#E5E7EB] p-4 md:p-8 text-[#334155] relative overflow-hidden shadow-2xl">
@@ -135,10 +136,10 @@ export default function SuperAdminOverviewPage() {
               <Crown className="h-5 w-5 text-[#B45309]" />
               <span className="text-[10px] font-mono tracking-[0.2em] text-[#B45309] uppercase font-bold">Panel Super Administrador</span>
             </div>
-            <h1 className="text-3xl md:text-4xl font-black text-[#0F172A] tracking-tight uppercase">
-              Centro de Comando
+            <h1 className="text-3xl md:text-4xl font-black text-[#0F172A] tracking-tight">
+              Panel de control
             </h1>
-            <p className="text-xs text-[#64748B] font-mono mt-1">Gestión avanzada del sistema The Villa Dog</p>
+            <p className="text-xs text-[#64748B] mt-1">Estado general, usuarios y accesos de soporte de The Villa Dog.</p>
           </div>
           <div className="flex items-center gap-3">
             <button
@@ -174,6 +175,17 @@ export default function SuperAdminOverviewPage() {
           ))}
         </motion.div>
 
+        <motion.div variants={itemVariants} className="grid gap-6 lg:grid-cols-[minmax(0,1.2fr)_minmax(300px,0.8fr)]">
+          <div className="rounded-2xl border border-[#E5E7EB] bg-white p-6 shadow-lg">
+            <div className="mb-5 flex items-center justify-between gap-3"><div><h3 className="flex items-center gap-2 text-base font-bold text-[#0F172A]"><Users className="h-5 w-5 text-[#7A1F2B]" /> Usuarios activos</h3><p className="mt-1 text-xs text-[#64748B]">Distribución actual por rol · {activeUsers} en total</p></div><ShieldCheck className="h-5 w-5 text-emerald-600" /></div>
+            <div className="grid gap-2 sm:grid-cols-2">{data?.usersByRole.map(item => <div key={item.role} className="flex items-center justify-between rounded-xl bg-[#F6F7F9] px-3 py-2.5"><span className="text-xs font-medium text-[#64748B]">{roleLabels[item.role] || item.role}</span><span className="text-sm font-black text-[#0F172A]">{item.count}</span></div>)}</div>
+          </div>
+          <div className="rounded-2xl border border-[#E5E7EB] bg-white p-6 shadow-lg">
+            <h3 className="flex items-center gap-2 text-base font-bold text-[#0F172A]"><Settings2 className="h-5 w-5 text-[#7A1F2B]" /> Atajos seguros</h3>
+            <div className="mt-4 space-y-2"><Link to="/superadmin/config" className="flex items-center justify-between rounded-xl bg-[#F6F7F9] px-3 py-3 text-xs font-bold text-[#334155] transition hover:bg-[#F1F5F9]"><span>Configuración técnica</span><ArrowRight className="h-4 w-4 text-[#7A1F2B]" /></Link><Link to="/superadmin/audit-logs" className="flex items-center justify-between rounded-xl bg-[#F6F7F9] px-3 py-3 text-xs font-bold text-[#334155] transition hover:bg-[#F1F5F9]"><span>Auditoría y errores</span><ArrowRight className="h-4 w-4 text-[#7A1F2B]" /></Link><Link to="/superadmin/maintenance" className="flex items-center justify-between rounded-xl bg-[#F6F7F9] px-3 py-3 text-xs font-bold text-[#334155] transition hover:bg-[#F1F5F9]"><span>Estado de base de datos</span><ArrowRight className="h-4 w-4 text-[#7A1F2B]" /></Link></div>
+          </div>
+        </motion.div>
+
         <div className="grid lg:grid-cols-3 gap-6">
           
           {/* Quick Access to Users */}
@@ -181,7 +193,7 @@ export default function SuperAdminOverviewPage() {
             <div className="bg-[#FFFFFF] rounded-2xl border border-[#E5E7EB] p-6 h-full shadow-lg">
               <div className="flex items-center justify-between mb-6">
                 <h3 className="text-base font-bold text-[#0F172A] flex items-center gap-2">
-                  <Users className="h-5 w-5 text-[#7A1F2B]" /> Acceso Rápido a Usuarios
+                  <Users className="h-5 w-5 text-[#7A1F2B]" /> Acceso rápido de soporte
                 </h3>
               </div>
               
@@ -213,8 +225,8 @@ export default function SuperAdminOverviewPage() {
           {/* System Health */}
           <motion.div variants={itemVariants} className="lg:col-span-1">
             <div className="bg-[#FFFFFF] rounded-2xl border border-[#E5E7EB] p-6 h-full shadow-lg flex flex-col">
-              <h3 className="text-base font-bold text-[#0F172A] flex items-center gap-2 mb-6">
-                <Database className="h-5 w-5 text-[#7A1F2B]" /> Estado del Sistema
+                <h3 className="text-base font-bold text-[#0F172A] flex items-center gap-2 mb-6">
+                  <Database className="h-5 w-5 text-[#7A1F2B]" /> Estado del Sistema
               </h3>
               
               <div className="space-y-4 flex-1">
@@ -243,7 +255,7 @@ export default function SuperAdminOverviewPage() {
 
               <div className="mt-6 pt-4 border-t border-[#E5E7EB]">
                 <Link to="/superadmin/maintenance" className="inline-flex items-center gap-2 text-sm text-[#64748B] hover:text-[#0F172A] transition-colors">
-                  Mantenimiento de BD <ArrowRight className="h-4 w-4" />
+                  Ver estado técnico (solo lectura) <ArrowRight className="h-4 w-4" />
                 </Link>
               </div>
             </div>

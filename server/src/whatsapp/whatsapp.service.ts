@@ -3977,6 +3977,81 @@ Restaurante (Tú):
     return message.replace(/https?:\/\/\S+/gi, '[URL del proveedor]').slice(0, 240);
   }
 
+  /**
+   * Reads the models visible to the configured Gemini key. Google exposes the
+   * model context/output token limits here, but it does not expose the
+   * remaining requests for an AI Studio/Cloud project through this endpoint.
+   */
+  async getGeminiModelInfo(key?: string, model?: string) {
+    const existingSetting = await this.prisma.appSetting.findUnique({ where: { key: 'gemini_api_key' } });
+    const existingKeys = (existingSetting?.value || '').split(',').map(k => k.trim()).filter(Boolean);
+    const providedTokens = key ? key.split(',').map(k => k.trim()).filter(Boolean) : [];
+    const keys = providedTokens.length > 0
+      ? this.resolveGeminiKeys(providedTokens, existingKeys)
+      : existingKeys;
+
+    if (keys.length === 0) {
+      throw new BadRequestException('Agrega al menos una llave de Gemini para consultar sus modelos.');
+    }
+
+    let payload: any = null;
+    let lastError: unknown = null;
+    let workingKey = '';
+    for (const apiKey of keys.slice(0, 10)) {
+      try {
+        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(apiKey)}`, {
+          signal: AbortSignal.timeout(8000),
+        });
+        if (!response.ok) {
+          const errorBody: any = await response.json().catch(() => null);
+          lastError = this.sanitizeGeminiError(errorBody?.error?.message || `Gemini respondió HTTP ${response.status}`, keys);
+          continue;
+        }
+        payload = await response.json();
+        workingKey = apiKey;
+        break;
+      } catch (error) {
+        lastError = this.sanitizeGeminiError(error, keys);
+      }
+    }
+
+    if (!payload) {
+      throw new BadRequestException(String(lastError || 'No se pudieron consultar los modelos de Gemini.'));
+    }
+
+    const availableModels = (Array.isArray(payload.models) ? payload.models : [])
+      .filter((entry: any) => Array.isArray(entry?.supportedGenerationMethods) && entry.supportedGenerationMethods.includes('generateContent'))
+      .map((entry: any) => ({
+        name: String(entry.name || '').replace(/^models\//i, ''),
+        displayName: String(entry.displayName || entry.name || '').trim(),
+        description: String(entry.description || '').trim().slice(0, 240),
+        inputTokenLimit: Number.isFinite(entry.inputTokenLimit) ? entry.inputTokenLimit : null,
+        outputTokenLimit: Number.isFinite(entry.outputTokenLimit) ? entry.outputTokenLimit : null,
+        supportedGenerationMethods: entry.supportedGenerationMethods,
+      }))
+      .filter((entry: any) => entry.name)
+      .sort((a: any, b: any) => a.name.localeCompare(b.name));
+
+    const configuredModel = this.normalizeGeminiModel(model || String(await this.getSetting('gemini_model') || ''));
+    const selected = availableModels.find((entry: any) => entry.name === configuredModel) || availableModels[0] || null;
+    const requestsToday = await this.getGeminiUsageToday();
+
+    return {
+      provider: 'Google Gemini',
+      keySuffix: workingKey ? `••••${workingKey.slice(-4)}` : null,
+      configuredModel: configuredModel || null,
+      selectedModel: selected,
+      availableModels,
+      usage: {
+        requestsToday,
+        quotaRemaining: null,
+        quotaSource: 'Google AI Studio / Google Cloud Console',
+        note: 'Google no publica la cuota restante de la llave en esta API. El límite depende del proyecto y del plan del proveedor.',
+      },
+      checkedAt: new Date().toISOString(),
+    };
+  }
+
   async testGeminiConnection(key?: string, prompt?: string, model?: string) {
     const existingSetting = await this.prisma.appSetting.findUnique({ where: { key: 'gemini_api_key' } });
     const existingKeys = (existingSetting?.value || '').split(',').map(k => k.trim()).filter(Boolean);
