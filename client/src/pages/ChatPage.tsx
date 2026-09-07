@@ -23,6 +23,7 @@ import {
 } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Mp3Recorder } from '@/lib/mp3Recorder'
+import { acquireWhatsappMediaUrl, peekWhatsappMediaUrl, releaseWhatsappMediaUrl } from '@/lib/mediaCache'
 import type { EmbeddedOrderParams } from './NewOrderPage'
 
 const EmbeddedNewOrderPage = React.lazy(() => import('./NewOrderPage'))
@@ -60,38 +61,33 @@ type Message = {
 }
 
 function WhatsAppMedia({ mediaId, type }: { mediaId: string; type: 'image' | 'audio' | 'video' }) {
-  const [src, setSrc] = useState<string | null>(null)
-  const [loading, setLoading] = useState(true)
+  const safeMediaId = typeof mediaId === 'string' ? mediaId : String(mediaId || '')
+  const rawMediaId = safeMediaId.split('|')[0] || ''
+  const cleanMediaId = rawMediaId.includes('/') ? (rawMediaId.split('/').pop() || rawMediaId) : rawMediaId
+  const captionText = safeMediaId.includes('|') ? safeMediaId.split('|').slice(1).join('|') : ''
+  const cachedSrc = peekWhatsappMediaUrl(cleanMediaId)
+  const [src, setSrc] = useState<string | null>(cachedSrc)
+  const [loading, setLoading] = useState(!cachedSrc)
   const [error, setError] = useState(false)
   const [isZoomed, setIsZoomed] = useState(false)
   const [rotation, setRotation] = useState(0)
   const [scale, setScale] = useState(1)
 
-  const safeMediaId = typeof mediaId === 'string' ? mediaId : String(mediaId || '')
-  const rawMediaId = safeMediaId.split('|')[0] || ''
-  const cleanMediaId = rawMediaId.includes('/') ? (rawMediaId.split('/').pop() || rawMediaId) : rawMediaId
-  const captionText = safeMediaId.includes('|') ? safeMediaId.split('|').slice(1).join('|') : ''
-
   useEffect(() => {
     let active = true
-    let objectUrl: string | null = null
+    let retained = false
 
     const fetchMedia = async () => {
       try {
-        const token = api.getToken()
-        const rawApiUrl = import.meta.env.VITE_API_URL || ''
-        const baseUrl = (rawApiUrl.endsWith('/') ? rawApiUrl.slice(0, -1) : rawApiUrl) + '/api'
-        const res = await fetch(`${baseUrl}/whatsapp/media/${cleanMediaId}`, {
-          headers: {
-            Authorization: `Bearer ${token}`
-          }
-        })
-        if (!res.ok) throw new Error('Error fetching media')
-        const blob = await res.blob()
-        if (active) {
-          objectUrl = URL.createObjectURL(blob)
-          setSrc(objectUrl)
+        setError(false)
+        if (!peekWhatsappMediaUrl(cleanMediaId)) setLoading(true)
+        const url = await acquireWhatsappMediaUrl(cleanMediaId)
+        if (!active) {
+          releaseWhatsappMediaUrl(cleanMediaId)
+          return
         }
+        retained = true
+        setSrc(url)
       } catch (err) {
         console.error('Error fetching media:', err)
         if (active) setError(true)
@@ -104,9 +100,7 @@ function WhatsAppMedia({ mediaId, type }: { mediaId: string; type: 'image' | 'au
 
     return () => {
       active = false
-      if (objectUrl) {
-        URL.revokeObjectURL(objectUrl)
-      }
+      if (retained) releaseWhatsappMediaUrl(cleanMediaId)
     }
   }, [cleanMediaId])
 
@@ -298,45 +292,31 @@ function WhatsAppMedia({ mediaId, type }: { mediaId: string; type: 'image' | 'au
 }
 
 function WhatsAppDocument({ mediaId }: { mediaId: string }) {
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState(false)
-  const [filename, setFilename] = useState('documento.pdf')
-  const [src, setSrc] = useState<string | null>(null)
-
   const safeMediaId = typeof mediaId === 'string' ? mediaId : String(mediaId || '')
   const rawMediaId = safeMediaId.split('|')[0] || ''
   const cleanMediaId = rawMediaId.includes('/') ? (rawMediaId.split('/').pop() || rawMediaId) : rawMediaId
   const captionText = safeMediaId.includes('|') ? safeMediaId.split('|').slice(1).join('|') : ''
+  const cachedSrc = peekWhatsappMediaUrl(cleanMediaId)
+  const [loading, setLoading] = useState(!cachedSrc)
+  const [error, setError] = useState(false)
+  const [filename] = useState('documento.pdf')
+  const [src, setSrc] = useState<string | null>(cachedSrc)
 
   useEffect(() => {
     let active = true
-    let objectUrl: string | null = null
+    let retained = false
 
     const fetchDoc = async () => {
       try {
-        const token = api.getToken()
-        const rawApiUrl = import.meta.env.VITE_API_URL || ''
-        const baseUrl = (rawApiUrl.endsWith('/') ? rawApiUrl.slice(0, -1) : rawApiUrl) + '/api'
-        const res = await fetch(`${baseUrl}/whatsapp/media/${cleanMediaId}`, {
-          headers: {
-            Authorization: `Bearer ${token}`
-          }
-        })
-        if (!res.ok) throw new Error('Error fetching document')
-        
-        const contentDisposition = res.headers.get('Content-Disposition')
-        let name = 'documento.pdf'
-        if (contentDisposition) {
-          const filenameMatch = contentDisposition.match(/filename="?([^";]+)"?/i)
-          if (filenameMatch?.[1]) name = filenameMatch[1]
+        setError(false)
+        if (!peekWhatsappMediaUrl(cleanMediaId)) setLoading(true)
+        const url = await acquireWhatsappMediaUrl(cleanMediaId)
+        if (!active) {
+          releaseWhatsappMediaUrl(cleanMediaId)
+          return
         }
-        
-        const blob = await res.blob()
-        if (active) {
-          objectUrl = URL.createObjectURL(blob)
-          setSrc(objectUrl)
-          setFilename(name)
-        }
+        retained = true
+        setSrc(url)
       } catch (err) {
         console.error('Error fetching document:', err)
         if (active) setError(true)
@@ -349,7 +329,7 @@ function WhatsAppDocument({ mediaId }: { mediaId: string }) {
 
     return () => {
       active = false
-      if (objectUrl) URL.revokeObjectURL(objectUrl)
+      if (retained) releaseWhatsappMediaUrl(cleanMediaId)
     }
   }, [cleanMediaId])
 
@@ -496,6 +476,9 @@ const MessageStatus = ({ status, direction, isList = false }: { status: string; 
   }
   if (norm === 'pending' || norm === 'sending') {
     return <span title="Enviando..."><Clock className={cn("h-2.5 w-2.5 animate-pulse inline shrink-0", defaultIconColor)} /></span>
+  }
+  if (norm === 'failed') {
+    return <span title="No se pudo enviar"><AlertCircle className="h-3.5 w-3.5 text-red-200 inline shrink-0" /></span>
   }
   return <span title="Enviado a WhatsApp"><Check className={cn("h-3.5 w-3.5 inline shrink-0", defaultIconColor)} /></span>
 }
@@ -692,7 +675,17 @@ const ChatInputBar = React.memo(({
   )
 })
 
-import { globalSessionsCache, globalActiveSessionIdCache, setGlobalSessionsCache, setGlobalActiveSessionIdCache } from '@/lib/chatCache'
+import {
+  getCachedMessages,
+  getCachedSessions,
+  globalActiveSessionIdCache,
+  globalMessagesCache,
+  globalSessionsCache,
+  removeCachedMessages,
+  setCachedMessages,
+  setCachedSessions,
+  setGlobalActiveSessionIdCache,
+} from '@/lib/chatCache'
 export { globalSessionsCache, globalActiveSessionIdCache }
 
 export function getAssignedInfo(
@@ -781,7 +774,7 @@ function ChatPage() {
   const [sessions, setSessions] = useState<Session[]>(() => (globalSessionsCache || []).map(session => ({ ...session, lastMessageAt: session.lastMessageAt || '', assignedToId: session.assignedToId || null, assignedTo: session.assignedTo || null, messages: session.messages || [] })))
   // Iniciar siempre en modo vacío (sin chat seleccionado) estilo WhatsApp Web
   const [activeSession, setActiveSession] = useState<Session | null>(null)
-  const [messages, setMessages] = useState<Message[]>([])
+  const [messages, rawSetMessages] = useState<Message[]>([])
   const [hasOlderMessages, setHasOlderMessages] = useState(false)
   const [loadingOlderMessages, setLoadingOlderMessages] = useState(false)
   const [inputValue, setInputValue] = useState('')
@@ -833,7 +826,7 @@ function ChatPage() {
   const sessionCursorRef = useRef<string | null>(null)
   const hasMoreRef = useRef(true)
   const loadingMoreRef = useRef(false)
-  const messagesCacheRef = useRef<Record<string, Message[]>>({})
+  const messagesCacheRef = useRef<Record<string, Message[]>>(globalMessagesCache)
   const messagesRequestIdRef = useRef(0)
   const olderMessagesRequestIdRef = useRef(0)
 
@@ -844,6 +837,11 @@ function ChatPage() {
   useEffect(() => {
     chatFilterRef.current = chatFilter
   }, [chatFilter])
+
+  useEffect(() => {
+    const query = sessionQueryRef.current
+    setCachedSessions(query.search, query.filter, sessions)
+  }, [sessions])
 
   const scrollTabs = (direction: 'left' | 'right') => {
     if (tabsRef.current) {
@@ -1032,6 +1030,20 @@ function ChatPage() {
     activeSessionRef.current = activeSession
   }, [activeSession])
 
+  const setMessagesCached = (update: React.SetStateAction<Message[]>) => {
+    rawSetMessages(previous => {
+      const next = typeof update === 'function'
+        ? (update as (current: Message[]) => Message[])(previous)
+        : update
+      const sessionId = activeSessionRef.current?.id
+      if (sessionId) {
+        setCachedMessages(sessionId, next)
+        messagesCacheRef.current[sessionId] = next.slice(-180)
+      }
+      return next
+    })
+  }
+
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const messagesViewportRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -1119,17 +1131,23 @@ function ChatPage() {
   // Fetch active sessions with optional search, filter or full historic query
   const loadSessions = async (selectId?: string, searchParam?: string, fetchAll?: boolean, targetFilter?: string) => {
     const requestId = ++sessionsRequestIdRef.current
+    const activeFilter = targetFilter !== undefined ? targetFilter : chatFilterRef.current
+    const activeSearch = searchParam !== undefined ? searchParam.trim() : chatSearchRef.current.trim()
+    const cachedSessions = !fetchAll ? getCachedSessions(activeSearch, activeFilter) : null
     loadMoreRequestIdRef.current += 1
     loadingMoreRef.current = false
     setLoadingMore(false)
-    setLoadingSessions(true)
+    if (cachedSessions !== null) {
+      setSessions(cachedSessions as Session[])
+      setLoadingSessions(false)
+    } else {
+      setLoadingSessions(true)
+    }
     sessionCursorRef.current = null
     hasMoreRef.current = true
     setHasMore(true)
     loadStats()
     try {
-      const activeFilter = targetFilter !== undefined ? targetFilter : chatFilterRef.current
-      const activeSearch = searchParam !== undefined ? searchParam.trim() : chatSearchRef.current.trim()
       sessionQueryRef.current = { search: activeSearch, filter: activeFilter }
       const queryParams = new URLSearchParams()
       if (activeSearch) {
@@ -1174,9 +1192,7 @@ function ChatPage() {
           uniqueSessions.unshift({ ...selectedSession, messages: selectedSession.messages || [] })
         }
       }
-      if (!activeSearch && !fetchAll && activeFilter === 'ALL') {
-        setGlobalSessionsCache(uniqueSessions)
-      }
+      if (!fetchAll) setCachedSessions(activeSearch, activeFilter, uniqueSessions)
       setSessions(uniqueSessions)
       setActiveSession(prevActive => {
         if (selectId) {
@@ -1288,14 +1304,15 @@ function ChatPage() {
     olderMessagesRequestIdRef.current += 1
     setLoadingOlderMessages(false)
     // 1. Si ya tenemos mensajes cacheados en memoria, renderizar al instante sin spinner
-    const cached = messagesCacheRef.current[sessionId]
+    const cached = (getCachedMessages(sessionId) as Message[] | null) || messagesCacheRef.current[sessionId]
     if (cached && cached.length > 0) {
-      setMessages(cached)
+      setMessagesCached(cached)
       setLoadingMessages(false)
     } else if (initialSession?.messages && initialSession.messages.length > 0) {
-      setMessages(initialSession.messages)
+      setMessagesCached(initialSession.messages)
       setLoadingMessages(false)
     } else {
+      setMessagesCached([])
       setLoadingMessages(true)
     }
 
@@ -1304,7 +1321,7 @@ function ChatPage() {
       if (requestId !== messagesRequestIdRef.current || activeSessionRef.current?.id !== sessionId) return
       const safeMessages = Array.isArray(data) ? data : []
       setHasOlderMessages(safeMessages.length === 120)
-      setMessages(current => {
+      setMessagesCached(current => {
         const knownIds = new Set(safeMessages.map(item => item.id))
         const knownWaIds = new Set(safeMessages.map(item => item.waMessageId).filter(Boolean))
         const serverOutgoingContent = new Set(safeMessages.filter(item => item.direction === 'OUT').map(item => item.content))
@@ -1353,7 +1370,7 @@ function ChatPage() {
       if (requestId !== olderMessagesRequestIdRef.current || activeSessionRef.current?.id !== sessionId) return
       const safeOlder = Array.isArray(older) ? older : []
       setHasOlderMessages(safeOlder.length === 120)
-      setMessages(current => {
+      setMessagesCached(current => {
         const known = new Set(current.map(item => item.id))
         const merged = [...safeOlder.filter(item => !known.has(item.id)), ...current]
         messagesCacheRef.current[sessionId] = merged
@@ -1611,7 +1628,7 @@ function ChatPage() {
           const pPhone10 = pClean.length === 12 && pClean.startsWith('57') ? pClean.slice(2) : pClean
           if (current.id === payload.sessionId || curPhone10 === pPhone10) {
 
-            setMessages(prevMsgs => {
+            setMessagesCached(prevMsgs => {
               const msgId = payload.id || payload.waMessageId || Math.random().toString()
               
               // 1. Exact ID or waMessageId already present -> do nothing
@@ -1673,7 +1690,7 @@ function ChatPage() {
     })
 
     socket.on('whatsappMessageReaction', (payload: { messageId: string; waMessageId: string; sessionId: string; reaction: string | null }) => {
-      setMessages(prevMsgs => prevMsgs.map(m => {
+      setMessagesCached(prevMsgs => prevMsgs.map(m => {
         if (m.id === payload.messageId || (payload.waMessageId && m.waMessageId === payload.waMessageId)) {
           return { ...m, reaction: payload.reaction || undefined }
         }
@@ -1692,7 +1709,7 @@ function ChatPage() {
         m.waMessageId === payload.messageId ||
         (payload.waMessageId && (m.id === payload.waMessageId || m.waMessageId === payload.waMessageId))
 
-      setMessages(prev => prev.map(m => matchId(m) ? {
+      setMessagesCached(prev => prev.map(m => matchId(m) ? {
         ...m,
         status: payload.status
       } : m))
@@ -1721,7 +1738,7 @@ function ChatPage() {
     })
 
     socket.on('chatMessageDeleted', (payload: { messageId: string; sessionId: string }) => {
-      setMessages(prev => prev.filter(m => m.id !== payload.messageId))
+      setMessagesCached(prev => prev.filter(m => m.id !== payload.messageId))
       setSessions(prev => prev.map(s => {
         if (s.id === payload.sessionId && s.messages) {
           return { ...s, messages: s.messages.filter(m => m.id !== payload.messageId) }
@@ -1731,7 +1748,7 @@ function ChatPage() {
     })
 
     socket.on('chatMessageEdited', (payload: { messageId: string; sessionId: string; content: string; status?: string; isEdited?: boolean }) => {
-      setMessages(prev => prev.map(m => (m.id === payload.messageId || m.waMessageId === payload.messageId) ? {
+      setMessagesCached(prev => prev.map(m => (m.id === payload.messageId || m.waMessageId === payload.messageId) ? {
         ...m,
         content: payload.content,
         status: payload.status || m.status,
@@ -1775,7 +1792,7 @@ function ChatPage() {
     } else {
       messagesRequestIdRef.current += 1
       olderMessagesRequestIdRef.current += 1
-      setMessages([])
+      setMessagesCached([])
       setHasOlderMessages(false)
     }
   }, [activeSession?.id])
@@ -1809,7 +1826,7 @@ function ChatPage() {
         api.get<Message[]>(`/whatsapp/sessions/${activeSession.id}/messages`)
           .then(newMsgs => {
             if (newMsgs && Array.isArray(newMsgs)) {
-              setMessages(prev => {
+              setMessagesCached(prev => {
                 if (newMsgs.length !== prev.length) return newMsgs
                 for (let i = 0; i < newMsgs.length; i++) {
                   if (newMsgs[i].id !== prev[i]?.id || newMsgs[i].status !== prev[i]?.status) {
@@ -1912,7 +1929,7 @@ function ChatPage() {
       direction: 'OUT',
       content: cleanText,
       messageType: 'text',
-      status: 'sent',
+      status: 'sending',
       createdAt: new Date().toISOString(),
       ...(replyingTo ? {
         replyToContent: replyingTo.messageType === 'image' ? '📷 Imagen' : replyingTo.messageType === 'audio' ? '🎤 Audio' : replyingTo.content,
@@ -1924,7 +1941,7 @@ function ChatPage() {
     const replyContent = replyingTo ? (replyingTo.messageType === 'image' ? '📷 Imagen' : replyingTo.messageType === 'audio' ? '🎤 Audio' : replyingTo.content) : null
     setReplyingTo(null)
 
-    setMessages(prev => [...prev, optimisticMsg])
+    setMessagesCached(prev => [...prev, optimisticMsg])
     setSessions(prev => {
       const updated = prev.map(s => s.id === activeSession.id ? {
         ...s,
@@ -1936,13 +1953,49 @@ function ChatPage() {
 
     // 2. Enviar a la API en segundo plano
     try {
-      await api.post('/whatsapp/send', {
+      const result = await api.post<{
+        sent: boolean
+        message?: Message & { sessionId?: string }
+      }>('/whatsapp/send', {
         phone: activeSession.phone,
         text: cleanText,
         ...(replyWaId ? { replyToWaMessageId: replyWaId, replyToContent: replyContent } : {})
       })
+
+      // El socket suele confirmar primero. Esta respuesta sirve de respaldo cuando
+      // la red en tiempo real está lenta y evita dejar el mensaje como "enviando".
+      if (result.message) {
+        const persisted = result.message
+        setMessagesCached(prev => {
+          const alreadyPresent = prev.some(message =>
+            message.id === persisted.id ||
+            Boolean(persisted.waMessageId && message.waMessageId === persisted.waMessageId)
+          )
+          if (alreadyPresent) return prev.filter(message => message.id !== tempId)
+          return prev.map(message => message.id === tempId ? persisted : message)
+        })
+        setSessions(prev => prev.map(session => session.id === activeSession.id ? {
+          ...session,
+          lastMessageAt: persisted.createdAt,
+          messages: [
+            persisted,
+            ...(session.messages || []).filter(message =>
+              message.id !== tempId &&
+              message.id !== persisted.id &&
+              (!persisted.waMessageId || message.waMessageId !== persisted.waMessageId)
+            )
+          ]
+        } : session))
+      } else {
+        setMessagesCached(prev => prev.map(message => message.id === tempId ? { ...message, status: 'sent' } : message))
+      }
     } catch (err: any) {
       console.error('Error enviando mensaje:', err)
+      setMessagesCached(prev => prev.map(message => message.id === tempId ? { ...message, status: 'failed' } : message))
+      setSessions(prev => prev.map(session => session.id === activeSession.id ? {
+        ...session,
+        messages: (session.messages || []).map(message => message.id === tempId ? { ...message, status: 'failed' } : message)
+      } : session))
       alerts.error('Error de Envío', err.message || 'No se pudo entregar el mensaje de WhatsApp. Inténtalo de nuevo.')
     }
   }
@@ -2202,6 +2255,7 @@ function ChatPage() {
 
     try {
       await api.delete(`/whatsapp/sessions/${sessionToDeleteId}`)
+      removeCachedMessages(sessionToDeleteId)
       if (activeSession?.id === sessionToDeleteId) {
         setActiveSession(null)
         navigate('/chat', { replace: true })
@@ -2243,7 +2297,7 @@ function ChatPage() {
     if (!editingMessage || !editText.trim()) return
     try {
       await api.put(`/whatsapp/messages/${editingMessage.id}`, { content: editText.trim() })
-      setMessages(prev => prev.map(m => m.id === editingMessage.id ? { ...m, content: editText.trim(), isEdited: true } : m))
+      setMessagesCached(prev => prev.map(m => m.id === editingMessage.id ? { ...m, content: editText.trim(), isEdited: true } : m))
       setEditingMessage(null)
       setEditText('')
     } catch (err: any) {
@@ -2257,13 +2311,13 @@ function ChatPage() {
     try {
       await api.delete(`/whatsapp/messages/${deletingMessage.id}?mode=${mode}`)
       if (mode === 'for_everyone') {
-        setMessages(prev => prev.map(m => m.id === deletingMessage.id ? {
+        setMessagesCached(prev => prev.map(m => m.id === deletingMessage.id ? {
           ...m,
           content: '🚫 Este mensaje fue eliminado',
           status: 'deleted'
         } : m))
       } else {
-        setMessages(prev => prev.filter(m => m.id !== deletingMessage.id))
+        setMessagesCached(prev => prev.filter(m => m.id !== deletingMessage.id))
       }
       setDeletingMessage(null)
     } catch (err: any) {

@@ -6,6 +6,7 @@ import { useAuth } from './useAuth'
 import { Bike, Bell, CheckCircle2, XCircle, MessageCircle, UserPlus } from 'lucide-react'
 import { getUsbDevice, printUsb, buildEscPosBuffer } from '@/lib/useUsbPrinter'
 import { playUrgentBell } from '@/lib/sound'
+import { cacheWhatsappMessage } from '@/lib/chatCache'
 
 // Simple notification sound using Web Audio API
 function playNotificationSound(type: 'message' | 'urgent' = 'message') {
@@ -320,12 +321,23 @@ export function useNotifications() {
 
     // WhatsApp: nuevo mensaje entrante
     socket.on('whatsappMessage', (payload: {
+      id?: string
+      waMessageId?: string
+      sessionId?: string
       phone: string
       customerName: string
       direction: 'IN' | 'OUT'
       content: string
       messageType?: string
+      status?: string
+      createdAt?: string
+      assignedToId?: string | null
+      assignedTo?: { id: string; name: string } | null
     }) => {
+      // Mantiene la bandeja y los mensajes calientes incluso mientras el usuario
+      // trabaja en otra pantalla. Al volver a WhatsApp aparecen de inmediato.
+      cacheWhatsappMessage(payload)
+
       // Solo notificar mensajes entrantes (del cliente)
       if (payload.direction !== 'IN') return
 

@@ -1,8 +1,11 @@
-import { lazy, Suspense } from 'react'
+import { lazy, Suspense, useEffect } from 'react'
 import { Routes, Route, Navigate } from 'react-router-dom'
 import { useAuth } from './hooks/useAuth'
 import { AppLayout } from './components/layout/AppLayout'
 import { getFirstAllowedPath } from './lib/navigation'
+import { hasUserPermission } from './lib/permissions'
+import { api } from './lib/api'
+import { setCachedSessions, type CachedSession } from './lib/chatCache'
 import LoginPage from './pages/LoginPage'
 const ForgotPasswordPage = lazy(() => import('./pages/ForgotPasswordPage'))
 const ResetPasswordPage = lazy(() => import('./pages/ResetPasswordPage'))
@@ -78,6 +81,32 @@ function HomeRedirect() {
 }
 
 function App() {
+  const { isAuthenticated, user } = useAuth()
+
+  useEffect(() => {
+    if (!isAuthenticated) return
+
+    // Descarga en segundo plano los módulos operativos más usados. Así el primer
+    // cambio de pestaña reutiliza el chunk local y no muestra una vista vacía.
+    const preloadTimer = window.setTimeout(() => {
+      const modules: Promise<unknown>[] = []
+      if (hasUserPermission(user, 'whatsapp.view')) {
+        modules.push(import('./pages/ChatPage'), import('./pages/NewOrderPage'))
+        void api.get<{ items?: CachedSession[] } | CachedSession[]>('/whatsapp/sessions?filter=TODAY&pagination=cursor&limit=60')
+          .then(result => setCachedSessions('', 'TODAY', Array.isArray(result) ? result : (result.items || [])))
+          .catch(() => {})
+      }
+      if (hasUserPermission(user, 'orders.view')) modules.push(import('./pages/OrdersPage'), import('./pages/ActiveDeliveriesPage'))
+      if (hasUserPermission(user, 'tables.view')) modules.push(import('./pages/TablesPage'), import('./pages/TableOrderPage'))
+      if (hasUserPermission(user, 'kitchen.view')) modules.push(import('./pages/KitchenPage'))
+      if (hasUserPermission(user, 'users.view')) modules.push(import('./pages/UsersPage'))
+      if (hasUserPermission(user, 'products.view')) modules.push(import('./pages/ProductsPage'))
+      void Promise.allSettled(modules)
+    }, 700)
+
+    return () => window.clearTimeout(preloadTimer)
+  }, [isAuthenticated, user])
+
   return (
     <Suspense fallback={<div role="status" className="flex min-h-[50vh] items-center justify-center text-sm text-[var(--text-secondary)]">Cargando vista…</div>}>
     <Routes>

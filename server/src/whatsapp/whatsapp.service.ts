@@ -2,12 +2,25 @@ import { Injectable, Logger, BadRequestException, ConflictException, ForbiddenEx
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
 import { SocketGateway } from '../socket/socket.gateway';
-import * as fs from 'fs';
-import * as path from 'path';
+
+type CachedMedia = {
+  buffer: Buffer;
+  contentType: string;
+  bytes: number;
+  lastUsed: number;
+  expiresAt: number;
+};
 
 @Injectable()
 export class WhatsappService {
   private readonly logger = new Logger(WhatsappService.name);
+  private readonly settingCache = new Map<string, { value: string | null; expiresAt: number }>();
+  private readonly mediaCache = new Map<string, CachedMedia>();
+  private readonly mediaRequests = new Map<string, Promise<{ buffer: Buffer; contentType: string } | null>>();
+  private mediaCacheBytes = 0;
+  private readonly maxMediaCacheBytes = 32 * 1024 * 1024;
+  private readonly maxMediaCacheItems = 50;
+  private readonly mediaCacheTtlMs = 6 * 60 * 60 * 1000;
 
   constructor(
     private prisma: PrismaService,
@@ -833,6 +846,7 @@ export class WhatsappService {
         create: u,
         update: { value: u.value },
       });
+      this.settingCache.delete(u.key);
     }
     const currentSettings = await this.getSettings();
     if (this.socketGateway) {
@@ -849,39 +863,14 @@ export class WhatsappService {
 
   async streamMedia(mediaId: string, res: any) {
     try {
-      const token = await this.getSetting('whatsapp_token');
-      if (!token) {
-        return res.status(400).send('WhatsApp Token no configurado');
-      }
+      const media = await this.getMediaBuffer(mediaId);
+      if (!media) return res.status(404).send('Archivo multimedia no disponible');
 
-      const metaRes = await fetch(`https://graph.facebook.com/v18.0/${mediaId}`, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-
-      if (!metaRes.ok) {
-        return res.status(404).send('Error obteniendo media de Meta');
-      }
-
-      const metaData: any = await metaRes.json();
-      const mediaUrl = metaData?.url;
-      const mimeType = metaData?.mime_type || 'application/octet-stream';
-
-      if (!mediaUrl) {
-        return res.status(404).send('Media URL no encontrada en Meta');
-      }
-
-      const fileRes = await fetch(mediaUrl, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-
-      if (!fileRes.ok || !fileRes.body) {
-        return res.status(500).send('Error descargando archivo de Meta');
-      }
-
-      res.setHeader('Content-Type', mimeType);
-      const arrayBuffer = await fileRes.arrayBuffer();
-      const buffer = Buffer.from(arrayBuffer);
-      return res.send(buffer);
+      res.setHeader('Content-Type', media.contentType);
+      res.setHeader('Content-Length', String(media.buffer.length));
+      res.setHeader('Cache-Control', 'private, max-age=86400, immutable');
+      res.setHeader('ETag', `"wa-${mediaId}"`);
+      return res.send(media.buffer);
     } catch (err: any) {
       this.logger.error(`Error obteniendo media de WhatsApp (${mediaId}):`, err?.message || err);
       return res.status(500).send('Error obteniendo archivo multimedia de Meta');
@@ -898,15 +887,6 @@ export class WhatsappService {
   }
 
   private async _processWebhookAsync(body: any) {
-    try {
-      fs.writeFileSync(
-        path.join(process.cwd(), 'whatsapp-webhook-raw.json'),
-        JSON.stringify(body, null, 2)
-      );
-    } catch (e) {
-      this.logger.error('Error saving raw webhook:', e);
-    }
-
     if (body.object !== 'whatsapp_business_account') return;
 
     for (const entry of body.entry || []) {
@@ -917,20 +897,29 @@ export class WhatsappService {
         const statuses = value.statuses || [];
         const contactsList = value.contacts || [];
 
+        // Procesar distintos clientes en paralelo, conservando el orden de los
+        // mensajes de un mismo número para evitar carreras al crear la sesión.
+        const messagesBySender = new Map<string, any[]>();
         for (const msg of messages) {
-          const rawFrom = msg.from || msg.from_user_id || msg.sender || msg.wa_id || '';
-          const cleanFrom = (rawFrom || '').replace(/\D/g, '');
-          const matchedContact = contactsList.find((c: any) => {
-            const cWaId = (c.wa_id || c.user_id || '').replace(/\D/g, '');
-            return cWaId === cleanFrom || (cleanFrom.length === 12 && cWaId === cleanFrom.slice(2)) || (cWaId.length === 12 && cWaId.slice(2) === cleanFrom);
-          }) || contactsList[0];
-
-          await this.processIncomingMessage(msg, matchedContact);
+          const sender = msg.from || msg.from_user_id || msg.sender || msg.wa_id || msg.id || 'unknown';
+          const group = messagesBySender.get(sender) || [];
+          group.push(msg);
+          messagesBySender.set(sender, group);
         }
 
-        for (const statusObj of statuses) {
-          await this.processMessageStatusUpdate(statusObj);
-        }
+        await Promise.all([...messagesBySender.values()].map(async group => {
+          for (const msg of group) {
+            const rawFrom = msg.from || msg.from_user_id || msg.sender || msg.wa_id || '';
+            const cleanFrom = (rawFrom || '').replace(/\D/g, '');
+            const matchedContact = contactsList.find((c: any) => {
+              const cWaId = (c.wa_id || c.user_id || '').replace(/\D/g, '');
+              return cWaId === cleanFrom || (cleanFrom.length === 12 && cWaId === cleanFrom.slice(2)) || (cWaId.length === 12 && cWaId.slice(2) === cleanFrom);
+            }) || contactsList[0];
+            await this.processIncomingMessage(msg, matchedContact);
+          }
+        }));
+
+        await Promise.all(statuses.map((statusObj: any) => this.processMessageStatusUpdate(statusObj)));
       }
     }
   }
@@ -1030,13 +1019,6 @@ export class WhatsappService {
     const phone = (phone10.length === 10) ? phone10 : (cleanDigits || rawPhone);
     const messageType = msg.type || 'text';
     
-    try {
-      fs.appendFileSync(
-        path.join(process.cwd(), 'whatsapp-incoming-msg.json'),
-        JSON.stringify(msg, null, 2) + '\n---\n'
-      );
-    } catch (e) {}
-
     try {
 
     // Manejo de Reacciones de WhatsApp (emojis ❤️, 👍, 😂, 🔥, 😮, 🙏)
@@ -1347,12 +1329,6 @@ export class WhatsappService {
 
     } catch (err) {
       this.logger.error(`❌ Error CRÍTICO procesando mensaje entrante de ${phone} (type: ${messageType}):`, err);
-      try {
-        fs.appendFileSync(
-          path.join(process.cwd(), 'whatsapp-failed-messages.json'),
-          JSON.stringify({ timestamp: new Date().toISOString(), phone, messageType, msg, error: String(err) }, null, 2) + '\n---\n'
-        );
-      } catch (fileErr) {}
     }
   }
 
@@ -2319,54 +2295,71 @@ export class WhatsappService {
     }
   }
 
-  async getMediaStream(mediaId: string) {
-    const token = await this.getSetting('whatsapp_token');
-    if (!token) return null;
-    const url = await this.getMediaUrl(mediaId);
-    if (!url) return null;
-    try {
-      const res = await fetch(url, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      if (!res.ok) return null;
-      return {
-        stream: res.body,
-        contentType: res.headers.get('Content-Type') || 'application/octet-stream'
-      };
-    } catch (err) {
-      this.logger.error('Error descargando stream de media', err);
-      return null;
-    }
-  }
-
   async getMediaBuffer(mediaId: string): Promise<{ buffer: Buffer; contentType: string } | null> {
-    const token = await this.getSetting('whatsapp_token');
-    if (!token) return null;
-    const url = await this.getMediaUrl(mediaId);
-    if (!url) return null;
-    try {
-      let res = await fetch(url, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (!res.ok && (res.status === 301 || res.status === 302)) {
-        const redirectUrl = res.headers.get('location');
-        if (redirectUrl) {
-          res = await fetch(redirectUrl, {
-            headers: { Authorization: `Bearer ${token}` }
-          });
+    const now = Date.now();
+    const cached = this.mediaCache.get(mediaId);
+    if (cached && cached.expiresAt > now) {
+      cached.lastUsed = now;
+      return { buffer: cached.buffer, contentType: cached.contentType };
+    }
+    if (cached) {
+      this.mediaCache.delete(mediaId);
+      this.mediaCacheBytes -= cached.bytes;
+    }
+
+    const pending = this.mediaRequests.get(mediaId);
+    if (pending) return pending;
+
+    const request = (async () => {
+      const token = await this.getSetting('whatsapp_token');
+      if (!token) return null;
+      const url = await this.getMediaUrl(mediaId);
+      if (!url) return null;
+
+      try {
+        const response = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+        if (!response.ok) {
+          this.logger.error(`Error descargando media de Meta. HTTP Status: ${response.status}`);
+          return null;
         }
-      }
-      if (!res.ok) {
-        this.logger.error(`Error descargando audio de Meta. HTTP Status: ${res.status}`);
+        const buffer = Buffer.from(await response.arrayBuffer());
+        const contentType = response.headers.get('Content-Type') || 'application/octet-stream';
+        const entry: CachedMedia = {
+          buffer,
+          contentType,
+          bytes: buffer.length,
+          lastUsed: Date.now(),
+          expiresAt: Date.now() + this.mediaCacheTtlMs,
+        };
+        this.mediaCache.set(mediaId, entry);
+        this.mediaCacheBytes += entry.bytes;
+        this.pruneMediaCache();
+        return { buffer, contentType };
+      } catch (err) {
+        this.logger.error('Error descargando buffer de media', err);
         return null;
       }
-      const arrayBuffer = await res.arrayBuffer();
-      const buffer = Buffer.from(arrayBuffer);
-      const contentType = res.headers.get('Content-Type') || 'audio/ogg';
-      return { buffer, contentType };
-    } catch (err) {
-      this.logger.error('Error descargando buffer de media', err);
-      return null;
+    })().finally(() => this.mediaRequests.delete(mediaId));
+
+    this.mediaRequests.set(mediaId, request);
+    return request;
+  }
+
+  private pruneMediaCache() {
+    const now = Date.now();
+    for (const [key, entry] of this.mediaCache.entries()) {
+      if (entry.expiresAt <= now) {
+        this.mediaCache.delete(key);
+        this.mediaCacheBytes -= entry.bytes;
+      }
+    }
+
+    if (this.mediaCache.size <= this.maxMediaCacheItems && this.mediaCacheBytes <= this.maxMediaCacheBytes) return;
+    const oldest = [...this.mediaCache.entries()].sort((a, b) => a[1].lastUsed - b[1].lastUsed);
+    for (const [key, entry] of oldest) {
+      if (this.mediaCache.size <= this.maxMediaCacheItems && this.mediaCacheBytes <= this.maxMediaCacheBytes) break;
+      this.mediaCache.delete(key);
+      this.mediaCacheBytes -= entry.bytes;
     }
   }
 
@@ -2658,6 +2651,7 @@ export class WhatsappService {
       }
     }
 
+    let persistedMessage: any = null;
     try {
       let res = await fetch(`https://graph.facebook.com/v26.0/${phoneId}/messages`, {
         method: 'POST',
@@ -2709,7 +2703,7 @@ export class WhatsappService {
           },
         });
 
-        this.socketGateway.emitWhatsApp('whatsappMessage', {
+        persistedMessage = {
           id: newMsg.id,
           waMessageId: newMsg.waMessageId,
           sessionId: session.id,
@@ -2724,10 +2718,11 @@ export class WhatsappService {
           createdAt: newMsg.createdAt,
           replyToContent: replyToContent || null,
           replyToDirection: replyToDirection || null,
-        });
+        };
+        this.socketGateway.emitWhatsApp('whatsappMessage', persistedMessage);
       }
 
-      return { sent: ok, data };
+      return { sent: ok, data, message: persistedMessage };
     } catch (err) {
       this.logger.error('Error enviando WhatsApp', err);
       return { sent: false, reason: 'api_error' };
@@ -2991,6 +2986,7 @@ The Villa Dog • Montería`;
     const { recipientPhone, lastInWaId, isId } = await this.resolveActiveRecipient(targetSession, phone);
     const formattedPhone = this.formatRecipient(recipientPhone);
 
+    let persistedMessage: any = null;
     try {
       const formData = new FormData();
       const blob = new Blob([new Uint8Array(fileBuffer)], { type: mimeType });
@@ -3072,7 +3068,7 @@ The Villa Dog • Montería`;
           },
         });
 
-        this.socketGateway.emitWhatsApp('whatsappMessage', {
+        persistedMessage = {
           id: newMsg.id,
           waMessageId: newMsg.waMessageId,
           sessionId: session.id,
@@ -3085,10 +3081,11 @@ The Villa Dog • Montería`;
           status: newMsg.status || 'sent',
           assignedTo: session.assignedToId,
           createdAt: newMsg.createdAt,
-        });
+        };
+        this.socketGateway.emitWhatsApp('whatsappMessage', persistedMessage);
       }
 
-      return { sent: sendOk, data: sendData };
+      return { sent: sendOk, data: sendData, message: persistedMessage };
     } catch (err) {
       this.logger.error('Error enviando WhatsApp multimedia', err);
       return { sent: false, reason: 'api_error' };
@@ -4714,8 +4711,12 @@ ${menuSummary}
   }
 
   private async getSetting(key: string): Promise<string | null> {
+    const cached = this.settingCache.get(key);
+    if (cached && cached.expiresAt > Date.now()) return cached.value;
     const s = await this.prisma.appSetting.findUnique({ where: { key } });
-    return s?.value || this.config.get(key.toUpperCase()) || null;
+    const value = s?.value || this.config.get(key.toUpperCase()) || null;
+    this.settingCache.set(key, { value, expiresAt: Date.now() + 60_000 });
+    return value;
   }
 
   private checkIfWithinBusinessHours(hoursStr: string): boolean {

@@ -34,6 +34,8 @@ export class WhatsappController {
   }
 
   @Get('media/:mediaId')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @Permissions('whatsapp.view')
   @ApiOperation({ summary: 'Proxy de archivos multimedia de WhatsApp Meta' })
   async streamMedia(@Param('mediaId') mediaId: string, @Res() res: express.Response) {
     return this.whatsappService.streamMedia(mediaId, res);
@@ -252,39 +254,6 @@ export class WhatsappController {
   @Permissions('whatsapp.reply')
   editMessage(@Param('id') id: string, @Body() body: { content: string }) {
     return this.whatsappService.editMessage(id, body.content);
-  }
-
-  @Get('media/:id')
-  @UseGuards(JwtAuthGuard, PermissionsGuard)
-  @Permissions('whatsapp.view')
-  async getMedia(@Param('id') id: string, @Res() res: express.Response) {
-    const media = await this.whatsappService.getMediaStream(id);
-    if (!media) {
-      res.status(404).send('Media not found');
-      return;
-    }
-    res.setHeader('Content-Type', media.contentType);
-    if (media.stream) {
-      const stream = media.stream as any;
-      if (typeof stream.pipe === 'function') {
-        stream.pipe(res);
-      } else if (stream[Symbol.asyncIterator]) {
-        for await (const chunk of stream) {
-          res.write(chunk);
-        }
-        res.end();
-      } else {
-        const reader = stream.getReader();
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          res.write(value);
-        }
-        res.end();
-      }
-    } else {
-      res.status(404).send('Media stream is empty');
-    }
   }
 
   @Put('sessions/:id/assign')

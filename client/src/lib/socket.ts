@@ -7,6 +7,9 @@ export function io(url: string, options: Partial<ManagerOptions & SocketOptions>
     ...options,
     auth: callback => callback({ token: api.getToken() }),
   })
+  // Invalidar primero los datos relacionados para que los listeners de cada vista
+  // siempre consulten la versión nueva cuando reciben un evento en tiempo real.
+  socket.prependAny((event) => api.invalidateRealtimeEvent(String(event || '')))
   let disposed = false
   const disconnect = socket.disconnect.bind(socket)
   socket.disconnect = () => { disposed = true; return disconnect() }

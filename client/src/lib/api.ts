@@ -19,6 +19,10 @@ class ApiClient {
   private token: string | null = null
   private refreshToken: string | null = null
   private refreshPromise: Promise<boolean> | null = null
+  private getCache = new Map<string, { value: unknown; expiresAt: number; lastUsed: number }>()
+  private getRequests = new Map<string, Promise<unknown>>()
+  private readonly maxCachedGets = 160
+  private cacheVersion = 0
 
   constructor() {
     this.token = localStorage.getItem('niche_token')
@@ -26,6 +30,7 @@ class ApiClient {
   }
 
   setToken(token: string) {
+    if (this.token !== token) this.invalidateCache()
     this.token = token
     localStorage.setItem('niche_token', token)
   }
@@ -35,9 +40,11 @@ class ApiClient {
     this.refreshToken = null
     localStorage.removeItem('niche_token')
     localStorage.removeItem('niche_refresh_token')
+    this.invalidateCache()
   }
 
   setTokens(accessToken: string, refreshToken?: string) {
+    if (this.token !== accessToken) this.invalidateCache()
     this.token = accessToken
     localStorage.setItem('niche_token', accessToken)
     if (refreshToken && refreshToken !== 'undefined' && refreshToken !== 'null') {
@@ -49,6 +56,7 @@ class ApiClient {
   // Usado por sesiones de impersonación: no tienen refreshToken propio, así que
   // si el access token expira se debe forzar logout en vez de refrescar de vuelta al SuperAdmin original.
   setAccessTokenOnly(accessToken: string) {
+    if (this.token !== accessToken) this.invalidateCache()
     this.token = accessToken
     this.refreshToken = null
     localStorage.setItem('niche_token', accessToken)
@@ -155,8 +163,110 @@ class ApiClient {
     return response.json()
   }
 
-  get<T>(endpoint: string) {
-    return this.request<T>(endpoint)
+  private getTtl(endpoint: string) {
+    const path = endpoint.split('?')[0]
+    if (/^\/(menu\/categories|zones|users|roles|cash-registers|kitchen\/stations|kitchen\/settings)(\/|$)/.test(path)) return 2 * 60_000
+    if (path === '/auth/profile') return 60_000
+    if (/(history|audit|dashboard-stats|closing)/.test(path)) return 15_000
+    if (path.startsWith('/whatsapp/')) return 1_500
+    return 5_000
+  }
+
+  private pruneGetCache() {
+    if (this.getCache.size <= this.maxCachedGets) return
+    const oldest = [...this.getCache.entries()]
+      .sort((a, b) => a[1].lastUsed - b[1].lastUsed)
+      .slice(0, this.getCache.size - this.maxCachedGets)
+    oldest.forEach(([key]) => this.getCache.delete(key))
+  }
+
+  invalidateCache(prefixes?: string | string[]) {
+    if (!prefixes) {
+      this.getCache.clear()
+      this.getRequests.clear()
+      this.cacheVersion += 1
+      return
+    }
+    const list = Array.isArray(prefixes) ? prefixes : [prefixes]
+    for (const key of this.getCache.keys()) {
+      if (list.some(prefix => key.startsWith(prefix))) this.getCache.delete(key)
+    }
+  }
+
+  invalidateRealtimeEvent(event: string) {
+    if (event.startsWith('whatsapp') || event.startsWith('chat')) {
+      this.invalidateCache('/whatsapp/')
+      return
+    }
+    if (event.includes('Payment') || event.startsWith('payment') || event.startsWith('cash')) {
+      this.invalidateCache(['/payments', '/payment-validation', '/orders', '/tables', '/orders/dashboard-stats'])
+      return
+    }
+    if (event.includes('Kitchen') || event.startsWith('kitchen')) {
+      this.invalidateCache(['/kitchen/', '/orders', '/tables'])
+      return
+    }
+    if (event.includes('Order') || event.startsWith('order')) {
+      this.invalidateCache(['/orders', '/tables', '/payments', '/payment-validation', '/orders/dashboard-stats', '/whatsapp/sessions'])
+      return
+    }
+    if (event.includes('Table') || event.startsWith('table')) {
+      this.invalidateCache(['/tables', '/orders', '/payments'])
+    }
+  }
+
+  private invalidateAfterMutation(endpoint: string) {
+    const path = endpoint.split('?')[0]
+    if (path.startsWith('/whatsapp/')) {
+      this.invalidateCache('/whatsapp/')
+    } else if (path.startsWith('/orders')) {
+      this.invalidateCache(['/orders', '/tables', '/payments', '/payment-validation', '/orders/dashboard-stats', '/whatsapp/sessions'])
+    } else if (path.startsWith('/tables')) {
+      this.invalidateCache(['/tables', '/orders', '/payments', '/payment-validation'])
+    } else if (path.startsWith('/payments') || path.startsWith('/payment-validation')) {
+      this.invalidateCache(['/payments', '/payment-validation', '/orders', '/tables', '/orders/dashboard-stats'])
+    } else if (path.startsWith('/menu')) {
+      this.invalidateCache(['/menu/', '/public/menu/'])
+    } else if (path.startsWith('/zones')) {
+      this.invalidateCache(['/zones', '/public/zones'])
+    } else if (path.startsWith('/users') || path.startsWith('/roles')) {
+      this.invalidateCache(['/users', '/roles', '/kitchen/'])
+    } else if (path.startsWith('/kitchen')) {
+      this.invalidateCache(['/kitchen/', '/orders', '/tables'])
+    } else if (path.startsWith('/cash-registers')) {
+      this.invalidateCache(['/cash-registers', '/payments', '/orders', '/tables'])
+    } else {
+      this.invalidateCache(path.split('/').slice(0, 2).join('/'))
+    }
+  }
+
+  get<T>(endpoint: string, options: { force?: boolean; ttlMs?: number } = {}) {
+    const now = Date.now()
+    const cached = this.getCache.get(endpoint)
+    if (!options.force && cached && cached.expiresAt > now) {
+      cached.lastUsed = now
+      return Promise.resolve(cached.value as T)
+    }
+
+    const pending = this.getRequests.get(endpoint)
+    if (pending) return pending as Promise<T>
+
+    const requestVersion = this.cacheVersion
+    const request = this.request<T>(endpoint)
+      .then(value => {
+        const ttl = options.ttlMs ?? this.getTtl(endpoint)
+        if (ttl > 0 && requestVersion === this.cacheVersion) {
+          this.getCache.set(endpoint, { value, expiresAt: Date.now() + ttl, lastUsed: Date.now() })
+          this.pruneGetCache()
+        }
+        return value
+      })
+      .finally(() => {
+        if (this.getRequests.get(endpoint) === request) this.getRequests.delete(endpoint)
+      })
+
+    this.getRequests.set(endpoint, request)
+    return request
   }
 
   getBlob(endpoint: string) {
@@ -166,19 +276,23 @@ class ApiClient {
   post<T>(endpoint: string, data?: any, options: RequestInit = {}) {
     const body = data instanceof FormData ? data : (data !== undefined ? JSON.stringify(data) : undefined)
     return this.request<T>(endpoint, { ...options, method: 'POST', body })
+      .then(result => { this.invalidateAfterMutation(endpoint); return result })
   }
 
   put<T>(endpoint: string, data?: any, options: RequestInit = {}) {
     const body = data instanceof FormData ? data : (data !== undefined ? JSON.stringify(data) : undefined)
     return this.request<T>(endpoint, { ...options, method: 'PUT', body })
+      .then(result => { this.invalidateAfterMutation(endpoint); return result })
   }
 
   patch<T>(endpoint: string, data?: any) {
     return this.request<T>(endpoint, { method: 'PATCH', body: JSON.stringify(data) })
+      .then(result => { this.invalidateAfterMutation(endpoint); return result })
   }
 
   delete<T>(endpoint: string) {
     return this.request<T>(endpoint, { method: 'DELETE' })
+      .then(result => { this.invalidateAfterMutation(endpoint); return result })
   }
 }
 
