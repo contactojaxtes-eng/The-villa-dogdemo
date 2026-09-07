@@ -37,6 +37,8 @@ type Session = {
   assignedToId: string | null
   assignedTo: { id: string; name: string } | null
   unreadCount?: number
+  /** Query for which the server confirmed a historical message match. */
+  searchMatchedFor?: string | null
   activeOrder?: { id: string; orderNumber: number; status: string; total?: number } | null
   messages: Message[]
 }
@@ -945,6 +947,18 @@ function ChatPage() {
     const rawQ = chatSearch.trim().toLowerCase()
     const q = rawQ.replace(/^(#|pedido\s*|orden\s*|factura\s*)/i, '').trim()
 
+    // El chat abierto puede tener más historial cargado que el resumen de la
+    // lista. Inclúyelo si la palabra aparece allí, aunque la consulta del
+    // servidor todavía esté llegando o ese mensaje sea muy antiguo.
+    if (rawQ && activeSession && messages.some(item => normalizeSearchValue(item.content || '').includes(normalizeSearchValue(rawQ)))) {
+      const activeIndex = dedupedList.findIndex(item => item.id === activeSession.id)
+      if (activeIndex >= 0) {
+        dedupedList[activeIndex] = { ...dedupedList[activeIndex], searchMatchedFor: normalizeSearchValue(rawQ) }
+      } else {
+        dedupedList.unshift({ ...activeSession, searchMatchedFor: normalizeSearchValue(rawQ) })
+      }
+    }
+
     // 1. Si NO hay búsqueda, filtrar estrictamente por la pestaña activa (TODAY, MINE, etc.)
     if (!rawQ) {
       let baseList = dedupedList
@@ -978,6 +992,11 @@ function ChatPage() {
     const searchBase = dedupedList
 
     return searchBase.filter(s => {
+      // Cuando la API encontró la coincidencia en un mensaje antiguo, la
+      // sesión solo trae el último mensaje como resumen. No la descartes al
+      // volver a filtrar en el cliente: hacerlo ocultaba chats históricos.
+      if (s.searchMatchedFor === normalizeSearchValue(rawQ)) return true
+
       // 2.1 Coincidencia por número de pedido (ej. 23, #23, pedido 23)
       if (!isNaN(searchNum) && (s.activeOrder?.orderNumber === searchNum || (s as any).orderNumber === searchNum)) return true
 
@@ -1026,7 +1045,7 @@ function ChatPage() {
 
       return false
     })
-  }, [sessions, chatSearch, chatFilter, user])
+  }, [sessions, chatSearch, chatFilter, user, activeSession, messages])
 
   const searchSuggestions = useMemo(() => {
     const query = chatSearch.trim()
@@ -1229,6 +1248,7 @@ function ChatPage() {
       const data = await api.get<Session[] | SessionPage>(`/whatsapp/sessions${queryString}`)
       if (requestId !== sessionsRequestIdRef.current) return
       const safeData = Array.isArray(data) ? data : (Array.isArray(data?.items) ? data.items : [])
+      const searchMarker = activeSearch ? normalizeSearchValue(activeSearch) : null
       if (!fetchAll) {
         const nextCursor = Array.isArray(data) ? null : data?.nextCursor || null
         sessionCursorRef.current = nextCursor
@@ -1245,14 +1265,14 @@ function ChatPage() {
         const key = phone10 || s.id
         if (!seen.has(key)) {
           seen.add(key)
-          uniqueSessions.push(s)
+          uniqueSessions.push(searchMarker ? { ...s, searchMatchedFor: searchMarker } : { ...s, searchMatchedFor: null })
         }
       }
       if (selectId && !uniqueSessions.some(session => session.id === selectId)) {
         const selectedSession = await api.get<Session>(`/whatsapp/sessions/${selectId}`).catch(() => null)
         if (requestId !== sessionsRequestIdRef.current) return
         if (selectedSession) {
-          uniqueSessions.unshift({ ...selectedSession, messages: selectedSession.messages || [] })
+          uniqueSessions.unshift({ ...selectedSession, messages: selectedSession.messages || [], searchMatchedFor: searchMarker })
         }
       }
       if (!fetchAll) setCachedSessions(activeSearch, activeFilter, uniqueSessions)
@@ -1323,13 +1343,14 @@ function ChatPage() {
             return (isStd ? (clean.length === 12 ? clean.slice(2) : clean) : null) || s.id
           }))
           const newItems: Session[] = []
+          const searchMarker = activeQuery.search ? normalizeSearchValue(activeQuery.search) : null
           for (const s of safeData) {
             const clean = (s.phone || '').replace(/\D/g, '')
             const isStd = (clean.length === 10 || (clean.length === 12 && clean.startsWith('57'))) && clean !== '3000000000' && clean !== '0000000000' && !/^0+$/.test(clean)
             const key = (isStd ? (clean.length === 12 ? clean.slice(2) : clean) : null) || s.id
             if (!seen.has(key)) {
               seen.add(key)
-              newItems.push(s)
+              newItems.push(searchMarker ? { ...s, searchMatchedFor: searchMarker } : { ...s, searchMatchedFor: null })
             }
           }
           return [...prev, ...newItems]
