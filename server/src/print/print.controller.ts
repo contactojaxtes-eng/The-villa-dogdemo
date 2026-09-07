@@ -1,4 +1,4 @@
-import { Controller, Get, Put, Post, Delete, Body, Param, Query, UseGuards } from '@nestjs/common';
+import { Controller, Get, Put, Post, Delete, Body, Param, Query, UseGuards, Header, NotFoundException } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
 import { PrintService } from './print.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -15,6 +15,23 @@ export class PrintController {
   @Get('settings')
   getSettings() {
     return this.printService.getPrinterSettings();
+  }
+
+  /**
+   * Returns the shared bridge key only to an authenticated administrator.
+   * The public installer never contains the key; the admin UI uses this
+   * endpoint to generate a one-click installer for another computer.
+   */
+  @Get('bridge-token')
+  @Roles('ADMIN', 'SUPERADMIN')
+  @UseGuards(RolesGuard)
+  @Header('Cache-Control', 'no-store')
+  getBridgeToken() {
+    const token = String(process.env.PRINT_BRIDGE_TOKEN || '').trim();
+    if (token.length < 32) {
+      throw new NotFoundException('PRINT_BRIDGE_TOKEN no está configurado en el servidor.');
+    }
+    return { token };
   }
 
   @Put('settings')

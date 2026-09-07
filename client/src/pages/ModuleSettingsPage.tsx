@@ -188,6 +188,7 @@ export default function ModuleSettingsPage() {
   const [hiddenModules, setHiddenModules] = useState<string[]>(() => getHiddenModules())
   const [loadingOperations, setLoadingOperations] = useState(true)
   const [savingSection, setSavingSection] = useState<SettingsTab | null>(null)
+  const [downloadingBridge, setDownloadingBridge] = useState(false)
   const [uploadingQr, setUploadingQr] = useState(false)
   const [testingPrinterId, setTestingPrinterId] = useState<string | null>(null)
   const [whatsapp, setWhatsapp] = useState<WhatsappSettings>(() => defaultWhatsappSettings())
@@ -559,6 +560,55 @@ export default function ModuleSettingsPage() {
     }
   }
 
+  const downloadConfiguredBridge = async () => {
+    setDownloadingBridge(true)
+    try {
+      const result = await api.get<{ token?: string }>('/print/bridge-token', { force: true })
+      const token = String(result?.token || '').trim()
+      if (token.length < 32) throw new Error('El puente de impresión todavía no tiene una llave válida en Railway.')
+
+      // The public EXE remains free of secrets. This small launcher is generated
+      // from the current admin session and passes the shared restaurant key to it.
+      const productionUrl = 'https://the-villa-dog-backend-production.up.railway.app'
+      const safeToken = token.replace(/[\r\n"]/g, '')
+      const script = [
+        '@echo off',
+        'setlocal EnableExtensions DisableDelayedExpansion',
+        'title Instalador del puente The Villa Dog',
+        `set "BRIDGE_TOKEN=${safeToken}"`,
+        `set "SOURCE_URL=${productionUrl}/downloads/Instalar-Impresion-TheVillaDog.exe"`,
+        'set "TARGET=%TEMP%\\TheVillaDogPrinterBridgeSetup.exe"',
+        'echo Descargando el instalador configurado...',
+        `powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$ProgressPreference = ''SilentlyContinue''; Invoke-WebRequest -UseBasicParsing -Uri $env:SOURCE_URL -OutFile $env:TARGET"`,
+        'if errorlevel 1 (',
+        '  echo No se pudo descargar el instalador. Comprueba la conexion a Internet.',
+        '  pause',
+        '  exit /b 1',
+        ')',
+        'start "" /wait "%TARGET%"',
+        'del /Q "%TARGET%" >nul 2>&1',
+        'echo.',
+        'echo Instalacion terminada. Puedes cerrar esta ventana.',
+        'exit /b 0',
+      ].join('\r\n') + '\r\n'
+
+      const blob = new Blob([script], { type: 'application/octet-stream' })
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = 'Instalar-Puente-TheVillaDog.cmd'
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      URL.revokeObjectURL(url)
+      alerts.success('Instalador listo', 'Descárgalo y ejecútalo en cada computador. No te pedirá la llave.')
+    } catch (error: unknown) {
+      alerts.error('No se pudo preparar el instalador', getErrorMessage(error, 'Verifica que PRINT_BRIDGE_TOKEN esté guardada en Railway.'))
+    } finally {
+      setDownloadingBridge(false)
+    }
+  }
+
   const updatePrinter = (id: string, changes: Partial<PrinterConfig>) => {
     setPrinting(current => ({ ...current, printers: current.printers.map(printer => printer.id === id ? { ...printer, ...changes } : printer) }))
   }
@@ -699,10 +749,10 @@ export default function ModuleSettingsPage() {
                     <p className="mt-0.5 max-w-2xl text-xs leading-5 text-[var(--text-muted)]">Instálalo una sola vez en el computador conectado a las impresoras. Inicia con Windows, funciona oculto y se levanta de nuevo si llega a cerrarse.</p>
                   </div>
                 </div>
-                <a href="/downloads/Instalar-Impresion-TheVillaDog.exe" download className="inline-flex h-11 shrink-0 items-center justify-center gap-2 rounded-xl bg-sky-600 px-5 text-sm font-black text-white shadow-sm transition hover:bg-sky-700"><Download className="h-4 w-4" /> Descargar instalador</a>
+                <Button type="button" onClick={downloadConfiguredBridge} disabled={downloadingBridge} className="h-11 shrink-0 rounded-xl bg-sky-600 px-5 text-sm font-black text-white shadow-sm transition hover:bg-sky-700">{downloadingBridge ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Download className="mr-2 h-4 w-4" />} {downloadingBridge ? 'Preparando...' : 'Descargar instalador configurado'}</Button>
               </div>
               <div className="grid border-t border-[var(--border-subtle)] bg-[var(--bg-elevated)] sm:grid-cols-3">
-                <div className="p-4"><p className="text-[10px] font-black uppercase tracking-wider text-sky-600">1. Instalar</p><p className="mt-1 text-xs text-[var(--text-secondary)]">Ejecuta el archivo y pega una sola vez la clave <strong>PRINT_BRIDGE_TOKEN</strong>.</p></div>
+                <div className="p-4"><p className="text-[10px] font-black uppercase tracking-wider text-sky-600">1. Instalar</p><p className="mt-1 text-xs text-[var(--text-secondary)]">Descarga el instalador configurado y ejecútalo. La llave se incluye automáticamente; no tienes que copiarla.</p></div>
                 <div className="border-y border-[var(--border-subtle)] p-4 sm:border-x sm:border-y-0"><p className="text-[10px] font-black uppercase tracking-wider text-sky-600">2. Configurar</p><p className="mt-1 text-xs text-[var(--text-secondary)]">Usa la IP local o selecciona USB y escribe únicamente el nombre compartido.</p></div>
                 <div className="p-4"><p className="text-[10px] font-black uppercase tracking-wider text-sky-600">3. Probar</p><p className="mt-1 text-xs text-[var(--text-secondary)]">Guarda y pulsa <strong>Probar</strong>. Puedes hacerlo desde cualquier dispositivo y lugar.</p></div>
               </div>

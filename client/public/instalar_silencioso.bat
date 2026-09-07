@@ -41,6 +41,7 @@ if not exist "%INSTALL_DIR%" (
   exit /b 1
 )
 
+if defined BRIDGE_TOKEN goto token_ready
 set "BRIDGE_TOKEN="
 if exist "%CONFIG_PATH%" (
   echo Se encontro una instalacion anterior. Se conservara su clave.
@@ -57,6 +58,7 @@ if exist "%CONFIG_PATH%" (
     exit /b 1
   )
 )
+:token_ready
 
 echo.
 echo Instalando en una ubicacion estable...
