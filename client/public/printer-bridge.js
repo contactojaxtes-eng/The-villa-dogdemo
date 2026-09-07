@@ -1,242 +1,335 @@
 const net = require('net');
 const fs = require('fs');
 const path = require('path');
-const { exec } = require('child_process');
+const { execFile } = require('child_process');
 const os = require('os');
 const http = require('http');
 const https = require('https');
 
-// Config file path
+const BRIDGE_VERSION = '1.1.0';
+const DEFAULT_BACKEND_URL = 'https://the-villa-dog-backend-production.up.railway.app';
+const MAX_LOG_BYTES = 1024 * 1024;
+const MAX_LOCAL_RECEIPTS = 500;
+const HTTP_TIMEOUT_MS = 15000;
+
 const isPkg = typeof process.pkg !== 'undefined';
 const configDir = isPkg ? path.dirname(process.execPath) : __dirname;
 const configPath = path.join(configDir, 'config.json');
+const logPath = path.join(configDir, 'bridge.log');
+const previousLogPath = path.join(configDir, 'bridge.previous.log');
+const receiptPath = path.join(configDir, 'printed-pending-confirmation.json');
+const lockPath = path.join(configDir, 'bridge.lock');
 
-const defaultUrl = "http://localhost:3000";
+function stringifyLogPart(value) {
+  if (value instanceof Error) return value.stack || value.message;
+  if (typeof value === 'string') return value;
+  try { return JSON.stringify(value); } catch { return String(value); }
+}
 
-// Default config
+function appendLog(level, values) {
+  try {
+    if (fs.existsSync(logPath) && fs.statSync(logPath).size >= MAX_LOG_BYTES) {
+      try { fs.unlinkSync(previousLogPath); } catch {}
+      fs.renameSync(logPath, previousLogPath);
+    }
+    const line = `${new Date().toISOString()} [${level}] ${values.map(stringifyLogPart).join(' ')}${os.EOL}`;
+    fs.appendFileSync(logPath, line, 'utf8');
+  } catch {}
+}
+
+for (const level of ['log', 'warn', 'error']) {
+  const original = console[level].bind(console);
+  console[level] = (...values) => {
+    original(...values);
+    appendLog(level.toUpperCase(), values);
+  };
+}
+
+function processIsAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function acquireSingleInstanceLock() {
+  try {
+    fs.writeFileSync(lockPath, String(process.pid), { flag: 'wx' });
+    return true;
+  } catch (error) {
+    try {
+      const existingPid = Number(fs.readFileSync(lockPath, 'utf8').trim());
+      if (processIsAlive(existingPid)) return false;
+      fs.unlinkSync(lockPath);
+      fs.writeFileSync(lockPath, String(process.pid), { flag: 'wx' });
+      return true;
+    } catch {
+      console.error('No se pudo crear el bloqueo de instancia:', error.message);
+      return false;
+    }
+  }
+}
+
+if (!acquireSingleInstanceLock()) {
+  console.log('El puente ya está ejecutándose. Esta copia se cerrará.');
+  process.exit(0);
+}
+
+const releaseLock = () => {
+  try {
+    if (Number(fs.readFileSync(lockPath, 'utf8').trim()) === process.pid) fs.unlinkSync(lockPath);
+  } catch {}
+};
+process.on('exit', releaseLock);
+process.on('SIGINT', () => process.exit(0));
+process.on('SIGTERM', () => process.exit(0));
+
 let config = {
-  backendUrl: defaultUrl,
+  backendUrl: DEFAULT_BACKEND_URL,
   bridgeToken: '',
-  pollIntervalMs: 3000
+  pollIntervalMs: 3000,
 };
 
-// Load or create config
 if (fs.existsSync(configPath)) {
   try {
-    const loaded = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    const loaded = JSON.parse(fs.readFileSync(configPath, 'utf8').replace(/^\uFEFF/, ''));
     if (loaded && typeof loaded.backendUrl === 'string' && loaded.backendUrl.trim()) {
       config.backendUrl = loaded.backendUrl.trim();
-    } else {
-      config.backendUrl = defaultUrl;
-      fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf8');
     }
     if (typeof loaded.bridgeToken === 'string') config.bridgeToken = loaded.bridgeToken.trim();
     if (Number.isFinite(Number(loaded.pollIntervalMs))) {
       config.pollIntervalMs = Math.max(1000, Number(loaded.pollIntervalMs));
     }
-    console.log(`Configuración cargada de ${configPath}`);
-  } catch (e) {
-    config.backendUrl = defaultUrl;
-    console.error('Error al leer config.json, usando valores por defecto.', e);
+  } catch (error) {
+    console.error('No se pudo leer config.json:', error.message);
   }
 } else {
   try {
-    config.backendUrl = defaultUrl;
     fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf8');
-    console.log(`Creado archivo de configuración por defecto en ${configPath}`);
-  } catch (e) {
-    config.backendUrl = defaultUrl;
-    console.error('No se pudo crear config.json', e);
+  } catch (error) {
+    console.error('No se pudo crear config.json:', error.message);
   }
 }
 
-if (!config.backendUrl || typeof config.backendUrl !== 'string') {
-  config.backendUrl = defaultUrl;
-}
 config.bridgeToken = String(process.env.PRINT_BRIDGE_TOKEN || config.bridgeToken || '').trim();
+config.backendUrl = String(config.backendUrl || DEFAULT_BACKEND_URL).trim().replace(/\/$/, '');
 
-console.log(`Conectando con Servidor Nube: ${config.backendUrl}`);
-console.log(`Puente de Impresión Local THE VILLA DOG iniciado. Consultando cada ${config.pollIntervalMs} ms...`);
-if (!config.bridgeToken) {
-  console.error('Falta bridgeToken en config.json. El servidor rechazará la cola de impresión.');
+let locallyPrinted = new Set();
+try {
+  const savedReceipts = JSON.parse(fs.readFileSync(receiptPath, 'utf8').replace(/^\uFEFF/, ''));
+  if (Array.isArray(savedReceipts)) locallyPrinted = new Set(savedReceipts.map(String).slice(-MAX_LOCAL_RECEIPTS));
+} catch {}
+
+function persistLocalReceipts() {
+  try {
+    const values = Array.from(locallyPrinted).slice(-MAX_LOCAL_RECEIPTS);
+    locallyPrinted = new Set(values);
+    fs.writeFileSync(receiptPath, JSON.stringify(values), 'utf8');
+  } catch (error) {
+    console.error('No se pudo guardar el control de impresiones:', error.message);
+  }
 }
 
-// Helper for HTTP/S requests
-function makeRequest(urlStr, options = {}) {
+function rememberPrinted(id) {
+  locallyPrinted.add(String(id));
+  persistLocalReceipts();
+}
+
+function forgetConfirmed(ids) {
+  for (const id of ids) locallyPrinted.delete(String(id));
+  persistLocalReceipts();
+}
+
+function makeRequest(urlString, options = {}) {
   return new Promise((resolve, reject) => {
     try {
-      const parsedUrl = new URL(urlStr);
+      const parsedUrl = new URL(urlString);
       const protocol = parsedUrl.protocol === 'https:' ? https : http;
-      const reqOptions = {
+      const request = protocol.request({
         hostname: parsedUrl.hostname,
         port: parsedUrl.port || (parsedUrl.protocol === 'https:' ? 443 : 80),
         path: parsedUrl.pathname + parsedUrl.search,
         method: options.method || 'GET',
         headers: {
           'Content-Type': 'application/json',
-          ...(options.headers || {})
-        }
-      };
-
-      const req = protocol.request(reqOptions, (res) => {
+          ...(options.headers || {}),
+        },
+      }, (response) => {
         let data = '';
-        res.on('data', (chunk) => { data += chunk; });
-        res.on('end', () => {
-          if (res.statusCode >= 200 && res.statusCode < 300) {
-            try {
-              resolve(JSON.parse(data));
-            } catch (e) {
-              resolve(data);
-            }
-          } else {
-            reject(new Error(`Error HTTP: ${res.statusCode} - ${data}`));
+        response.setEncoding('utf8');
+        response.on('data', chunk => { data += chunk; });
+        response.on('end', () => {
+          if (response.statusCode >= 200 && response.statusCode < 300) {
+            try { resolve(JSON.parse(data)); } catch { resolve(data); }
+            return;
           }
+          reject(new Error(`HTTP ${response.statusCode}: ${data.slice(0, 300)}`));
         });
       });
 
-      req.on('error', (err) => reject(err));
-      
-      if (options.body) {
-        req.write(typeof options.body === 'string' ? options.body : JSON.stringify(options.body));
-      }
-      req.end();
-    } catch (err) {
-      reject(err);
+      request.setTimeout(HTTP_TIMEOUT_MS, () => request.destroy(new Error('Tiempo de espera agotado al conectar con Railway')));
+      request.on('error', reject);
+      if (options.body) request.write(typeof options.body === 'string' ? options.body : JSON.stringify(options.body));
+      request.end();
+    } catch (error) {
+      reject(error);
     }
   });
 }
 
-function printToThermal(data, ip, port = 9100) {
-    return new Promise((resolve, reject) => {
-        // --- CASO 1: IMPRESORA USB ---
-        if (ip && ip.startsWith('USB:')) {
-            const printerName = ip.substring(4); // Extrae el nombre compartido
-            
-            // Crea un archivo binario temporal
-            const tmpFile = path.join(os.tmpdir(), `print_${Date.now()}_${Math.floor(Math.random()*1000)}.bin`);
-            try {
-                fs.writeFileSync(tmpFile, data);
-            } catch(e) {
-                return reject(new Error('No se pudo crear archivo temporal USB: ' + e.message));
-            }
-            // Ejecuta el comando de Windows para enviar el archivo binario directamente al puerto compartido
-            const cmd = `copy /b "${tmpFile}" "\\\\127.0.0.1\\${printerName}"`;
-            exec(cmd, (err) => {
-                try { fs.unlinkSync(tmpFile); } catch(e){} // Borra el temporal
-                if (err) return reject(new Error(`Fallo copia a USB: Asegúrate de compartir la impresora como ${printerName}`));
-                setTimeout(() => resolve(), 600); // Pequeña espera para evitar colisiones
-            });
-            return;
-        }
-        
-        // --- CASO 2: IMPRESORA DE RED (TCP/IP) ---
-        if (!ip) {
-            return reject(new Error('IP de impresora no especificada o inválida'));
-        }
-        
-        const client = new net.Socket();
-        
-        // Timeout de seguridad en caso de que la impresora esté apagada o no conectada
-        const timeout = setTimeout(() => { 
-            client.destroy(); 
-            reject(new Error('Timeout conectando a ' + ip)); 
-        }, 5000);
-        
-        client.connect(port, ip, () => {
-            client.write(data, (err) => {
-                clearTimeout(timeout);
-                if (err) { client.destroy(); return reject(err); }
-                
-                // Espera 600ms antes de cerrar para asegurar que los buffers de la impresora procesen los datos
-                setTimeout(() => { 
-                    client.destroy(); 
-                    resolve(); 
-                }, 600);
-            });
-        });
-        
-        client.on('error', (err) => { 
-            clearTimeout(timeout); 
-            reject(err); 
-        });
-    });
+function validUsbShareName(value) {
+  return /^[\p{L}\p{N} ._()-]{1,80}$/u.test(value) && value.trim().length > 0;
 }
 
-// Polling loop
+function printToSharedUsb(data, printerName) {
+  return new Promise((resolve, reject) => {
+    if (process.platform !== 'win32') {
+      reject(new Error('La impresión USB compartida requiere Windows'));
+      return;
+    }
+
+    const shareName = printerName.trim();
+    if (!validUsbShareName(shareName)) {
+      reject(new Error('Nombre compartido USB inválido. Usa letras, números, espacios, punto, guion o paréntesis'));
+      return;
+    }
+
+    const tempFile = path.join(os.tmpdir(), `the_villa_dog_${process.pid}_${Date.now()}.bin`);
+    try {
+      fs.writeFileSync(tempFile, data);
+    } catch (error) {
+      reject(new Error(`No se pudo preparar la impresión USB: ${error.message}`));
+      return;
+    }
+
+    const destination = `\\\\127.0.0.1\\${shareName}`;
+    const command = `copy /b "${tempFile}" "${destination}" >nul`;
+    execFile(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', command], { windowsHide: true, timeout: 10000 }, (error) => {
+      try { fs.unlinkSync(tempFile); } catch {}
+      if (error) {
+        reject(new Error(`No se pudo imprimir en USB. Comparte la impresora en Windows con el nombre "${shareName}"`));
+        return;
+      }
+      resolve();
+    });
+  });
+}
+
+function printToNetwork(data, host, port = 9100) {
+  return new Promise((resolve, reject) => {
+    const socket = new net.Socket();
+    let settled = false;
+    const finish = (error) => {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      if (error) reject(error);
+      else resolve();
+    };
+
+    socket.setTimeout(6000, () => finish(new Error(`Tiempo agotado conectando a ${host}:${port}`)));
+    socket.once('error', finish);
+    socket.connect(port, host, () => {
+      socket.write(data, (error) => {
+        if (error) {
+          finish(error);
+          return;
+        }
+        setTimeout(() => finish(), 500);
+      });
+    });
+  });
+}
+
+function parsePrinterAddress(rawAddress, rawPort) {
+  const address = String(rawAddress || '').trim();
+  if (address.toUpperCase().startsWith('USB:')) {
+    const shareName = address.slice(4).trim();
+    if (!validUsbShareName(shareName)) throw new Error('Falta un nombre válido después de USB:');
+    return { type: 'USB', shareName, label: `USB:${shareName}` };
+  }
+
+  let host = address;
+  let port = Number(rawPort) || 9100;
+  const match = address.match(/^(.+):(\d+)$/);
+  if (match) {
+    host = match[1];
+    port = Number(match[2]);
+  }
+  const parts = host.split('.');
+  const isIpv4 = parts.length === 4 && parts.every(part => /^\d{1,3}$/.test(part) && Number(part) <= 255);
+  if ((!isIpv4 && host !== 'localhost') || port < 1 || port > 65535) {
+    throw new Error(`Dirección de impresora inválida: "${address}"`);
+  }
+  return { type: 'NETWORK', host, port, label: `${host}:${port}` };
+}
+
+async function printJob(job) {
+  const target = parsePrinterAddress(job.impresora_ip, job.port || job.impresora_puerto);
+  const data = Buffer.from(job.payload, 'base64');
+  if (!data.length) throw new Error('La comanda llegó vacía');
+  if (target.type === 'USB') await printToSharedUsb(data, target.shareName);
+  else await printToNetwork(data, target.host, target.port);
+  return target.label;
+}
+
 async function pollPrintQueue() {
   try {
-    const rawUrl = (config && typeof config.backendUrl === 'string' && config.backendUrl.trim()) ? config.backendUrl.trim() : defaultUrl;
-    const backendApiUrl = rawUrl.endsWith('/') ? rawUrl.slice(0, -1) : rawUrl;
-    const getUrl = `${backendApiUrl}/api/imprimir/cola`;
-    
-    // 1. Obtener trabajos pendientes
+    const queueUrl = `${config.backendUrl}/api/imprimir/cola`;
     const authHeaders = config.bridgeToken ? { 'x-print-token': config.bridgeToken } : {};
-    const jobs = await makeRequest(getUrl, { headers: authHeaders });
-    
-    if (jobs && jobs.length > 0) {
-      console.log(`[${new Date().toLocaleTimeString()}] Detectados ${jobs.length} trabajos de impresión en cola.`);
-      const printedIds = [];
+    const jobs = await makeRequest(queueUrl, { headers: authHeaders });
+
+    if (!Array.isArray(jobs)) throw new Error('Railway devolvió una cola inválida');
+    if (jobs.length > 0) {
+      console.log(`Se encontraron ${jobs.length} trabajo(s) pendiente(s).`);
+      const confirmedIds = [];
       let failedCount = 0;
-      
+
       for (const job of jobs) {
+        const localId = String(job.id);
+        if (locallyPrinted.has(localId)) {
+          console.log(`Trabajo ${job.id} ya impreso; reintentando solamente la confirmación.`);
+          confirmedIds.push(job.id);
+          continue;
+        }
+
         try {
-          // Resolver puerto opcional si la IP tiene formato IP:puerto
-          let ip = job.impresora_ip || '';
-          let port = Number(job.port || job.impresora_puerto) || 9100;
-          if (ip.includes(':') && !ip.startsWith('USB:')) {
-            const parts = ip.split(':');
-            ip = parts[0];
-            port = parseInt(parts[1]) || 9100;
-          }
-          
-          // Validar que la IP es una dirección válida (no un nombre como "caja" o "cocina")
-          const ipParts = ip.split('.');
-          const isIpv4 = ipParts.length === 4 && ipParts.every(part => /^\d{1,3}$/.test(part) && Number(part) <= 255);
-          const isValidIp = isIpv4 || ip === 'localhost' || ip.startsWith('USB:');
-          if (!ip || !isValidIp) {
-            console.error(`  ⚠ Trabajo ID ${job.id} espera una IP válida en Configuración: "${job.impresora_ip}".`);
-            failedCount += 1;
-            continue;
-          }
-          
-          console.log(`- Imprimiendo trabajo ID ${job.id} en ${ip}:${port}...`);
-          const dataBuffer = Buffer.from(job.payload, 'base64');
-          
-          await printToThermal(dataBuffer, ip, port);
-          console.log(`  ✓ Trabajo ID ${job.id} impreso con éxito.`);
-          printedIds.push(job.id);
-        } catch (printErr) {
-          console.error(`  ✗ Error imprimiendo trabajo ID ${job.id}:`, printErr.message);
-          console.error(`    → El trabajo queda pendiente para reintentar; no se perderá la comanda.`);
+          const destination = await printJob(job);
+          rememberPrinted(job.id);
+          confirmedIds.push(job.id);
+          console.log(`Trabajo ${job.id} impreso correctamente en ${destination}.`);
+        } catch (error) {
           failedCount += 1;
+          console.error(`Trabajo ${job.id} pendiente: ${error.message}`);
         }
       }
-      
-      // 2. Confirmar únicamente trabajos realmente impresos. Los fallidos siguen
-      // pendientes para que un cambio de IP o la reconexión de la impresora los recupere.
-      if (printedIds.length > 0) {
+
+      if (confirmedIds.length > 0) {
         try {
-          const confirmUrl = `${backendApiUrl}/api/imprimir/cola`;
-          await makeRequest(confirmUrl, {
+          await makeRequest(queueUrl, {
             method: 'POST',
             headers: authHeaders,
-            body: { ids: printedIds }
+            body: { ids: confirmedIds },
           });
-          if (printedIds.length > 0) console.log(`  ✓ ${printedIds.length} trabajos confirmados exitosamente.`);
-        } catch (confirmErr) {
-          console.error(`  ✗ Error confirmando trabajos:`, confirmErr.message);
-          console.error(`    → Los trabajos podrían reaparecer en el próximo ciclo. Verifica la conexión al servidor.`);
+          forgetConfirmed(confirmedIds);
+          console.log(`${confirmedIds.length} trabajo(s) confirmado(s) con Railway.`);
+        } catch (error) {
+          console.error(`No se pudo confirmar con Railway: ${error.message}. No se volverán a imprimir localmente.`);
         }
       }
-      if (failedCount > 0) console.log(`  ⚠ ${failedCount} trabajos siguen pendientes para un nuevo intento.`);
+      if (failedCount > 0) console.warn(`${failedCount} trabajo(s) quedan en cola para reintentar.`);
     }
-  } catch (err) {
-    console.error(`[${new Date().toLocaleTimeString()}] Error de conexión o procesamiento:`, err.message);
+  } catch (error) {
+    console.error(`Conexión pendiente: ${error.message}`);
+  } finally {
+    setTimeout(pollPrintQueue, config.pollIntervalMs);
   }
-  
-  // Continuar polling en 3 segundos
-  setTimeout(pollPrintQueue, config.pollIntervalMs);
 }
 
-// Start polling
+console.log(`Puente The Villa Dog v${BRIDGE_VERSION} iniciado.`);
+console.log(`Servidor: ${config.backendUrl} | consulta cada ${config.pollIntervalMs} ms.`);
+if (!config.bridgeToken) console.error('Falta PRINT_BRIDGE_TOKEN. Ejecuta nuevamente el instalador para configurarlo.');
 pollPrintQueue();

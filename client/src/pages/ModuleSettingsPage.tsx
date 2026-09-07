@@ -8,6 +8,8 @@ import {
   ChefHat,
   CheckCircle2,
   CreditCard,
+  Download,
+  Edit2,
   ExternalLink,
   Image as ImageIcon,
   LayoutDashboard,
@@ -37,6 +39,7 @@ import {
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
+import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { alerts } from '@/lib/alerts'
 import { api } from '@/lib/api'
 import { io } from '@/lib/socket'
@@ -84,6 +87,34 @@ interface KitchenStation {
   id: string
   name: string
   active: boolean
+  color?: string
+  priority?: number
+  categories?: Array<{ id: string; name: string }>
+  users?: KitchenUser[]
+}
+
+interface KitchenUser {
+  id: string
+  name: string
+  role: string
+  active?: boolean
+}
+
+interface CookStatus {
+  active?: boolean
+  onBreak?: boolean
+  breakUntil?: number | null
+  breakMinutes?: number
+  breakReason?: string
+}
+
+interface DeliveryStationDraft {
+  id?: string
+  name: string
+  color: string
+  active: boolean
+  categoryIds: string[]
+  userIds: string[]
 }
 
 interface PrinterConfig {
@@ -163,6 +194,13 @@ export default function ModuleSettingsPage() {
   const [kitchen, setKitchen] = useState<KitchenSettings>(defaultKitchenSettings)
   const [stations, setStations] = useState<KitchenStation[]>([])
   const [printing, setPrinting] = useState<PrinterSettings>({ printers: [] })
+  const [menuCategories, setMenuCategories] = useState<Array<{ id: string; name: string }>>([])
+  const [kitchenUsers, setKitchenUsers] = useState<KitchenUser[]>([])
+  const [deliveryCookStatuses, setDeliveryCookStatuses] = useState<Record<string, CookStatus>>({})
+  const [stationDraft, setStationDraft] = useState<DeliveryStationDraft | null>(null)
+  const [savingStation, setSavingStation] = useState(false)
+  const [busyCookId, setBusyCookId] = useState<string | null>(null)
+  const [clockNow, setClockNow] = useState(Date.now())
 
   const accessibleModules = useMemo(
     () => MODULE_DEFINITIONS.filter(def => allNavItems.some(item => item.module === def.id && hasNavItemAccess(user, item))),
@@ -175,6 +213,21 @@ export default function ModuleSettingsPage() {
     return [...groups.entries()]
   }, [accessibleModules])
 
+  const deliveryStations = useMemo(() => stations.filter(station => {
+    const configured = kitchen.stationChannels[station.id]
+    if (configured) return configured === 'DELIVERY'
+    return /domicilio/i.test(station.name)
+  }), [kitchen.stationChannels, stations])
+
+  const deliveryPrinters = useMemo(() => printing.printers.filter(printer => {
+    const channel = printer.channel || (/domicilio/i.test(printer.name) ? 'DELIVERY' : 'DINING')
+    return channel === 'DELIVERY' || channel === 'BOTH'
+  }), [printing.printers])
+
+  const availableKitchenUsers = useMemo(() => kitchenUsers
+    .filter(candidate => candidate.active !== false && candidate.role === 'KITCHEN')
+    .sort((a, b) => a.name.localeCompare(b.name)), [kitchenUsers])
+
   useEffect(() => {
     let active = true
     Promise.all([
@@ -182,7 +235,10 @@ export default function ModuleSettingsPage() {
       api.get<Partial<KitchenSettings>>('/kitchen/settings').catch(() => null),
       api.get<KitchenStation[]>('/kitchen/stations').catch(() => []),
       api.get<PrinterSettings>('/print/settings').catch(() => null),
-    ]).then(([wa, kitchenSettings, stationRows, printerSettings]) => {
+      api.get<Array<{ id: string; name: string }>>('/menu/categories?includeInactive=true').catch(() => []),
+      api.get<KitchenUser[]>('/users').catch(() => []),
+      api.get<Record<string, CookStatus>>('/kitchen/delivery/cooks/status').catch(() => ({})),
+    ]).then(([wa, kitchenSettings, stationRows, printerSettings, categoryRows, userRows, cookStatuses]) => {
       if (!active) return
       if (wa) {
         const fallback = defaultWhatsappSettings()
@@ -213,10 +269,18 @@ export default function ModuleSettingsPage() {
       }
       setStations(stationRows || [])
       if (printerSettings) setPrinting({ ...printerSettings, printers: printerSettings.printers || [] })
+      setMenuCategories(categoryRows || [])
+      setKitchenUsers(userRows || [])
+      setDeliveryCookStatuses(cookStatuses || {})
     }).finally(() => {
       if (active) setLoadingOperations(false)
     })
     return () => { active = false }
+  }, [])
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setClockNow(Date.now()), 30000)
+    return () => window.clearInterval(timer)
   }, [])
 
   useEffect(() => {
@@ -236,6 +300,10 @@ export default function ModuleSettingsPage() {
     })
     socket.on('kitchenSettingsUpdated', (updated: KitchenSettings) => setKitchen(current => ({ ...current, ...updated })))
     socket.on('printerSettingsUpdated', (updated: PrinterSettings) => setPrinting({ ...updated, printers: updated.printers || [] }))
+    socket.on('deliveryKitchenCookStatusChanged', (updated: Record<string, CookStatus>) => setDeliveryCookStatuses(updated || {}))
+    socket.on('kitchenStationsChanged', () => {
+      api.get<KitchenStation[]>('/kitchen/stations').then(rows => setStations(rows || [])).catch(() => {})
+    })
     return () => { socket.disconnect() }
   }, [user?.id])
 
@@ -346,14 +414,105 @@ export default function ModuleSettingsPage() {
     return 'DINING'
   }
 
+  const openDeliveryStationEditor = (station?: KitchenStation) => {
+    setStationDraft(station ? {
+      id: station.id,
+      name: station.name,
+      color: station.color || '#F97316',
+      active: station.active !== false,
+      categoryIds: (station.categories || []).map(category => category.id),
+      userIds: (station.users || []).map(candidate => candidate.id),
+    } : {
+      name: `Tablet domicilios ${deliveryStations.length + 1}`,
+      color: '#F97316',
+      active: true,
+      categoryIds: [],
+      userIds: [],
+    })
+  }
+
+  const saveDeliveryStation = async () => {
+    if (!stationDraft?.name.trim()) {
+      alerts.warning('Escribe un nombre para la estación')
+      return
+    }
+    if (stationDraft.userIds.length === 0) {
+      alerts.warning('Asigna al menos un cocinero', 'El reparto automático necesita saber quiénes trabajan en esta tablet.')
+      return
+    }
+    setSavingStation(true)
+    try {
+      await api.post('/kitchen/stations', {
+        id: stationDraft.id,
+        name: stationDraft.name.trim(),
+        color: stationDraft.color,
+        active: stationDraft.active,
+        categoryIds: stationDraft.categoryIds,
+        userIds: stationDraft.userIds,
+        priority: deliveryStations.findIndex(station => station.id === stationDraft.id) + 1,
+        channel: 'DELIVERY',
+      })
+      const [stationRows, updatedSettings] = await Promise.all([
+        api.get<KitchenStation[]>('/kitchen/stations'),
+        api.get<KitchenSettings>('/kitchen/settings'),
+      ])
+      setStations(stationRows || [])
+      setKitchen(current => ({ ...current, ...updatedSettings }))
+      setStationDraft(null)
+      alerts.success('Estación de domicilios guardada', 'La tablet y sus cocineros quedaron separados de la cocina de mesas.')
+    } catch (error: unknown) {
+      alerts.error('No se pudo guardar la estación', getErrorMessage(error, 'Inténtalo nuevamente.'))
+    } finally {
+      setSavingStation(false)
+    }
+  }
+
+  const setDeliveryStationActive = async (station: KitchenStation, active: boolean) => {
+    try {
+      await api.post('/kitchen/stations', {
+        id: station.id,
+        name: station.name,
+        color: station.color || '#F97316',
+        active,
+        categoryIds: (station.categories || []).map(category => category.id),
+        userIds: (station.users || []).map(candidate => candidate.id),
+        priority: station.priority || 0,
+        channel: 'DELIVERY',
+      })
+      setStations(current => current.map(item => item.id === station.id ? { ...item, active } : item))
+      alerts.toast(active ? 'Tablet activada' : 'Tablet pausada')
+    } catch (error: unknown) {
+      alerts.error('No se pudo cambiar la tablet', getErrorMessage(error, 'Inténtalo nuevamente.'))
+    }
+  }
+
+  const updateDeliveryCookStatus = async (userId: string, data: { active?: boolean; onBreak?: boolean; breakMinutes?: number; breakReason?: string }) => {
+    setBusyCookId(userId)
+    try {
+      const updated = await api.post<Record<string, CookStatus>>(`/kitchen/delivery/cooks/${userId}/status`, data)
+      setDeliveryCookStatuses(updated || {})
+      if (data.onBreak === true) alerts.toast('Descanso iniciado; la tablet sigue recibiendo pedidos')
+      else if (data.onBreak === false) alerts.toast('Cocinero reincorporado al reparto')
+      else alerts.toast(data.active === false ? 'Cocinero fuera del reparto' : 'Cocinero disponible')
+    } catch (error: unknown) {
+      alerts.error('No se pudo cambiar la disponibilidad', getErrorMessage(error, 'Inténtalo nuevamente.'))
+    } finally {
+      setBusyCookId(null)
+    }
+  }
+
   const printerChannel = (printer: PrinterConfig): KitchenChannel =>
     printer.channel || (/domicilio/i.test(printer.name) ? 'DELIVERY' : 'DINING')
 
   const hasValidPrinterAddress = (printer: PrinterConfig) => {
     const address = String(printer.ip || '').trim()
+    if (address.toUpperCase().startsWith('USB:')) {
+      const shareName = address.slice(4).trim()
+      return /^[\p{L}\p{N} ._()-]{1,80}$/u.test(shareName)
+    }
     const parts = address.split('.')
     const isIpv4 = parts.length === 4 && parts.every(part => /^\d{1,3}$/.test(part) && Number(part) <= 255)
-    return isIpv4 || address.startsWith('USB:') || address === 'localhost'
+    return isIpv4 || address === 'localhost'
   }
 
   const saveDeliveryKitchen = async () => {
@@ -370,21 +529,20 @@ export default function ModuleSettingsPage() {
       }
       const invalidAddress = deliveryPrinters.find(printer => !hasValidPrinterAddress(printer))
       if (invalidAddress) {
-        alerts.warning('IP de impresora inválida', `Revisa la dirección configurada para ${invalidAddress.name}.`)
+        alerts.warning('Conexión de impresora inválida', `Revisa la IP o el nombre USB compartido de ${invalidAddress.name}.`)
         return
       }
     }
-    if (['TABLET', 'BOTH'].includes(kitchen.deliveryKitchenMode) && !stations.some(station => ['DELIVERY', 'BOTH'].includes(stationChannel(station)))) {
-      alerts.warning('Falta la estación de domicilios', 'Asigna al menos una estación a Domicilios antes de activar tablets.')
+    if (['TABLET', 'BOTH'].includes(kitchen.deliveryKitchenMode) && !deliveryStations.some(station => station.active && (station.users || []).length > 0)) {
+      alerts.warning('Falta una tablet lista', 'Crea y activa al menos un puesto de domicilios con sus cocineros asignados.')
       return
     }
     setSavingSection('DELIVERY_KITCHEN')
     try {
-      const normalizedChannels = Object.fromEntries(stations.map(station => [station.id, stationChannel(station)]))
       const savedKitchen = await api.post<KitchenSettings>('/kitchen/settings', {
         ...kitchen,
         splitByChannel: true,
-        stationChannels: normalizedChannels,
+        stationChannels: kitchen.stationChannels,
       })
       const normalizedPrinters = printing.printers.map(printer => ({
         ...printer,
@@ -403,6 +561,15 @@ export default function ModuleSettingsPage() {
 
   const updatePrinter = (id: string, changes: Partial<PrinterConfig>) => {
     setPrinting(current => ({ ...current, printers: current.printers.map(printer => printer.id === id ? { ...printer, ...changes } : printer) }))
+  }
+
+  const setPrinterConnectionType = (printer: PrinterConfig, type: 'NETWORK' | 'USB') => {
+    const currentAddress = String(printer.ip || '').trim()
+    if (type === 'USB') {
+      updatePrinter(printer.id, { ip: currentAddress.toUpperCase().startsWith('USB:') ? currentAddress : 'USB:' })
+      return
+    }
+    updatePrinter(printer.id, { ip: currentAddress.toUpperCase().startsWith('USB:') ? '' : currentAddress })
   }
 
   const addPrinter = () => {
@@ -522,21 +689,159 @@ export default function ModuleSettingsPage() {
             {['PRINT', 'BOTH'].includes(kitchen.deliveryKitchenMode) && <label className="mt-4 flex cursor-pointer items-center justify-between gap-3 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-3"><span><span className="block text-sm font-bold text-[var(--text-primary)]">Imprimir automáticamente al confirmar</span><span className="block text-[10px] text-[var(--text-muted)]">También genera una nueva comanda cuando cambia el pedido.</span></span><input type="checkbox" checked={kitchen.deliveryAutoPrint} onChange={event => setKitchen(current => ({ ...current, deliveryAutoPrint: event.target.checked }))} className="h-5 w-5 accent-[var(--accent)]" /></label>}
           </Card>
 
-          <div className="grid grid-cols-1 gap-4 xl:grid-cols-[0.8fr_1.2fr]">
-            <Card className="rounded-2xl border-[var(--border-subtle)] bg-[var(--bg-panel)] p-5">
-              <div className="mb-4"><h2 className="font-black text-[var(--text-primary)]">Canal de cada estación</h2><p className="text-xs text-[var(--text-muted)]">Impide que una comanda de domicilio se mezcle con las mesas.</p></div>
-              {stations.length === 0 ? <p className="rounded-xl bg-[var(--bg-elevated)] p-4 text-xs text-[var(--text-muted)]">Primero crea una estación en Estaciones de Cocina.</p> : <div className="space-y-2">{stations.map(station => <div key={station.id} className="flex items-center justify-between gap-3 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-3"><div className="min-w-0"><p className="truncate text-sm font-bold text-[var(--text-primary)]">{station.name}</p><p className="text-[10px] text-[var(--text-muted)]">{station.active ? 'Activa' : 'Inactiva'}</p></div><select value={stationChannel(station)} onChange={event => setKitchen(current => ({ ...current, stationChannels: { ...current.stationChannels, [station.id]: event.target.value as KitchenChannel } }))} className="h-9 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] px-2 text-xs font-bold text-[var(--text-primary)] outline-none"><option value="DINING">Solo salón</option><option value="DELIVERY">Solo domicilios</option><option value="BOTH">Ambos</option></select></div>)}</div>}
+          {['PRINT', 'BOTH'].includes(kitchen.deliveryKitchenMode) && (
+            <Card className="overflow-hidden rounded-2xl border-[var(--border-subtle)] bg-[var(--bg-panel)]">
+              <div className="flex flex-col gap-4 p-5 lg:flex-row lg:items-center lg:justify-between">
+                <div className="flex min-w-0 items-start gap-3">
+                  <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-sky-500/10 text-sky-600"><Download className="h-5 w-5" /></span>
+                  <div>
+                    <h2 className="font-black text-[var(--text-primary)]">Puente de impresión para Windows</h2>
+                    <p className="mt-0.5 max-w-2xl text-xs leading-5 text-[var(--text-muted)]">Instálalo una sola vez en el computador conectado a las impresoras. Inicia con Windows, funciona oculto y se levanta de nuevo si llega a cerrarse.</p>
+                  </div>
+                </div>
+                <a href="/downloads/Instalar-Impresion-TheVillaDog.exe" download className="inline-flex h-11 shrink-0 items-center justify-center gap-2 rounded-xl bg-sky-600 px-5 text-sm font-black text-white shadow-sm transition hover:bg-sky-700"><Download className="h-4 w-4" /> Descargar instalador</a>
+              </div>
+              <div className="grid border-t border-[var(--border-subtle)] bg-[var(--bg-elevated)] sm:grid-cols-3">
+                <div className="p-4"><p className="text-[10px] font-black uppercase tracking-wider text-sky-600">1. Instalar</p><p className="mt-1 text-xs text-[var(--text-secondary)]">Ejecuta el archivo y pega una sola vez la clave <strong>PRINT_BRIDGE_TOKEN</strong>.</p></div>
+                <div className="border-y border-[var(--border-subtle)] p-4 sm:border-x sm:border-y-0"><p className="text-[10px] font-black uppercase tracking-wider text-sky-600">2. Configurar</p><p className="mt-1 text-xs text-[var(--text-secondary)]">Usa la IP local o selecciona USB y escribe únicamente el nombre compartido.</p></div>
+                <div className="p-4"><p className="text-[10px] font-black uppercase tracking-wider text-sky-600">3. Probar</p><p className="mt-1 text-xs text-[var(--text-secondary)]">Guarda y pulsa <strong>Probar</strong>. Puedes hacerlo desde cualquier dispositivo y lugar.</p></div>
+              </div>
             </Card>
+          )}
 
+          <div className={cn('grid grid-cols-1 gap-4', kitchen.deliveryKitchenMode === 'BOTH' && 'xl:grid-cols-[0.9fr_1.1fr]')}>
+            {['TABLET', 'BOTH'].includes(kitchen.deliveryKitchenMode) && (
+            <Card className="rounded-2xl border-[var(--border-subtle)] bg-[var(--bg-panel)] p-5">
+              <div className="mb-4 flex items-start justify-between gap-3">
+                <div><h2 className="font-black text-[var(--text-primary)]">Tablets y equipo de domicilios</h2><p className="text-xs leading-5 text-[var(--text-muted)]">Cada puesto representa una tablet. Los pedidos rotan 1 a 1 entre sus cocineros disponibles.</p></div>
+                <Button variant="outline" onClick={() => openDeliveryStationEditor()} className="h-9 shrink-0 rounded-xl text-xs font-bold"><Plus className="mr-1 h-4 w-4" /> Puesto</Button>
+              </div>
+              <div className="mb-3 rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-3 text-xs text-emerald-700 dark:text-emerald-300"><p className="font-bold">Separado de la cocina de mesas</p><p className="mt-0.5 opacity-80">El descanso de un cocinero saca solo a esa persona del reparto. La tablet continúa con los demás. Pausa el puesto únicamente si quieres detener esa tablet completa.</p></div>
+              {deliveryStations.length === 0 ? (
+                <button type="button" onClick={() => openDeliveryStationEditor()} className="w-full rounded-2xl border border-dashed border-[var(--border-default)] bg-[var(--bg-elevated)] p-7 text-center transition hover:border-[var(--accent)]"><Tablet className="mx-auto mb-2 h-7 w-7 text-[var(--accent)]" /><span className="block text-sm font-black text-[var(--text-primary)]">Crear primera tablet de domicilios</span><span className="mt-1 block text-[10px] text-[var(--text-muted)]">Después asignas sus categorías y cocineros.</span></button>
+              ) : (
+                <div className="space-y-3">
+                  {deliveryStations.map((station, index) => (
+                    <div key={station.id} className={cn('overflow-hidden rounded-2xl border bg-[var(--bg-elevated)]', station.active ? 'border-[var(--border-subtle)]' : 'border-amber-500/30 opacity-80')}>
+                      <div className="flex items-center gap-3 border-b border-[var(--border-subtle)] p-3">
+                        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-white" style={{ backgroundColor: station.color || '#F97316' }}><Tablet className="h-4 w-4" /></span>
+                        <div className="min-w-0 flex-1"><p className="truncate text-sm font-black text-[var(--text-primary)]">{station.name}</p><p className="text-[10px] text-[var(--text-muted)]">Tablet {index + 1} · {station.active ? 'recibiendo pedidos' : 'pausada'}</p></div>
+                        <button type="button" onClick={() => openDeliveryStationEditor(station)} className="flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--border-subtle)] text-[var(--text-secondary)]" title="Editar puesto"><Edit2 className="h-3.5 w-3.5" /></button>
+                        <button type="button" onClick={() => setDeliveryStationActive(station, !station.active)} className={cn('h-8 rounded-lg border px-2.5 text-[10px] font-black', station.active ? 'border-amber-500/30 text-amber-600' : 'border-emerald-500/30 text-emerald-600')}>{station.active ? 'Pausar tablet' : 'Activar tablet'}</button>
+                      </div>
+                      <div className="p-3">
+                        <div className="mb-3"><p className="text-[9px] font-black uppercase tracking-wider text-[var(--text-muted)]">Prepara</p><div className="mt-1 flex flex-wrap gap-1">{(station.categories || []).length > 0 ? (station.categories || []).map(category => <span key={category.id} className="rounded-md bg-[var(--bg-panel)] px-2 py-1 text-[10px] font-bold text-[var(--text-secondary)]">{category.name}</span>) : <span className="rounded-md bg-[var(--bg-panel)] px-2 py-1 text-[10px] font-bold text-[var(--text-secondary)]">Todos los platos</span>}</div></div>
+                        <p className="mb-1.5 text-[9px] font-black uppercase tracking-wider text-[var(--text-muted)]">Cocineros y descansos</p>
+                        <div className="space-y-1.5">
+                          {(station.users || []).map(cook => {
+                            const status = deliveryCookStatuses[cook.id] || { active: true, onBreak: false }
+                            const remainingMinutes = status.breakUntil ? Math.max(0, Math.ceil((status.breakUntil - clockNow) / 60000)) : 0
+                            const onBreak = Boolean(status.onBreak && remainingMinutes > 0)
+                            const active = status.active !== false
+                            return (
+                              <div key={cook.id} className="flex flex-wrap items-center gap-2 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-2">
+                                <span className={cn('h-2 w-2 rounded-full', onBreak ? 'bg-amber-500' : active ? 'bg-emerald-500' : 'bg-slate-400')} />
+                                <span className="min-w-28 flex-1 truncate text-xs font-bold text-[var(--text-primary)]">{cook.name}</span>
+                                <span className="text-[9px] font-bold text-[var(--text-muted)]">{onBreak ? `${status.breakReason || 'Descanso'} · ${remainingMinutes} min` : active ? 'Disponible' : 'Fuera del reparto'}</span>
+                                {busyCookId === cook.id ? <Loader2 className="h-4 w-4 animate-spin text-[var(--accent)]" /> : onBreak ? (
+                                  <button type="button" onClick={() => updateDeliveryCookStatus(cook.id, { onBreak: false })} className="h-7 rounded-lg bg-emerald-500/10 px-2 text-[9px] font-black text-emerald-600">Reincorporar</button>
+                                ) : (
+                                  <><button type="button" disabled={!active} onClick={() => updateDeliveryCookStatus(cook.id, { onBreak: true, breakMinutes: 15, breakReason: 'Descanso' })} className="h-7 rounded-lg bg-amber-500/10 px-2 text-[9px] font-black text-amber-700 disabled:opacity-40">Descanso 15m</button><button type="button" onClick={() => updateDeliveryCookStatus(cook.id, { active: !active })} className="h-7 rounded-lg border border-[var(--border-subtle)] px-2 text-[9px] font-black text-[var(--text-secondary)]">{active ? 'Sacar' : 'Activar'}</button></>
+                                )}
+                              </div>
+                            )
+                          })}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </Card>
+            )}
+
+            {['PRINT', 'BOTH'].includes(kitchen.deliveryKitchenMode) && (
             <Card className="rounded-2xl border-[var(--border-subtle)] bg-[var(--bg-panel)] p-5">
               <div className="mb-4 flex items-center justify-between gap-3"><div><h2 className="font-black text-[var(--text-primary)]">Impresoras de preparación</h2><p className="text-xs text-[var(--text-muted)]">La IP se cambia aquí y el puente local la recibe desde Railway.</p></div><Button variant="outline" onClick={addPrinter} className="h-9 rounded-xl text-xs font-bold"><Plus className="mr-1 h-4 w-4" /> Agregar</Button></div>
-              {printing.printers.length === 0 ? <button type="button" onClick={addPrinter} className="w-full rounded-2xl border border-dashed border-[var(--border-default)] p-8 text-sm font-bold text-[var(--text-muted)] hover:text-[var(--accent)]"><Plus className="mx-auto mb-2 h-5 w-5" /> Agregar impresora de domicilios</button> : <div className="space-y-3">{printing.printers.map(printer => <div key={printer.id} className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-3"><div className="grid grid-cols-1 gap-2 sm:grid-cols-[1.2fr_1fr_90px_110px_auto]"><input value={printer.name} onChange={event => updatePrinter(printer.id, { name: event.target.value })} className={fieldClass} placeholder="Nombre" /><input value={printer.ip || ''} onChange={event => updatePrinter(printer.id, { ip: event.target.value })} className={fieldClass} placeholder="192.168.1.150" /><input type="number" min={1} max={65535} value={printer.port || 9100} onChange={event => updatePrinter(printer.id, { port: Number(event.target.value) || 9100 })} className={fieldClass} title="Puerto" /><select value={printerChannel(printer)} onChange={event => updatePrinter(printer.id, { channel: event.target.value as KitchenChannel })} className={fieldClass}><option value="DINING">Salón</option><option value="DELIVERY">Domicilios</option><option value="BOTH">Ambos</option></select><button type="button" onClick={() => setPrinting(current => ({ ...current, printers: current.printers.filter(item => item.id !== printer.id) }))} className="flex h-10 items-center justify-center rounded-xl border border-red-500/20 px-3 text-red-500" title="Eliminar"><Trash2 className="h-4 w-4" /></button></div><div className="mt-2 flex flex-wrap items-center justify-between gap-2"><div className="flex items-center gap-3"><label className="flex items-center gap-1.5 text-xs font-bold text-[var(--text-secondary)]"><input type="checkbox" checked={printer.enabled !== false} onChange={event => updatePrinter(printer.id, { enabled: event.target.checked })} className="accent-[var(--accent)]" /> Activa</label><select value={printer.paper || '80'} onChange={event => updatePrinter(printer.id, { paper: event.target.value })} className="h-8 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-panel)] px-2 text-xs text-[var(--text-primary)]"><option value="80">Papel 80 mm</option><option value="58">Papel 58 mm</option></select></div><button type="button" disabled={testingPrinterId === printer.id || !printer.ip} onClick={() => testPrinter(printer)} className="flex h-8 items-center gap-1.5 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-panel)] px-3 text-xs font-bold text-[var(--text-secondary)] disabled:opacity-50">{testingPrinterId === printer.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Printer className="h-3.5 w-3.5" />} Probar</button></div></div>)}</div>}
-              <div className="mt-4 rounded-xl border border-amber-500/20 bg-amber-500/5 p-3 text-xs text-amber-800 dark:text-amber-200"><p className="font-bold">La impresora sigue dentro de la red del negocio</p><p className="mt-0.5 opacity-80">Railway guarda la configuración y la cola. Un servicio local, instalado una sola vez y con reinicio automático, entrega el trabajo a la IP privada.</p></div>
+              {deliveryPrinters.length === 0 ? (
+                <button type="button" onClick={addPrinter} className="w-full rounded-2xl border border-dashed border-[var(--border-default)] p-8 text-sm font-bold text-[var(--text-muted)] hover:text-[var(--accent)]"><Plus className="mx-auto mb-2 h-5 w-5" /> Agregar impresora de domicilios</button>
+              ) : (
+                <div className="space-y-3">
+                  {deliveryPrinters.map(printer => {
+                    const isUsb = String(printer.ip || '').trim().toUpperCase().startsWith('USB:')
+                    const addressValue = isUsb ? String(printer.ip || '').slice(4) : (printer.ip || '')
+                    return (
+                      <div key={printer.id} className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-3">
+                        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-[1.1fr_110px_1fr_82px_110px_auto]">
+                          <input value={printer.name} onChange={event => updatePrinter(printer.id, { name: event.target.value })} className={fieldClass} placeholder="Nombre interno" />
+                          <select value={isUsb ? 'USB' : 'NETWORK'} onChange={event => setPrinterConnectionType(printer, event.target.value as 'NETWORK' | 'USB')} className={fieldClass} aria-label="Tipo de conexión"><option value="NETWORK">Red / IP</option><option value="USB">USB</option></select>
+                          <input value={addressValue} onChange={event => updatePrinter(printer.id, { ip: isUsb ? `USB:${event.target.value}` : event.target.value })} className={fieldClass} placeholder={isUsb ? 'Nombre compartido' : '192.168.1.150'} aria-label={isUsb ? 'Nombre compartido de la impresora' : 'IP local de la impresora'} />
+                          <input type="number" min={1} max={65535} value={printer.port || 9100} onChange={event => updatePrinter(printer.id, { port: Number(event.target.value) || 9100 })} className={cn(fieldClass, isUsb && 'cursor-not-allowed opacity-40')} title={isUsb ? 'USB no usa puerto' : 'Puerto'} disabled={isUsb} />
+                          <div className="flex h-10 items-center justify-center rounded-xl border border-emerald-500/20 bg-emerald-500/10 px-2 text-[10px] font-black text-emerald-600">Domicilios</div>
+                          <button type="button" onClick={() => setPrinting(current => ({ ...current, printers: current.printers.filter(item => item.id !== printer.id) }))} className="flex h-10 items-center justify-center rounded-xl border border-red-500/20 px-3 text-red-500" title="Eliminar"><Trash2 className="h-4 w-4" /></button>
+                        </div>
+                        <p className="mt-2 text-[10px] text-[var(--text-muted)]">{isUsb ? 'Comparte primero la impresora en Windows y escribe aquí solamente ese nombre compartido.' : 'La IP puede cambiarse desde aquí, incluso estando fuera del restaurante.'}</p>
+                        <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+                          <div className="flex items-center gap-3"><label className="flex items-center gap-1.5 text-xs font-bold text-[var(--text-secondary)]"><input type="checkbox" checked={printer.enabled !== false} onChange={event => updatePrinter(printer.id, { enabled: event.target.checked })} className="accent-[var(--accent)]" /> Activa</label><select value={printer.paper || '80'} onChange={event => updatePrinter(printer.id, { paper: event.target.value })} className="h-8 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-panel)] px-2 text-xs text-[var(--text-primary)]"><option value="80">Papel 80 mm</option><option value="58">Papel 58 mm</option></select></div>
+                          <button type="button" disabled={testingPrinterId === printer.id || !hasValidPrinterAddress(printer)} onClick={() => testPrinter(printer)} className="flex h-8 items-center gap-1.5 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-panel)] px-3 text-xs font-bold text-[var(--text-secondary)] disabled:opacity-50">{testingPrinterId === printer.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Printer className="h-3.5 w-3.5" />} Probar</button>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+              <div className="mt-4 rounded-xl border border-sky-500/20 bg-sky-500/5 p-3 text-xs text-sky-800 dark:text-sky-200"><p className="font-bold">Cómo viaja la impresión</p><p className="mt-0.5 opacity-80">El pedido puede salir desde cualquier lugar. Railway guarda la comanda; el puente la descarga por Internet y la entrega dentro del restaurante por IP local o USB compartida.</p></div>
             </Card>
+            )}
           </div>
           <div className="flex justify-end"><Button onClick={saveDeliveryKitchen} disabled={savingSection === 'DELIVERY_KITCHEN'} className="h-11 rounded-xl bg-[var(--accent)] px-5 font-bold text-[var(--accent-fg)]">{savingSection === 'DELIVERY_KITCHEN' ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />} Guardar cocina de domicilios</Button></div>
         </div>
       ))}
+
+      <Dialog open={stationDraft !== null} onOpenChange={open => { if (!open && !savingStation) setStationDraft(null) }}>
+        <DialogContent className="flex max-h-[90vh] w-[95vw] max-w-2xl flex-col overflow-hidden rounded-3xl border-[var(--border-subtle)] bg-[var(--bg-panel)] p-0">
+          {stationDraft && (
+            <>
+              <div className="border-b border-[var(--border-subtle)] p-5">
+                <DialogTitle className="flex items-center gap-3 text-lg font-black text-[var(--text-primary)]"><span className="flex h-10 w-10 items-center justify-center rounded-xl bg-orange-500/10 text-orange-600"><Tablet className="h-5 w-5" /></span>{stationDraft.id ? 'Editar puesto de domicilios' : 'Nueva tablet de domicilios'}</DialogTitle>
+                <p className="ml-[52px] mt-[-8px] text-xs text-[var(--text-muted)]">Configura esta pantalla sin tocar las estaciones de las mesas.</p>
+              </div>
+              <div className="flex-1 space-y-5 overflow-y-auto p-5">
+                <div className="grid gap-3 sm:grid-cols-[1fr_auto]">
+                  <label><span className="mb-1.5 block text-xs font-black text-[var(--text-secondary)]">Nombre del puesto o tablet</span><input autoFocus value={stationDraft.name} onChange={event => setStationDraft(current => current ? { ...current, name: event.target.value } : current)} className={fieldClass} placeholder="Ej. Tablet perros y hamburguesas" /></label>
+                  <label className="flex min-w-40 cursor-pointer items-center justify-between gap-3 self-end rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] px-3 py-2.5 text-xs font-bold text-[var(--text-secondary)]"><span>Tablet activa</span><input type="checkbox" checked={stationDraft.active} onChange={event => setStationDraft(current => current ? { ...current, active: event.target.checked } : current)} className="h-4 w-4 accent-[var(--accent)]" /></label>
+                </div>
+
+                <div>
+                  <div className="mb-2 flex items-end justify-between gap-2"><div><p className="text-xs font-black text-[var(--text-primary)]">¿Qué prepara este puesto?</p><p className="text-[10px] text-[var(--text-muted)]">Sin selección funciona como puesto general para todos los platos.</p></div><span className="text-[10px] font-bold text-[var(--text-muted)]">{stationDraft.categoryIds.length} seleccionadas</span></div>
+                  <div className="grid max-h-44 grid-cols-2 gap-2 overflow-y-auto rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-2 sm:grid-cols-3">
+                    {menuCategories.map(category => {
+                      const selected = stationDraft.categoryIds.includes(category.id)
+                      return <button key={category.id} type="button" onClick={() => setStationDraft(current => current ? { ...current, categoryIds: selected ? current.categoryIds.filter(id => id !== category.id) : [...current.categoryIds, category.id] } : current)} className={cn('min-h-10 rounded-xl border px-2 text-left text-[10px] font-bold transition', selected ? 'border-orange-500 bg-orange-500/10 text-orange-700 dark:text-orange-300' : 'border-[var(--border-subtle)] bg-[var(--bg-panel)] text-[var(--text-secondary)]')}>{category.name}</button>
+                    })}
+                  </div>
+                </div>
+
+                <div>
+                  <div className="mb-2 flex items-end justify-between gap-2"><div><p className="text-xs font-black text-[var(--text-primary)]">Cocineros que comparten esta tablet</p><p className="text-[10px] text-[var(--text-muted)]">El sistema rota los pedidos equitativamente entre quienes estén disponibles.</p></div><span className="text-[10px] font-bold text-[var(--text-muted)]">{stationDraft.userIds.length} asignados</span></div>
+                  {availableKitchenUsers.length === 0 ? <p className="rounded-xl bg-amber-500/10 p-3 text-xs text-amber-700">Primero crea usuarios con rol Cocinero en Usuarios.</p> : (
+                    <div className="grid max-h-52 grid-cols-1 gap-2 overflow-y-auto rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-2 sm:grid-cols-2">
+                      {availableKitchenUsers.map(candidate => {
+                        const selected = stationDraft.userIds.includes(candidate.id)
+                        const otherStation = deliveryStations.find(station => station.id !== stationDraft.id && (station.users || []).some(member => member.id === candidate.id))
+                        return <button key={candidate.id} type="button" disabled={Boolean(otherStation)} onClick={() => setStationDraft(current => current ? { ...current, userIds: selected ? current.userIds.filter(id => id !== candidate.id) : [...current.userIds, candidate.id] } : current)} className={cn('flex min-h-11 items-center justify-between gap-2 rounded-xl border px-3 text-left transition', selected ? 'border-emerald-500 bg-emerald-500/10' : 'border-[var(--border-subtle)] bg-[var(--bg-panel)]', otherStation && 'cursor-not-allowed opacity-45')}><span className="min-w-0"><span className="block truncate text-xs font-bold text-[var(--text-primary)]">{candidate.name}</span><span className="block truncate text-[9px] text-[var(--text-muted)]">{otherStation ? `Ya está en ${otherStation.name}` : selected ? 'Participa en el reparto' : 'Disponible para asignar'}</span></span><span className={cn('h-4 w-4 shrink-0 rounded-md border', selected ? 'border-emerald-600 bg-emerald-600' : 'border-[var(--border-default)]')} /></button>
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                <div className="rounded-xl border border-blue-500/20 bg-blue-500/5 p-3 text-xs text-blue-700 dark:text-blue-300"><strong>Ejemplo:</strong> con 2 cocineros en esta tablet, los pedidos se asignan 1 y 1. Si uno entra en descanso, todos pasan temporalmente al otro; la tablet nunca se bloquea.</div>
+              </div>
+              <div className="flex justify-end gap-2 border-t border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-4"><Button variant="outline" onClick={() => setStationDraft(null)} disabled={savingStation} className="rounded-xl">Cancelar</Button><Button onClick={saveDeliveryStation} disabled={savingStation} className="rounded-xl bg-[var(--accent)] font-bold text-[var(--accent-fg)]">{savingStation ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />} Guardar puesto</Button></div>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

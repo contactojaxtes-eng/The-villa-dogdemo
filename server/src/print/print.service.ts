@@ -21,10 +21,13 @@ export class PrintService {
   }
 
   private isLocalPrinterAddress(value: string) {
+    if (value.toUpperCase().startsWith('USB:')) {
+      const shareName = value.slice(4).trim();
+      return /^[\p{L}\p{N} ._()-]{1,80}$/u.test(shareName);
+    }
     const [host, rawPort, ...extra] = value.split(':');
     const validPort = rawPort === undefined || (/^\d+$/.test(rawPort) && Number(rawPort) >= 1 && Number(rawPort) <= 65535);
-    return value.startsWith('USB:')
-      || ((this.isIpv4(host) || host === 'localhost') && extra.length === 0 && validPort);
+    return (this.isIpv4(host) || host === 'localhost') && extra.length === 0 && validPort;
   }
 
   async getPrinterSettings() {
@@ -858,7 +861,7 @@ export class PrintService {
 
     const targetIp = (printerConfig?.ip || '').trim();
     if (['local_bridge', 'network'].includes(printerConfig?.mode) && !this.isLocalPrinterAddress(targetIp)) {
-      return { ok: false, error: `Configura una IP válida para la impresora ${printerConfig?.name || target}` };
+      return { ok: false, error: `Configura una IP o un nombre USB compartido válido para la impresora ${printerConfig?.name || target}` };
     }
 
     if (this.socketGateway) {
@@ -1281,7 +1284,7 @@ export class PrintService {
 
     if (!printerConfig) return { ok: false, error: `Impresora "${target}" no encontrada` };
     const targetIp = (printerConfig.ip || '').trim();
-    if (!this.isLocalPrinterAddress(targetIp)) return { ok: false, error: `Configura primero una IP válida para ${printerConfig.name || target}` };
+    if (!this.isLocalPrinterAddress(targetIp)) return { ok: false, error: `Configura primero una IP o un nombre USB compartido válido para ${printerConfig.name || target}` };
 
     const text = `THE VILLA DOG - Prueba de impresion (${(printerConfig.name || target).toUpperCase()})\nMonteria, Cordoba\n========================\nSi ves esto, la impresora funciona.\n`;
 

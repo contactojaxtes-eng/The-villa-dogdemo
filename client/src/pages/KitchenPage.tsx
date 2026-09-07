@@ -53,15 +53,25 @@ export default function KitchenPage() {
   // Estado de cena / pausa para cocineros en su tablet
   const [cookStatus, setCookStatus] = useState<{ active?: boolean; onBreak?: boolean; breakUntil?: number | null; breakReason?: string; breakMinutes?: number } | null>(null)
   const [breakRemaining, setBreakRemaining] = useState<string>('')
+  const [deliveryStationIds, setDeliveryStationIds] = useState<Set<string>>(new Set())
+  const [isDeliveryCook, setIsDeliveryCook] = useState(false)
 
   // Cargar estado inicial de cena/pausa del cocinero
   useEffect(() => {
     if (user?.role !== 'KITCHEN' || !user?.id) return
-    api.get<Record<string, any>>('/kitchen/cooks/status').then(res => {
-      const statuses = res.data || res
-      if (statuses && statuses[user.id]) {
-        setCookStatus(statuses[user.id])
-      }
+    Promise.all([
+      api.get<Record<string, any>>('/kitchen/cooks/status').catch(() => ({})),
+      api.get<Record<string, any>>('/kitchen/delivery/cooks/status').catch(() => ({})),
+      api.get<any>('/kitchen/settings').catch(() => ({ stationChannels: {} })),
+      api.get<any[]>('/kitchen/stations').catch(() => []),
+    ]).then(([diningStatuses, deliveryStatuses, settings, stations]) => {
+      const diningStatusMap = diningStatuses as Record<string, any>
+      const deliveryStatusMap = deliveryStatuses as Record<string, any>
+      const ids = new Set<string>(Object.entries(settings?.stationChannels || {}).filter(([, channel]) => channel === 'DELIVERY').map(([id]) => id))
+      const belongsToDelivery = stations.some(station => ids.has(station.id) && (station.users || []).some((member: any) => member.id === user.id))
+      setDeliveryStationIds(ids)
+      setIsDeliveryCook(belongsToDelivery)
+      setCookStatus(belongsToDelivery ? (deliveryStatusMap[user.id] || { active: true, onBreak: false }) : (diningStatusMap[user.id] || { active: true, onBreak: false }))
     }).catch(() => {})
   }, [user?.id, user?.role])
 
@@ -134,16 +144,19 @@ export default function KitchenPage() {
     // Si es cocinero (KITCHEN):
     if (user?.role === 'KITCHEN') {
       const assignedId = ticket.assignedToId || ticket.assignedTo?.id
+      const stationUsers = ticket.station?.users || []
+      if (deliveryStationIds.has(ticket.stationId || ticket.station?.id || '') && stationUsers.some(u => u.id === user?.id)) {
+        return true
+      }
       // 1. Si el ticket está asignado a un cocinero: SOLO pertenece a ese cocinero
       if (assignedId) {
         return assignedId === user?.id
       }
       // 2. Solo si el ticket NO tiene cocinero asignado aún, verificar si pertenece a su estación
-      const stationUsers = ticket.station?.users || []
       return stationUsers.some(u => u.id === user?.id)
     }
     return false
-  }, [user?.id, user?.role])
+  }, [deliveryStationIds, user?.id, user?.role])
 
   useEffect(() => {
     const socketUrl = import.meta.env.VITE_API_URL || window.location.origin
@@ -199,13 +212,17 @@ export default function KitchenPage() {
 
     // CAMBIO DE ESTADO DE COCINEROS (activo/inactivo/cena)
     socket.on('kitchenCookStatusChanged', (statuses: Record<string, any>) => {
-      if (user?.id && statuses && statuses[user.id]) {
+      if (!isDeliveryCook && user?.id && statuses && statuses[user.id]) {
         setCookStatus(statuses[user.id])
       }
     })
 
+    socket.on('deliveryKitchenCookStatusChanged', (statuses: Record<string, any>) => {
+      if (isDeliveryCook && user?.id) setCookStatus(statuses?.[user.id] || { active: true, onBreak: false })
+    })
+
     socket.on('cookBreakStarted', (payload: any) => {
-      if (payload?.userId === user?.id) {
+      if (payload?.userId === user?.id && (payload?.channel === 'DELIVERY') === isDeliveryCook) {
         setCookStatus(prev => ({
           ...(prev || {}),
           onBreak: true,
@@ -217,13 +234,13 @@ export default function KitchenPage() {
     })
 
     socket.on('cookBreakFinished', (payload: any) => {
-      if (payload?.userId === user?.id) {
+      if (payload?.userId === user?.id && (payload?.channel === 'DELIVERY') === isDeliveryCook) {
         setCookStatus(prev => ({ ...(prev || {}), onBreak: false, breakUntil: null }))
       }
     })
 
     socket.on('cookBreakReincorporated', (payload: any) => {
-      if (payload?.userId === user?.id) {
+      if (payload?.userId === user?.id && (payload?.channel === 'DELIVERY') === isDeliveryCook) {
         setCookStatus(prev => ({ ...(prev || {}), onBreak: false, breakUntil: null }))
       }
     })
@@ -232,7 +249,7 @@ export default function KitchenPage() {
     socket.on('cashStatusChanged', () => load(false))
 
     return () => { socket.disconnect() }
-  }, [isTicketForThisCook, user?.id, user?.name, user?.role])
+  }, [isDeliveryCook, isTicketForThisCook, user?.id, user?.name, user?.role])
 
   const consolidatedTickets = useMemo(() => {
     // Mantener cada ticket por su ID único para nunca borrar tickets previos del historial
@@ -526,10 +543,10 @@ export default function KitchenPage() {
                 <Coffee className="h-6 w-6 text-amber-600 dark:text-amber-400 shrink-0" />
                 <div>
                   <p className="text-sm font-black uppercase tracking-wider text-amber-800 dark:text-amber-300">
-                    🍽️ En tiempo de {cookStatus.breakReason || 'cena'} — Estación en Pausa
+                    🍽️ En tiempo de {cookStatus.breakReason || 'cena'} — {isDeliveryCook ? 'Pausa personal' : 'Estación en pausa'}
                   </p>
                   <p className="text-xs text-amber-900/90 dark:text-amber-200/90 font-medium">
-                    Tu estación está en pausa. Mientras cenas no te entrarán nuevos pedidos (se reparten entre tus compañeros).
+                    {isDeliveryCook ? 'La tablet sigue activa y los pedidos pasan a tus compañeros disponibles.' : 'Mientras descansas no te entrarán nuevos pedidos; se reparten entre tus compañeros.'}
                   </p>
                 </div>
               </div>
@@ -544,10 +561,10 @@ export default function KitchenPage() {
                 <PauseCircle className="h-6 w-6 text-rose-600 dark:text-rose-400 shrink-0" />
                 <div>
                   <p className="text-sm font-black uppercase tracking-wider text-rose-700 dark:text-rose-300">
-                    ⏸️ Estación Pausada / Inactiva
+                     ⏸️ {isDeliveryCook ? 'Fuera del reparto' : 'Estación pausada / inactiva'}
                   </p>
                   <p className="text-xs text-rose-900/90 dark:text-rose-200/90 font-medium">
-                    El administrador te marcó como inactivo. No recibirás nuevos pedidos en esta tablet hasta que seas reactivado.
+                     {isDeliveryCook ? 'No recibirás asignaciones; la tablet y tus compañeros continúan trabajando.' : 'El administrador te marcó como inactivo. No recibirás nuevos pedidos hasta que seas reactivado.'}
                   </p>
                 </div>
               </div>

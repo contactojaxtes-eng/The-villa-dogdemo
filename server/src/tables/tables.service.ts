@@ -25,6 +25,7 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
   onModuleInit() {
     this.cookTimerInterval = setInterval(() => {
       this.checkExpiredCookBreaks().catch(() => {});
+      this.checkExpiredDeliveryCookBreaks().catch(() => {});
     }, 2500);
   }
 
@@ -381,8 +382,13 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
     const stationUsers = (station?.users || []).filter(u => u.active);
     if (stationUsers.length === 0) return null;
 
-    // Obtener estados de cocineros (activo/desactivado y tiempo de cena/descanso)
-    const cookStatuses = await this.getCookStatuses(db);
+    // Domicilios y salón mantienen disponibilidades separadas. Así, una pausa
+    // tomada desde el módulo de domicilios no altera la cocina de mesas.
+    const routingSettings = await this.getKitchenSettings(db);
+    const isDeliveryStation = routingSettings.stationChannels?.[stationId] === 'DELIVERY';
+    const cookStatuses = isDeliveryStation
+      ? await this.getDeliveryCookStatuses(db)
+      : await this.getCookStatuses(db);
     const now = Date.now();
 
     // Filtrar cocineros que estén activos Y no estén en cena activa
@@ -396,8 +402,10 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
     });
 
     // Si hay cocineros disponibles (ej: 2 de 3, o 1 de 3), se divide equitativamente entre ellos.
-    // Si todos estuvieran en pausa/desactivados, se recurre a stationUsers para que la comanda no quede huérfana.
-    const users = availableUsers.length > 0 ? availableUsers : stationUsers;
+    // En domicilios, si todos descansan, el ticket queda visible sin asignar en
+    // la tablet. En salón se conserva exactamente el comportamiento anterior.
+    const users = availableUsers.length > 0 ? availableUsers : (isDeliveryStation ? [] : stationUsers);
+    if (users.length === 0) return null;
     if (users.length === 1) return users[0].id;
 
     // Ventana del turno actual para el reparto equitativo 50/50:
@@ -636,6 +644,132 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
     }
 
     return statuses;
+  }
+
+  async checkExpiredDeliveryCookBreaks() {
+    const setting = await this.prisma.appSetting.findUnique({ where: { key: 'delivery_kitchen_cook_status' } }).catch(() => null);
+    if (!setting) return;
+    let statuses: Record<string, any> = {};
+    try {
+      statuses = JSON.parse(setting.value) || {};
+    } catch {
+      return;
+    }
+
+    let changed = false;
+    const now = Date.now();
+    for (const [userId, status] of Object.entries(statuses)) {
+      if (!status?.onBreak || !status?.breakUntil || now < status.breakUntil) continue;
+      status.onBreak = false;
+      status.notifiedFinished = true;
+      changed = true;
+      const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { name: true } }).catch(() => null);
+      const payload = {
+        userId,
+        userName: user?.name || 'Cocinero',
+        finishedAt: now,
+        breakReason: status.breakReason || 'Descanso',
+        breakMinutes: status.breakMinutes || 15,
+        channel: 'DELIVERY',
+      };
+      this.socketGateway.server.emit('deliveryCookBreakFinished', payload);
+      this.socketGateway.server.emit('cookBreakFinished', payload);
+    }
+
+    if (changed) {
+      await this.prisma.appSetting.upsert({
+        where: { key: 'delivery_kitchen_cook_status' },
+        update: { value: JSON.stringify(statuses) },
+        create: { key: 'delivery_kitchen_cook_status', value: JSON.stringify(statuses) },
+      });
+      this.socketGateway.server.emit('deliveryKitchenCookStatusChanged', statuses);
+    }
+  }
+
+  async getDeliveryCookStatuses(db: Prisma.TransactionClient = this.prisma): Promise<Record<string, {
+    active: boolean;
+    onBreak: boolean;
+    breakMinutes?: number;
+    breakStartedAt?: number;
+    breakUntil?: number | null;
+    breakReason?: string;
+    notifiedFinished?: boolean;
+  }>> {
+    const setting = await db.appSetting.findUnique({ where: { key: 'delivery_kitchen_cook_status' } });
+    let statuses: Record<string, any> = {};
+    if (setting) {
+      try {
+        statuses = JSON.parse(setting.value) || {};
+      } catch {}
+    }
+
+    const now = Date.now();
+    let changed = false;
+    for (const status of Object.values(statuses)) {
+      if (status?.onBreak && status?.breakUntil && now >= status.breakUntil) {
+        status.onBreak = false;
+        status.notifiedFinished = true;
+        changed = true;
+      }
+    }
+    if (changed) {
+      await db.appSetting.upsert({
+        where: { key: 'delivery_kitchen_cook_status' },
+        update: { value: JSON.stringify(statuses) },
+        create: { key: 'delivery_kitchen_cook_status', value: JSON.stringify(statuses) },
+      });
+      this.socketGateway.server.emit('deliveryKitchenCookStatusChanged', statuses);
+    }
+    return statuses;
+  }
+
+  async updateDeliveryCookStatus(userId: string, data: { active?: boolean; onBreak?: boolean; breakMinutes?: number; breakReason?: string }) {
+    const statuses = await this.getDeliveryCookStatuses();
+    const existing = statuses[userId] || { active: true, onBreak: false };
+
+    if (data.active !== undefined) existing.active = Boolean(data.active);
+    if (data.onBreak === true) {
+      const minutes = Math.max(1, Math.min(240, Number(data.breakMinutes) || 15));
+      existing.onBreak = true;
+      existing.breakMinutes = minutes;
+      existing.breakStartedAt = Date.now();
+      existing.breakUntil = Date.now() + minutes * 60 * 1000;
+      existing.breakReason = String(data.breakReason || 'Descanso').slice(0, 50);
+      existing.notifiedFinished = false;
+      setTimeout(() => this.checkExpiredDeliveryCookBreaks().catch(() => {}), Math.max(500, minutes * 60 * 1000));
+    } else if (data.onBreak === false) {
+      existing.onBreak = false;
+      existing.breakUntil = null;
+      existing.notifiedFinished = true;
+    }
+    statuses[userId] = existing;
+
+    const updated = await this.prisma.appSetting.upsert({
+      where: { key: 'delivery_kitchen_cook_status' },
+      update: { value: JSON.stringify(statuses) },
+      create: { key: 'delivery_kitchen_cook_status', value: JSON.stringify(statuses) },
+    });
+    const result = JSON.parse(updated.value);
+    this.socketGateway.server.emit('deliveryKitchenCookStatusChanged', result);
+
+    const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { name: true } });
+    if (data.onBreak === true) {
+      const payload = {
+        userId,
+        userName: user?.name || 'Cocinero',
+        breakMinutes: existing.breakMinutes,
+        breakUntil: existing.breakUntil,
+        breakReason: existing.breakReason,
+        channel: 'DELIVERY',
+      };
+      this.socketGateway.server.emit('deliveryCookBreakStarted', payload);
+      this.socketGateway.server.emit('cookBreakStarted', payload);
+    } else if (data.onBreak === false) {
+      const payload = { userId, userName: user?.name || 'Cocinero', channel: 'DELIVERY' };
+      this.socketGateway.server.emit('deliveryCookBreakReincorporated', payload);
+      this.socketGateway.server.emit('cookBreakReincorporated', payload);
+    }
+    return result;
   }
 
   async updateCookStatus(userId: string, data: { active?: boolean; onBreak?: boolean; breakMinutes?: number; breakReason?: string }) {
@@ -1058,9 +1192,16 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
     }
     if (params.stationId) where.stationId = params.stationId;
     if (!['ADMIN', 'SUPERADMIN', 'CASHIER'].includes(user.role)) {
+      const settings = await this.getKitchenSettings();
+      const deliveryStationIds = Object.entries(settings.stationChannels || {})
+        .filter(([, channel]) => channel === 'DELIVERY')
+        .map(([stationId]) => stationId);
       where.OR = [
         { assignedToId: user.id },
         { assignedToId: null, station: { users: { some: { id: user.id } } } },
+        ...(deliveryStationIds.length > 0
+          ? [{ stationId: { in: deliveryStationIds }, station: { users: { some: { id: user.id } } } }]
+          : []),
       ];
     }
 
@@ -1112,6 +1253,28 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
     const station = data.id
       ? await this.prisma.kitchenStation.update({ where: { id: data.id }, data: payload, include: { categories: true, users: true } })
       : await this.prisma.kitchenStation.create({ data: payload, include: { categories: true, users: true } });
+
+    const requestedChannel = ['DINING', 'DELIVERY', 'BOTH'].includes(String(data.channel))
+      ? String(data.channel) as 'DINING' | 'DELIVERY' | 'BOTH'
+      : null;
+    const settings = await this.getKitchenSettings();
+    if (requestedChannel || Object.keys(settings.stationChannels || {}).length > 0) {
+      const allStations = await this.prisma.kitchenStation.findMany({ select: { id: true, name: true } });
+      const stationChannels: Record<string, 'DINING' | 'DELIVERY' | 'BOTH'> = { ...(settings.stationChannels || {}) };
+      for (const currentStation of allStations) {
+        if (!stationChannels[currentStation.id]) {
+          stationChannels[currentStation.id] = /domicilio/i.test(currentStation.name) ? 'DELIVERY' : 'DINING';
+        }
+      }
+      stationChannels[station.id] = requestedChannel || stationChannels[station.id] || 'DINING';
+      const nextSettings = { ...settings, splitByChannel: true, stationChannels };
+      await this.prisma.appSetting.upsert({
+        where: { key: 'kitchen_routing_settings' },
+        update: { value: JSON.stringify(nextSettings) },
+        create: { key: 'kitchen_routing_settings', value: JSON.stringify(nextSettings) },
+      });
+      this.socketGateway.server.emit('kitchenSettingsUpdated', nextSettings);
+    }
     this.socketGateway.server.emit('kitchenStationsChanged', station);
     return station;
   }

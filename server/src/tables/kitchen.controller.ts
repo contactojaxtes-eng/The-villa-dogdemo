@@ -78,4 +78,18 @@ export class KitchenController {
   updateCookStatus(@Param('userId') userId: string, @Body() body: any) {
     return this.tablesService.updateCookStatus(userId, body);
   }
+
+  @Get('delivery/cooks/status')
+  @Roles('ADMIN', 'SUPERADMIN', 'CASHIER', 'KITCHEN')
+  @ApiOperation({ summary: 'Consultar disponibilidad de cocineros de domicilios' })
+  getDeliveryCookStatuses() {
+    return this.tablesService.getDeliveryCookStatuses();
+  }
+
+  @Post('delivery/cooks/:userId/status')
+  @Roles('ADMIN', 'SUPERADMIN')
+  @ApiOperation({ summary: 'Actualizar disponibilidad de un cocinero solo para domicilios' })
+  updateDeliveryCookStatus(@Param('userId') userId: string, @Body() body: any) {
+    return this.tablesService.updateDeliveryCookStatus(userId, body);
+  }
 }

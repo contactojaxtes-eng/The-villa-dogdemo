@@ -119,7 +119,11 @@ export default function KitchenStationsPage() {
         api.get<any>('/kitchen/settings').catch(() => ({ smartDrinkRouting: true, splitByChannel: true })),
         api.get<Record<string, CookStatus>>('/kitchen/cooks/status').catch(() => ({})),
       ])
-      setStations(sts || [])
+      const stationChannels = settings?.stationChannels || {}
+      setStations((sts || []).filter(station => {
+        const channel = stationChannels[station.id]
+        return channel !== 'DELIVERY'
+      }))
       setCategories((cats || []).map(c => ({ id: c.id, name: c.name })))
       setUsers(usrs || [])
       setCookStatuses(cooksStatus || {})
@@ -314,7 +318,7 @@ export default function KitchenStationsPage() {
   const saveRoutingSettings = async () => {
     setSavingSettings(true)
     try {
-      await api.post('/kitchen/settings', routingSettings)
+      await api.post('/kitchen/settings', { ...routingSettings, splitByChannel: true })
       alerts.success(
         'Reglas de Cocina Actualizadas',
         'La distribución de bebidas y platos ha sido guardada en el sistema.'
@@ -437,10 +441,10 @@ export default function KitchenStationsPage() {
             <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-orange-500/10 text-orange-500">
               <ChefHat className="h-6 w-6" />
             </div>
-            ESTACIONES DE COCINA
+            ESTACIONES DE COCINA · MESAS
           </h1>
           <p className="mt-1 text-sm text-[var(--text-secondary)]">
-            Asigna qué platos prepara cada cocinero en su pantalla (ej: Perros, Hamburguesas o Cocina General).
+            Esta pantalla conserva la operación del salón. La cocina de domicilios se configura por separado.
           </p>
         </div>
 
@@ -484,15 +488,10 @@ export default function KitchenStationsPage() {
             <span className="text-[var(--text-primary)]">Vincular bebida al plato de comida</span>
           </label>
 
-          <label className="flex items-center gap-2.5 p-2.5 rounded-xl bg-[var(--bg-elevated)] border border-[var(--border-subtle)] text-xs font-bold cursor-pointer hover:border-[var(--accent)] transition">
-            <input
-              type="checkbox"
-              checked={routingSettings.splitByChannel}
-              onChange={e => setRoutingSettings(prev => ({ ...prev, splitByChannel: e.target.checked }))}
-              className="rounded h-4 w-4 text-[var(--accent)] cursor-pointer"
-            />
-            <span className="text-[var(--text-primary)]">Separar estaciones de Salón y Domicilio</span>
-          </label>
+          <div className="flex items-center gap-2.5 rounded-xl border border-emerald-500/20 bg-emerald-500/10 p-2.5 text-xs font-bold text-emerald-700 dark:text-emerald-300">
+            <ShieldCheck className="h-4 w-4" />
+            <span>Cocina de mesas protegida e independiente de domicilios</span>
+          </div>
         </div>
       </div>
 
