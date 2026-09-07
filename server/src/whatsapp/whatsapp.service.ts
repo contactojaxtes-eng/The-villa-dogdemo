@@ -4101,6 +4101,7 @@ Restaurante (Tú):
         const models: any[] = [];
         let pageToken = '';
         let page = 0;
+        let pageFailed = false;
         do {
           const params = new URLSearchParams({ key: apiKey, pageSize: '1000' });
           if (pageToken) params.set('pageToken', pageToken);
@@ -4110,6 +4111,7 @@ Restaurante (Tú):
           if (!response.ok) {
             const errorBody: any = await response.json().catch(() => null);
             lastError = this.sanitizeGeminiError(errorBody?.error?.message || `Gemini respondió HTTP ${response.status}`, keys);
+            pageFailed = true;
             break;
           }
           const pagePayload: any = await response.json();
@@ -4118,7 +4120,7 @@ Restaurante (Tú):
           page += 1;
         } while (pageToken && page < 20);
 
-        if (lastError && models.length === 0) continue;
+        if (pageFailed) continue;
         payload = { models };
         workingKey = apiKey;
         break;
