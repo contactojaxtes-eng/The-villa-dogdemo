@@ -923,7 +923,8 @@ export default function KitchenPage() {
         <div className="grid gap-3 grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 2xl:grid-cols-5 items-start">
           {displayTickets.map(ticket => {
             const hasActiveItems = ticket.items?.some(i => i.changeType !== 'REMOVED')
-            const isFullyCancelled = !hasActiveItems || ticket.status === 'CANCELLED'
+            const isEditedDelta = Boolean(ticket.isEdited)
+            const isFullyCancelled = ticket.status === 'CANCELLED' || (!hasActiveItems && !isEditedDelta)
             const minutesAgo = getMinutesAgo(ticket.order?.createdAt)
             const isDelayed = minutesAgo !== null && minutesAgo >= 15
             const isWarning = minutesAgo !== null && minutesAgo >= 10 && !isDelayed
@@ -1026,25 +1027,18 @@ export default function KitchenPage() {
                     </div>
                   )}
 
-                  {/* En ediciones se conserva el pedido completo y se resaltan los cambios dentro de la misma tarjeta. */}
+                  {/* Las ediciones llegan como una comanda nueva con solo los cambios del pedido. */}
                   {(() => {
                     const isEditedTicket = ticket.isEdited || (ticket.items || []).some(i => i.changeType === 'ADDED' || i.changeType === 'REMOVED' || i.changeType === 'MODIFIED')
                     const actionItems = isEditedTicket
                       ? (ticket.items || []).filter(i => i.changeType === 'ADDED' || i.changeType === 'REMOVED' || (i.changeType === 'MODIFIED' && ((i.previousQty ?? i.quantity) !== i.quantity || i.notes !== i.previousNotes)))
                       : []
 
-                    // En una edición la tarjeta sigue representando el pedido completo.
-                    // Solo se resaltan los cambios dentro de esa misma tarjeta para no
-                    // hacer que cocina confunda una adición con un pedido separado.
                     if (isEditedTicket && !isFullyCancelled && activeTab !== 'HISTORY') {
-                      const currentItems = (ticket.items || []).filter(item => item.changeType !== 'REMOVED')
-                      const removedItems = (ticket.items || []).filter(item => item.changeType === 'REMOVED')
-                      const hasAdded = actionItems.some(item => {
-                        const previousQty = item.previousQty ?? 0
-                        return item.changeType === 'ADDED' || item.quantity > previousQty
-                      })
-                      const hasReduced = actionItems.some(item => item.changeType === 'REMOVED' || (item.previousQty !== null && item.previousQty !== undefined && item.quantity < item.previousQty))
-                      const hasNoteChange = actionItems.some(item => item.changeType === 'MODIFIED' && item.quantity === (item.previousQty ?? item.quantity) && item.notes !== item.previousNotes)
+                      const deltaItems = actionItems.length > 0 ? actionItems : (ticket.items || [])
+                      const hasAdded = deltaItems.some(item => item.changeType === 'ADDED' || (item.changeType === 'MODIFIED' && item.quantity > (item.previousQty ?? 0)))
+                      const hasReduced = deltaItems.some(item => item.changeType === 'REMOVED' || (item.changeType === 'MODIFIED' && item.previousQty !== null && item.previousQty !== undefined && item.quantity < item.previousQty))
+                      const hasNoteChange = deltaItems.some(item => item.changeType === 'MODIFIED' && item.notes !== item.previousNotes)
 
                       return (
                         <div className="mt-2.5 space-y-2.5">
@@ -1057,32 +1051,35 @@ export default function KitchenPage() {
                               : 'border-amber-500/40 bg-amber-500/10 text-amber-950 dark:text-amber-200',
                           )}>
                             <Flame className={cn('h-4 w-4', hasAdded ? 'text-emerald-600 dark:text-emerald-400' : hasReduced ? 'text-rose-600 dark:text-rose-400' : 'text-amber-600 dark:text-amber-400')} />
-                            <span>PEDIDO COMPLETO ACTUALIZADO</span>
+                            <span>PEDIDO EDITADO · SOLO CAMBIOS</span>
                           </div>
 
-                          {hasAdded && <p className="rounded-lg bg-emerald-500/10 px-2.5 py-1.5 text-[11px] font-bold text-emerald-800 dark:text-emerald-300">Lo agregado está marcado en verde. Se prepara dentro de esta misma tarjeta.</p>}
-                          {hasReduced && <p className="rounded-lg bg-rose-500/10 px-2.5 py-1.5 text-[11px] font-bold text-rose-800 dark:text-rose-300">Las reducciones están marcadas en rojo. No prepares las unidades retiradas.</p>}
-                          {hasNoteChange && <p className="rounded-lg bg-amber-500/10 px-2.5 py-1.5 text-[11px] font-bold text-amber-800 dark:text-amber-300">La indicación de preparación cambió dentro del pedido.</p>}
+                          {hasAdded && <p className="rounded-lg bg-emerald-500/10 px-2.5 py-1.5 text-[11px] font-bold text-emerald-800 dark:text-emerald-300">Lo verde se agregó al pedido #{ticket.order?.orderNumber || ''}.</p>}
+                          {hasReduced && <p className="rounded-lg bg-rose-500/10 px-2.5 py-1.5 text-[11px] font-bold text-rose-800 dark:text-rose-300">Lo rojo se retiró del pedido. No prepares esas unidades.</p>}
+                          {hasNoteChange && <p className="rounded-lg bg-amber-500/10 px-2.5 py-1.5 text-[11px] font-bold text-amber-800 dark:text-amber-300">La indicación de preparación fue actualizada.</p>}
 
                           <div className="space-y-1.5">
-                            {currentItems.map((item: KitchenTicketItemSummary) => {
-                              const previousQty = item.previousQty ?? (item.changeType === 'ADDED' ? 0 : item.quantity)
-                              const qtyDiff = item.changeType === 'ADDED' ? item.quantity : item.quantity - previousQty
+                            {deltaItems.map((item: KitchenTicketItemSummary) => {
+                              const previousQty = item.previousQty ?? 0
+                              const quantityDiff = item.changeType === 'ADDED' || item.changeType === 'REMOVED'
+                                ? item.quantity
+                                : item.quantity - previousQty
+                              const isRemoved = item.changeType === 'REMOVED' || quantityDiff < 0
+                              const isAdded = !isRemoved && (item.changeType === 'ADDED' || quantityDiff > 0)
                               const noteChanged = item.changeType === 'MODIFIED' && item.notes !== item.previousNotes
-                              const isAdded = qtyDiff > 0
-                              const isReduced = qtyDiff < 0
+                              const displayQuantity = item.changeType === 'MODIFIED' && quantityDiff !== 0 ? Math.abs(quantityDiff) : item.quantity
                               const cleanNotes = (item.notes || '').replace(/\[PARA LLEVAR\]/gi, '').replace(/\[MESA\]/gi, '').trim()
                               const isTakeaway = (item.notes || '').toLowerCase().includes('llevar')
 
                               return (
-                                <div key={item.id} className={cn('rounded-xl border p-2.5', isAdded ? 'border-emerald-500/50 bg-emerald-500/15' : isReduced ? 'border-rose-500/50 bg-rose-500/10' : noteChanged ? 'border-amber-500/40 bg-amber-500/10' : 'border-transparent bg-[var(--bg-elevated)]')}>
+                                <div key={item.id} className={cn('rounded-xl border p-2.5', isAdded ? 'border-emerald-500/50 bg-emerald-500/15' : isRemoved ? 'border-rose-500/50 bg-rose-500/10' : noteChanged ? 'border-amber-500/40 bg-amber-500/10' : 'border-transparent bg-[var(--bg-elevated)]')}>
                                   <div className="flex items-start justify-between gap-2">
                                     <div className="min-w-0 flex-1">
                                       <div className="flex flex-wrap items-center gap-1.5">
-                                        <span className="text-base font-black leading-tight text-[var(--text-primary)]">{item.quantity}x {item.nameSnapshot}</span>
-                                        {isAdded && <span className="rounded-md bg-emerald-600 px-1.5 py-0.5 text-[9px] font-black text-white">+{qtyDiff} AGREGADO · ANTES {previousQty}</span>}
-                                        {isReduced && <span className="rounded-md bg-rose-600 px-1.5 py-0.5 text-[9px] font-black text-white">-{Math.abs(qtyDiff)} RETIRADO · ANTES {previousQty}</span>}
-                                        {noteChanged && !isAdded && !isReduced && <span className="rounded-md bg-amber-600 px-1.5 py-0.5 text-[9px] font-black text-white">NOTA ACTUALIZADA</span>}
+                                        <span className="text-base font-black leading-tight text-[var(--text-primary)]">{isAdded ? '+' : isRemoved ? '-' : ''}{displayQuantity}x {item.nameSnapshot}</span>
+                                        {isAdded && <span className="rounded-md bg-emerald-600 px-1.5 py-0.5 text-[9px] font-black text-white">AGREGADO · ANTES {previousQty}</span>}
+                                        {isRemoved && <span className="rounded-md bg-rose-600 px-1.5 py-0.5 text-[9px] font-black text-white">RETIRADO · ANTES {previousQty}</span>}
+                                        {noteChanged && !isAdded && !isRemoved && <span className="rounded-md bg-amber-600 px-1.5 py-0.5 text-[9px] font-black text-white">NOTA ACTUALIZADA</span>}
                                       </div>
                                       {cleanNotes && <p className="mt-1 border-l-2 border-amber-500 bg-amber-500/10 py-0.5 pl-1.5 text-xs font-bold text-amber-700 dark:text-amber-300">👉 {cleanNotes}</p>}
                                     </div>
@@ -1092,40 +1089,57 @@ export default function KitchenPage() {
                               )
                             })}
                           </div>
-
-                          {removedItems.length > 0 && <div className="space-y-1 rounded-xl border border-rose-500/30 bg-rose-500/10 p-2"><p className="text-[10px] font-black uppercase tracking-wider text-rose-700 dark:text-rose-300">Retirado del pedido · no preparar</p>{removedItems.map(item => <p key={item.id} className="text-xs font-black text-rose-800 line-through dark:text-rose-200">-{item.quantity}x {item.nameSnapshot}</p>)}</div>}
                         </div>
                       )
                     }
 
-                    // MODO NORMAL O PESTAÑA HISTORIAL: Mostrar el pedido completo de la mesa
-                    const visibleItems = (ticket.items || []).filter((i: any) => i.changeType !== 'REMOVED')
-                    const totalProductsCount = visibleItems.reduce((acc: number, curr: any) => acc + (curr.quantity || 0), 0)
+                    // En historial los tickets editados muestran solo su diferencia.
+                    // Los tickets normales siguen mostrando el pedido completo.
+                    const visibleItems = isEditedTicket
+                      ? (actionItems.length > 0 ? actionItems : (ticket.items || []))
+                      : (ticket.items || []).filter((i: KitchenTicketItemSummary) => i.changeType !== 'REMOVED')
 
                     return (
                       <div className="mt-2.5 space-y-1.5">
                         {activeTab === 'HISTORY' && isEditedTicket && (
-                          <div className="flex items-center justify-between px-2.5 py-1.5 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-800 dark:text-emerald-300 text-xs font-black mb-2">
-                            <span>📋 PEDIDO COMPLETO ({totalProductsCount} productos)</span>
-                            <span className="text-[10px] font-extrabold bg-emerald-500/20 px-2 py-0.5 rounded-full">Incluye iniciales + adiciones</span>
+                          <div className="flex items-center justify-between px-2.5 py-1.5 rounded-xl bg-blue-500/10 border border-blue-500/30 text-blue-800 dark:text-blue-300 text-xs font-black mb-2">
+                            <span>📝 PEDIDO EDITADO · SOLO CAMBIOS</span>
+                            <span className="text-[10px] font-extrabold bg-blue-500/15 px-2 py-0.5 rounded-full">Pedido #{ticket.order?.orderNumber || '—'}</span>
                           </div>
                         )}
                         {visibleItems.map((item: KitchenTicketItemSummary) => {
                           const isTakeaway = (item.notes || '').toLowerCase().includes('llevar')
                           const cleanNotes = (item.notes || '').replace(/\[PARA LLEVAR\]/gi, '').replace(/\[MESA\]/gi, '').trim()
-                          const isAdded = item.changeType === 'ADDED' || (item.changeType === 'MODIFIED' && (item.quantity > (item.previousQty ?? 0)))
+                          const previousQty = item.previousQty ?? 0
+                          const quantityDiff = item.changeType === 'ADDED' || item.changeType === 'REMOVED'
+                            ? item.quantity
+                            : item.quantity - previousQty
+                          const isRemoved = item.changeType === 'REMOVED' || quantityDiff < 0
+                          const isAdded = !isRemoved && (item.changeType === 'ADDED' || quantityDiff > 0)
+                          const noteChanged = item.changeType === 'MODIFIED' && item.notes !== item.previousNotes
+                          const displayQuantity = item.changeType === 'MODIFIED' && quantityDiff !== 0 ? Math.abs(quantityDiff) : item.quantity
 
                           return (
-                            <div key={item.id} className="rounded-xl p-2 text-xs border border-transparent bg-[var(--bg-elevated)]">
+                            <div key={item.id} className={cn('rounded-xl p-2 text-xs border', isAdded ? 'border-emerald-500/40 bg-emerald-500/10' : isRemoved ? 'border-rose-500/40 bg-rose-500/10' : noteChanged ? 'border-amber-500/40 bg-amber-500/10' : 'border-transparent bg-[var(--bg-elevated)]')}>
                               <div className="flex items-start justify-between gap-1">
                                 <div className="min-w-0 flex-1">
                                   <div className="flex items-center gap-1.5 flex-wrap">
                                     <span className="text-sm font-black text-[var(--text-primary)] leading-tight">
-                                      {item.quantity}x {item.nameSnapshot}
+                                      {isAdded ? '+' : isRemoved ? '-' : ''}{displayQuantity}x {item.nameSnapshot}
                                     </span>
                                     {isAdded && isEditedTicket && (
                                       <span className="text-[9px] font-black px-1.5 py-0.2 rounded bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30">
-                                        ✨ Adición
+                                        AGREGADO · ANTES {previousQty}
+                                      </span>
+                                    )}
+                                    {isRemoved && isEditedTicket && (
+                                      <span className="text-[9px] font-black px-1.5 py-0.2 rounded bg-rose-500/20 text-rose-700 dark:text-rose-300 border border-rose-500/30">
+                                        RETIRADO · ANTES {previousQty}
+                                      </span>
+                                    )}
+                                    {noteChanged && !isAdded && !isRemoved && (
+                                      <span className="text-[9px] font-black px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-700 dark:text-amber-300 border border-amber-500/30">
+                                        NOTA ACTUALIZADA
                                       </span>
                                     )}
                                   </div>
