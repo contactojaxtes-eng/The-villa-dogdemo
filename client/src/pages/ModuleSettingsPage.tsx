@@ -586,7 +586,10 @@ export default function ModuleSettingsPage() {
         `set "SOURCE_URL=${productionUrl}/downloads/Instalar-Impresion-TheVillaDog.exe"`,
         'set "TARGET=%TEMP%\\TheVillaDogPrinterBridgeSetup.exe"',
         'echo Descargando el instalador configurado...',
-        `powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$ProgressPreference = ''SilentlyContinue''; Invoke-WebRequest -UseBasicParsing -Uri $env:SOURCE_URL -OutFile $env:TARGET"`,
+        // Keep single quotes inside the PowerShell command. Doubling them here
+        // makes PowerShell parse `''SilentlyContinue''` and aborts before the
+        // download starts when this line is executed from the generated .cmd.
+        `powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$ProgressPreference = 'SilentlyContinue'; Invoke-WebRequest -UseBasicParsing -Uri $env:SOURCE_URL -OutFile $env:TARGET"`,
         'if errorlevel 1 (',
         '  echo No se pudo descargar el instalador. Comprueba la conexion a Internet.',
         '  pause',
