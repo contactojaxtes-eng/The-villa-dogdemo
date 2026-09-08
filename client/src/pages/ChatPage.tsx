@@ -1171,6 +1171,13 @@ function ChatPage() {
       clearInterval(recordingTimerRef.current)
     }
 
+    if (user && activeSession && activeSession.assignedToId !== user.id) {
+      if (!await handleClaimSession(undefined, true)) {
+        mp3RecorderRef.current = null
+        return
+      }
+    }
+
     setUploadingMedia(true)
     try {
       const audioBlob = mp3RecorderRef.current.stop()
@@ -2299,20 +2306,37 @@ function ChatPage() {
   }
 
   // Claim/assign session to current user
-  const handleClaimSession = async (): Promise<boolean> => {
-    if (!activeSession || !user) return false
-    if (activeSession.assignedToId === user.id) return true
-    if (activeSession.assignedToId && activeSession.assignedToId !== user.id) {
-      alerts.info('Chat ocupado', `Esta conversación está siendo atendida por ${activeSession.assignedTo?.name || 'otra asesora'}.`)
-      return false
+  const handleClaimSession = async (sessionToClaim?: Session | null, silent?: boolean): Promise<boolean> => {
+    const targetSession = sessionToClaim || activeSession
+    if (!targetSession || !user) return false
+    if (targetSession.assignedToId === user.id) return true
+
+    if (targetSession.assignedToId && targetSession.assignedToId !== user.id) {
+      const isSupervisor = ['ADMIN', 'SUPERADMIN'].includes(user.role || '')
+      const otherName = targetSession.assignedTo?.name || 'otra asesora'
+      if (!isSupervisor) {
+        alerts.info('Chat ocupado', `Esta conversación está siendo atendida en tiempo real por ${otherName}.`)
+        return false
+      }
+      const confirm = await alerts.confirm(
+        '¿Reasignar conversación?',
+        `Esta conversación está tomada por ${otherName}. Como administrador, ¿deseas reasignártela a ti?`,
+        'Sí, Reclamar',
+        'Cancelar'
+      )
+      if (!confirm) return false
     }
+
     try {
-      const updated = await api.put<Session>(`/whatsapp/sessions/${activeSession.id}/assign`, {
+      const updated = await api.put<Session>(`/whatsapp/sessions/${targetSession.id}/assign`, {
         userId: user.id
       })
       const assignedTo = updated.assignedTo || { id: user.id, name: user.name }
-      setActiveSession(prev => prev?.id === updated.id ? { ...prev, ...updated, assignedTo } : prev)
-      setSessions(prev => prev.map(s => s.id === updated.id ? { ...s, ...updated, assignedTo } : s))
+      setActiveSession(prev => prev?.id === updated.id ? { ...prev, ...updated, assignedTo, assignedToId: user.id } : prev)
+      setSessions(prev => prev.map(s => s.id === updated.id ? { ...s, ...updated, assignedTo, assignedToId: user.id } : s))
+      if (!silent) {
+        alerts.success('Chat Reclamado', 'Ahora estás atendiendo esta conversación.')
+      }
       return true
     } catch (err: any) {
       alerts.error('No se pudo tomar el chat', err?.message || 'Otra asesora tomó esta conversación primero.')
@@ -2324,12 +2348,21 @@ function ChatPage() {
   // Release/unassign session
   const handleReleaseSession = async () => {
     if (!activeSession) return
+    const confirm = await alerts.confirm(
+      '¿Liberar conversación?',
+      'El chat volverá a la cola general para que cualquier asesora disponible pueda atenderlo o responderlo.',
+      'Sí, Soltar',
+      'Cancelar'
+    )
+    if (!confirm) return
+
     try {
       const updated = await api.put<Session>(`/whatsapp/sessions/${activeSession.id}/assign`, {
         userId: null
       })
-      setActiveSession(prev => prev?.id === updated.id ? { ...prev, ...updated } : prev)
-      setSessions(prev => prev.map(s => s.id === updated.id ? { ...s, ...updated } : s))
+      setActiveSession(prev => prev?.id === updated.id ? { ...prev, ...updated, assignedToId: null, assignedTo: null } : prev)
+      setSessions(prev => prev.map(s => s.id === updated.id ? { ...s, ...updated, assignedToId: null, assignedTo: null } : s))
+      alerts.success('Chat Liberado', 'La conversación volvió a estar disponible en la cola.')
     } catch (err: any) {
       alerts.error('No se pudo liberar el chat', err?.message || 'Actualiza la bandeja e inténtalo nuevamente.')
       await loadSessions(undefined, chatSearch.trim(), false, chatFilter)
@@ -2380,6 +2413,10 @@ function ChatPage() {
   const handleSendQuickTemplate = async (sessionToUse?: Session | null) => {
     const s = sessionToUse || activeSession
     if (!s) return
+
+    if (user && s.assignedToId !== user.id) {
+      if (!await handleClaimSession(s, true)) return
+    }
 
     const confirm = await alerts.confirm(
       '¿Enviar Plantilla Meta?',
@@ -2878,21 +2915,10 @@ function ChatPage() {
                           setActiveOrder(s.activeOrder)
                         }
                         
-                        // Abrir de inmediato y tomar el chat en el servidor de forma atómica.
-                        const isUnassigned = !s.assignedToId && !s.assignedTo
+                        // Abrir el chat para visualizarlo SIN reclamarlo automáticamente.
+                        // Se reclamará cuando la asesora responda o pulse explícitamente "Reclamar".
                         setActiveSession({ ...s, unreadCount: 0 })
                         setSessions(prev => prev.map(item => item.id === s.id ? { ...item, unreadCount: 0 } : item))
-                        
-                        if (isUnassigned && user?.id) {
-                          try {
-                            const claimed = await api.put<Session>(`/whatsapp/sessions/${s.id}/assign`, { userId: user.id })
-                            setActiveSession(prev => prev?.id === claimed.id ? { ...prev, ...claimed } : prev)
-                            setSessions(prev => prev.map(item => item.id === claimed.id ? { ...item, ...claimed } : item))
-                          } catch (err: any) {
-                            alerts.info('Chat tomado', err?.message || 'Otra asesora tomó esta conversación primero.')
-                            await loadSessions(undefined, chatSearch.trim(), false, chatFilter)
-                          }
-                        }
                         api.post(`/whatsapp/sessions/${s.id}/read`).catch(() => {})
                       }}
                       className={btnClass}
@@ -3158,46 +3184,73 @@ function ChatPage() {
 
                   {/* Claim/Release Session */}
                   {activeAssignedInfo.isMine ? (
-                    <Button 
-                      size="sm" 
-                      variant="outline" 
-                      className="h-8 border-amber-500/30 hover:bg-amber-500/10 text-xs rounded-lg text-amber-500 px-2 sm:px-3"
-                      onClick={handleReleaseSession}
-                      title="Soltar chat a la cola general"
-                    >
-                      <UserX className="h-3.5 w-3.5 mr-0 sm:mr-1 text-amber-500" />
-                      <span className="hidden sm:inline">Soltar</span>
-                    </Button>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <div className="text-right text-[10px] text-emerald-600 dark:text-emerald-400 font-bold shrink-0 bg-emerald-500/10 px-2 py-1 rounded-lg border border-emerald-500/30 flex items-center gap-1">
+                        <span className="relative flex h-2 w-2 shrink-0">
+                          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                          <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                        </span>
+                        <span>Atendiendo tú</span>
+                      </div>
+                      <Button 
+                        size="sm" 
+                        variant="outline" 
+                        className="h-8 border-amber-500/30 hover:bg-amber-500/10 text-xs rounded-lg text-amber-600 dark:text-amber-400 px-2 sm:px-3 cursor-pointer"
+                        onClick={handleReleaseSession}
+                        title="Soltar chat a la cola general"
+                      >
+                        <UserX className="h-3.5 w-3.5 mr-1 text-amber-500" />
+                        <span>Soltar</span>
+                      </Button>
+                    </div>
                   ) : activeAssignedInfo.isAssigned ? (
-                    <div className="flex items-center gap-1.5">
-                      <div className="text-right text-[10px] text-[var(--text-muted)] font-medium shrink-0 bg-[var(--bg-elevated)] px-2 py-1 rounded-lg border border-[var(--border-subtle)]/40 max-w-[120px] sm:max-w-none truncate">
-                        <span className="hidden sm:inline">Atendido por: </span>
-                        <strong className="text-[var(--text-primary)]">{activeAssignedInfo.assignedName}</strong>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <div className="text-right text-[10px] text-amber-600 dark:text-amber-400 font-bold shrink-0 bg-amber-500/10 px-2 py-1 rounded-lg border border-amber-500/30 max-w-[150px] sm:max-w-none truncate flex items-center gap-1">
+                        <span className="relative flex h-2 w-2 shrink-0">
+                          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
+                          <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500"></span>
+                        </span>
+                        <span className="truncate">Tomado por: <strong>{activeAssignedInfo.assignedName}</strong></span>
                       </div>
                       {['SUPERADMIN', 'ADMIN'].includes(user?.role || '') && (
                         <Button 
                           size="sm" 
                           variant="outline" 
-                          className="h-8 w-8 p-0 sm:w-auto sm:px-2 border-red-500/20 hover:bg-red-500/10 text-red-500 rounded-lg flex items-center justify-center shrink-0"
+                          className="h-8 border-red-500/20 hover:bg-red-500/10 text-red-500 rounded-lg flex items-center justify-center shrink-0 text-xs px-2 cursor-pointer"
                           onClick={handleReleaseSession}
                           title="Forzar Soltar chat (Administrador)"
                         >
-                          <UserX className="h-3.5 w-3.5 sm:mr-1" />
-                          <span className="hidden sm:inline text-xs">Soltar</span>
+                          <UserX className="h-3.5 w-3.5 mr-1" />
+                          <span>Soltar</span>
                         </Button>
                       )}
+                      <Button 
+                        size="sm" 
+                        variant="outline" 
+                        className="h-8 border-amber-500/40 hover:bg-amber-500/20 text-xs rounded-lg text-amber-600 dark:text-amber-300 px-2 sm:px-3 font-bold cursor-pointer flex items-center gap-1"
+                        onClick={() => handleClaimSession()}
+                        title="Reclamar chat"
+                      >
+                        <UserPlus className="h-3.5 w-3.5" />
+                        <span>Reclamar</span>
+                      </Button>
                     </div>
                   ) : (
-                    <Button 
-                      size="sm" 
-                      variant="outline" 
-                      className="h-8 border-[var(--accent)]/30 hover:bg-[var(--accent-muted)]/30 text-xs rounded-lg text-[var(--accent)] px-2 sm:px-3"
-                      onClick={handleClaimSession}
-                      title="Reclamar chat"
-                    >
-                      <UserPlus className="h-3.5 w-3.5 mr-0 sm:mr-1" />
-                      <span className="hidden sm:inline">Reclamar</span>
-                    </Button>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <div className="text-right text-[10px] text-slate-500 dark:text-slate-400 font-bold shrink-0 bg-slate-500/10 px-2 py-1 rounded-lg border border-slate-500/20 flex items-center gap-1">
+                        <span className="h-2 w-2 rounded-full bg-slate-400" />
+                        <span>Sin asignar</span>
+                      </div>
+                      <Button 
+                        size="sm" 
+                        className="h-8 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-lg px-2.5 sm:px-3 flex items-center gap-1.5 shadow-sm cursor-pointer"
+                        onClick={() => handleClaimSession()}
+                        title="Reclamar chat para atenderlo tú"
+                      >
+                        <UserPlus className="h-3.5 w-3.5" />
+                        <span>Reclamar</span>
+                      </Button>
+                    </div>
                   )}
 
                   {/* Cerrar / Deseleccionar Chat (Estilo WhatsApp Web) */}
@@ -3220,7 +3273,7 @@ function ChatPage() {
 
               {/* LIVE ATTENTION STATUS BANNER */}
               {activeAssignedInfo.isMine ? (
-                <div className="px-4 py-2 bg-emerald-500/10 border-b border-emerald-500/20 flex items-center text-xs font-bold text-emerald-600 dark:text-emerald-400 shrink-0 animate-in fade-in duration-150">
+                <div className="px-4 py-2 bg-emerald-500/10 border-b border-emerald-500/20 flex items-center justify-between text-xs font-bold text-emerald-600 dark:text-emerald-400 shrink-0 animate-in fade-in duration-150">
                   <div className="flex items-center gap-2">
                     <span className="relative flex h-2 w-2">
                       <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
@@ -3231,6 +3284,14 @@ function ChatPage() {
                       {chatbotEnabled === true && <span className="ml-1 font-medium text-emerald-700/80 dark:text-emerald-300/80">· IA en pausa mientras esté asignado</span>}
                     </span>
                   </div>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={handleReleaseSession}
+                    className="h-6 px-2 text-[10px] font-bold text-amber-600 dark:text-amber-400 hover:bg-amber-500/10 rounded-md cursor-pointer"
+                  >
+                    Soltar Chat
+                  </Button>
                 </div>
               ) : activeAssignedInfo.isAssigned ? (
                 <div className="px-4 py-2 bg-amber-500/15 border-b border-amber-500/25 flex items-center justify-between text-xs font-bold text-amber-700 dark:text-amber-300 shrink-0 animate-in fade-in duration-150">
@@ -3244,26 +3305,27 @@ function ChatPage() {
                   <Button
                     size="sm"
                     variant="outline"
-                    onClick={handleClaimSession}
-                    className="h-6 px-2.5 text-[10px] font-extrabold border-amber-500/40 text-amber-700 dark:text-amber-300 hover:bg-amber-500/20 rounded-md cursor-pointer"
+                    onClick={() => handleClaimSession()}
+                    className="h-6.5 px-3 text-[11px] font-extrabold border-amber-500/40 text-amber-700 dark:text-amber-300 hover:bg-amber-500/20 rounded-md cursor-pointer flex items-center gap-1"
                     title="Tomar este chat para responder tú"
                   >
-                    Tomar este chat
+                    <UserPlus className="h-3 w-3" />
+                    Reclamar Chat
                   </Button>
                 </div>
               ) : (
                 <div className="px-4 py-1.5 bg-[var(--bg-elevated)]/50 border-b border-[var(--border-subtle)]/40 flex items-center justify-between text-xs font-medium text-[var(--text-secondary)] shrink-0">
                   <div className="flex items-center gap-2">
                     <span className="h-2 w-2 rounded-full bg-slate-400" />
-                    <span>Chat disponible (Sin asignar)</span>
+                    <span>Chat disponible (Sin asignar) · Ningún asesor lo ha tomado</span>
                   </div>
                   <Button
                     size="sm"
-                    variant="ghost"
-                    onClick={handleClaimSession}
-                    className="h-6 px-2.5 text-[10px] font-bold text-[var(--accent)] hover:bg-[var(--accent-muted)]/20 rounded-md cursor-pointer"
+                    onClick={() => handleClaimSession()}
+                    className="h-6.5 px-3 text-[11px] font-extrabold bg-emerald-600 hover:bg-emerald-700 text-white rounded-md cursor-pointer flex items-center gap-1 shadow-sm"
                   >
-                    Tomar Chat
+                    <UserPlus className="h-3 w-3" />
+                    Reclamar Chat
                   </Button>
                 </div>
               )}
@@ -3568,7 +3630,7 @@ function ChatPage() {
                     type="button"
                     size="sm"
                     className="bg-amber-500 hover:bg-amber-600 text-black font-extrabold text-xs h-7 px-3 rounded-lg cursor-pointer"
-                    onClick={handleClaimSession}
+                    onClick={() => handleClaimSession()}
                   >
                     <UserPlus className="w-3.5 h-3.5 mr-1" /> Reclamar Chat
                   </Button>
