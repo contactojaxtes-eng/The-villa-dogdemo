@@ -572,30 +572,58 @@ export default function ModuleSettingsPage() {
     try {
       const result = await api.get<{ token?: string }>('/print/bridge-token', { force: true })
       const token = String(result?.token || '').trim()
-      if (token.length < 32) throw new Error('El puente de impresión todavía no tiene una llave válida en Railway.')
+      if (token.length < 32) throw new Error('El puente de impresión todavía no tiene una llave válida en el servidor.')
 
       // The public EXE remains free of secrets. This small launcher is generated
       // from the current admin session and passes the shared restaurant key to it.
-      const productionUrl = 'https://the-villa-dog-backend-production.up.railway.app'
+      const configuredApiUrlFromEnv = String(import.meta.env.VITE_API_URL || '').trim()
+      const configuredApiUrl = (/^(https?:\/\/)?(localhost|127\.0\.0\.1)(:\d+)?(\/api)?$/i.test(configuredApiUrlFromEnv) || !configuredApiUrlFromEnv ? window.location.origin : configuredApiUrlFromEnv).replace(/\/+$/, '')
+      const backendUrl = configuredApiUrl.replace(/\/api$/i, '')
       const safeToken = token.replace(/[\r\n"]/g, '')
+      if (!/^[A-Za-z0-9._~-]{32,}$/.test(safeToken)) throw new Error('La llave del puente tiene un formato inválido.')
       const script = [
         '@echo off',
         'setlocal EnableExtensions DisableDelayedExpansion',
         'title Instalador del puente The Villa Dog',
         `set "BRIDGE_TOKEN=${safeToken}"`,
-        `set "SOURCE_URL=${productionUrl}/downloads/Instalar-Impresion-TheVillaDog.exe"`,
+        'set "PRINT_BRIDGE_TOKEN=%BRIDGE_TOKEN%"',
+        `set "BRIDGE_BACKEND_URL=${backendUrl}"`,
+        'set "SOURCE_URL=%BRIDGE_BACKEND_URL%/downloads/Instalar-Impresion-TheVillaDog.exe"',
         'set "TARGET=%TEMP%\\TheVillaDogPrinterBridgeSetup.exe"',
+        'del /Q "%TARGET%" >nul 2>&1',
         'echo Descargando el instalador configurado...',
+        'echo Servidor: %BRIDGE_BACKEND_URL%',
+        'where curl.exe >nul 2>&1',
+        'if not errorlevel 1 (',
+        '  curl.exe --fail --location --retry 3 --retry-delay 2 --connect-timeout 15 --max-time 180 --progress-bar --output "%TARGET%" "%SOURCE_URL%"',
+        ') else (',
         // Keep single quotes inside the PowerShell command. Doubling them here
         // makes PowerShell parse `''SilentlyContinue''` and aborts before the
         // download starts when this line is executed from the generated .cmd.
-        `powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$ProgressPreference = 'SilentlyContinue'; Invoke-WebRequest -UseBasicParsing -Uri $env:SOURCE_URL -OutFile $env:TARGET"`,
+        `  powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$ProgressPreference = 'SilentlyContinue'; try { Invoke-WebRequest -UseBasicParsing -TimeoutSec 180 -Uri $env:SOURCE_URL -OutFile $env:TARGET; exit 0 } catch { Write-Host $_; exit 1 }"`,
+        ')',
         'if errorlevel 1 (',
-        '  echo No se pudo descargar el instalador. Comprueba la conexion a Internet.',
+        '  echo No se pudo descargar el instalador. Comprueba la conexion a Internet o el servidor.',
         '  pause',
         '  exit /b 1',
         ')',
+        'if not exist "%TARGET%" (',
+        '  echo No se recibio el archivo del instalador.',
+        '  pause',
+        '  exit /b 1',
+        ')',
+        'for %%A in ("%TARGET%") do if %%~zA LSS 1000000 (',
+        '  echo El archivo descargado esta incompleto.',
+        '  pause',
+        '  exit /b 1',
+        ')',
+        'echo Descarga completa. Iniciando instalador...',
         'start "" /wait "%TARGET%"',
+        'if errorlevel 1 (',
+        '  echo El instalador devolvio un error. Conservamos el archivo en %TARGET% para revisar el diagnostico.',
+        '  pause',
+        '  exit /b 1',
+        ')',
         'del /Q "%TARGET%" >nul 2>&1',
         'echo.',
         'echo Instalacion terminada. Puedes cerrar esta ventana.',
@@ -613,7 +641,7 @@ export default function ModuleSettingsPage() {
       URL.revokeObjectURL(url)
       alerts.success('Instalador listo', 'Descárgalo y ejecútalo en cada computador. No te pedirá la llave.')
     } catch (error: unknown) {
-      alerts.error('No se pudo preparar el instalador', getErrorMessage(error, 'Verifica que PRINT_BRIDGE_TOKEN esté guardada en Railway.'))
+      alerts.error('No se pudo preparar el instalador', getErrorMessage(error, 'Verifica que PRINT_BRIDGE_TOKEN esté guardada en el servidor.'))
     } finally {
       setDownloadingBridge(false)
     }
@@ -765,7 +793,7 @@ export default function ModuleSettingsPage() {
               <div className="grid border-t border-[var(--border-subtle)] bg-[var(--bg-elevated)] sm:grid-cols-3">
                 <div className="p-4"><p className="text-[10px] font-black uppercase tracking-wider text-sky-600">1. Instalar</p><p className="mt-1 text-xs text-[var(--text-secondary)]">Descarga el instalador configurado y ejecútalo. La llave se incluye automáticamente; no tienes que copiarla.</p></div>
                 <div className="border-y border-[var(--border-subtle)] p-4 sm:border-x sm:border-y-0"><p className="text-[10px] font-black uppercase tracking-wider text-sky-600">2. Configurar</p><p className="mt-1 text-xs text-[var(--text-secondary)]">Usa la IP local o selecciona USB y escribe únicamente el nombre compartido.</p></div>
-                <div className="p-4"><p className="text-[10px] font-black uppercase tracking-wider text-sky-600">3. Probar</p><p className="mt-1 text-xs text-[var(--text-secondary)]">Guarda y pulsa <strong>Probar</strong>. Puedes hacerlo desde cualquier dispositivo y lugar.</p></div>
+              <div className="p-4"><p className="text-[10px] font-black uppercase tracking-wider text-sky-600">3. Probar</p><p className="mt-1 text-xs text-[var(--text-secondary)]">Guarda y pulsa <strong>Probar impresora</strong>. Puedes hacerlo desde cualquier dispositivo y lugar.</p></div>
               </div>
             </Card>
           )}
@@ -823,7 +851,7 @@ export default function ModuleSettingsPage() {
 
             {['PRINT', 'BOTH'].includes(kitchen.deliveryKitchenMode) && (
             <Card className="rounded-2xl border-[var(--border-subtle)] bg-[var(--bg-panel)] p-5">
-              <div className="mb-4 flex items-center justify-between gap-3"><div><h2 className="font-black text-[var(--text-primary)]">Impresoras de preparación</h2><p className="text-xs text-[var(--text-muted)]">La IP se cambia aquí y el puente local la recibe desde Railway.</p></div><Button variant="outline" onClick={addPrinter} className="h-9 rounded-xl text-xs font-bold"><Plus className="mr-1 h-4 w-4" /> Agregar</Button></div>
+              <div className="mb-4 flex items-center justify-between gap-3"><div><h2 className="font-black text-[var(--text-primary)]">Impresoras de preparación</h2><p className="text-xs text-[var(--text-muted)]">La IP se cambia aquí y el puente local la recibe desde el servidor.</p></div><Button variant="outline" onClick={addPrinter} className="h-9 rounded-xl text-xs font-bold"><Plus className="mr-1 h-4 w-4" /> Agregar</Button></div>
               {deliveryPrinters.length === 0 ? (
                 <button type="button" onClick={addPrinter} className="w-full rounded-2xl border border-dashed border-[var(--border-default)] p-8 text-sm font-bold text-[var(--text-muted)] hover:text-[var(--accent)]"><Plus className="mx-auto mb-2 h-5 w-5" /> Agregar impresora de domicilios</button>
               ) : (
@@ -844,14 +872,14 @@ export default function ModuleSettingsPage() {
                         <p className="mt-2 text-[10px] text-[var(--text-muted)]">{isUsb ? 'Comparte primero la impresora en Windows y escribe aquí solamente ese nombre compartido.' : 'La IP puede cambiarse desde aquí, incluso estando fuera del restaurante.'}</p>
                         <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
                           <div className="flex items-center gap-3"><label className="flex items-center gap-1.5 text-xs font-bold text-[var(--text-secondary)]"><input type="checkbox" checked={printer.enabled !== false} onChange={event => updatePrinter(printer.id, { enabled: event.target.checked })} className="accent-[var(--accent)]" /> Activa</label><select value={printer.paper || '80'} onChange={event => updatePrinter(printer.id, { paper: event.target.value })} className="h-8 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-panel)] px-2 text-xs text-[var(--text-primary)]"><option value="80">Papel 80 mm</option><option value="58">Papel 58 mm</option></select></div>
-                          <button type="button" disabled={testingPrinterId === printer.id || !hasValidPrinterAddress(printer)} onClick={() => testPrinter(printer)} className="flex h-8 items-center gap-1.5 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-panel)] px-3 text-xs font-bold text-[var(--text-secondary)] disabled:opacity-50">{testingPrinterId === printer.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Printer className="h-3.5 w-3.5" />} Probar</button>
+                          <button type="button" disabled={testingPrinterId === printer.id || !hasValidPrinterAddress(printer)} onClick={() => testPrinter(printer)} className="flex h-8 items-center gap-1.5 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-panel)] px-3 text-xs font-bold text-[var(--text-secondary)] disabled:opacity-50" title="Enviar una comanda de prueba a esta impresora">{testingPrinterId === printer.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Printer className="h-3.5 w-3.5" />} Probar impresora</button>
                         </div>
                       </div>
                     )
                   })}
                 </div>
               )}
-              <div className="mt-4 rounded-xl border border-sky-500/20 bg-sky-500/5 p-3 text-xs text-sky-800 dark:text-sky-200"><p className="font-bold">Cómo viaja la impresión</p><p className="mt-0.5 opacity-80">El pedido puede salir desde cualquier lugar. Railway guarda la comanda; el puente la descarga por Internet y la entrega dentro del restaurante por IP local o USB compartida.</p></div>
+              <div className="mt-4 rounded-xl border border-sky-500/20 bg-sky-500/5 p-3 text-xs text-sky-800 dark:text-sky-200"><p className="font-bold">Cómo viaja la impresión</p><p className="mt-0.5 opacity-80">El pedido puede salir desde cualquier lugar. El servidor guarda la comanda; el puente la descarga por Internet y la entrega dentro del restaurante por IP local o USB compartida.</p></div>
             </Card>
             )}
           </div>

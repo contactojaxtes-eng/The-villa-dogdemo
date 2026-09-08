@@ -16,6 +16,7 @@ set "STARTUP_DIR=%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup"
 set "SHORTCUT_PATH=%STARTUP_DIR%\TheVillaDogPrinterBridge.lnk"
 set "TASK_NAME=TheVillaDogPrinterBridgeWatchdog"
 set "BACKEND_URL=https://the-villa-dog-backend-production.up.railway.app"
+if defined BRIDGE_BACKEND_URL set "BACKEND_URL=%BRIDGE_BACKEND_URL%"
 
 echo ==============================================================
 echo       IMPRESION AUTOMATICA - THE VILLA DOG
@@ -23,7 +24,6 @@ echo ==============================================================
 echo.
 echo Esta instalacion se realiza una sola vez. El puente se iniciara
 echo con Windows y se recuperara solo si otra aplicacion lo cierra.
-echo.
 
 if not exist "%SOURCE_EXE%" (
   echo [ERROR] El instalador no encontro el componente de impresion.
@@ -60,7 +60,6 @@ if exist "%CONFIG_PATH%" (
 )
 :token_ready
 
-echo.
 echo Instalando en una ubicacion estable...
 taskkill /F /IM the-villa-dog-printer-bridge.exe >nul 2>&1
 copy /Y "%SOURCE_EXE%" "%INSTALLED_EXE%" >nul
@@ -129,13 +128,9 @@ echo.
 echo ==============================================================
 echo [LISTO] Puente instalado e iniciado en segundo plano.
 echo ==============================================================
-echo - No necesitas abrirlo cada dia.
 echo - Inicia automaticamente al entrar a Windows.
 echo - El vigilante lo recupera si se cierra.
 echo - Diagnostico: %INSTALL_DIR%\bridge.log
-echo - Desinstalar: %UNINSTALL_PATH%
 echo.
 echo Ya puedes enviar una prueba desde Configuracion - Cocina domicilios.
-echo.
-pause
 exit /b 0
