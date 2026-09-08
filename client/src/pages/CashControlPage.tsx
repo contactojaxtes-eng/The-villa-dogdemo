@@ -14,7 +14,7 @@ import {
   Wallet, DollarSign, ArrowUpRight, TrendingUp, History, Filter, Search, 
   Printer, LockOpen, Lock, User, Calendar, CheckCircle2, AlertTriangle, 
   Layers, RefreshCw, Banknote, CreditCard, Smartphone, ShieldCheck, PieChart, BarChart2,
-  Eye, FileText, ChevronRight, Receipt, X, Bike, Store
+  Eye, FileText, ChevronRight, Receipt, X, Bike, Store, Clock
 } from 'lucide-react'
 import { io } from '@/lib/socket'
 import { PageHeader } from '@/components/ui/PageHeader'
@@ -277,8 +277,6 @@ export default function CashControlPage() {
   }
 
   const fmtCOP = (val: number) => formatCurrency(val)
-  const deliveryRegister = registers.find(register => register.purpose === 'DELIVERY')
-  const deliverySummary = deliveryRegister ? summaries[deliveryRegister.id] : undefined
 
   if (loading) {
     return (
@@ -309,88 +307,55 @@ export default function CashControlPage() {
 
       {/* KPI Cards */}
       <motion.div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4" variants={fadeUp}>
-        <Card className="niche-card-premium border-[var(--border-subtle)] bg-[var(--bg-panel)] rounded-2xl p-5 relative overflow-hidden">
-          <div className="flex items-center gap-3">
-            <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-[var(--accent)]/15 border border-[var(--accent)]/30 text-[var(--accent)]">
-              <TrendingUp className="h-6 w-6" />
+        <Card className="border border-[var(--border-subtle)] bg-[var(--bg-panel)] rounded-2xl p-5 relative overflow-hidden shadow-sm hover:shadow transition-all">
+          <div className="flex items-center gap-4">
+            <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl bg-rose-50 dark:bg-rose-500/10 border border-rose-100 dark:border-rose-500/20 text-rose-600 dark:text-rose-400">
+              <TrendingUp className="h-6 w-6 stroke-[2.2]" />
             </div>
             <div>
-              <p className="text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-wider">Ventas Totales Hoy</p>
-              <p className="text-2xl font-black text-[var(--accent)] tracking-tight mt-0.5">{formatCurrency(globalSummary.totalSales)}</p>
-              <p className="text-[11px] text-[var(--text-secondary)] mt-0.5">{globalSummary.orderCount} pedidos en {registers.length} cajas</p>
+              <p className="text-[10px] font-extrabold text-[var(--text-muted)] uppercase tracking-wider">Ventas Totales Hoy</p>
+              <p className="text-2xl font-black text-rose-600 dark:text-rose-500 tracking-tight mt-0.5">{formatCurrency(globalSummary.totalSales)}</p>
+              <p className="text-xs text-[var(--text-secondary)] font-medium mt-0.5">{globalSummary.orderCount} pedidos en {registers.length} cajas</p>
             </div>
           </div>
         </Card>
-        <Card className="niche-card-premium border-[var(--border-subtle)] bg-[var(--bg-panel)] rounded-2xl p-5 relative overflow-hidden">
-          <div className="flex items-center gap-3">
-            <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-500">
-              <Banknote className="h-6 w-6" />
+        <Card className="border border-[var(--border-subtle)] bg-[var(--bg-panel)] rounded-2xl p-5 relative overflow-hidden shadow-sm hover:shadow transition-all">
+          <div className="flex items-center gap-4">
+            <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl bg-emerald-50 dark:bg-emerald-500/10 border border-emerald-100 dark:border-emerald-500/20 text-emerald-600 dark:text-emerald-400">
+              <Banknote className="h-6 w-6 stroke-[2.2]" />
             </div>
             <div>
-              <p className="text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-wider">Efectivo en Cajas</p>
+              <p className="text-[10px] font-extrabold text-[var(--text-muted)] uppercase tracking-wider">Efectivo en Cajas</p>
               <p className="text-2xl font-black text-[var(--text-primary)] tracking-tight mt-0.5">{formatCurrency(globalSummary.totalCashInDrawer)}</p>
-              <p className="text-[11px] text-[var(--text-secondary)] mt-0.5">Base ({formatCurrency(globalSummary.totalInitial)}) + Ventas ({formatCurrency(globalSummary.totalCash)})</p>
+              <p className="text-xs text-[var(--text-secondary)] font-medium mt-0.5">Base ({formatCurrency(globalSummary.totalInitial)}) + Ventas ({formatCurrency(globalSummary.totalCash)})</p>
             </div>
           </div>
         </Card>
-        <Card className="niche-card-premium border-[var(--border-subtle)] bg-[var(--bg-panel)] rounded-2xl p-5 relative overflow-hidden">
-          <div className="flex items-center gap-3">
-            <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-blue-500/15 border border-blue-500/30 text-blue-500">
-              <CreditCard className="h-6 w-6" />
+        <Card className="border border-[var(--border-subtle)] bg-[var(--bg-panel)] rounded-2xl p-5 relative overflow-hidden shadow-sm hover:shadow transition-all">
+          <div className="flex items-center gap-4">
+            <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl bg-blue-50 dark:bg-blue-500/10 border border-blue-100 dark:border-blue-500/20 text-blue-600 dark:text-blue-400">
+              <CreditCard className="h-6 w-6 stroke-[2.2]" />
             </div>
             <div>
-              <p className="text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-wider">Bancos y Digitales</p>
+              <p className="text-[10px] font-extrabold text-[var(--text-muted)] uppercase tracking-wider">Bancos y Digitales</p>
               <p className="text-2xl font-black text-[var(--text-primary)] tracking-tight mt-0.5">{formatCurrency(globalSummary.totalTransfers)}</p>
-              <p className="text-[11px] text-[var(--text-secondary)] mt-0.5">Transferencias / Nequi / Daviplata</p>
+              <p className="text-xs text-[var(--text-secondary)] font-medium mt-0.5">Transferencias / Nequi / Daviplata</p>
             </div>
           </div>
         </Card>
-        <Card className="niche-card-premium border-[var(--border-subtle)] bg-[var(--bg-panel)] rounded-2xl p-5 relative overflow-hidden">
-          <div className="flex items-center gap-3">
-            <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-purple-500/15 border border-purple-500/30 text-purple-500">
-              <Wallet className="h-6 w-6" />
+        <Card className="border border-[var(--border-subtle)] bg-[var(--bg-panel)] rounded-2xl p-5 relative overflow-hidden shadow-sm hover:shadow transition-all">
+          <div className="flex items-center gap-4">
+            <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl bg-purple-50 dark:bg-purple-500/10 border border-purple-100 dark:border-purple-500/20 text-purple-600 dark:text-purple-400">
+              <Wallet className="h-6 w-6 stroke-[2.2]" />
             </div>
             <div>
-              <p className="text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-wider">Estado de Turnos</p>
+              <p className="text-[10px] font-extrabold text-[var(--text-muted)] uppercase tracking-wider">Estado de Turnos</p>
               <p className="text-2xl font-black text-[var(--text-primary)] tracking-tight mt-0.5">{globalSummary.openCount} / {registers.length}</p>
-              <p className="text-[11px] text-[var(--text-secondary)] mt-0.5">Cajas abiertas actualmente</p>
+              <p className="text-xs text-[var(--text-secondary)] font-medium mt-0.5">Cajas abiertas actualmente</p>
             </div>
           </div>
         </Card>
       </motion.div>
-
-      {deliveryRegister && (
-        <motion.div variants={fadeUp}>
-          <Card className="overflow-hidden rounded-2xl border border-rose-500/25 bg-gradient-to-r from-rose-500/10 via-[var(--bg-panel)] to-orange-500/5 shadow-sm">
-            <CardContent className="p-5">
-              <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
-                <div className="flex min-w-0 items-start gap-3">
-                  <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-rose-500/25 bg-rose-500/10 text-rose-600">
-                    <Bike className="h-6 w-6" />
-                  </div>
-                  <div className="min-w-0">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <h2 className="text-lg font-black text-[var(--text-primary)]">Caja Domicilios</h2>
-                      <Badge className={deliverySummary?.isOpen ? 'border border-emerald-500/25 bg-emerald-500/10 text-[10px] font-black text-emerald-600' : 'border border-[var(--border-subtle)] bg-[var(--bg-elevated)] text-[10px] font-black text-[var(--text-muted)]'}>
-                        {deliverySummary?.isOpen ? 'Turno abierto' : 'Turno cerrado'}
-                      </Badge>
-                    </div>
-                    <p className="mt-1 text-xs text-[var(--text-secondary)]">Aquí entran únicamente domicilios y pedidos para recoger del turno activo.</p>
-                  </div>
-                </div>
-                <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:min-w-[42rem] xl:grid-cols-6">
-                  <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-panel)]/85 p-3"><p className="text-[9px] font-black uppercase text-[var(--text-muted)]">Pedidos</p><p className="mt-1 text-lg font-black text-[var(--text-primary)]">{deliverySummary?.orderCount || 0}</p></div>
-                  <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-panel)]/85 p-3"><p className="flex items-center gap-1 text-[9px] font-black uppercase text-[var(--text-muted)]"><Bike className="h-3 w-3" /> Domicilios</p><p className="mt-1 text-lg font-black text-rose-600">{deliverySummary?.deliveryCount || 0}</p></div>
-                  <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-panel)]/85 p-3"><p className="flex items-center gap-1 text-[9px] font-black uppercase text-[var(--text-muted)]"><Store className="h-3 w-3" /> Recoger</p><p className="mt-1 text-lg font-black text-purple-600">{deliverySummary?.pickupCount || 0}</p></div>
-                  <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-3"><p className="text-[9px] font-black uppercase text-[var(--text-muted)]">Recaudado</p><p className="mt-1 text-sm font-black text-emerald-600">{formatCurrency(deliverySummary?.totalCollected || 0)}</p></div>
-                  <div className={(deliverySummary?.pendingPaymentCount || 0) > 0 ? 'rounded-xl border border-amber-500/30 bg-amber-500/10 p-3' : 'rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-panel)]/85 p-3'}><p className="text-[9px] font-black uppercase text-[var(--text-muted)]">Por cobrar</p><p className={(deliverySummary?.pendingPaymentCount || 0) > 0 ? 'mt-1 text-sm font-black text-amber-600' : 'mt-1 text-sm font-black text-[var(--text-primary)]'}>{formatCurrency(deliverySummary?.pendingPaymentAmount || 0)}</p></div>
-                  <div className={(deliverySummary?.pendingDriverCash || 0) > 0 ? 'rounded-xl border border-orange-500/30 bg-orange-500/10 p-3' : 'rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-panel)]/85 p-3'}><p className="text-[9px] font-black uppercase text-[var(--text-muted)]">Con repartidores</p><p className={(deliverySummary?.pendingDriverCash || 0) > 0 ? 'mt-1 text-sm font-black text-orange-600' : 'mt-1 text-sm font-black text-[var(--text-primary)]'}>{formatCurrency(deliverySummary?.pendingDriverCash || 0)}</p></div>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-        </motion.div>
-      )}
 
       {/* Tab Switcher & Consolidated Report Button */}
       <motion.div variants={fadeUp} className="flex justify-between items-center flex-wrap gap-4">
@@ -463,49 +428,60 @@ export default function CashControlPage() {
                     </div>
                   )}
 
-                  {sum && reg.purpose === 'DELIVERY' && (
-                    <div className="grid grid-cols-2 gap-3 pt-2 text-sm sm:grid-cols-3">
-                      <div className="rounded-xl border border-rose-500/20 bg-rose-500/5 p-3"><p className="text-[10px] font-bold uppercase text-[var(--text-muted)]">Pedidos</p><p className="mt-0.5 text-lg font-black text-rose-600">{sum.orderCount}</p><p className="mt-0.5 text-[10px] text-[var(--text-secondary)]">{sum.deliveryCount || 0} domicilios · {sum.pickupCount || 0} recoger</p></div>
-                      <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-3"><p className="text-[10px] font-bold uppercase text-[var(--text-muted)]">Facturado</p><p className="mt-0.5 text-lg font-black text-[var(--text-primary)]">{formatCurrency(sum.totalSales || 0)}</p><p className="mt-0.5 text-[10px] text-[var(--text-secondary)]">Total del turno</p></div>
-                      <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-3"><p className="text-[10px] font-bold uppercase text-[var(--text-muted)]">Recaudado</p><p className="mt-0.5 text-lg font-black text-emerald-600">{formatCurrency(sum.totalCollected || 0)}</p><p className="mt-0.5 text-[10px] text-[var(--text-secondary)]">{sum.paidOrderCount || 0} pagos confirmados</p></div>
-                      <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-3"><p className="text-[10px] font-bold uppercase text-[var(--text-muted)]">Efectivo en caja</p><p className="mt-0.5 text-base font-extrabold text-[var(--text-primary)]">{formatCurrency(sum.cashInDrawer || 0)}</p><p className="mt-0.5 text-[10px] text-[var(--text-secondary)]">Base + recibido − gastos</p></div>
-                      <div className={(sum.pendingPaymentCount || 0) > 0 ? 'rounded-xl border border-amber-500/30 bg-amber-500/10 p-3' : 'rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-3'}><p className="text-[10px] font-bold uppercase text-[var(--text-muted)]">Pendiente por cobrar</p><p className={(sum.pendingPaymentCount || 0) > 0 ? 'mt-0.5 text-base font-extrabold text-amber-600' : 'mt-0.5 text-base font-extrabold text-[var(--text-primary)]'}>{formatCurrency(sum.pendingPaymentAmount || 0)}</p><p className="mt-0.5 text-[10px] text-[var(--text-secondary)]">{sum.pendingPaymentCount || 0} pedidos</p></div>
-                      <div className="rounded-xl border border-blue-500/20 bg-blue-500/5 p-3"><p className="text-[10px] font-bold uppercase text-[var(--text-muted)]">Pagos digitales</p><p className="mt-0.5 text-base font-extrabold text-blue-600">{formatCurrency(sum.totalTransfer || 0)}</p><p className="mt-0.5 text-[10px] text-[var(--text-secondary)]">Confirmados</p></div>
-                    </div>
-                  )}
+                  {sum && (
+                    <div className="space-y-3 pt-2">
+                      <div className="grid grid-cols-2 gap-3 text-sm">
+                        <div className="rounded-xl bg-[var(--bg-elevated)] border border-[var(--border-subtle)] p-3.5">
+                          <p className="text-[10px] font-extrabold text-[var(--text-muted)] uppercase tracking-wider">Ventas Totales</p>
+                          <p className="text-xl font-black text-rose-600 dark:text-rose-500 mt-1">
+                            {formatCurrency(sum.totalSales || 0)}
+                          </p>
+                          <p className="text-[11px] text-[var(--text-secondary)] mt-0.5">
+                            {sum.orderCount} pedidos {isOpen ? 'del turno' : 'hoy'}
+                            {reg.purpose === 'DELIVERY' && (sum.deliveryCount || sum.pickupCount ? ` · ${sum.deliveryCount || 0} dom · ${sum.pickupCount || 0} rec` : '')}
+                          </p>
+                        </div>
+                        <div className="rounded-xl bg-[var(--bg-elevated)] border border-[var(--border-subtle)] p-3.5">
+                          <p className="text-[10px] font-extrabold text-[var(--text-muted)] uppercase tracking-wider">Efectivo en Caja</p>
+                          <p className="text-xl font-black text-[var(--text-primary)] mt-1">
+                            {formatCurrency(sum.cashInDrawer ?? ((sum.initialCash || 0) + sum.totalCash))}
+                          </p>
+                          <p className="text-[11px] text-[var(--text-secondary)] mt-0.5 truncate">
+                            {sum.initialCash ? `Base (${formatCurrency(sum.initialCash)}) + Efectivo` : 'Recaudado en físico'}
+                          </p>
+                        </div>
+                        <div className="rounded-xl bg-[var(--bg-elevated)] border border-[var(--border-subtle)] p-3.5">
+                          <p className="text-[10px] font-extrabold text-[var(--text-muted)] uppercase tracking-wider">Transferencias & Digitales</p>
+                          <p className="text-xl font-black text-[var(--text-primary)] mt-1">
+                            {formatCurrency(sum.totalTransfer || 0)}
+                          </p>
+                          <p className="text-[11px] text-[var(--text-secondary)] mt-0.5 truncate">Bancos / Nequi / Daviplata</p>
+                        </div>
+                        <div className="rounded-xl bg-[var(--bg-elevated)] border border-[var(--border-subtle)] p-3.5">
+                          <p className="text-[10px] font-extrabold text-[var(--text-muted)] uppercase tracking-wider">Total General del Turno</p>
+                          <p className="text-xl font-black text-emerald-600 dark:text-emerald-400 mt-1">
+                            {formatCurrency(((sum.initialCash || 0) + sum.totalSales))}
+                          </p>
+                          <p className="text-[11px] text-[var(--text-secondary)] mt-0.5 truncate">Inicial + Ventas Totales</p>
+                        </div>
+                      </div>
 
-                  {sum && reg.purpose !== 'DELIVERY' && (
-                    <div className="grid grid-cols-2 gap-3 text-sm pt-2">
-                      <div className="rounded-xl bg-[var(--bg-elevated)] border border-[var(--border-subtle)] p-3">
-                        <p className="text-[10px] font-bold text-[var(--text-muted)] uppercase">Ventas Totales</p>
-                        <p className="text-lg font-black text-[var(--accent)] mt-0.5">{formatCurrency(sum.totalSales || 0)}</p>
-                        <p className="text-[10px] text-[var(--text-secondary)] mt-0.5">
-                          {sum.orderCount} pedidos {isOpen ? 'del turno' : 'hoy'}
-                        </p>
-                      </div>
-                      <div className="rounded-xl bg-[var(--bg-elevated)] border border-[var(--border-subtle)] p-3">
-                        <p className="text-[10px] font-bold text-[var(--text-muted)] uppercase">Efectivo en Caja</p>
-                        <p className="text-lg font-black text-[var(--text-primary)] mt-0.5">
-                          {formatCurrency(sum.cashInDrawer ?? ((sum.initialCash || 0) + sum.totalCash))}
-                        </p>
-                        <p className="text-[10px] text-[var(--text-secondary)] mt-0.5">
-                          {sum.initialCash ? `Base (${formatCurrency(sum.initialCash)}) + Efectivo` : 'Recaudado en físico'}
-                        </p>
-                      </div>
-                      <div className="rounded-xl bg-[var(--bg-elevated)] border border-[var(--border-subtle)] p-3">
-                        <p className="text-[10px] font-bold text-[var(--text-muted)] uppercase">Transferencias & Digitales</p>
-                        <p className="text-base font-extrabold text-[var(--text-primary)] mt-0.5">
-                          {formatCurrency(sum.totalTransfer || 0)}
-                        </p>
-                        <p className="text-[10px] text-[var(--text-secondary)] mt-0.5">Bancos / Nequi / Daviplata</p>
-                      </div>
-                      <div className="rounded-xl bg-[var(--bg-elevated)] border border-[var(--border-subtle)] p-3">
-                        <p className="text-[10px] font-bold text-[var(--text-muted)] uppercase">Total General del Turno</p>
-                        <p className="text-base font-extrabold text-emerald-400 mt-0.5">
-                          {formatCurrency(((sum.initialCash || 0) + sum.totalSales))}
-                        </p>
-                        <p className="text-[10px] text-[var(--text-secondary)] mt-0.5">Inicial + Ventas Totales</p>
-                      </div>
+                      {reg.purpose === 'DELIVERY' && ((sum.pendingPaymentCount || 0) > 0 || (sum.pendingDriverCash || 0) > 0) && (
+                        <div className="flex flex-wrap items-center gap-2 pt-1">
+                          {(sum.pendingPaymentCount || 0) > 0 && (
+                            <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-500/10 border border-amber-500/20 text-[11px] font-bold text-amber-700 dark:text-amber-400">
+                              <Clock className="h-3.5 w-3.5" />
+                              <span>Por cobrar: {formatCurrency(sum.pendingPaymentAmount || 0)} ({sum.pendingPaymentCount} pedidos)</span>
+                            </div>
+                          )}
+                          {(sum.pendingDriverCash || 0) > 0 && (
+                            <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-orange-500/10 border border-orange-500/20 text-[11px] font-bold text-orange-700 dark:text-orange-400">
+                              <Bike className="h-3.5 w-3.5" />
+                              <span>Con repartidores: {formatCurrency(sum.pendingDriverCash || 0)}</span>
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </div>
                   )}
 
