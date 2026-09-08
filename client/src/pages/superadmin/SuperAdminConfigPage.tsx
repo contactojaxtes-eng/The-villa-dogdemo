@@ -213,6 +213,7 @@ export default function SuperAdminConfigPage() {
   const [geminiKeys, setGeminiKeys] = useState<string[]>([''])
   const [savingMeta, setSavingMeta] = useState(false)
   const [savingAi, setSavingAi] = useState(false)
+  const [savingChatbot, setSavingChatbot] = useState(false)
   const [testingGemini, setTestingGemini] = useState(false)
   const [testPrompt, setTestPrompt] = useState('Saluda brevemente como asesor de The Villa Dog.')
   const [testResult, setTestResult] = useState<GeminiTestResult | null>(null)
@@ -265,6 +266,23 @@ export default function SuperAdminConfigPage() {
       return next.length ? next : ['']
     })
     setTestResult(null)
+  }
+
+  const toggleChatbot = async () => {
+    if (savingChatbot) return
+    const next = !wa.chatbotEnabled
+    setSavingChatbot(true)
+    try {
+      const updated = await api.put<WhatsappCoreConfig>('/whatsapp/settings', { chatbotEnabled: next })
+      setWa(current => ({ ...current, chatbotEnabled: updated.chatbotEnabled === true }))
+      alerts.success(next ? 'IA activada' : 'IA pausada', next
+        ? 'Responderá en conversaciones nuevas o que estén sin asignar.'
+        : 'Las respuestas automáticas quedaron pausadas.')
+    } catch (error) {
+      alerts.error('No se pudo cambiar la IA', getErrorMessage(error, 'Inténtalo nuevamente.'))
+    } finally {
+      setSavingChatbot(false)
+    }
   }
 
   const saveAi = async () => {
@@ -449,13 +467,16 @@ export default function SuperAdminConfigPage() {
           <Card className="rounded-2xl border-[var(--border-subtle)] bg-[var(--bg-panel)] p-4 shadow-sm sm:p-5">
             <div className="flex flex-col gap-3 border-b border-[var(--border-subtle)] pb-4 sm:flex-row sm:items-center sm:justify-between">
               <SectionTitle icon={Bot} title="Asistente de WhatsApp" description="Controla cuándo responde y con qué instrucciones atiende." />
-              <button type="button" role="switch" aria-checked={wa.chatbotEnabled} onClick={() => setWa(current => ({ ...current, chatbotEnabled: !current.chatbotEnabled }))} className={cn('inline-flex h-10 shrink-0 items-center gap-2 rounded-xl border px-3 text-xs font-black transition', wa.chatbotEnabled ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-600' : 'border-[var(--border-subtle)] bg-[var(--bg-elevated)] text-[var(--text-secondary)]')}>
-                <span className={cn('h-2.5 w-2.5 rounded-full', wa.chatbotEnabled ? 'bg-emerald-500' : 'bg-slate-400')} />
-                {wa.chatbotEnabled ? 'Respuestas activas' : 'Bot pausado'}
+              <button type="button" role="switch" aria-checked={wa.chatbotEnabled} onClick={() => void toggleChatbot()} disabled={savingChatbot} className={cn('inline-flex h-10 shrink-0 items-center gap-2 rounded-xl border px-3 text-xs font-black transition disabled:cursor-wait disabled:opacity-70', wa.chatbotEnabled ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-600' : 'border-[var(--border-subtle)] bg-[var(--bg-elevated)] text-[var(--text-secondary)]')}>
+                {savingChatbot ? <Loader2 className="h-4 w-4 animate-spin" /> : <span className={cn('h-2.5 w-2.5 rounded-full', wa.chatbotEnabled ? 'bg-emerald-500' : 'bg-slate-400')} />}
+                {savingChatbot ? 'Guardando…' : wa.chatbotEnabled ? 'Respuestas activas' : 'Bot pausado'}
               </button>
             </div>
 
             <div className="mt-5 space-y-5">
+              <div className="rounded-xl border border-amber-500/25 bg-amber-500/5 p-3 text-[11px] leading-5 text-[var(--text-secondary)]">
+                <strong className="text-[var(--text-primary)]">Cómo se prueba:</strong> el interruptor se guarda al instante. La IA solo responde mensajes entrantes de chats sin asignar; si una asesora tomó el chat, usa <strong className="text-[var(--text-primary)]">Soltar chat</strong> o prueba con una conversación nueva.
+              </div>
               <label className="block">
                 <span className="mb-1.5 block text-xs font-bold text-[var(--text-secondary)]">Modelo principal</span>
                 <div className="flex flex-col gap-2 sm:flex-row"><input list="gemini-models" value={wa.geminiModel} onChange={event => { setWa(current => ({ ...current, geminiModel: event.target.value })); setTestResult(null) }} className={cn(fieldClass, 'min-w-0 flex-1')} placeholder="gemini-flash-lite-latest" /><Button type="button" variant="outline" onClick={() => void loadGeminiModelInfo()} disabled={loadingModelInfo} className="h-11 shrink-0 rounded-xl text-xs font-black">{loadingModelInfo ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-1.5 h-4 w-4" />} Consultar modelos</Button></div>

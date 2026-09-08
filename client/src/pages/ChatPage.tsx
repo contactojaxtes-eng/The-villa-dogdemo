@@ -3224,7 +3224,10 @@ function ChatPage() {
                       <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
                       <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
                     </span>
-                    <span>Estás atendiendo este chat en tiempo real ({user?.name || 'Tú'})</span>
+                    <span>
+                      Estás atendiendo este chat en tiempo real ({user?.name || 'Tú'})
+                      {chatbotEnabled === true && <span className="ml-1 font-medium text-emerald-700/80 dark:text-emerald-300/80">· IA en pausa mientras esté asignado</span>}
+                    </span>
                   </div>
                 </div>
               ) : activeAssignedInfo.isAssigned ? (
