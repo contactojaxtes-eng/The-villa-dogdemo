@@ -53,6 +53,7 @@ export interface DiningOrderSummary {
   orderNumber?: number
   createdAt: string
   status: string
+  orderType?: string
   customerName?: string
   notes?: string
   kitchenStatus?: string
@@ -69,6 +70,7 @@ export interface DiningOrderSummary {
 export interface KitchenTicketSummary {
   id: string
   orderId?: string
+  tableId?: string
   stationId?: string
   status: 'NEW' | 'PREPARING' | 'READY' | 'SERVED' | string
   changeSummary?: string

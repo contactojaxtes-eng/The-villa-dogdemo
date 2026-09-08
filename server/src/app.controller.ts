@@ -49,9 +49,21 @@ export class AppController {
     let customPrinters: any[] = [];
     let cashPrinterIp = '';
     let cashPrinterPort = 9100;
+    let cocinaPrinterIp = '';
+    let cocinaPrinterPort = 9100;
     try {
       const rows = await this.prisma.appSetting.findMany({
-        where: { key: { in: ['custom_prep_printers', 'caja_printer_ip', 'caja_printer_port'] } },
+        where: {
+          key: {
+            in: [
+              'custom_prep_printers',
+              'caja_printer_ip',
+              'caja_printer_port',
+              'cocina_printer_ip',
+              'cocina_printer_port',
+            ],
+          },
+        },
       });
       const values = Object.fromEntries(rows.map(row => [row.key, row.value]));
       if (values.custom_prep_printers) {
@@ -60,9 +72,26 @@ export class AppController {
       }
       cashPrinterIp = String(values.caja_printer_ip || '').trim();
       cashPrinterPort = Number(values.caja_printer_port) || 9100;
+      cocinaPrinterIp = String(values.cocina_printer_ip || '').trim();
+      cocinaPrinterPort = Number(values.cocina_printer_port) || 9100;
     } catch {}
 
     const normalize = (value: unknown) => String(value || '').trim().toLowerCase();
+
+    const isValidAddress = (addr: unknown): boolean => {
+      const s = String(addr || '').trim();
+      if (!s) return false;
+      if (s.toUpperCase().startsWith('USB:')) {
+        return s.slice(4).trim().length > 0;
+      }
+      const host = s.split(':')[0].trim();
+      if (host.toLowerCase() === 'localhost') return true;
+      const parts = host.split('.');
+      return parts.length === 4 && parts.every(part => /^\d{1,3}$/.test(part) && Number(part) >= 0 && Number(part) <= 255);
+    };
+
+    const validEnabledPrinters = customPrinters.filter(p => p && p.enabled !== false && isValidAddress(p.ip));
+    const defaultDeliveryPrinter = validEnabledPrinters.find(p => p.channel === 'DELIVERY' || p.channel === 'BOTH') || validEnabledPrinters[0];
 
     return jobs.map(j => {
       const storedTarget = (j.impresoraIp || '').trim();
@@ -74,16 +103,45 @@ export class AppController {
         const combinedTarget = [...targetKeys].join(' ');
         if (combinedTarget.includes('pizza')) {
           configuredPrinter = customPrinters.find(printer => printer.enabled !== false && normalize(printer.name).includes('pizza'));
-        } else if (combinedTarget.includes('cocina')) {
-          configuredPrinter = customPrinters.find(printer => printer.enabled !== false && normalize(printer.name).includes('cocina'));
+        } else if (combinedTarget.includes('cocina') || combinedTarget.includes('domicilio')) {
+          configuredPrinter = customPrinters.find(printer => printer.enabled !== false && (normalize(printer.name).includes('cocina') || normalize(printer.name).includes('domicilio')));
         }
       }
 
       const isCashJob = normalize(j.tipo) === 'caja' || normalize(storedTarget) === 'caja';
-      const resolvedIp = String(
-        configuredPrinter?.ip || (isCashJob ? cashPrinterIp : '') || storedTarget,
-      ).trim();
-      const resolvedPort = Number(configuredPrinter?.port || (isCashJob ? cashPrinterPort : 0)) || 9100;
+
+      // 1. Preferir la IP configurada de la impresora encontrada
+      let resolvedIp = isValidAddress(configuredPrinter?.ip) ? String(configuredPrinter.ip).trim() : '';
+      let resolvedPort = Number(configuredPrinter?.port) || 9100;
+
+      // 2. Si es de caja y tiene IP dedicada de caja válida
+      if (!resolvedIp && isCashJob && isValidAddress(cashPrinterIp)) {
+        resolvedIp = cashPrinterIp;
+        resolvedPort = cashPrinterPort;
+      }
+
+      // 3. Si tiene IP dedicada clásica de cocina válida
+      if (!resolvedIp && isValidAddress(cocinaPrinterIp)) {
+        resolvedIp = cocinaPrinterIp;
+        resolvedPort = cocinaPrinterPort;
+      }
+
+      // 4. Si el storedTarget ya es una IP o USB válido directamente
+      if (!resolvedIp && isValidAddress(storedTarget)) {
+        resolvedIp = storedTarget;
+      }
+
+      // 5. Fallback inteligente: si la IP sigue sin ser válida, usar la impresora activa de domicilios
+      if (!resolvedIp && defaultDeliveryPrinter) {
+        resolvedIp = String(defaultDeliveryPrinter.ip).trim();
+        resolvedPort = Number(defaultDeliveryPrinter.port) || 9100;
+      }
+
+      // 6. Último recurso: lo que vino en el trabajo
+      if (!resolvedIp) {
+        resolvedIp = storedTarget;
+      }
+
       return {
         id: j.id,
         impresora_ip: resolvedIp,

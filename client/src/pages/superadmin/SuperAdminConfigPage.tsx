@@ -127,18 +127,18 @@ const getGeminiModelUse = (model: GeminiModel): GeminiModelUse => {
       tone: 'reasoning',
     }
   }
-  if (name === 'gemini-2.5-flash-lite') {
+  if (name === 'gemini-3.5-flash-lite') {
     return {
       label: 'Recomendado principal',
       description: 'La opción más rápida y económica para alto volumen, extracción de datos y toma de pedidos.',
       tone: 'recommended',
     }
   }
-  if (name === 'gemini-3.8-flash') {
+  if (name === 'gemini-2.5-flash-lite') {
     return {
-      label: 'Más comprensión',
-      description: 'Mejor para conversaciones complejas; usa más recursos y puede responder más lento.',
-      tone: 'reasoning',
+      label: 'Rápido y estable',
+      description: 'Buena opción estable para respuestas rápidas, alto volumen y extracción de pedidos.',
+      tone: 'recommended',
     }
   }
   if (name.includes('flash-lite') || name.endsWith('-lite') || name.includes('lite-')) {
@@ -164,12 +164,9 @@ const getGeminiModelUse = (model: GeminiModel): GeminiModelUse => {
 
 const getRecommendedGeminiModel = (models: GeminiModel[]) => {
   const preferred = [
-    'gemini-2.5-flash-lite',
-    'gemini-3.8-flash',
-    'gemini-3.5-flash',
     'gemini-3.5-flash-lite',
-    'gemini-3.1-flash-lite',
-    'gemini-3.6-flash',
+    'gemini-2.5-flash-lite',
+    'gemini-3.5-flash',
     'gemini-2.5-flash',
   ]
   const stableChatModels = models.filter(model => {
@@ -236,9 +233,11 @@ export default function SuperAdminConfigPage() {
   const [modelInfo, setModelInfo] = useState<GeminiModelInfo | null>(null)
   const [loadingModelInfo, setLoadingModelInfo] = useState(false)
   const [modelInfoError, setModelInfoError] = useState('')
+  const [savedGeminiModel, setSavedGeminiModel] = useState('gemini-2.5-flash-lite')
 
   const setWhatsappResponse = (settings: WhatsappCoreConfig) => {
     setWa(settings)
+    setSavedGeminiModel(settings.geminiModel)
     const keys = settings.geminiApiKey
       ? settings.geminiApiKey.split(',').map(key => key.trim()).filter(Boolean)
       : []
@@ -270,6 +269,7 @@ export default function SuperAdminConfigPage() {
     () => getRecommendedGeminiModel(modelInfo?.availableModels || []),
     [modelInfo],
   )
+  const geminiModelChanged = wa.geminiModel.trim() !== savedGeminiModel.trim()
 
   const updateKey = (index: number, value: string) => {
     setGeminiKeys(current => current.map((key, keyIndex) => keyIndex === index ? value : key))
@@ -364,7 +364,6 @@ export default function SuperAdminConfigPage() {
     try {
       const result = await api.post<GeminiModelInfo>('/whatsapp/gemini-models', { key: combinedKeys, model: modelOverride ?? wa.geminiModel })
       setModelInfo(result)
-      if (result.selectedModel?.name) setWa(current => ({ ...current, geminiModel: result.selectedModel?.name || current.geminiModel }))
       alerts.toast(`${result.availableModels.length} modelos compatibles encontrados`)
     } catch (error) {
       const message = getErrorMessage(error, 'No se pudieron consultar los modelos de Gemini.')
@@ -494,10 +493,15 @@ export default function SuperAdminConfigPage() {
                 <strong className="text-[var(--text-primary)]">Cómo se prueba:</strong> el interruptor se guarda al instante. La IA solo responde mensajes entrantes de chats sin asignar; si una asesora tomó el chat, usa <strong className="text-[var(--text-primary)]">Soltar chat</strong> o prueba con una conversación nueva.
               </div>
               <label className="block">
-                <span className="mb-1.5 block text-xs font-bold text-[var(--text-secondary)]">Modelo principal</span>
+                <span className="mb-1.5 flex flex-wrap items-center justify-between gap-2 text-xs font-bold text-[var(--text-secondary)]">
+                  <span>Modelo principal</span>
+                  <span className={cn('rounded-md px-2 py-0.5 text-[10px] font-black', geminiModelChanged ? 'bg-amber-500/10 text-amber-600' : 'bg-emerald-500/10 text-emerald-600')}>
+                    {geminiModelChanged ? 'Cambio pendiente' : `Activo: ${savedGeminiModel}`}
+                  </span>
+                </span>
                 <div className="flex flex-col gap-2 sm:flex-row"><input list="gemini-models" value={wa.geminiModel} onChange={event => { setWa(current => ({ ...current, geminiModel: event.target.value })); setTestResult(null) }} className={cn(fieldClass, 'min-w-0 flex-1')} placeholder="gemini-2.5-flash-lite" /><Button type="button" variant="outline" onClick={() => void loadGeminiModelInfo()} disabled={loadingModelInfo} className="h-11 shrink-0 rounded-xl text-xs font-black">{loadingModelInfo ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-1.5 h-4 w-4" />} Consultar modelos</Button></div>
-                <datalist id="gemini-models"><option value="gemini-2.5-flash-lite" /><option value="gemini-2.5-flash" /><option value="gemini-3.8-flash" /><option value="gemini-3.5-flash" /><option value="gemini-3.5-flash-lite" />{modelInfo?.availableModels.map(model => <option key={model.name} value={model.name} />)}</datalist>
-                <span className="mt-1.5 block text-[11px] text-[var(--text-muted)]">Para respuestas rápidas y alto volumen usa <strong>gemini-2.5-flash-lite</strong>. La llave muestra los modelos reales y sus límites; “Nuevo pedido” reconoce el chat localmente y usa Gemini solo para completar datos.</span>
+                <datalist id="gemini-models">{modelInfo?.availableModels.map(model => <option key={model.name} value={model.name} />)}</datalist>
+                <span className="mt-1.5 block text-[11px] text-[var(--text-muted)]">Consulta la llave para elegir únicamente entre sus modelos reales. Al guardar, este modelo se aplica tanto a las respuestas del bot como a la lectura de productos y datos de <strong>Nuevo pedido</strong>.</span>
               </label>
 
               <label className="block">
@@ -534,13 +538,13 @@ export default function SuperAdminConfigPage() {
               {modelInfo && <div className="space-y-4 rounded-2xl border border-blue-500/20 bg-blue-500/5 p-4">
                 <div className="flex items-start gap-2"><Gauge className="mt-0.5 h-5 w-5 shrink-0 text-blue-600" /><div><p className="text-sm font-black text-[var(--text-primary)]">Modelos reales de esta llave</p><p className="mt-0.5 text-[11px] text-[var(--text-muted)]">Google devolvió {modelInfo.availableModels.length} modelos que aceptan respuestas de texto. Consulta realizada con la llave {modelInfo.keySuffix || 'configurada'} · {new Date(modelInfo.checkedAt).toLocaleTimeString('es-CO')}</p></div></div>
 
-                <div className="grid gap-2 sm:grid-cols-3"><div className="rounded-xl bg-[var(--bg-panel)] p-3"><p className="text-[10px] font-bold uppercase tracking-wide text-[var(--text-muted)]">Modelo seleccionado</p><p className="mt-1 truncate text-xs font-black text-[var(--text-primary)]">{modelInfo.selectedModel?.name || modelInfo.configuredModel || 'No encontrado'}</p></div><div className="rounded-xl bg-[var(--bg-panel)] p-3"><p className="text-[10px] font-bold uppercase tracking-wide text-[var(--text-muted)]">Entrada máxima</p><p className="mt-1 text-sm font-black text-[var(--text-primary)]">{formatTokenLimit(modelInfo.selectedModel?.inputTokenLimit ?? null)}</p></div><div className="rounded-xl bg-[var(--bg-panel)] p-3"><p className="text-[10px] font-bold uppercase tracking-wide text-[var(--text-muted)]">Salida máxima</p><p className="mt-1 text-sm font-black text-[var(--text-primary)]">{formatTokenLimit(modelInfo.selectedModel?.outputTokenLimit ?? null)}</p></div></div>
+                <div className="grid gap-2 sm:grid-cols-3"><div className="rounded-xl bg-[var(--bg-panel)] p-3"><p className="text-[10px] font-bold uppercase tracking-wide text-[var(--text-muted)]">Modelo activo guardado</p><p className="mt-1 truncate text-xs font-black text-[var(--text-primary)]">{modelInfo.configuredModel || savedGeminiModel || 'No configurado'}</p>{!modelInfo.selectedModel && <p className="mt-1 text-[10px] font-bold text-amber-600">No aparece disponible para esta llave</p>}</div><div className="rounded-xl bg-[var(--bg-panel)] p-3"><p className="text-[10px] font-bold uppercase tracking-wide text-[var(--text-muted)]">Entrada máxima</p><p className="mt-1 text-sm font-black text-[var(--text-primary)]">{formatTokenLimit(modelInfo.selectedModel?.inputTokenLimit ?? null)}</p></div><div className="rounded-xl bg-[var(--bg-panel)] p-3"><p className="text-[10px] font-bold uppercase tracking-wide text-[var(--text-muted)]">Salida máxima</p><p className="mt-1 text-sm font-black text-[var(--text-primary)]">{formatTokenLimit(modelInfo.selectedModel?.outputTokenLimit ?? null)}</p></div></div>
 
                 {recommendedModel && <div className="flex flex-col gap-3 rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-3 sm:flex-row sm:items-center sm:justify-between"><div className="min-w-0"><p className="text-xs font-black text-emerald-700 dark:text-emerald-300">Recomendado para respuestas y toma de pedidos</p><p className="mt-0.5 truncate font-mono text-[11px] font-bold text-[var(--text-primary)]">{recommendedModel.name}</p><p className="mt-0.5 text-[11px] text-[var(--text-secondary)]">{getGeminiModelUse(recommendedModel).description}</p></div><Button type="button" variant="outline" onClick={() => { setWa(current => ({ ...current, geminiModel: recommendedModel.name })); setTestResult(null) }} className="h-9 shrink-0 rounded-lg border-emerald-500/30 text-[11px] font-black text-emerald-700 hover:bg-emerald-500/10 dark:text-emerald-300">Usar este modelo</Button></div>}
 
                 <div className="flex items-start gap-2 rounded-xl bg-[var(--bg-panel)] p-3"><Info className="mt-0.5 h-4 w-4 shrink-0 text-blue-600" /><p className="text-[11px] leading-5 text-[var(--text-secondary)]">Solicitudes registradas por esta aplicación hoy: <strong>{modelInfo.usage.requestsToday.toLocaleString('es-CO')}</strong>. La cuota restante exacta no la publica esta API; Google la administra por proyecto y plan en AI Studio o Cloud Console.</p></div>
 
-                <div><div className="mb-2 flex items-center justify-between gap-2"><p className="text-xs font-black text-[var(--text-primary)]">Todos los modelos disponibles</p><span className="rounded-lg bg-[var(--bg-panel)] px-2 py-1 text-[10px] font-bold text-[var(--text-muted)]">Haz clic para seleccionar</span></div><div className="max-h-[30rem] space-y-2 overflow-y-auto pr-1">{modelInfo.availableModels.map(model => { const use = getGeminiModelUse(model); const selected = wa.geminiModel === model.name; return <button key={model.name} type="button" onClick={() => { setWa(current => ({ ...current, geminiModel: model.name })); setTestResult(null) }} className={cn('w-full rounded-xl border p-3 text-left transition hover:border-[var(--accent)] hover:shadow-sm', modelToneClass[use.tone], selected && 'border-[var(--accent)] ring-2 ring-[var(--accent)]/15')}><div className="flex items-start justify-between gap-3"><div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><span className="truncate text-xs font-black text-[var(--text-primary)]">{model.displayName || model.name}</span><span className="rounded-md bg-[var(--bg-panel)] px-1.5 py-0.5 text-[9px] font-black text-[var(--text-secondary)]">{use.label}</span>{selected && <span className="rounded-md bg-[var(--accent)] px-1.5 py-0.5 text-[9px] font-black text-[var(--accent-fg)]">Seleccionado</span>}</div><p className="mt-1 truncate font-mono text-[10px] text-[var(--text-muted)]">{model.name}</p><p className="mt-1 text-[11px] leading-4 text-[var(--text-secondary)]">{model.description || use.description}</p></div><span className="shrink-0 text-[10px] font-bold text-[var(--text-muted)]">{formatTokenLimit(model.outputTokenLimit)} salida</span></div></button> })}</div></div>
+                <div><div className="mb-2 flex items-center justify-between gap-2"><p className="text-xs font-black text-[var(--text-primary)]">Todos los modelos disponibles</p><span className="rounded-lg bg-[var(--bg-panel)] px-2 py-1 text-[10px] font-bold text-[var(--text-muted)]">Haz clic para seleccionar</span></div><div className="max-h-[30rem] space-y-2 overflow-y-auto pr-1">{modelInfo.availableModels.map(model => { const use = getGeminiModelUse(model); const selected = wa.geminiModel === model.name; const active = savedGeminiModel === model.name; return <button key={model.name} type="button" onClick={() => { setWa(current => ({ ...current, geminiModel: model.name })); setTestResult(null) }} className={cn('w-full rounded-xl border p-3 text-left transition hover:border-[var(--accent)] hover:shadow-sm', modelToneClass[use.tone], selected && 'border-[var(--accent)] ring-2 ring-[var(--accent)]/15')}><div className="flex items-start justify-between gap-3"><div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><span className="truncate text-xs font-black text-[var(--text-primary)]">{model.displayName || model.name}</span><span className="rounded-md bg-[var(--bg-panel)] px-1.5 py-0.5 text-[9px] font-black text-[var(--text-secondary)]">{use.label}</span>{active && <span className="rounded-md bg-emerald-500 px-1.5 py-0.5 text-[9px] font-black text-white">Activo</span>}{selected && !active && <span className="rounded-md bg-amber-500 px-1.5 py-0.5 text-[9px] font-black text-white">Por guardar</span>}</div><p className="mt-1 truncate font-mono text-[10px] text-[var(--text-muted)]">{model.name}</p><p className="mt-1 text-[11px] leading-4 text-[var(--text-secondary)]">{model.description || use.description}</p></div><span className="shrink-0 text-[10px] font-bold text-[var(--text-muted)]">{formatTokenLimit(model.outputTokenLimit)} salida</span></div></button> })}</div></div>
                 <p className="text-[10px] text-[var(--text-muted)]">El modelo elegido queda guardado al pulsar “Guardar configuración de IA”. “Nuevo pedido” usa automáticamente ese modelo para interpretar el chat; si falla, mantiene la contingencia local.</p>
               </div>}
 

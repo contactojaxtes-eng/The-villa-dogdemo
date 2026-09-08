@@ -163,6 +163,32 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
         data: { purpose: 'DELIVERY' },
       });
 
+      const deliveryRegister = await this.cashRegister.findFirst({
+        where: { purpose: 'DELIVERY' },
+        select: { id: true, active: true },
+        orderBy: [{ active: 'desc' }, { createdAt: 'asc' }],
+      });
+      if (!deliveryRegister) {
+        // El id estable hace que dos instancias iniciando a la vez converjan en
+        // el mismo registro sin tocar ninguna caja que ya exista.
+        await this.cashRegister.upsert({
+          where: { id: 'cash-register-delivery-default' },
+          create: {
+            id: 'cash-register-delivery-default',
+            name: 'Caja Domicilios',
+            description: 'Domicilios y pedidos para recoger',
+            purpose: 'DELIVERY',
+            active: true,
+          },
+          update: { purpose: 'DELIVERY' },
+        });
+      } else if (!deliveryRegister.active) {
+        await this.cashRegister.update({
+          where: { id: deliveryRegister.id },
+          data: { active: true },
+        });
+      }
+
       await this.customRole.upsert({
         where: { code: 'DELIVERY_MANAGER' },
         create: {

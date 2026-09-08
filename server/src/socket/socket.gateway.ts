@@ -217,6 +217,28 @@ export class SocketGateway implements OnGatewayConnection, OnGatewayDisconnect, 
     this.server.emit('kitchenTicketReady', ticket);
   }
 
+  emitDiningKitchenTicketDelayed(ticket: any) {
+    // Una comanda de salón solo debe alertar a quien puede atenderla. Socket.IO
+    // combina los cuartos y entrega una única copia aunque un usuario aparezca
+    // en más de uno.
+    const recipientIds = new Set<string>();
+    const waiterId = ticket?.order?.waiterId || ticket?.order?.waiter?.id;
+    if (waiterId) recipientIds.add(waiterId);
+
+    if (ticket?.assignedToId) {
+      recipientIds.add(ticket.assignedToId);
+    } else {
+      for (const member of ticket?.station?.users || []) {
+        if (member?.id && member?.role === 'KITCHEN') recipientIds.add(member.id);
+      }
+    }
+
+    const rooms = Array.from(recipientIds, userId => `user:${userId}`);
+    if (rooms.length > 0) {
+      this.server.to(rooms).emit('diningKitchenTicketDelayed', ticket);
+    }
+  }
+
   emitPaymentSubmitted(payload: any) {
     this.server.to('admins').to('cashiers').emit('paymentSubmitted', payload);
   }

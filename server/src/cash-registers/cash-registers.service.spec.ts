@@ -20,9 +20,9 @@ describe('CashRegistersService delivery isolation', () => {
       order: {
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
         findMany: jest.fn().mockResolvedValue([
-          { total: 30_000, tip: 0, status: 'DELIVERED', paymentStatus: 'CONFIRMED', paymentMethod: 'CASH', cashAmount: 30_000, payment: null },
-          { total: 25_000, tip: 0, status: 'DELIVERED', paymentStatus: 'CONFIRMED', paymentMethod: 'TRANSFER', transferAmount: 25_000, payment: null },
-          { total: 12_000, tip: 0, status: 'DELIVERED', paymentStatus: 'DRIVER_CASH_PENDING', paymentMethod: 'CASH', cashAmount: 12_000, payment: null },
+          { orderType: 'DELIVERY', total: 30_000, tip: 0, status: 'DELIVERED', paymentStatus: 'CONFIRMED', paymentMethod: 'CASH', cashAmount: 30_000, payment: null },
+          { orderType: 'PICKUP', total: 25_000, tip: 0, status: 'DELIVERED', paymentStatus: 'CONFIRMED', paymentMethod: 'TRANSFER', transferAmount: 25_000, payment: null },
+          { orderType: 'DELIVERY', total: 12_000, tip: 0, status: 'DELIVERED', paymentStatus: 'DRIVER_CASH_PENDING', paymentMethod: 'CASH', cashAmount: 12_000, payment: null },
         ]),
       },
       expense: { findMany: jest.fn().mockResolvedValue([]) },
@@ -32,15 +32,7 @@ describe('CashRegistersService delivery isolation', () => {
 
     const summary = await service.getSummary('delivery-register');
 
-    expect(prisma.order.updateMany).toHaveBeenCalledWith({
-      where: {
-        cashRegisterId: 'delivery-register',
-        cashClosingId: null,
-        orderType: { in: ['DELIVERY', 'PICKUP'] },
-        createdAt: { gte: shiftStart },
-      },
-      data: { cashClosingId: 'delivery-shift' },
-    });
+    expect(prisma.order.updateMany).not.toHaveBeenCalled();
     expect(prisma.order.findMany).toHaveBeenCalledWith({
       where: {
         cashClosingId: 'delivery-shift',
@@ -52,11 +44,31 @@ describe('CashRegistersService delivery isolation', () => {
     });
     expect(summary).toMatchObject({
       orderCount: 3,
+      deliveryCount: 2,
+      pickupCount: 1,
+      paidOrderCount: 2,
+      pendingPaymentCount: 1,
+      pendingPaymentAmount: 12_000,
       totalSales: 67_000,
+      totalCollected: 55_000,
       totalCash: 30_000,
       pendingDriverCash: 12_000,
       totalTransfer: 25_000,
       cashInDrawer: 50_000,
     });
+  });
+
+  it('keeps the required delivery register active and preserves its history', async () => {
+    const prisma: any = {
+      cashRegister: {
+        findUnique: jest.fn().mockResolvedValue({ id: 'delivery-register', purpose: 'DELIVERY', active: true }),
+        update: jest.fn(),
+      },
+      cashClosing: { findFirst: jest.fn() },
+    };
+    const service = new CashRegistersService(prisma, { server: { emit: jest.fn() } } as any);
+
+    await expect(service.remove('delivery-register')).rejects.toThrow('La Caja Domicilios es necesaria');
+    expect(prisma.cashRegister.update).not.toHaveBeenCalled();
   });
 });

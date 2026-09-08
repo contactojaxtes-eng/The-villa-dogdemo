@@ -243,12 +243,9 @@ describe('WhatsApp Gemini settings', () => {
     });
   });
 
-  it('upgrades only moving Gemini aliases to the exact stable model', async () => {
+  it('uses the administrator model first and keeps stable models only as fallback', async () => {
     const appSetting = {
-      findUnique: jest.fn()
-        .mockResolvedValueOnce({ value: 'gemini-flash-lite-latest' })
-        .mockResolvedValueOnce({ value: 'gemini-2.5-flash' }),
-      upsert: jest.fn().mockResolvedValue(null),
+      findUnique: jest.fn().mockResolvedValue({ value: 'gemini-custom-flash' }),
     };
     const service = new WhatsappService(
       { appSetting } as any,
@@ -256,16 +253,11 @@ describe('WhatsApp Gemini settings', () => {
       { emitWhatsApp: jest.fn() } as any,
     );
 
-    await (service as any).preferStableGeminiModel();
-    expect(appSetting.upsert).toHaveBeenCalledWith({
-      where: { key: 'gemini_model' },
-      create: { key: 'gemini_model', value: 'gemini-2.5-flash-lite' },
-      update: { value: 'gemini-2.5-flash-lite' },
-    });
-
-    appSetting.upsert.mockClear();
-    await (service as any).preferStableGeminiModel();
-    expect(appSetting.upsert).not.toHaveBeenCalled();
+    await expect((service as any).getGeminiModels()).resolves.toEqual([
+      'gemini-custom-flash',
+      'gemini-2.5-flash-lite',
+      'gemini-2.5-flash',
+    ]);
   });
 
   it('extracts an explicit neighborhood without treating payment data as part of its name', () => {

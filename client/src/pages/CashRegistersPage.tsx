@@ -9,8 +9,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { api } from '@/lib/api'
 import { useAuth } from '@/hooks/useAuth'
-import { formatCurrency, formatThousandsInput, parseThousandsInput } from '@/lib/utils'
-import { Wallet, Plus, User, ArrowUpRight, DollarSign, LockOpen, Lock, Loader2, CheckCircle2, Banknote, CreditCard, Smartphone, TrendingUp, Receipt, AlertTriangle, X, Trash2, Printer, Edit } from 'lucide-react'
+import { cn, formatCurrency, formatThousandsInput, parseThousandsInput } from '@/lib/utils'
+import { Wallet, Plus, User, ArrowUpRight, DollarSign, LockOpen, Lock, Loader2, CheckCircle2, Banknote, CreditCard, Smartphone, TrendingUp, Receipt, AlertTriangle, X, Trash2, Printer, Edit, Bike } from 'lucide-react'
 import { PageHeader } from '@/components/ui/PageHeader'
 import { io } from '@/lib/socket'
 import { printClosingSmart, printOpeningSmart } from '@/lib/printer'
@@ -38,6 +38,12 @@ interface Summary {
   totalTips: number
   totalExpenses: number
   pendingDriverCash?: number
+  deliveryCount?: number
+  pickupCount?: number
+  paidOrderCount?: number
+  pendingPaymentCount?: number
+  pendingPaymentAmount?: number
+  totalCollected?: number
   isOpen?: boolean
   initialCash?: number
   cashInDrawer?: number
@@ -53,6 +59,12 @@ interface CashSummary {
   totalTips: number
   totalExpenses: number
   pendingDriverCash?: number
+  deliveryCount?: number
+  pickupCount?: number
+  paidOrderCount?: number
+  pendingPaymentCount?: number
+  pendingPaymentAmount?: number
+  totalCollected?: number
   creditSales: number
   totalCreditPayments: number
   orderCount: number
@@ -100,6 +112,7 @@ export default function CashRegistersPage() {
   // Close result
   const [closeSuccess, setCloseSuccess] = useState(false)
   const pendingDriverCashAtClose = closeRegSummary?.pendingDriverCash || closeSummary?.pendingDriverCash || 0
+  const pendingPaymentsAtClose = closeRegSummary?.pendingPaymentCount || closeSummary?.pendingPaymentCount || 0
 
   const load = async () => {
     setLoading(true)
@@ -109,7 +122,7 @@ export default function CashRegistersPage() {
         isAdmin ? api.get<UserOption[]>('/users?active=true') : Promise.resolve([]),
       ])
       setRegisters(regs)
-      setUsers(usrs.filter(u => u.active !== false && ['CASHIER', 'ADMIN', 'SUPERADMIN', 'DELIVERY_MANAGER'].includes(u.role)))
+      setUsers(usrs.filter(u => u.active !== false && ['CASHIER', 'ADMIN', 'SUPERADMIN', 'DELIVERY_MANAGER', 'DISPATCHER'].includes(u.role)))
 
       const sums: Record<string, Summary> = {}
       for (const r of regs) {
@@ -222,7 +235,7 @@ export default function CashRegistersPage() {
   const handleOpenCash = async () => {
     setOpeningLoading(true)
     try {
-      const openingResult = await api.post<any>('/payments/opening', { 
+      await api.post('/payments/opening', {
         initialCash: parseThousandsInput(initialCash),
         cashRegisterId: openCashRegisterId 
       })
@@ -264,6 +277,12 @@ export default function CashRegistersPage() {
         totalTips: regSummary?.totalTips || 0,
         totalExpenses: regSummary?.totalExpenses || 0,
         pendingDriverCash: regSummary?.pendingDriverCash || 0,
+        deliveryCount: regSummary?.deliveryCount || 0,
+        pickupCount: regSummary?.pickupCount || 0,
+        paidOrderCount: regSummary?.paidOrderCount || 0,
+        pendingPaymentCount: regSummary?.pendingPaymentCount || 0,
+        pendingPaymentAmount: regSummary?.pendingPaymentAmount || 0,
+        totalCollected: regSummary?.totalCollected || 0,
         orderCount: regSummary?.orderCount || 0,
         isOpen: regSummary?.isOpen ?? true,
         initialCash: regSummary?.initialCash || 0,
@@ -325,15 +344,15 @@ export default function CashRegistersPage() {
 
   const handleDelete = async (regId: string) => {
     const ok = await alerts.confirm(
-      '¿Eliminar Caja?',
-      '¿Estás seguro de que deseas eliminar esta caja registradora permanentemente?',
-      'Sí, eliminar',
+      '¿Desactivar caja?',
+      'La caja dejará de mostrarse, pero sus turnos y movimientos históricos se conservarán.',
+      'Sí, desactivar',
       'Cancelar'
     )
     if (!ok) return
     try {
       await api.delete(`/cash-registers/${regId}`)
-      alerts.success('Caja Eliminada', 'La caja registradora ha sido removida.')
+      alerts.success('Caja desactivada', 'La caja dejó de mostrarse y su historial quedó conservado.')
       load()
     } catch (err: any) {
       alerts.error('Error al eliminar caja', err.message || 'No se pudo eliminar la caja.')
@@ -357,7 +376,7 @@ export default function CashRegistersPage() {
         <div className="space-y-6">
           <PageHeader
             title="CAJA"
-            description="Administra las cajas registradoras. Abre, opera y cierra turnos de caja."
+            description="Abre y cierra cada canal por separado. Domicilios y recoger se contabilizan únicamente en Caja Domicilios."
             actions={
               isAdmin ? (
                 <Button 
@@ -393,9 +412,11 @@ export default function CashRegistersPage() {
                   <div className="flex items-start justify-between">
                     <div className="space-y-1">
                       <div className="flex items-center gap-2">
-                        <Wallet className="h-5 w-5 text-[var(--accent)]" />
+                        {reg.purpose === 'DELIVERY' ? <Bike className="h-5 w-5 text-rose-500" /> : <Wallet className="h-5 w-5 text-[var(--accent)]" />}
                         <h3 className="font-extrabold text-lg text-[var(--text-primary)] tracking-wide group-hover:text-[var(--accent)] transition-colors">{reg.name}</h3>
-                        <Badge className="border border-[var(--border-subtle)] bg-[var(--bg-elevated)] text-[9px] font-extrabold uppercase tracking-wider text-[var(--text-secondary)]">
+                        <Badge className={reg.purpose === 'DELIVERY'
+                          ? 'border border-rose-500/25 bg-rose-500/10 text-[9px] font-extrabold uppercase tracking-wider text-rose-600'
+                          : 'border border-[var(--border-subtle)] bg-[var(--bg-elevated)] text-[9px] font-extrabold uppercase tracking-wider text-[var(--text-secondary)]'}>
                           {reg.purpose === 'DELIVERY' ? 'Domicilios' : reg.purpose === 'DINING' ? 'Salón' : 'General'}
                         </Badge>
                       </div>
@@ -415,15 +436,15 @@ export default function CashRegistersPage() {
                           >
                             <Edit className="h-4 w-4" />
                           </Button>
-                          <Button
+                          {reg.purpose !== 'DELIVERY' && <Button
                             variant="ghost"
                             size="icon"
                             className="h-8 w-8 text-[var(--text-muted)] hover:text-[var(--destructive)] hover:bg-[var(--destructive)]/10 rounded-lg transition-all"
                             onClick={() => handleDelete(reg.id)}
-                            title="Eliminar Caja"
+                            title="Desactivar caja"
                           >
                             <Trash2 className="h-4 w-4" />
-                          </Button>
+                          </Button>}
                         </>
                       )}
                       <Badge className={`text-[10px] font-extrabold uppercase px-2.5 py-0.5 rounded-full tracking-wider ${isOpen ? 'bg-[var(--accent)]/10 text-[var(--accent)] border border-[var(--accent)]/20 animate-pulse' : 'bg-[var(--bg-elevated)] text-[var(--text-secondary)] border border-[var(--border-subtle)]'}`}>
@@ -451,7 +472,42 @@ export default function CashRegistersPage() {
                   )}
 
                   {/* Summary grid */}
-                  {sum && (
+                  {sum && reg.purpose === 'DELIVERY' && (
+                    <div className="grid grid-cols-2 gap-3 border-t border-[var(--border-subtle)]/40 pt-4 text-sm sm:grid-cols-3">
+                      <div className="rounded-xl border border-rose-500/20 bg-rose-500/5 p-3">
+                        <p className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)]">Pedidos del turno</p>
+                        <p className="mt-0.5 text-lg font-black text-rose-600">{isOpen ? sum.orderCount : 0}</p>
+                        <p className="mt-0.5 text-[10px] text-[var(--text-secondary)]">{sum.deliveryCount || 0} domicilios · {sum.pickupCount || 0} recoger</p>
+                      </div>
+                      <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-3">
+                        <p className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)]">Facturado</p>
+                        <p className="mt-0.5 text-lg font-black text-[var(--text-primary)]">{formatCurrency(isOpen ? sum.totalSales : 0)}</p>
+                        <p className="mt-0.5 text-[10px] text-[var(--text-secondary)]">Valor total de pedidos</p>
+                      </div>
+                      <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-3">
+                        <p className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)]">Recaudado</p>
+                        <p className="mt-0.5 text-lg font-black text-emerald-600">{formatCurrency(isOpen ? (sum.totalCollected || 0) : 0)}</p>
+                        <p className="mt-0.5 text-[10px] text-[var(--text-secondary)]">{sum.paidOrderCount || 0} pagos confirmados</p>
+                      </div>
+                      <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-3">
+                        <p className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)]">Efectivo en caja</p>
+                        <p className="mt-0.5 text-base font-extrabold text-[var(--text-primary)]">{formatCurrency(isOpen ? (sum.cashInDrawer || 0) : 0)}</p>
+                        <p className="mt-0.5 text-[10px] text-[var(--text-secondary)]">Base + efectivo recibido − gastos</p>
+                      </div>
+                      <div className={cn('rounded-xl border p-3', (sum.pendingPaymentCount || 0) > 0 ? 'border-amber-500/30 bg-amber-500/10' : 'border-[var(--border-subtle)] bg-[var(--bg-elevated)]')}>
+                        <p className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)]">Pendiente por cobrar</p>
+                        <p className={cn('mt-0.5 text-base font-extrabold', (sum.pendingPaymentCount || 0) > 0 ? 'text-amber-600' : 'text-[var(--text-primary)]')}>{formatCurrency(isOpen ? (sum.pendingPaymentAmount || 0) : 0)}</p>
+                        <p className="mt-0.5 text-[10px] text-[var(--text-secondary)]">{sum.pendingPaymentCount || 0} pedidos sin confirmar</p>
+                      </div>
+                      <div className="rounded-xl border border-blue-500/20 bg-blue-500/5 p-3">
+                        <p className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)]">Pagos digitales</p>
+                        <p className="mt-0.5 text-base font-extrabold text-blue-600">{formatCurrency(isOpen ? (sum.totalTransfer || 0) : 0)}</p>
+                        <p className="mt-0.5 text-[10px] text-[var(--text-secondary)]">Transferencias confirmadas</p>
+                      </div>
+                    </div>
+                  )}
+
+                  {sum && reg.purpose !== 'DELIVERY' && (
                     <div className="grid grid-cols-2 gap-3 text-sm pt-4 border-t border-[var(--border-subtle)]/40">
                       <div className="rounded-xl bg-[var(--bg-elevated)] border border-[var(--border-subtle)] p-3">
                         <p className="text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-wider">Ventas Totales</p>
@@ -668,6 +724,13 @@ export default function CashRegistersPage() {
                     </div>
                   )}
 
+                  {pendingPaymentsAtClose > 0 && (
+                    <div className="rounded-xl border border-rose-500/30 bg-rose-500/10 p-3 text-xs text-rose-600">
+                      <p className="flex items-center gap-2 font-extrabold"><AlertTriangle className="h-4 w-4" /> Hay pagos pendientes</p>
+                      <p className="mt-1">Confirma el cobro de {pendingPaymentsAtClose} pedido(s) antes de cerrar la Caja Domicilios.</p>
+                    </div>
+                  )}
+
                   {/* Notes */}
                   <div className="space-y-1.5">
                     <Label className="text-xs uppercase font-extrabold tracking-wider text-[var(--text-secondary)]">Notas del cierre (Opcional)</Label>
@@ -692,14 +755,14 @@ export default function CashRegistersPage() {
                     <Button
                       className="h-11 bg-amber-500 hover:bg-amber-600 text-white font-bold rounded-xl text-xs uppercase tracking-wider gap-2 shadow-md"
                       onClick={() => handleCloseCash(false)}
-                      disabled={closingLoading || pendingDriverCashAtClose > 0}
+                      disabled={closingLoading || pendingDriverCashAtClose > 0 || pendingPaymentsAtClose > 0}
                     >
                       <Lock className="h-4 w-4" /> Solo Cerrar
                     </Button>
                     <Button
                       className="h-11 bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-fg)] font-bold rounded-xl text-xs uppercase tracking-wider gap-2 shadow-md col-span-2 border-0 cursor-pointer"
                       onClick={() => handleCloseCash(true)}
-                      disabled={closingLoading || pendingDriverCashAtClose > 0}
+                      disabled={closingLoading || pendingDriverCashAtClose > 0 || pendingPaymentsAtClose > 0}
                     >
                       <Printer className="h-4 w-4" /> Cerrar e Imprimir
                     </Button>
@@ -751,12 +814,14 @@ export default function CashRegistersPage() {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent className="border-[var(--border-subtle)] bg-[var(--bg-panel)] rounded-xl">
-                  <SelectItem value="DELIVERY">Domicilios y pedidos para recoger</SelectItem>
+                  {(!registers.some(register => register.purpose === 'DELIVERY') || form.purpose === 'DELIVERY') && (
+                    <SelectItem value="DELIVERY">Domicilios y pedidos para recoger</SelectItem>
+                  )}
                   <SelectItem value="DINING">Salón y mesas</SelectItem>
                   <SelectItem value="GENERAL">Caja general</SelectItem>
                 </SelectContent>
               </Select>
-              <p className="text-[10px] text-[var(--text-muted)]">La caja de domicilios solo acumula pedidos de domicilio y para recoger de su turno.</p>
+              <p className="text-[10px] text-[var(--text-muted)]">La Caja Domicilios es única, se crea automáticamente y solo acumula domicilios y pedidos para recoger de su turno.</p>
             </div>
 
              <div className="space-y-2">

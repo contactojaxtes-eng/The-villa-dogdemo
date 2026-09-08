@@ -15,6 +15,9 @@ const PENDING_PAYMENT = ['PENDING', 'PENDING_REVIEW'];
 @Injectable()
 export class TablesService implements OnModuleInit, OnModuleDestroy {
   private cookTimerInterval?: NodeJS.Timeout;
+  private diningDelayTimerInterval?: NodeJS.Timeout;
+  private delayedDiningTicketIds = new Set<string>();
+  private checkingDiningDelays = false;
 
   constructor(
     private prisma: PrismaService,
@@ -27,10 +30,46 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
       this.checkExpiredCookBreaks().catch(() => {});
       this.checkExpiredDeliveryCookBreaks().catch(() => {});
     }, 2500);
+    void this.checkDelayedDiningKitchenTickets();
+    this.diningDelayTimerInterval = setInterval(() => {
+      void this.checkDelayedDiningKitchenTickets();
+    }, 10_000);
   }
 
   onModuleDestroy() {
     if (this.cookTimerInterval) clearInterval(this.cookTimerInterval);
+    if (this.diningDelayTimerInterval) clearInterval(this.diningDelayTimerInterval);
+  }
+
+  private async checkDelayedDiningKitchenTickets() {
+    if (this.checkingDiningDelays) return;
+    this.checkingDiningDelays = true;
+    try {
+      const delayedTickets = await this.prisma.kitchenTicket.findMany({
+        where: {
+          status: { in: ACTIVE_KITCHEN },
+          createdAt: { lte: new Date(Date.now() - 15 * 60 * 1000) },
+          tableId: { not: null },
+          order: { orderType: 'LOCAL', tableId: { not: null } },
+        },
+        include: {
+          station: { include: { users: { select: { id: true, name: true, role: true } } } },
+          assignedTo: { select: { id: true, name: true } },
+          items: true,
+          order: { include: { waiter: true, diningTable: true } },
+        },
+      });
+
+      const activeDelayedIds = new Set(delayedTickets.map(ticket => ticket.id));
+      for (const ticket of delayedTickets) {
+        if (!this.delayedDiningTicketIds.has(ticket.id)) {
+          this.socketGateway.emitDiningKitchenTicketDelayed(ticket);
+        }
+      }
+      this.delayedDiningTicketIds = activeDelayedIds;
+    } finally {
+      this.checkingDiningDelays = false;
+    }
   }
 
   private async getActiveClosing(userId: string, cashRegisterId?: string, db: Prisma.TransactionClient = this.prisma) {

@@ -35,34 +35,6 @@ export class WhatsappService implements OnModuleInit {
     } catch (error) {
       this.logger.warn('No se pudo limpiar la carta estática anterior al iniciar', error);
     }
-    try {
-      await this.preferStableGeminiModel();
-    } catch (error) {
-      this.logger.warn('No se pudo actualizar el alias de Gemini a un modelo estable', error);
-    }
-  }
-
-  private async preferStableGeminiModel() {
-    const current = await this.prisma.appSetting.findUnique({ where: { key: 'gemini_model' } });
-    const currentModel = String(current?.value || '').trim();
-    // Los alias "latest" pueden cambiar sin aviso. Solo los migramos; si el
-    // administrador eligió un modelo concreto, esa selección se respeta.
-    if (currentModel && ![
-      'gemini-flash-lite-latest',
-      'gemini-flash-latest',
-    ].includes(currentModel)) return;
-
-    await this.prisma.appSetting.upsert({
-      where: { key: 'gemini_model' },
-      // Estos alias "latest" apuntaban a modelos que pueden cambiar de
-      // comportamiento y, en la práctica, el alias lite terminaba usando
-      // Flash 3.8. Para extracción de pedidos priorizamos el modelo estable
-      // de baja latencia de la familia 2.5.
-      create: { key: 'gemini_model', value: 'gemini-2.5-flash-lite' },
-      update: { value: 'gemini-2.5-flash-lite' },
-    });
-    this.settingCache.delete('gemini_model');
-    this.logger.log('Modelo Gemini configurado en gemini-2.5-flash-lite estable y rápido');
   }
 
   private normalizeSpanishLookup(value: unknown): string {
@@ -4156,9 +4128,6 @@ Restaurante (Tú):
       requested,
       this.isValidGeminiModel(configured) ? configured : '',
       'gemini-2.5-flash-lite',
-      'gemini-3.8-flash',
-      'gemini-3.5-flash',
-      'gemini-3.5-flash-lite',
       'gemini-2.5-flash',
     ].filter(Boolean)));
   }
@@ -4268,19 +4237,18 @@ Restaurante (Tú):
         && !/(preview|experimental|exp|latest)/i.test(name);
     });
     const preferredNames = [
-      'gemini-2.5-flash-lite',
-      'gemini-3.8-flash',
-      'gemini-3.5-flash',
       'gemini-3.5-flash-lite',
-      'gemini-3.1-flash-lite',
-      'gemini-3.6-flash',
+      'gemini-2.5-flash-lite',
+      'gemini-3.5-flash',
       'gemini-2.5-flash',
     ];
     const recommended = preferredNames.map(name => productionCandidates.find((entry: any) => entry.name === name)).find(Boolean)
       || productionCandidates.find((entry: any) => /flash/i.test(entry.name))
       || availableModels[0]
       || null;
-    const selected = availableModels.find((entry: any) => entry.name === configuredModel) || recommended;
+    // "Seleccionado" significa exactamente el modelo que el administrador
+    // guardó. La consulta nunca cambia esa elección silenciosamente.
+    const selected = availableModels.find((entry: any) => entry.name === configuredModel) || null;
     const requestsToday = await this.getGeminiUsageToday();
 
     return {
@@ -4510,11 +4478,12 @@ ${text}
 Responde solo con JSON válido.`;
 
       let data: any = null;
+      let modelUsed = '';
       let lastError: any = null;
-      // «Nuevo pedido» prioriza la respuesta rápida. El navegador hace un
-      // primer reconocimiento local y Gemini completa datos o correcciones
-      // en segundo plano con el modelo estable de baja latencia.
-      const modelsToTry = await this.getGeminiModels('gemini-2.5-flash-lite');
+      // El modelo principal es el que el administrador guardó en Configuración
+      // técnica. El navegador mantiene su reconocimiento local inmediato y los
+      // otros modelos se usan únicamente como contingencia si el elegido falla.
+      const modelsToTry = await this.getGeminiModels();
 
       for (const key of apiKeys) {
         for (const model of modelsToTry) {
@@ -4587,6 +4556,7 @@ Responde solo con JSON válido.`;
             await this.incrementGeminiUsage();
             data = await response.json();
             if (data?.candidates?.[0]?.content?.parts?.[0]?.text) {
+              modelUsed = model;
               break;
             }
           } catch (e: any) {
@@ -4831,7 +4801,8 @@ Responde solo con JSON válido.`;
         customerAddressReference: typeof rawJson.customerAddressReference === 'string' ? rawJson.customerAddressReference.trim().slice(0, 250) || null : null,
         customerNeighborhood: typeof resolvedNeighborhood === 'string' ? resolvedNeighborhood.trim().slice(0, 120) || null : null,
         zoneId: resolvedZoneId,
-        paymentMethod
+        paymentMethod,
+        modelUsed,
       };
 
     } catch (err) {

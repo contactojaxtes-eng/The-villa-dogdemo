@@ -14,7 +14,7 @@ import {
   Wallet, DollarSign, ArrowUpRight, TrendingUp, History, Filter, Search, 
   Printer, LockOpen, Lock, User, Calendar, CheckCircle2, AlertTriangle, 
   Layers, RefreshCw, Banknote, CreditCard, Smartphone, ShieldCheck, PieChart, BarChart2,
-  Eye, FileText, ChevronRight, Receipt, X
+  Eye, FileText, ChevronRight, Receipt, X, Bike, Store
 } from 'lucide-react'
 import { io } from '@/lib/socket'
 import { PageHeader } from '@/components/ui/PageHeader'
@@ -24,6 +24,7 @@ interface CashRegister {
   id: string
   name: string
   description: string | null
+  purpose: 'GENERAL' | 'DINING' | 'DELIVERY'
   manager: { id: string; name: string } | null
   closings: { id: string; isOpen: boolean; user: { id: string; name: string }; initialCash: number; shiftStart: string }[]
 }
@@ -46,7 +47,7 @@ interface CashClosingHistory {
   notes: string | null
   isOpen?: boolean
   user: { id: string; name: string }
-  cashRegister?: { id: string; name: string } | null
+  cashRegister?: { id: string; name: string; purpose?: 'GENERAL' | 'DINING' | 'DELIVERY' } | null
 }
 
 interface Summary {
@@ -58,6 +59,14 @@ interface Summary {
   totalBancolombia: number
   totalDaviplata: number
   totalTips: number
+  totalExpenses?: number
+  pendingDriverCash?: number
+  deliveryCount?: number
+  pickupCount?: number
+  paidOrderCount?: number
+  pendingPaymentCount?: number
+  pendingPaymentAmount?: number
+  totalCollected?: number
   isOpen?: boolean
   initialCash?: number
   cashInDrawer?: number
@@ -268,6 +277,8 @@ export default function CashControlPage() {
   }
 
   const fmtCOP = (val: number) => formatCurrency(val)
+  const deliveryRegister = registers.find(register => register.purpose === 'DELIVERY')
+  const deliverySummary = deliveryRegister ? summaries[deliveryRegister.id] : undefined
 
   if (loading) {
     return (
@@ -284,7 +295,7 @@ export default function CashControlPage() {
     <motion.div className="space-y-6" initial="hidden" animate="visible" variants={stagger}>
       <PageHeader
         title="CONTROL DE CAJA"
-        description="Consolidado global de ventas, administración de cajas y auditoría histórica de cierres."
+        description="Controla cada turno y revisa por separado las ventas de salón y la Caja Domicilios."
         actions={
           <Button
             variant="outline"
@@ -348,6 +359,39 @@ export default function CashControlPage() {
         </Card>
       </motion.div>
 
+      {deliveryRegister && (
+        <motion.div variants={fadeUp}>
+          <Card className="overflow-hidden rounded-2xl border border-rose-500/25 bg-gradient-to-r from-rose-500/10 via-[var(--bg-panel)] to-orange-500/5 shadow-sm">
+            <CardContent className="p-5">
+              <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+                <div className="flex min-w-0 items-start gap-3">
+                  <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-rose-500/25 bg-rose-500/10 text-rose-600">
+                    <Bike className="h-6 w-6" />
+                  </div>
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h2 className="text-lg font-black text-[var(--text-primary)]">Caja Domicilios</h2>
+                      <Badge className={deliverySummary?.isOpen ? 'border border-emerald-500/25 bg-emerald-500/10 text-[10px] font-black text-emerald-600' : 'border border-[var(--border-subtle)] bg-[var(--bg-elevated)] text-[10px] font-black text-[var(--text-muted)]'}>
+                        {deliverySummary?.isOpen ? 'Turno abierto' : 'Turno cerrado'}
+                      </Badge>
+                    </div>
+                    <p className="mt-1 text-xs text-[var(--text-secondary)]">Aquí entran únicamente domicilios y pedidos para recoger del turno activo.</p>
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:min-w-[42rem] xl:grid-cols-6">
+                  <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-panel)]/85 p-3"><p className="text-[9px] font-black uppercase text-[var(--text-muted)]">Pedidos</p><p className="mt-1 text-lg font-black text-[var(--text-primary)]">{deliverySummary?.orderCount || 0}</p></div>
+                  <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-panel)]/85 p-3"><p className="flex items-center gap-1 text-[9px] font-black uppercase text-[var(--text-muted)]"><Bike className="h-3 w-3" /> Domicilios</p><p className="mt-1 text-lg font-black text-rose-600">{deliverySummary?.deliveryCount || 0}</p></div>
+                  <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-panel)]/85 p-3"><p className="flex items-center gap-1 text-[9px] font-black uppercase text-[var(--text-muted)]"><Store className="h-3 w-3" /> Recoger</p><p className="mt-1 text-lg font-black text-purple-600">{deliverySummary?.pickupCount || 0}</p></div>
+                  <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-3"><p className="text-[9px] font-black uppercase text-[var(--text-muted)]">Recaudado</p><p className="mt-1 text-sm font-black text-emerald-600">{formatCurrency(deliverySummary?.totalCollected || 0)}</p></div>
+                  <div className={(deliverySummary?.pendingPaymentCount || 0) > 0 ? 'rounded-xl border border-amber-500/30 bg-amber-500/10 p-3' : 'rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-panel)]/85 p-3'}><p className="text-[9px] font-black uppercase text-[var(--text-muted)]">Por cobrar</p><p className={(deliverySummary?.pendingPaymentCount || 0) > 0 ? 'mt-1 text-sm font-black text-amber-600' : 'mt-1 text-sm font-black text-[var(--text-primary)]'}>{formatCurrency(deliverySummary?.pendingPaymentAmount || 0)}</p></div>
+                  <div className={(deliverySummary?.pendingDriverCash || 0) > 0 ? 'rounded-xl border border-orange-500/30 bg-orange-500/10 p-3' : 'rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-panel)]/85 p-3'}><p className="text-[9px] font-black uppercase text-[var(--text-muted)]">Con repartidores</p><p className={(deliverySummary?.pendingDriverCash || 0) > 0 ? 'mt-1 text-sm font-black text-orange-600' : 'mt-1 text-sm font-black text-[var(--text-primary)]'}>{formatCurrency(deliverySummary?.pendingDriverCash || 0)}</p></div>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        </motion.div>
+      )}
+
       {/* Tab Switcher & Consolidated Report Button */}
       <motion.div variants={fadeUp} className="flex justify-between items-center flex-wrap gap-4">
         <div className="flex gap-2 p-1 bg-[var(--bg-panel)] rounded-2xl border border-[var(--border-subtle)] w-fit">
@@ -386,8 +430,11 @@ export default function CashControlPage() {
                   <div className="flex items-start justify-between">
                     <div className="space-y-1">
                       <div className="flex items-center gap-2">
-                        <Wallet className="h-5 w-5 text-[var(--accent)]" />
+                        {reg.purpose === 'DELIVERY' ? <Bike className="h-5 w-5 text-rose-600" /> : <Wallet className="h-5 w-5 text-[var(--accent)]" />}
                         <h3 className="font-extrabold text-lg text-[var(--text-primary)] tracking-wide">{reg.name}</h3>
+                        <Badge className={reg.purpose === 'DELIVERY' ? 'border border-rose-500/25 bg-rose-500/10 text-[9px] font-black uppercase text-rose-600' : 'border border-[var(--border-subtle)] bg-[var(--bg-elevated)] text-[9px] font-black uppercase text-[var(--text-muted)]'}>
+                          {reg.purpose === 'DELIVERY' ? 'Domicilios' : reg.purpose === 'DINING' ? 'Salón' : 'General'}
+                        </Badge>
                       </div>
                       {reg.description && <p className="text-xs text-[var(--text-secondary)] font-medium leading-relaxed">{reg.description}</p>}
                     </div>
@@ -416,7 +463,18 @@ export default function CashControlPage() {
                     </div>
                   )}
 
-                  {sum && (
+                  {sum && reg.purpose === 'DELIVERY' && (
+                    <div className="grid grid-cols-2 gap-3 pt-2 text-sm sm:grid-cols-3">
+                      <div className="rounded-xl border border-rose-500/20 bg-rose-500/5 p-3"><p className="text-[10px] font-bold uppercase text-[var(--text-muted)]">Pedidos</p><p className="mt-0.5 text-lg font-black text-rose-600">{sum.orderCount}</p><p className="mt-0.5 text-[10px] text-[var(--text-secondary)]">{sum.deliveryCount || 0} domicilios · {sum.pickupCount || 0} recoger</p></div>
+                      <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-3"><p className="text-[10px] font-bold uppercase text-[var(--text-muted)]">Facturado</p><p className="mt-0.5 text-lg font-black text-[var(--text-primary)]">{formatCurrency(sum.totalSales || 0)}</p><p className="mt-0.5 text-[10px] text-[var(--text-secondary)]">Total del turno</p></div>
+                      <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-3"><p className="text-[10px] font-bold uppercase text-[var(--text-muted)]">Recaudado</p><p className="mt-0.5 text-lg font-black text-emerald-600">{formatCurrency(sum.totalCollected || 0)}</p><p className="mt-0.5 text-[10px] text-[var(--text-secondary)]">{sum.paidOrderCount || 0} pagos confirmados</p></div>
+                      <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-3"><p className="text-[10px] font-bold uppercase text-[var(--text-muted)]">Efectivo en caja</p><p className="mt-0.5 text-base font-extrabold text-[var(--text-primary)]">{formatCurrency(sum.cashInDrawer || 0)}</p><p className="mt-0.5 text-[10px] text-[var(--text-secondary)]">Base + recibido − gastos</p></div>
+                      <div className={(sum.pendingPaymentCount || 0) > 0 ? 'rounded-xl border border-amber-500/30 bg-amber-500/10 p-3' : 'rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-3'}><p className="text-[10px] font-bold uppercase text-[var(--text-muted)]">Pendiente por cobrar</p><p className={(sum.pendingPaymentCount || 0) > 0 ? 'mt-0.5 text-base font-extrabold text-amber-600' : 'mt-0.5 text-base font-extrabold text-[var(--text-primary)]'}>{formatCurrency(sum.pendingPaymentAmount || 0)}</p><p className="mt-0.5 text-[10px] text-[var(--text-secondary)]">{sum.pendingPaymentCount || 0} pedidos</p></div>
+                      <div className="rounded-xl border border-blue-500/20 bg-blue-500/5 p-3"><p className="text-[10px] font-bold uppercase text-[var(--text-muted)]">Pagos digitales</p><p className="mt-0.5 text-base font-extrabold text-blue-600">{formatCurrency(sum.totalTransfer || 0)}</p><p className="mt-0.5 text-[10px] text-[var(--text-secondary)]">Confirmados</p></div>
+                    </div>
+                  )}
+
+                  {sum && reg.purpose !== 'DELIVERY' && (
                     <div className="grid grid-cols-2 gap-3 text-sm pt-2">
                       <div className="rounded-xl bg-[var(--bg-elevated)] border border-[var(--border-subtle)] p-3">
                         <p className="text-[10px] font-bold text-[var(--text-muted)] uppercase">Ventas Totales</p>

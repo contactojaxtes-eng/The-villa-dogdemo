@@ -66,9 +66,21 @@ export class CashRegistersService {
   }
 
   async update(id: string, data: Partial<{ name: string; description: string; managerId: string | null; active: boolean; purpose: string }>) {
-    await this.findOne(id);
+    const current = await this.findOne(id);
+    if (current.purpose === 'DELIVERY' && data.active === false) {
+      throw new BadRequestException('La Caja Domicilios es necesaria para tomar pedidos y no se puede desactivar.');
+    }
     if (data.purpose) {
       data.purpose = this.normalizePurpose(data.purpose);
+      if (data.purpose !== current.purpose) {
+        const [closingCount, orderCount] = await Promise.all([
+          this.prisma.cashClosing.count({ where: { cashRegisterId: id } }),
+          this.prisma.order.count({ where: { cashRegisterId: id } }),
+        ]);
+        if (closingCount > 0 || orderCount > 0) {
+          throw new BadRequestException('No se puede cambiar el canal de una caja con movimientos. Crea una caja nueva para conservar el historial.');
+        }
+      }
       if (data.purpose === 'DELIVERY') {
         const existing = await this.prisma.cashRegister.findFirst({
           where: { purpose: 'DELIVERY', active: true, id: { not: id } },
@@ -184,31 +196,29 @@ export class CashRegistersService {
         date: today.toISOString().split('T')[0],
         isOpen: false,
         orderCount: 0,
+        deliveryCount: 0,
+        pickupCount: 0,
+        paidOrderCount: 0,
+        pendingPaymentCount: 0,
+        pendingPaymentAmount: 0,
         totalSales: 0,
+        totalCollected: 0,
         totalCash: 0,
+        pendingDriverCash: 0,
         totalTransfer: 0,
         totalNequi: 0,
         totalBancolombia: 0,
         totalDaviplata: 0,
         totalTips: 0,
+        totalExpenses: 0,
         initialCash: 0,
         cashInDrawer: 0,
       };
     }
 
     if (isDeliveryRegister) {
-      // Compatibilidad con pedidos anteriores: solo se adoptan domicilios que ya
-      // pertenecían explícitamente a esta caja. Nunca se toman pedidos huérfanos.
-      await this.prisma.order.updateMany({
-        where: {
-          cashRegisterId: registerId,
-          cashClosingId: null,
-          orderType: { in: ['DELIVERY', 'PICKUP'] },
-          createdAt: { gte: openClosing.shiftStart },
-        },
-        data: { cashClosingId: openClosing.id },
-      });
-
+      // La caja de domicilios usa el turno enlazado al crear el pedido. El resumen
+      // es deliberadamente de solo lectura para no absorber ventas de otro turno.
       const shiftOrders = await this.prisma.order.findMany({
         where: {
           cashClosingId: openClosing.id,
@@ -224,6 +234,10 @@ export class CashRegistersService {
       })).reduce((sum, expense) => sum + (expense.amount || 0), 0);
       const paymentMethod = (order: (typeof shiftOrders)[number]) => String(order.payment?.method || order.paymentMethod || '').toUpperCase().trim();
       const isCollected = (order: (typeof shiftOrders)[number]) => order.paymentStatus === 'CONFIRMED' || order.payment?.status === 'CONFIRMED';
+      const isPendingPayment = (order: (typeof shiftOrders)[number]) => {
+        const method = paymentMethod(order);
+        return !['CREDIT', 'CORTESIA'].includes(method) && !isCollected(order);
+      };
       const totalCash = shiftOrders.reduce((sum, order) => {
         const method = paymentMethod(order);
         if (!isCollected(order)) return sum;
@@ -232,19 +246,24 @@ export class CashRegistersService {
         return sum;
       }, 0);
       const pendingDriverCash = shiftOrders.reduce((sum, order) => {
-        if (order.status !== 'DELIVERED' || isCollected(order)) return sum;
+        if (order.orderType !== 'DELIVERY' || order.status !== 'DELIVERED' || isCollected(order)) return sum;
         const method = paymentMethod(order);
         if (method === 'CASH') return sum + (order.total || 0);
         if (method === 'MIXED') return sum + (order.cashAmount || order.payment?.cashAmount || 0);
         return sum;
       }, 0);
       const totalTransfer = shiftOrders.reduce((sum, order) => {
+        if (!isCollected(order)) return sum;
         const method = paymentMethod(order);
         if (['TRANSFER', 'NEQUI', 'BANCOLOMBIA', 'DAVIPLATA'].includes(method)) return sum + (order.total || 0);
         if (method === 'MIXED') return sum + (order.transferAmount || order.payment?.transferAmount || 0);
         return sum;
       }, 0);
       const initialCash = openClosing.initialCash || 0;
+      const deliveryCount = shiftOrders.filter(order => order.orderType === 'DELIVERY').length;
+      const pickupCount = shiftOrders.filter(order => order.orderType === 'PICKUP').length;
+      const paidOrderCount = shiftOrders.filter(isCollected).length;
+      const pendingPaymentOrders = shiftOrders.filter(isPendingPayment);
 
       return {
         registerId,
@@ -253,16 +272,22 @@ export class CashRegistersService {
         shiftStart: openClosing.shiftStart,
         operatorName: openClosing.user?.name || 'Gestor de domicilios',
         orderCount: shiftOrders.length,
+        deliveryCount,
+        pickupCount,
+        paidOrderCount,
+        pendingPaymentCount: pendingPaymentOrders.length,
+        pendingPaymentAmount: pendingPaymentOrders.reduce((sum, order) => sum + (order.total || 0), 0),
         totalSales: shiftOrders.reduce((sum, order) => sum + (order.total || 0), 0),
+        totalCollected: shiftOrders.filter(isCollected).reduce((sum, order) => sum + (order.total || 0), 0),
         totalCash,
         pendingDriverCash,
         initialCash,
         cashInDrawer: Math.max(0, initialCash + totalCash - totalExpenses),
         totalExpenses,
         totalTransfer,
-        totalNequi: shiftOrders.filter(order => paymentMethod(order) === 'NEQUI').reduce((sum, order) => sum + order.total, 0),
-        totalBancolombia: shiftOrders.filter(order => paymentMethod(order) === 'BANCOLOMBIA').reduce((sum, order) => sum + order.total, 0),
-        totalDaviplata: shiftOrders.filter(order => paymentMethod(order) === 'DAVIPLATA').reduce((sum, order) => sum + order.total, 0),
+        totalNequi: shiftOrders.filter(order => isCollected(order) && paymentMethod(order) === 'NEQUI').reduce((sum, order) => sum + order.total, 0),
+        totalBancolombia: shiftOrders.filter(order => isCollected(order) && paymentMethod(order) === 'BANCOLOMBIA').reduce((sum, order) => sum + order.total, 0),
+        totalDaviplata: shiftOrders.filter(order => isCollected(order) && paymentMethod(order) === 'DAVIPLATA').reduce((sum, order) => sum + order.total, 0),
         totalTips: shiftOrders.reduce((sum, order) => sum + (order.tip || 0), 0),
       };
     }
@@ -272,6 +297,7 @@ export class CashRegistersService {
     await this.prisma.order.updateMany({
       where: {
         cashRegisterId: null,
+        orderType: 'LOCAL',
         createdAt: { gte: openClosing.shiftStart },
       },
       data: {
@@ -295,6 +321,7 @@ export class CashRegistersService {
     const orders = await this.prisma.order.findMany({
       where: {
         status: { not: 'CANCELLED' },
+        orderType: 'LOCAL',
         OR: [
           // 1. Pedidos creados durante este turno
           {
@@ -385,17 +412,23 @@ export class CashRegistersService {
   }
 
   async remove(id: string) {
-    await this.findOne(id);
-    await this.prisma.order.updateMany({
-      where: { cashRegisterId: id },
-      data: { cashRegisterId: null },
+    const register = await this.findOne(id);
+    if (register.purpose === 'DELIVERY') {
+      throw new BadRequestException('La Caja Domicilios es necesaria para tomar pedidos y no se puede desactivar.');
+    }
+    const openClosing = await this.prisma.cashClosing.findFirst({
+      where: { cashRegisterId: id, isOpen: true },
+      select: { id: true },
     });
-    await this.prisma.cashClosing.updateMany({
-      where: { cashRegisterId: id },
-      data: { cashRegisterId: null },
-    });
-    const res = await this.prisma.cashRegister.delete({
+    if (openClosing) {
+      throw new BadRequestException('Cierra el turno antes de desactivar esta caja.');
+    }
+
+    // Se conserva la caja y todas sus relaciones para que los cierres históricos
+    // sigan siendo auditables. findAll ya oculta las cajas inactivas.
+    const res = await this.prisma.cashRegister.update({
       where: { id },
+      data: { active: false },
     });
     this.socketGateway.server.emit('cashRegistersChanged');
     return res;

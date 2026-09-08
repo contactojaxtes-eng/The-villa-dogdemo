@@ -7,6 +7,12 @@ import { Bike, Bell, CheckCircle2, XCircle, MessageCircle, UserPlus } from 'luci
 import { getUsbDevice, printUsb, buildEscPosBuffer } from '@/lib/useUsbPrinter'
 import { playUrgentBell } from '@/lib/sound'
 import { cacheWhatsappMessage } from '@/lib/chatCache'
+import type { DiningTableSummary, KitchenTicketSummary } from '@/lib/tableTypes'
+import {
+  isDiningKitchenTicketForUser,
+  publishDiningKitchenDelays,
+  toDiningKitchenDelay,
+} from '@/lib/diningKitchenAlerts'
 
 // Simple notification sound using Web Audio API
 function playNotificationSound(type: 'message' | 'urgent' = 'message') {
@@ -53,22 +59,34 @@ function requestNotificationPermission() {
   }
 }
 
-let activeNotification: Notification | null = null
+const activeNotifications = new Map<string, Notification>()
 
-function showBrowserNotification(title: string, body: string, url?: string) {
+function closeBrowserNotification(tag: string) {
+  const notification = activeNotifications.get(tag)
+  if (!notification) return
+  try { notification.close() } catch {}
+  activeNotifications.delete(tag)
+}
+
+function showBrowserNotification(
+  title: string,
+  body: string,
+  url?: string,
+  options: { tag?: string; persistent?: boolean } = {},
+) {
   if ('Notification' in window && Notification.permission === 'granted') {
     try {
-      if (activeNotification) {
-        try { activeNotification.close() } catch {}
-      }
+      const tag = options.tag || 'niche-wa-notif'
+      closeBrowserNotification(tag)
 
       const notification = new Notification(title, {
         body,
         icon: '/favicon.png',
-        requireInteraction: false,
-        tag: 'niche-wa-notif',
+        requireInteraction: options.persistent === true,
+        tag,
       })
-      activeNotification = notification
+      activeNotifications.set(tag, notification)
+      notification.onclose = () => activeNotifications.delete(tag)
 
       notification.onclick = (e) => {
         e.preventDefault()
@@ -79,11 +97,9 @@ function showBrowserNotification(title: string, body: string, url?: string) {
         try { notification.close() } catch {}
       }
 
-      setTimeout(() => {
-        try {
-          notification.close()
-        } catch {}
-      }, 3000)
+      if (!options.persistent) {
+        setTimeout(() => closeBrowserNotification(tag), 3000)
+      }
     } catch {
       // Fallback: some browsers don't support Notification constructor
     }
@@ -110,6 +126,123 @@ export function useNotifications() {
     })
 
     const isMuted = () => localStorage.getItem('the_villa_dog_mute_notifications') === 'true'
+
+    // Alertas exclusivas de comandas de salón demoradas. Se conservan en el
+    // shell global para que la mesera las vea aunque esté creando otro pedido.
+    const tracksDiningDelays = user.role === 'WAITER' || user.role === 'KITCHEN'
+    const trackedDiningTickets = new Map<string, KitchenTicketSummary>()
+    const openDiningDelayToasts = new Set<string>()
+    const notifiedDiningTickets = new Set<string>()
+
+    const browserDelayTag = (ticketId: string) => `dining-kitchen-delay:${user.id}:${ticketId}`
+    const toastDelayId = (ticketId: string) => `dining-kitchen-delay:${user.id}:${ticketId}`
+
+    const clearDiningDelay = (ticketId: string) => {
+      const toastId = toastDelayId(ticketId)
+      if (openDiningDelayToasts.has(ticketId)) {
+        toast.dismiss(toastId)
+        openDiningDelayToasts.delete(ticketId)
+      }
+      closeBrowserNotification(browserDelayTag(ticketId))
+      notifiedDiningTickets.delete(ticketId)
+    }
+
+    const evaluateDiningDelays = () => {
+      if (!tracksDiningDelays) return
+      const now = Date.now()
+      const activeDelays = []
+
+      for (const [ticketId, ticket] of trackedDiningTickets) {
+        if (!isDiningKitchenTicketForUser(ticket, user)) {
+          trackedDiningTickets.delete(ticketId)
+          clearDiningDelay(ticketId)
+          continue
+        }
+
+        const delay = toDiningKitchenDelay(ticket, now)
+        if (!delay) continue
+        activeDelays.push(delay)
+
+        if (isMuted()) continue
+        if (notifiedDiningTickets.has(ticketId)) continue
+        notifiedDiningTickets.add(ticketId)
+        const orderLabel = delay.orderNumber ? `#${delay.orderNumber}` : 'sin número'
+        const title = user.role === 'WAITER'
+          ? `🚨 ${delay.tableLabel} lleva 15 min en cocina`
+          : `🚨 Comanda ${orderLabel} demorada`
+        const description = user.role === 'WAITER'
+          ? `El pedido ${orderLabel} sigue ${ticket.status === 'NEW' ? 'pendiente' : 'en preparación'} en ${delay.stationName}.`
+          : `${delay.tableLabel} · ${delay.stationName} · sigue ${ticket.status === 'NEW' ? 'pendiente' : 'en preparación'}.`
+        const targetUrl = user.role === 'WAITER' ? `/tables/${delay.tableId}` : '/kitchen'
+
+        toast.error(title, {
+          id: toastDelayId(ticketId),
+          description,
+          icon: <Bell className="h-5 w-5 animate-pulse text-rose-600" />,
+          duration: Infinity,
+          closeButton: true,
+          action: {
+            label: user.role === 'WAITER' ? 'Ver mesa' : 'Ver comanda',
+            onClick: () => { window.location.href = targetUrl },
+          },
+        })
+        openDiningDelayToasts.add(ticketId)
+        if (localStorage.getItem('niche_mute_sounds') !== 'true') playUrgentBell()
+        showBrowserNotification(title, description, targetUrl, {
+          tag: browserDelayTag(ticketId),
+          persistent: true,
+        })
+      }
+
+      publishDiningKitchenDelays(activeDelays)
+    }
+
+    const trackDiningTicket = (ticket: KitchenTicketSummary) => {
+      if (!tracksDiningDelays || !ticket?.id) return
+      if (isDiningKitchenTicketForUser(ticket, user)) {
+        trackedDiningTickets.set(ticket.id, ticket)
+      } else {
+        trackedDiningTickets.delete(ticket.id)
+        clearDiningDelay(ticket.id)
+      }
+      evaluateDiningDelays()
+    }
+
+    const trackDiningTable = (table: DiningTableSummary) => {
+      if (!tracksDiningDelays || !table?.orders) return
+      for (const order of table.orders) {
+        for (const ticket of order.kitchenTickets || []) trackDiningTicket(ticket)
+      }
+    }
+
+    if (tracksDiningDelays) {
+      const initialRequest = user.role === 'WAITER'
+        ? api.get<DiningTableSummary[]>(`/tables?status=ALL&waiterId=${user.id}&currentShift=true`)
+        : api.get<KitchenTicketSummary[]>('/kitchen/tickets?currentShift=true')
+
+      void initialRequest.then(result => {
+        if (user.role === 'WAITER') {
+          for (const table of result as DiningTableSummary[]) trackDiningTable(table)
+        } else {
+          for (const ticket of result as KitchenTicketSummary[]) trackDiningTicket(ticket)
+        }
+        evaluateDiningDelays()
+      }).catch(() => {})
+    }
+
+    socket.on('diningKitchenTicketDelayed', trackDiningTicket)
+    socket.on('kitchenTicketCreated', trackDiningTicket)
+    socket.on('kitchenTicketUpdated', trackDiningTicket)
+    socket.on('kitchenTicketEdited', trackDiningTicket)
+    socket.on('tableUpdated', trackDiningTable)
+    socket.on('tableClosed', trackDiningTable)
+
+    const diningDelayInterval = setInterval(evaluateDiningDelays, 5000)
+    const handleMuteChanged = () => {
+      if (!isMuted()) return
+      for (const ticketId of openDiningDelayToasts) clearDiningDelay(ticketId)
+    }
+    window.addEventListener('the-villa-dog-mute-changed', handleMuteChanged)
 
     socket.on('newOrder', (order: { orderNumber?: number; customerName?: string }) => {
       if (isMuted()) return
@@ -436,6 +569,10 @@ export function useNotifications() {
 
     return () => {
       clearInterval(breakInterval)
+      clearInterval(diningDelayInterval)
+      window.removeEventListener('the-villa-dog-mute-changed', handleMuteChanged)
+      for (const ticketId of openDiningDelayToasts) clearDiningDelay(ticketId)
+      publishDiningKitchenDelays([])
       socket.disconnect()
     }
   }, [isAuthenticated, user])
