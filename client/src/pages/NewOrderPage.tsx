@@ -1176,12 +1176,6 @@ export default function NewOrderPage({
           lLower.startsWith('asesor:') ||
           lLower.startsWith('restaurante:') ||
           lLower.startsWith('niche:') ||
-          lLower.startsWith('tengo la') ||
-          lLower.startsWith('tengo el') ||
-          lLower.startsWith('tenemos la') ||
-          lLower.startsWith('tenemos el') ||
-          lLower.startsWith('te ofrezco') ||
-          lLower.startsWith('te recomiendo') ||
           lLower.includes('tu pedido #') ||
           lLower.includes('detalle de tu pedido') ||
           lLower.includes('valor del pedido') ||
@@ -1342,10 +1336,24 @@ export default function NewOrderPage({
           }
         }
 
-        const qtyMatch = clause.match(/^(\d+)\s*(?:x|de|\*|\s)/i) || clause.match(/(?:x|de|\*)\s*(\d+)/i)
+        // La cantidad puede ir antes o después del producto y puede estar
+        // separada por texto (“quiero 2 perros”, “perro sencillo x2”,
+        // “perro sencillo 2”). Antes solo se detectaba cuando comenzaba la
+        // cláusula, por eso los chats antiguos quedaban con el carrito vacío
+        // o con una sola unidad.
+        const qtyMatch = clause.match(/(?:^|\s)(\d{1,2})\s*(?:x|unidades?|uds?\.?|de|\*)?(?=\s|$)/i)
+          || clause.match(/(?:x|de|\*)\s*(\d{1,2})\b/i)
+        const trailingWordQuantity = clause.match(/\b(un|una|uno|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez)\s*$/i)
         let parsedQuantity = 1
         if (qtyMatch) {
-          parsedQuantity = Math.min(10, parseInt(qtyMatch[1], 10))
+          parsedQuantity = Math.min(99, parseInt(qtyMatch[1], 10))
+        } else if (trailingWordQuantity) {
+          const wordMap: Record<string, number> = {
+            'un': 1, 'una': 1, 'uno': 1, 'dos': 2, 'tres': 3,
+            'cuatro': 4, 'cinco': 5, 'seis': 6, 'siete': 7,
+            'ocho': 8, 'nueve': 9, 'diez': 10
+          }
+          parsedQuantity = wordMap[trailingWordQuantity[1].toLowerCase()] || 1
         } else {
           const wordNumMatch = clause.match(/^(un|una|uno|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez)\b/i)
           if (wordNumMatch) {
@@ -1602,7 +1610,9 @@ export default function NewOrderPage({
       setParsingChatOrder(true)
       Promise.all([
         api.get<any>(`/whatsapp/sessions/${chatSessionId}`),
-        api.get<any[]>(`/whatsapp/sessions/${chatSessionId}/messages`)
+        // Pedir una página amplia y fresca: los chats antiguos también deben
+        // poder completar el pedido al abrirlo desde WhatsApp.
+        api.get<any[]>(`/whatsapp/sessions/${chatSessionId}/messages?limit=200`, { force: true })
       ])
         .then(async ([session, messages]) => {
           if (session) {
@@ -1655,14 +1665,11 @@ export default function NewOrderPage({
               relevantSlice = []
             }
           } else {
-            // Si no hay pedidos previos, solo considerar mensajes de las últimas 12 horas
-            const twelveHoursAgo = Date.now() - 12 * 60 * 60 * 1000
-            relevantSlice = messages.filter(m => new Date(m.createdAt).getTime() >= twelveHoursAgo)
+            // Sin una confirmación previa, el chat completo de esta página es
+            // el contexto del pedido. No usar una ventana de horas: el asesor
+            // también puede abrir conversaciones de ayer o de días anteriores.
+            relevantSlice = messages
           }
-
-          // Filtrar cualquier mensaje que sea más viejo que 12 horas
-          const twelveHoursAgo = Date.now() - 12 * 60 * 60 * 1000
-          relevantSlice = relevantSlice.filter(m => new Date(m.createdAt).getTime() >= twelveHoursAgo)
 
           // 2. Filtrar mensajes de texto relevantes, descartando respuestas automáticas o plantillas
           let recentMessages = relevantSlice
@@ -1682,7 +1689,10 @@ export default function NewOrderPage({
               ) return false
               return true
             })
-            .slice(-30)
+            // 120 mensajes cubren conversaciones largas sin mandar un
+            // historial ilimitado a Gemini. El reconocimiento local recorre
+            // la misma ventana y se muestra antes de la llamada remota.
+            .slice(-120)
 
           // Si no hay mensajes entrantes del cliente en la conversación actual, no autollenar nada
           const hasIncomingCustomerMsg = recentMessages.some(m => m.direction === 'IN')
@@ -1877,8 +1887,12 @@ export default function NewOrderPage({
             }
           }
 
-          // Mostrar inmediatamente lo reconocido y completar los datos con Gemini en segundo plano.
-          if (localParsed) applyData(localParsed)
+          // Mostrar inmediatamente lo reconocido. Gemini queda como
+          // enriquecimiento en segundo plano y nunca debe bloquear el panel.
+          if (localParsed) {
+            applyData(localParsed)
+            setParsingChatOrder(false)
+          }
 
           return api.post<ParsedOrderResponse>('/whatsapp/parse-order', { text: customerText })
             .then(parsed => {

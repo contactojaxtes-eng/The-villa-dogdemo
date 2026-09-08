@@ -2462,10 +2462,12 @@ function ChatPage() {
     let extractedAddress = ''
     let extractedZone = ''
 
-    // Scan inbound text and location messages from the last 12 hours (newest first)
-    const twelveHoursAgo = Date.now() - 12 * 60 * 60 * 1000
+    // El pedido puede abrirse desde un chat antiguo. El historial ya viene
+    // paginado por el servidor, así que no debemos descartar mensajes solo
+    // por su fecha: el panel de Nuevo pedido decide el corte usando la última
+    // confirmación real del pedido.
     const textMessages = [...messages]
-      .filter(m => m.direction === 'IN' && new Date(m.createdAt).getTime() >= twelveHoursAgo)
+      .filter(m => m.direction === 'IN')
       .reverse()
 
     for (const msg of textMessages) {

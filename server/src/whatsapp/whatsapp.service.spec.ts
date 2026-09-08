@@ -231,6 +231,18 @@ describe('WhatsApp Gemini settings', () => {
       .toThrow('El nombre del modelo de Gemini no es válido');
   });
 
+  it('configures Flash-Lite without a reasoning budget for fast extraction', () => {
+    const service = createService();
+
+    expect((service as any).buildGeminiGenerationConfig('gemini-2.5-flash-lite', {
+      temperature: 0.3,
+      maxOutputTokens: 120,
+    })).toEqual({
+      maxOutputTokens: 120,
+      thinkingConfig: { thinkingBudget: 0 },
+    });
+  });
+
   it('upgrades only moving Gemini aliases to the exact stable model', async () => {
     const appSetting = {
       findUnique: jest.fn()
@@ -247,8 +259,8 @@ describe('WhatsApp Gemini settings', () => {
     await (service as any).preferStableGeminiModel();
     expect(appSetting.upsert).toHaveBeenCalledWith({
       where: { key: 'gemini_model' },
-      create: { key: 'gemini_model', value: 'gemini-3.8-flash' },
-      update: { value: 'gemini-3.8-flash' },
+      create: { key: 'gemini_model', value: 'gemini-2.5-flash-lite' },
+      update: { value: 'gemini-2.5-flash-lite' },
     });
 
     appSetting.upsert.mockClear();

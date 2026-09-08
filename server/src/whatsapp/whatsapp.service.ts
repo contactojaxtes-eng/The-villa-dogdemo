@@ -54,11 +54,15 @@ export class WhatsappService implements OnModuleInit {
 
     await this.prisma.appSetting.upsert({
       where: { key: 'gemini_model' },
-      create: { key: 'gemini_model', value: 'gemini-3.8-flash' },
-      update: { value: 'gemini-3.8-flash' },
+      // Estos alias "latest" apuntaban a modelos que pueden cambiar de
+      // comportamiento y, en la práctica, el alias lite terminaba usando
+      // Flash 3.8. Para extracción de pedidos priorizamos el modelo estable
+      // de baja latencia de la familia 2.5.
+      create: { key: 'gemini_model', value: 'gemini-2.5-flash-lite' },
+      update: { value: 'gemini-2.5-flash-lite' },
     });
     this.settingCache.delete('gemini_model');
-    this.logger.log('Modelo Gemini configurado en gemini-3.8-flash estable');
+    this.logger.log('Modelo Gemini configurado en gemini-2.5-flash-lite estable y rápido');
   }
 
   private normalizeSpanishLookup(value: unknown): string {
@@ -161,7 +165,7 @@ export class WhatsappService implements OnModuleInit {
       paymentAccountText: map.chatbot_payment_account_text || '',
       geminiApiKey: map.gemini_api_key || '',
       geminiKeyCount,
-      geminiModel: map.gemini_model || 'gemini-3.8-flash',
+      geminiModel: map.gemini_model || 'gemini-2.5-flash-lite',
       aiInstructions: map.chatbot_ai_instructions || '',
       geminiRequestsToday,
       // Mientras no exista un dominio público explícito, no mostramos ni
@@ -4151,6 +4155,7 @@ Restaurante (Tú):
     return Array.from(new Set([
       requested,
       this.isValidGeminiModel(configured) ? configured : '',
+      'gemini-2.5-flash-lite',
       'gemini-3.8-flash',
       'gemini-3.5-flash',
       'gemini-3.5-flash-lite',
@@ -4166,6 +4171,11 @@ Restaurante (Tú):
     if (Number.isFinite(options.maxOutputTokens)) config.maxOutputTokens = options.maxOutputTokens;
     if (/^gemini-3\./i.test(model)) {
       config.thinkingConfig = { thinkingLevel: 'low' };
+    } else if (/^gemini-2\.5-flash-lite(?:$|-)/i.test(model)) {
+      // Flash-Lite está orientado a extracción de alto volumen. Desactivar
+      // cualquier presupuesto de razonamiento evita que una lectura de chat
+      // espere tokens que no necesita.
+      config.thinkingConfig = { thinkingBudget: 0 };
     } else if (options.temperature !== undefined) {
       config.temperature = options.temperature;
     }
@@ -4258,11 +4268,11 @@ Restaurante (Tú):
         && !/(preview|experimental|exp|latest)/i.test(name);
     });
     const preferredNames = [
+      'gemini-2.5-flash-lite',
       'gemini-3.8-flash',
       'gemini-3.5-flash',
       'gemini-3.5-flash-lite',
       'gemini-3.1-flash-lite',
-      'gemini-2.5-flash-lite',
       'gemini-3.6-flash',
       'gemini-2.5-flash',
     ];
@@ -4501,7 +4511,10 @@ Responde solo con JSON válido.`;
 
       let data: any = null;
       let lastError: any = null;
-      const modelsToTry = await this.getGeminiModels();
+      // «Nuevo pedido» prioriza la respuesta rápida. El navegador hace un
+      // primer reconocimiento local y Gemini completa datos o correcciones
+      // en segundo plano con el modelo estable de baja latencia.
+      const modelsToTry = await this.getGeminiModels('gemini-2.5-flash-lite');
 
       for (const key of apiKeys) {
         for (const model of modelsToTry) {
