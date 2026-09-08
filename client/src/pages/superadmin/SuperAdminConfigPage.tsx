@@ -127,11 +127,18 @@ const getGeminiModelUse = (model: GeminiModel): GeminiModelUse => {
       tone: 'reasoning',
     }
   }
+  if (name === 'gemini-3.8-flash') {
+    return {
+      label: 'Recomendado principal',
+      description: 'La mejor combinación actual de rapidez y comprensión para conversar, corregir escritura y estructurar pedidos.',
+      tone: 'recommended',
+    }
+  }
   if (name.includes('flash-lite') || name.endsWith('-lite') || name.includes('lite-')) {
     return {
-      label: 'Recomendado para alto volumen',
-      description: 'Rápido y económico para muchas conversaciones y extracción automática de pedidos.',
-      tone: 'recommended',
+      label: 'Más rápido y económico',
+      description: 'Útil para tareas sencillas y alto volumen; puede entender peor conversaciones ambiguas o con muchos cambios.',
+      tone: 'balanced',
     }
   }
   if (name.includes('flash')) {
@@ -150,6 +157,8 @@ const getGeminiModelUse = (model: GeminiModel): GeminiModelUse => {
 
 const getRecommendedGeminiModel = (models: GeminiModel[]) => {
   const preferred = [
+    'gemini-3.8-flash',
+    'gemini-3.5-flash',
     'gemini-3.5-flash-lite',
     'gemini-3.1-flash-lite',
     'gemini-2.5-flash-lite',
@@ -204,7 +213,7 @@ export default function SuperAdminConfigPage() {
     chatbotEnabled: false,
     geminiApiKey: '',
     geminiKeyCount: 0,
-    geminiModel: 'gemini-flash-lite-latest',
+    geminiModel: 'gemini-3.8-flash',
     aiInstructions: '',
     geminiRequestsToday: 0,
   })
@@ -479,8 +488,8 @@ export default function SuperAdminConfigPage() {
               </div>
               <label className="block">
                 <span className="mb-1.5 block text-xs font-bold text-[var(--text-secondary)]">Modelo principal</span>
-                <div className="flex flex-col gap-2 sm:flex-row"><input list="gemini-models" value={wa.geminiModel} onChange={event => { setWa(current => ({ ...current, geminiModel: event.target.value })); setTestResult(null) }} className={cn(fieldClass, 'min-w-0 flex-1')} placeholder="gemini-flash-lite-latest" /><Button type="button" variant="outline" onClick={() => void loadGeminiModelInfo()} disabled={loadingModelInfo} className="h-11 shrink-0 rounded-xl text-xs font-black">{loadingModelInfo ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-1.5 h-4 w-4" />} Consultar modelos</Button></div>
-                <datalist id="gemini-models"><option value="gemini-flash-lite-latest" /><option value="gemini-flash-latest" />{modelInfo?.availableModels.map(model => <option key={model.name} value={model.name} />)}</datalist>
+                <div className="flex flex-col gap-2 sm:flex-row"><input list="gemini-models" value={wa.geminiModel} onChange={event => { setWa(current => ({ ...current, geminiModel: event.target.value })); setTestResult(null) }} className={cn(fieldClass, 'min-w-0 flex-1')} placeholder="gemini-3.8-flash" /><Button type="button" variant="outline" onClick={() => void loadGeminiModelInfo()} disabled={loadingModelInfo} className="h-11 shrink-0 rounded-xl text-xs font-black">{loadingModelInfo ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-1.5 h-4 w-4" />} Consultar modelos</Button></div>
+                <datalist id="gemini-models"><option value="gemini-3.8-flash" /><option value="gemini-3.5-flash" /><option value="gemini-3.5-flash-lite" />{modelInfo?.availableModels.map(model => <option key={model.name} value={model.name} />)}</datalist>
                 <span className="mt-1.5 block text-[11px] text-[var(--text-muted)]">Consulta la llave para mostrar la lista completa que Google permite y sus límites. El mismo modelo se usa automáticamente al abrir “Nuevo pedido”.</span>
               </label>
 

@@ -35,6 +35,64 @@ export class WhatsappService implements OnModuleInit {
     } catch (error) {
       this.logger.warn('No se pudo limpiar la carta estática anterior al iniciar', error);
     }
+    try {
+      await this.preferStableGeminiModel();
+    } catch (error) {
+      this.logger.warn('No se pudo actualizar el alias de Gemini a un modelo estable', error);
+    }
+  }
+
+  private async preferStableGeminiModel() {
+    const current = await this.prisma.appSetting.findUnique({ where: { key: 'gemini_model' } });
+    const currentModel = String(current?.value || '').trim();
+    // Los alias "latest" pueden cambiar sin aviso. Solo los migramos; si el
+    // administrador eligió un modelo concreto, esa selección se respeta.
+    if (currentModel && ![
+      'gemini-flash-lite-latest',
+      'gemini-flash-latest',
+    ].includes(currentModel)) return;
+
+    await this.prisma.appSetting.upsert({
+      where: { key: 'gemini_model' },
+      create: { key: 'gemini_model', value: 'gemini-3.8-flash' },
+      update: { value: 'gemini-3.8-flash' },
+    });
+    this.settingCache.delete('gemini_model');
+    this.logger.log('Modelo Gemini configurado en gemini-3.8-flash estable');
+  }
+
+  private normalizeSpanishLookup(value: unknown): string {
+    return String(value || '')
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-z0-9]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  private extractExplicitNeighborhood(messages: string[]): string | null {
+    for (const message of [...messages].reverse()) {
+      const match = message.match(/\bbarrio\s*[:\-]?\s+([^,\n.;]+)/i);
+      if (!match?.[1]) continue;
+      const value = match[1]
+        .split(/\b(?:direcci[oó]n|pago|efectivo|transferencia|nequi|daviplata|bancolombia)\b/i)[0]
+        .replace(/\s+(?:y|con)\s*$/i, '')
+        .trim();
+      if (value.length >= 2) return value;
+    }
+    return null;
+  }
+
+  private isMeaningfulGeminiReply(value: string): boolean {
+    const text = String(value || '').trim();
+    return text.length >= 3 && /[a-záéíóúñ0-9]/i.test(text);
+  }
+
+  private parseColombianAmount(value: string): number | null {
+    const normalized = String(value || '').replace(/\s/g, '').replace(/\./g, '').replace(',', '.');
+    const parsed = Number(normalized);
+    return Number.isFinite(parsed) ? parsed : null;
   }
 
   async getSettings() {
@@ -103,7 +161,7 @@ export class WhatsappService implements OnModuleInit {
       paymentAccountText: map.chatbot_payment_account_text || '',
       geminiApiKey: map.gemini_api_key || '',
       geminiKeyCount,
-      geminiModel: map.gemini_model || 'gemini-flash-lite-latest',
+      geminiModel: map.gemini_model || 'gemini-3.8-flash',
       aiInstructions: map.chatbot_ai_instructions || '',
       geminiRequestsToday,
       // Mientras no exista un dominio público explícito, no mostramos ni
@@ -3242,25 +3300,47 @@ The Villa Dog • Montería`;
 
   private async handleGeminiChatbot(session: any, userText: string, apiKeys: string[]) {
     try {
-      const history = await this.prisma.whatsAppMessage.findMany({
-        where: { sessionId: session.id },
-        orderBy: { createdAt: 'desc' },
-        take: 8,
-      });
+      const cleanPhone = (session.phone.startsWith('57') && session.phone.length === 12)
+        ? session.phone.substring(2)
+        : session.phone;
+      const [
+        history,
+        dbItems,
+        dbZones,
+        recentCustomerOrders,
+        configuredMenuUrl,
+        restaurantHours,
+        aiInstructions,
+        paymentQrMode,
+        paymentAccountText,
+      ] = await Promise.all([
+        this.prisma.whatsAppMessage.findMany({
+          where: { sessionId: session.id },
+          orderBy: { createdAt: 'desc' },
+          take: 16,
+        }),
+        this.prisma.menuItem.findMany({
+          where: { active: true },
+          include: { category: { select: { name: true } } },
+          orderBy: [{ category: { name: 'asc' } }, { price: 'asc' }],
+        }),
+        this.prisma.deliveryZone.findMany({
+          where: { active: true },
+          orderBy: { name: 'asc' },
+        }),
+        this.prisma.order.findMany({
+          where: { customerPhone: { contains: cleanPhone } },
+          include: { items: { include: { menuItem: true } } },
+          orderBy: { createdAt: 'desc' },
+          take: 5,
+        }),
+        this.getSetting('digital_menu_url'),
+        this.getSetting('restaurant_hours'),
+        this.getSetting('chatbot_ai_instructions'),
+        this.getSetting('chatbot_payment_qr_mode'),
+        this.getSetting('chatbot_payment_account_text'),
+      ]);
       const messagesChronological = history.reverse();
-
-      const dbItems = await this.prisma.menuItem.findMany({
-        where: { active: true },
-        include: {
-          category: {
-            select: { name: true }
-          }
-        },
-        orderBy: [
-          { category: { name: 'asc' } },
-          { price: 'asc' }
-        ]
-      });
       
       const itemsByCategory: Record<string, string[]> = {};
       dbItems.forEach(i => {
@@ -3290,31 +3370,7 @@ The Villa Dog • Montería`;
         .map(c => `- *${c}*`)
         .join('\n');
 
-      const dbZones = await this.prisma.deliveryZone.findMany({
-        where: { active: true },
-        orderBy: { name: 'asc' }
-      });
       const zonesSummary = dbZones.map(z => `- ${z.name}: $${z.rate.toLocaleString('de-DE')}`).join('\n');
-
-      // Consultar historial de pedidos recientes de este cliente
-      const cleanPhone = (session.phone.startsWith('57') && session.phone.length === 12)
-        ? session.phone.substring(2)
-        : session.phone;
-
-      const recentCustomerOrders = await this.prisma.order.findMany({
-        where: {
-          customerPhone: { contains: cleanPhone }
-        },
-        include: {
-          items: {
-            include: {
-              menuItem: true
-            }
-          }
-        },
-        orderBy: { createdAt: 'desc' },
-        take: 5,
-      });
 
       let recentOrdersSummary = 'No hay pedidos previos registrados para este cliente.';
       if (recentCustomerOrders.length > 0) {
@@ -3325,25 +3381,6 @@ The Villa Dog • Montería`;
         }).join('\n');
       }
 
-      const activeOrdersCount = await this.prisma.order.count({
-        where: { status: 'PENDING' }
-      });
-      let queueDelayMinutes = 0;
-      if (activeOrdersCount >= 3 && activeOrdersCount <= 5) {
-        queueDelayMinutes = 5;
-      } else if (activeOrdersCount >= 6 && activeOrdersCount <= 10) {
-        queueDelayMinutes = 10;
-      } else if (activeOrdersCount > 10) {
-        queueDelayMinutes = 15;
-      }
-
-        const [configuredMenuUrl, restaurantHours, aiInstructions, paymentQrMode, paymentAccountText] = await Promise.all([
-          this.getSetting('digital_menu_url'),
-          this.getSetting('restaurant_hours'),
-          this.getSetting('chatbot_ai_instructions'),
-          this.getSetting('chatbot_payment_qr_mode'),
-          this.getSetting('chatbot_payment_account_text'),
-        ]);
         const displayMenuUrl = this.getShareableDigitalMenuUrl(configuredMenuUrl);
         const menuGeneralRule = displayMenuUrl
           ? `Muestra la lista limpia de categorías principales y al final incluye el enlace digital: ${displayMenuUrl}.`
@@ -3363,9 +3400,13 @@ The Villa Dog • Montería`;
           ? `\nINSTRUCCIONES ADICIONALES CONFIGURADAS POR ADMINISTRACIÓN:\n${aiInstructions.trim()}\n`
           : '';
 
-        const conversationPrompt = messagesChronological.map(m => 
-          `${m.direction === 'IN' ? 'Cliente' : 'Restaurante (Tú)'}: ${m.content}`
-        ).join('\n');
+        const conversationPrompt = messagesChronological.map(m => {
+          const rawContent = String(m.content || '').trim();
+          const content = rawContent.length > 1200
+            ? `${rawContent.slice(0, 500)}\n[Mensaje extenso ya enviado]`
+            : rawContent;
+          return `${m.direction === 'IN' ? 'Cliente' : 'Restaurante (Tú)'}: ${content}`;
+        }).join('\n');
 
         const systemPrompt = `
 Eres la persona encargada de atender de forma directa el WhatsApp del restaurante "The Villa Dog" en Montería, Colombia. Habla con un tono humano, cercano, natural y muy sencillo. Evita a toda costa sonar como un robot, una máquina de soporte técnico o un asistente de inteligencia artificial genérico. Habla como un asesor amable del restaurante.
@@ -3388,9 +3429,6 @@ ${restaurantHours || 'Horario por confirmar con un asesor.'}
 
 Cobertura y tarifas de domicilios según el barrio en Montería:
 ${zonesSummary}
-
-Estado actual de la cocina (Carga de trabajo en tiempo real):
-- Pedidos en preparación en la cocina actualmente: ${activeOrdersCount} 
 
     Reglas críticas de interacción:
     1. SI EL CLIENTE PIDE "EL MENÚ" O "LA CARTA" EN GENERAL:
@@ -3419,33 +3457,29 @@ ${dynamicCategoriesString}
        ${menuFollowupRule} (ej: "¿Qué ingredientes trae el suizo?", "Y con papas a la francesa?", "¿Cuántos gramos trae?", "¿Tienen Coca Cola?")
        - En todas las preguntas de aclaración, ingredientes, gramos o seguimiento, RESPONDE ÚNICAMENTE LA RESPUESTA DIRECTA A LA INQUIETUD DEL CLIENTE DE FORMA CORDIAL Y CORTA. NO agregues el enlace del menú digital al final de cada mensaje.
 
-    5. TIEMPO DE ESPERA Y DEMORA:
-       Calcula el tiempo de forma realista: Tiempo de preparación de los platos + retraso de cola actual (${queueDelayMinutes} minutos). Si es a domicilio súmale de 15 a 20 minutos de transporte.
+    5. TIEMPO DE ESPERA, TARIFAS Y TOTALES:
+       - NUNCA inventes ni calcules por tu cuenta un tiempo, una tarifa de domicilio o el total final del pedido.
+       - No tienes una estimación validada de cocina ni transporte. Si el cliente pregunta por demora, indica que un asesor la confirmará.
+       - Los precios solo pueden salir del menú vigente incluido arriba.
+       - La tarifa solo puede mencionarse cuando el barrio coincide claramente con una zona oficial. El total definitivo lo confirma el sistema o un asesor.
 
     6. MANEJO DE DATOS Y TOMAR PEDIDOS (REGLAS DE ORO):
        - NOMBRE DEL CLIENTE: El nombre registrado de la persona es "${session.customerName || 'No especificado aún'}". Si ya conoces su nombre (por ejemplo, "${session.customerName || ''}" o si viene en el texto como "Nombre: Juan Martinez"), ESTÁ ABSOLUTAMENTE PROHIBIDO VOLVER A PREGUNTAR SU NOMBRE. Llámalo por su nombre directamente (ej: "¡Hola Juan!").
        - CUENTAS DE TRANSFERENCIA: ${paymentInstruction}
-       - PEDIDO PARA PASAR A RECOGER (PICKUP): Si el tipo de pedido es "PASAR A RECOGER EN RESTAURANTE" (o Recoger en el local), NUNCA JAMÁS PREGUNTES POR EL BARRIO NI POR LA DIRECCIÓN. Únicamente confirma sus productos y el método de pago. Para transferencias aplica exactamente la regla de cuenta o QR anterior.
-       - PEDIDO A DOMICILIO: Únicamente si el cliente indica que su pedido es a Domicilio, solicita la Dirección y el Barrio para liquidar la tarifa de entrega.
+       - PREGUNTA ÚNICA: No pidas los datos uno por uno. Después de conocer productos y tipo de entrega, solicita EN UN SOLO MENSAJE todos los datos que falten.
+       - PEDIDO PARA PASAR A RECOGER (PICKUP): Nunca preguntes barrio ni dirección. Pide únicamente el método de pago si todavía falta.
+       - PEDIDO A DOMICILIO: Solicita juntos el barrio, la dirección exacta y el método de pago. Ejemplo: "Listo. Envíame en un solo mensaje tu barrio, dirección exacta y si pagas en efectivo o transferencia."
+       - Si el cliente ya entregó uno o dos datos, pregunta solamente por todos los que falten, juntos y en una respuesta corta.
        - TARIFA DE DOMICILIO - REGLA CRÍTICA ABSOLUTA: La lista de barrios y tarifas que tienes disponible arriba es la lista OFICIAL. Si el barrio del cliente NO APARECE en esa lista oficial, o si no tiene precio asignado, ESTÁ ABSOLUTAMENTE PROHIBIDO DECIR QUE EL DOMICILIO ES "GRATIS", "$0" O INVENTAR UN VALOR. Jamás digas que un domicilio es gratis. En esos casos, DEBES responder exactamente: "Perfecto. El valor del domicilio a tu barrio será verificado y confirmado directamente por nuestro asesor al procesar tu pedido." e incluir [TRANSFERIR_ASESOR].
 
     7. FINALIZACIÓN Y TRANSFERENCIA:
-       Si el cliente ya entregó sus datos completos (o si el pedido es Pasar a Recoger y ya dio su nombre y método de pago) o solicita un asesor humano, finaliza tu mensaje incluyendo la etiqueta obligatoria: [TRANSFERIR_ASESOR].
+       Si el cliente ya entregó los productos y todos los datos necesarios (o si recoge y ya dio el método de pago), responde que un asesor revisará y confirmará el resumen e incluye [TRANSFERIR_ASESOR]. Nunca afirmes que el pedido ya fue creado porque se crea desde el panel.
 
 Historial de la conversación reciente:
 ${conversationPrompt}
 
 Restaurante (Tú):
 `;
-
-      const payload = {
-        contents: [{
-          parts: [{ text: systemPrompt }]
-        }],
-        generationConfig: {
-          temperature: 0.3
-        }
-      };
 
       let lastError = null;
       let data = null;
@@ -3454,6 +3488,17 @@ Restaurante (Tú):
       for (const key of apiKeys) {
         for (const model of modelsToTry) {
           const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`;
+          const payload = {
+            contents: [{
+              parts: [{ text: systemPrompt }]
+            }],
+            // Gemini 3.8 no longer accepts temperature. Low thinking keeps
+            // the live chat fast while preserving the model's validation.
+            generationConfig: this.buildGeminiGenerationConfig(model, {
+              temperature: 0.3,
+              maxOutputTokens: 600,
+            }),
+          };
           try {
             const response = await fetch(url, {
               method: 'POST',
@@ -3493,8 +3538,51 @@ Restaurante (Tú):
 
       replyText = replyText.trim();
 
-      const shouldTransfer = replyText.includes('[TRANSFERIR_ASESOR]');
-      const cleanReply = replyText.replace('[TRANSFERIR_ASESOR]', '').trim();
+      let shouldTransfer = replyText.includes('[TRANSFERIR_ASESOR]');
+      let cleanReply = replyText.replace('[TRANSFERIR_ASESOR]', '').trim();
+
+      const explicitNeighborhood = this.extractExplicitNeighborhood([userText]);
+      if (explicitNeighborhood) {
+        const normalizedNeighborhood = this.normalizeSpanishLookup(explicitNeighborhood);
+        const configuredZone = dbZones.find(zone => this.normalizeSpanishLookup(zone.name) === normalizedNeighborhood);
+        if (!configuredZone) {
+          cleanReply = 'Perfecto. El valor del domicilio a tu barrio será verificado y confirmado directamente por nuestro asesor al procesar tu pedido.';
+          shouldTransfer = true;
+        }
+      }
+
+      const normalizedIncoming = this.normalizeSpanishLookup(
+        messagesChronological
+          .filter(message => message.direction === 'IN')
+          .map(message => message.content)
+          .join(' '),
+      );
+      const mentionedZone = [...dbZones]
+        .sort((left, right) => right.name.length - left.name.length)
+        .find(zone => {
+          const normalizedZone = this.normalizeSpanishLookup(zone.name);
+          return normalizedZone.length >= 3 && ` ${normalizedIncoming} `.includes(` ${normalizedZone} `);
+        });
+      const tariffClaim = cleanReply.match(
+        /(?:\b(?:valor|tarifa|costo)\s+(?:del\s+)?domicilio\b|\bdomicilio\s+(?:cuesta|vale|tiene un valor de)\b)[^0-9$]{0,80}\$?\s*([\d][\d.,]*)/i,
+      );
+      const claimedTariff = tariffClaim?.[1] ? this.parseColombianAmount(tariffClaim[1]) : null;
+      const invalidTariff = Boolean(tariffClaim) && (
+        !mentionedZone || claimedTariff === null || claimedTariff !== Number(mentionedZone.rate)
+      );
+      const claimsUnverifiedTotal = /\btotal(?:\s+(?:final|a pagar|del pedido))?\b[^0-9$]{0,50}\$?\s*[\d]/i.test(cleanReply);
+      const claimsUnverifiedTime = /\b(?:tarda|demora|tiempo estimado|llega(?:r[ií]a)?)\b[^0-9]{0,40}\d+\s*(?:minutos?|mins?|horas?)/i.test(cleanReply);
+      const claimsFreeDelivery = /\bdomicilio\b[^.!?\n]{0,50}\bgratis\b|\bgratis\b[^.!?\n]{0,50}\bdomicilio\b/i.test(cleanReply);
+
+      if (invalidTariff || claimsUnverifiedTotal || claimsUnverifiedTime || claimsFreeDelivery) {
+        cleanReply = 'Gracias. Un asesor verificará la tarifa, el tiempo y el total antes de confirmar tu pedido.';
+        shouldTransfer = true;
+      }
+
+      if (!this.isMeaningfulGeminiReply(cleanReply)) {
+        cleanReply = 'Gracias. Un asesor revisará los datos de tu pedido y te confirmará el resumen.';
+        shouldTransfer = true;
+      }
 
       if (cleanReply) {
         await this.sendMessage(session.phone, cleanReply);
@@ -4063,9 +4151,25 @@ Restaurante (Tú):
     return Array.from(new Set([
       requested,
       this.isValidGeminiModel(configured) ? configured : '',
-      'gemini-flash-lite-latest',
-      'gemini-flash-latest',
+      'gemini-3.8-flash',
+      'gemini-3.5-flash',
+      'gemini-3.5-flash-lite',
+      'gemini-2.5-flash',
     ].filter(Boolean)));
+  }
+
+  private buildGeminiGenerationConfig(
+    model: string,
+    options: { temperature?: number; maxOutputTokens?: number } = {},
+  ): Record<string, unknown> {
+    const config: Record<string, unknown> = {};
+    if (Number.isFinite(options.maxOutputTokens)) config.maxOutputTokens = options.maxOutputTokens;
+    if (/^gemini-3\./i.test(model)) {
+      config.thinkingConfig = { thinkingLevel: 'low' };
+    } else if (options.temperature !== undefined) {
+      config.temperature = options.temperature;
+    }
+    return config;
   }
 
   private sanitizeGeminiError(error: unknown, keys: string[]): string {
@@ -4154,6 +4258,8 @@ Restaurante (Tú):
         && !/(preview|experimental|exp|latest)/i.test(name);
     });
     const preferredNames = [
+      'gemini-3.8-flash',
+      'gemini-3.5-flash',
       'gemini-3.5-flash-lite',
       'gemini-3.1-flash-lite',
       'gemini-2.5-flash-lite',
@@ -4238,7 +4344,10 @@ Restaurante (Tú):
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               contents: [{ parts: [{ text: testPrompt }] }],
-              generationConfig: { temperature: 0, maxOutputTokens: 100 },
+              generationConfig: this.buildGeminiGenerationConfig(candidateModel, {
+                temperature: 0,
+                maxOutputTokens: 100,
+              }),
             }),
             signal: AbortSignal.timeout(6000)
           });
@@ -4312,6 +4421,7 @@ Restaurante (Tú):
           }
         }),
         this.prisma.deliveryZone.findMany({
+          where: { active: true },
           select: { id: true, name: true, rate: true }
         })
       ]);
@@ -4342,126 +4452,52 @@ Restaurante (Tú):
 
       const zoneSummary = dbZones.map(z => `${z.id} | ${z.name} | $${z.rate}`).join('\n');
 
-      const prompt = `Eres el extractor de pedidos de máxima precisión e inteligencia gastronómica del restaurante The Villa Dog en Montería, Córdoba, Colombia.
-Analiza la conversación completa de WhatsApp y extrae el pedido FINAL confirmado con 100% de exactitud, corrigiendo errores ortográficos del cliente y mapeando cada producto y barrio al catálogo oficial.
+      const prompt = `Eres un extractor de pedidos de WhatsApp para Villa Dog.
+Lee la conversación completa y devuelve únicamente el estado FINAL que el cliente confirmó. No converses, no calcules precios y no inventes datos.
 
-Menú Oficial del Restaurante (ID_UUID | Nombre | Precio):
+CATÁLOGO VIGENTE (ID | producto | precio):
 ${menuSummary}
 
-Zonas de Entrega / Barrios Oficiales en Montería (ID_UUID | Nombre | Tarifa):
-${zoneSummary}
+ZONAS VIGENTES (ID | barrio | tarifa):
+${zoneSummary || 'No hay zonas configuradas.'}
 
-REGLAS DE ORO DE EXTRACCIÓN Y CORRECCIÓN PARA MONTERÍA / CÓRDOBA:
-1. DISTINCIÓN CRÍTICA ENTRE PERROS CALIENTES Y SUIZOS:
-   - "perro suizo", "perro con suiza", "perro italo suizo" -> Pertenece a la categoría "Perros Calientes", producto "Perro Suizo" o "Perro Italo Suizo".
-   - "un suizo", "suizo sencillo", "super suizo", "suizo con papas" -> Pertenece a la categoría "Suizos (Con Papas a la Francesa)", producto "Super Suizo (Papas Francesa)" (o Gratinado si pide queso/gratinado).
-   - "suizo con pollo" -> "Suizo Especial Con Pollo (Papas Francesa)".
-   - "suizo con cerdo" -> "Suizo Especial Con Cerdo (Papas Francesa)".
-   - "suizo con lomito" -> "Suizo Especial Con Lomito (Papas Francesa)".
-   - "suizo con chorizo y butifarra" -> "Suizo Chorizo y Butifarra (Papas Francesa)".
-   - "suizo ranchero" -> "Suizo Ranchero (Papas Francesa)".
-   - "suizo con todo" -> "Suizo Con Todo (Papas Francesa)".
-   - "suizo super con todo" -> "Suizo Super Con Todo (Papas Francesa)".
+Reglas obligatorias:
+- Extrae productos y cantidades solo de mensajes marcados como "Cliente:". Los mensajes del asistente sirven únicamente como contexto de lo que el cliente confirmó.
+- Corrige faltas ortográficas y abreviaturas únicamente cuando permitan identificar sin duda un producto del catálogo. Usa siempre su ID exacto. Si hay ambigüedad, omite ese producto.
+- Consolida cambios y correcciones posteriores: devuelve el pedido final, sin duplicar versiones anteriores.
+- quantity debe ser un entero entre 1 y 99.
+- preference y notes contienen solo instrucciones explícitas del cliente para ese producto. additions contiene únicamente IDs exactos de adiciones vigentes.
+- detectedOrderType es "delivery" si pidió domicilio y "pickup" si pasa a recoger.
+- paymentMethod es "CASH" para efectivo y "TRANSFER" para Nequi, Daviplata, Bancolombia o transferencia.
+- Extrae barrio, dirección y referencia solo si el cliente los escribió.
+- zoneId solo puede ser el ID de una zona vigente cuando el barrio coincide claramente, ignorando mayúsculas y tildes. Si no coincide, déjalo en null. Nunca inventes una tarifa, zona, total ni tiempo.
+- Los datos faltantes deben ser cadena vacía o arreglo vacío según el esquema.
 
-2. MAPEO EXACTO DE PERROS CALIENTES:
-   - "perro sencillo" / "un perro" -> "Perro Sencillo".
-   - "perro especial" / "perro especial niche" -> "Perro Especial The Villa Dog".
-   - "perro super niche" / "perro con todo" / "super perro" -> "Perro Super The Villa Dog".
-   - "perro suizo" -> "Perro Suizo".
-   - "perro suizito" -> "Perro Suizito".
-   - "perro con tocineta" -> "Perro Con Tocineta".
-   - "perro con pollo" -> "Perro Con Pollo".
-   - "perro ranchero" -> "Perro Ranchero".
-   - "perro italo ranchero" -> "Perro Italo Ranchero".
-   - "perro italo suizo" -> "Perro Italo Suizo".
-   - "perro escoces" / "escoces" -> "Perro Escocés".
-   - "perro americano" -> "Perro Americano".
-   - "perro combo" -> "Perro Combo".
-   - "chori perro" / "perro con chorizo" -> "Perro Chori Perro".
-   - "perro gemelo" -> "Perro Gemelo".
-
-3. REGLA SUPREMA DE PIZZAS Y TAMAÑOS:
-   - Cuando el cliente pide una pizza (ej: "una pizza pollo champiñones", "pizza hawaiana", "quiero una pizza de pollo con champiñones") y NO especifica el tamaño ("mediana", "familiar", "extragrande"), SIEMPRE Y SIN EXCEPCIÓN debes seleccionar el ID de la categoría "Pizzas Personales (25 cm - 6 porc)" (la que contiene la palabra "Personal").
-   - ÚNICAMENTE selecciona "Mediana" si el cliente dijo "mediana".
-   - ÚNICAMENTE selecciona "Familiar" si el cliente dijo "familiar".
-   - ÚNICAMENTE selecciona "Extra Grande" si el cliente dijo "extragrande" o "grande".
-   - PROHIBIDO seleccionar pizzas combinadas (que contengan "MITAD") a menos que el cliente diga explícitamente "mitad".
-
-4. REGLA SUPREMA DE PAPAS (FRANCESA POR DEFECTO VS AL VAPOR):
-   - En Suizos, Salchipapas, Desgranados y platos con variantes de papas:
-   - SIEMPRE Y POR DEFECTO selecciona la variante con "Papas Francesa" o "A la Francesa".
-   - PROHIBIDO seleccionar la variante "Papas al Vapor" o "Al Vapor" a menos que el cliente haya escrito explícitamente "al vapor", "vapor" o "cocida".
-
-5. MAPEO DE SALCHIPAPAS, SALVAJADAS Y HAMBURGUESAS:
-   - "chori papa" / "choripapa" -> Salchipapa Chori Papa (si dice "gratinada" o "con queso" -> Salchipapa Chori Papa Gratinada).
-   - "ranchi papa" / "ranchipapa" -> Salchipapa Ranchi Papa (o Gratinada).
-   - "salchipapa sencilla" -> Salchipapa Sencilla (o Gratinada si dice queso).
-   - "salchipapa con pollo" -> Salchipapa Con Pollo (o Gratinada).
-   - "salchipapa con cerdo" -> Salchipapa Con Cerdo (o Gratinada).
-   - "salchipapa con lomito" -> Salchipapa Con Lomito (o Gratinada).
-   - "salchipapa con todo" -> Salchipapa Con Todo (o Gratinada).
-   - "salchipapa 4 carnes" / "cuatro carnes" -> Salchipapa Cuatro Carnes (o Gratinada).
-   - "salvajada trio" -> Salvajada Trío (o Gratinada si dice queso/gratinada).
-   - "salvajadita" -> Salvajada Salvajadita (o Gratinada).
-   - "salvajada matrimonio" -> Salvajada Matrimonio (o Gratinada).
-   - "salvajada chica" -> Salvajada Chica (o Gratinada).
-   - "salvajada super" -> Salvajada Super (o Gratinada).
-   - "salvajada niche" -> Salvajada The Villa Dog (o Gratinada).
-   - "salvajada extralargue" -> Salvajada Extralargue (o Gratinada).
-   - "hamburguesa sencilla", "hamburguesa doble carne", "hamburguesa combo", "hamburguesa especial", "hamburguesa super especial niche", "hamburguesa con pollo", "hamburguesa ranchera especial".
-
-6. REGLA ESTRICTA DE EXTRACCIÓN: CLIENTE VS ASISTENTE/BOT:
-   - El texto del chat contiene mensajes del "Cliente:" y del "Asistente:".
-   - ÚNICAMENTE debes extraer los productos, bebidas, cantidades y notas que el CLIENTE ha solicitado o confirmado explícitamente en sus mensajes ("Cliente: ...").
-   - ABSOLUTAMENTE PROHIBIDO agregar platos, bebidas o notas basándote en sugerencias, respuestas o menús enviados por el ASISTENTE.
-   - NUNCA pongas frases conversacionales del asistente dentro de "notes".
-
-7. ASIGNACIÓN ESTRICTA Y TOTAL DE NOTAS DE COCINA Y PREPARACIÓN ("notes"):
-   - Si el cliente especifica detalles de preparación (ej: "sin cebolla", "con ripio", "sin ripio", "con bastante salsa tártara", "solo tártara", "sin salsa rosada", "salsas por aparte", "sin verduras", "bien asado", "término medio", "papas bien tostadas", "sin queso", etc.), DEBES CAPTURAR CADA DETALLE EN EL CAMPO "notes" DEL PRODUCTO CORRESPONDIENTE.
-   - NUNCA omitas ni descartes especificaciones de salsas, verduras o ingredientes pedidos por el cliente.
-   - NUNCA pongas el nombre del plato ni frases de solicitud ("quiero una...", "por favor", "me das") en "notes".
-   - PROHIBIDO COLOCAR PRECIOS O SIGNOS DE PESOS EN "notes".
-   - NUNCA mezcles ni traslades notas de un plato a otro.
-   - Si un producto no tiene especificación de cocina, asigna "notes": "".
-
-8. ADICIONES Y EXTRAS DE COBRO:
-   - Si el cliente pide adiciones pagas (ej: "tocineta extra", "borde de queso", "queso extra", "más carne", "salchicha ranchera extra"), busca su UUID exacto en la lista de adiciones del menú y agrégalo al arreglo "additions".
-
-9. DATOS DE CLIENTE, PAGO Y DIRECCIÓN:
-   - "paymentMethod": "CASH" para efectivo, "TRANSFER" para Nequi, Bancolombia, Daviplata, transferencia.
-   - "detectedOrderType": "delivery" para domicilios, "pickup" para recoger.
-   - "customerAddress": Extrae la dirección exacta (ej: "MZ z lote 9", "Calle 24 # 5-10").
-   - "customerAddressReference": Puntos de referencia (ej: "mandala 1", "cerca de la tienda").
-   - "customerNeighborhood": Nombre del barrio detectado.
-   - "zoneId": Si el barrio coincide con uno de la lista de zonas oficiales, incluye su UUID.
-
-JSON a devolver:
+Devuelve exactamente este JSON:
 {
-  "items": [
-    {
-      "menuItemId": "UUID-EXACTO",
-      "quantity": 1,
-      "preference": "",
-      "notes": "",
-      "additions": []
-    }
-  ],
-  "detectedOrderType": "delivery"|"pickup"|null,
-  "paymentMethod": "CASH"|"TRANSFER"|null,
+  "items": [{
+    "menuItemId": "UUID-EXACTO",
+    "quantity": 1,
+    "preference": "",
+    "notes": "",
+    "additions": []
+  }],
+  "detectedOrderType": "delivery"|"pickup"|"",
+  "paymentMethod": "CASH"|"TRANSFER"|"",
   "independentNotes": [],
-  "customerName": null,
-  "customerPhone": null,
-  "customerAddress": null,
-  "customerAddressReference": null,
-  "customerNeighborhood": null,
-  "zoneId": null
+  "customerName": "",
+  "customerPhone": "",
+  "customerAddress": "",
+  "customerAddressReference": "",
+  "customerNeighborhood": "",
+  "zoneId": ""
 }
 
-Texto del chat:
+CONVERSACIÓN:
 """
 ${text}
 """
-Responde SOLO con el JSON válido.`;
+Responde solo con JSON válido.`;
 
       let data: any = null;
       let lastError: any = null;
@@ -4477,7 +4513,43 @@ Responde SOLO con el JSON válido.`;
               }],
               generationConfig: {
                 responseMimeType: "application/json",
-                temperature: 0.0
+                responseSchema: {
+                  type: 'OBJECT',
+                  properties: {
+                    items: {
+                      type: 'ARRAY',
+                      items: {
+                        type: 'OBJECT',
+                        properties: {
+                          menuItemId: { type: 'STRING' },
+                          quantity: { type: 'INTEGER' },
+                          preference: { type: 'STRING' },
+                          notes: { type: 'STRING' },
+                          additions: { type: 'ARRAY', items: { type: 'STRING' } },
+                        },
+                        required: ['menuItemId', 'quantity', 'preference', 'notes', 'additions'],
+                      },
+                    },
+                    detectedOrderType: { type: 'STRING', enum: ['delivery', 'pickup', ''] },
+                    paymentMethod: { type: 'STRING', enum: ['CASH', 'TRANSFER', ''] },
+                    independentNotes: { type: 'ARRAY', items: { type: 'STRING' } },
+                    customerName: { type: 'STRING' },
+                    customerPhone: { type: 'STRING' },
+                    customerAddress: { type: 'STRING' },
+                    customerAddressReference: { type: 'STRING' },
+                    customerNeighborhood: { type: 'STRING' },
+                    zoneId: { type: 'STRING' },
+                  },
+                  required: [
+                    'items', 'detectedOrderType', 'paymentMethod', 'independentNotes',
+                    'customerName', 'customerPhone', 'customerAddress',
+                    'customerAddressReference', 'customerNeighborhood', 'zoneId',
+                  ],
+                },
+                ...this.buildGeminiGenerationConfig(model, {
+                  temperature: 0.0,
+                  maxOutputTokens: 4096,
+                }),
               }
             };
 
@@ -4529,12 +4601,16 @@ Responde SOLO con el JSON válido.`;
         resultText = resultText.substring(3, resultText.length - 3).trim();
       }
 
-      const rawJson = JSON.parse(resultText);
-      this.logger.log(`[parseOrder] Gemini devolvió JSON con ${(rawJson.items || []).length} items`);
-      this.logger.log(`[parseOrder] rawJson: ${JSON.stringify(rawJson)}`);
+      const parsedResponse = JSON.parse(resultText);
+      const rawJson = parsedResponse && typeof parsedResponse === 'object' && !Array.isArray(parsedResponse)
+        ? parsedResponse
+        : {};
+      const rawItems = Array.isArray(rawJson?.items) ? rawJson.items : [];
+      this.logger.log(`[parseOrder] Gemini devolvió JSON con ${rawItems.length} items`);
       const parsedCartItems: any[] = [];
 
-      for (const rawItem of (rawJson.items || [])) {
+      for (const rawItem of rawItems) {
+        if (!rawItem || typeof rawItem !== 'object') continue;
         let rawId = rawItem.menuItemId || '';
         this.logger.log(`[parseOrder] Procesando item menuItemId="${rawId}"`);
         if (rawId.startsWith('[ID:')) {
@@ -4545,8 +4621,12 @@ Responde SOLO con el JSON válido.`;
         let menuItem = dbItems.find(i => i.id === rawId);
         if (!menuItem) {
           this.logger.warn(`[parseOrder] ⚠ NO se encontró menuItem con id="${rawId}" en dbItems (${dbItems.length} items en DB)`);
-          // Intentar búsqueda por nombre como fallback
-          const nameMatch = dbItems.find(i => i.name.toLowerCase().includes(rawId.toLowerCase()));
+          // Aceptar el nombre únicamente cuando coincide por completo. Una
+          // coincidencia parcial puede convertir un producto en otro distinto.
+          const normalizedRawId = this.normalizeSpanishLookup(rawId);
+          const nameMatch = normalizedRawId
+            ? dbItems.find(i => this.normalizeSpanishLookup(i.name) === normalizedRawId)
+            : undefined;
           if (nameMatch) {
             this.logger.log(`[parseOrder] Encontrado por nombre: ${nameMatch.name} (id=${nameMatch.id})`);
             menuItem = nameMatch;
@@ -4647,7 +4727,8 @@ Responde SOLO con el JSON válido.`;
         this.logger.log(`[parseOrder]  Encontrado: ${menuItem.name}`);
 
         const additions: any[] = [];
-        for (const addId of (rawItem.additions || [])) {
+        const rawAdditions = Array.isArray(rawItem.additions) ? rawItem.additions : [];
+        for (const addId of rawAdditions) {
           let cleanAddId = addId || '';
           if (cleanAddId.startsWith('[ID:')) {
             cleanAddId = cleanAddId.replace('[ID:', '').replace(']', '').trim();
@@ -4656,7 +4737,7 @@ Responde SOLO con el JSON válido.`;
           if (add) additions.push(add);
         }
 
-        let cleanItemNotes = (rawItem.notes || '').trim();
+        let cleanItemNotes = typeof rawItem.notes === 'string' ? rawItem.notes.trim() : '';
         if (cleanItemNotes) {
           cleanItemNotes = cleanItemNotes
             .replace(/\(\s*\$\s*[\d.,]+\s*\)/gi, '')
@@ -4690,17 +4771,16 @@ Responde SOLO con el JSON válido.`;
 
         parsedCartItems.push({
           menuItem,
-          quantity: rawItem.quantity || 1,
-          preference: rawItem.preference || '',
+          quantity: Math.min(99, Math.max(1, Math.trunc(Number(rawItem.quantity) || 1))),
+          preference: typeof rawItem.preference === 'string' ? rawItem.preference.trim().slice(0, 300) : '',
           notes: cleanItemNotes,
           additions
         });
       }
 
-      let paymentMethod = rawJson.paymentMethod || null;
-      if (paymentMethod === 'NEQUI' || paymentMethod === 'CARD') {
-        paymentMethod = 'TRANSFER';
-      }
+      const paymentMethod = rawJson.paymentMethod === 'CASH' || rawJson.paymentMethod === 'TRANSFER'
+        ? rawJson.paymentMethod
+        : null;
 
       // Validar y resolver zoneId en base a las zonas de la base de datos
       let resolvedZoneId = rawJson.zoneId || null;
@@ -4716,11 +4796,8 @@ Responde SOLO con el JSON válido.`;
       }
 
       if (!resolvedZoneId && resolvedNeighborhood) {
-        const normSearch = resolvedNeighborhood.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
-        const matchedZone = dbZones.find(z => {
-          const zn = z.name.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
-          return zn === normSearch || zn.includes(normSearch) || normSearch.includes(zn);
-        });
+        const normSearch = this.normalizeSpanishLookup(resolvedNeighborhood);
+        const matchedZone = dbZones.find(z => this.normalizeSpanishLookup(z.name) === normSearch);
         if (matchedZone) {
           resolvedZoneId = matchedZone.id;
           resolvedNeighborhood = matchedZone.name;
@@ -4729,13 +4806,17 @@ Responde SOLO con el JSON válido.`;
 
       return {
         parsedCartItems,
-        detectedOrderType: rawJson.detectedOrderType || null,
-        independentNotes: rawJson.independentNotes || [],
-        customerName: rawJson.customerName || null,
-        customerPhone: rawJson.customerPhone || null,
-        customerAddress: rawJson.customerAddress || null,
-        customerAddressReference: rawJson.customerAddressReference || null,
-        customerNeighborhood: resolvedNeighborhood,
+        detectedOrderType: rawJson.detectedOrderType === 'delivery' || rawJson.detectedOrderType === 'pickup'
+          ? rawJson.detectedOrderType
+          : null,
+        independentNotes: Array.isArray(rawJson.independentNotes)
+          ? rawJson.independentNotes.filter((note: unknown) => typeof note === 'string').map((note: string) => note.trim().slice(0, 300)).filter(Boolean)
+          : [],
+        customerName: typeof rawJson.customerName === 'string' ? rawJson.customerName.trim().slice(0, 100) || null : null,
+        customerPhone: typeof rawJson.customerPhone === 'string' ? rawJson.customerPhone.trim().slice(0, 35) || null : null,
+        customerAddress: typeof rawJson.customerAddress === 'string' ? rawJson.customerAddress.trim().slice(0, 250) || null : null,
+        customerAddressReference: typeof rawJson.customerAddressReference === 'string' ? rawJson.customerAddressReference.trim().slice(0, 250) || null : null,
+        customerNeighborhood: typeof resolvedNeighborhood === 'string' ? resolvedNeighborhood.trim().slice(0, 120) || null : null,
         zoneId: resolvedZoneId,
         paymentMethod
       };
@@ -4840,10 +4921,10 @@ ${menuSummary}
                 }
               ]
             }],
-            generationConfig: {
+            generationConfig: this.buildGeminiGenerationConfig(model, {
               temperature: 0.3,
-              maxOutputTokens: 500
-            }
+              maxOutputTokens: 500,
+            })
           };
 
           const res = await fetch(url, {

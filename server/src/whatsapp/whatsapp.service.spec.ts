@@ -231,6 +231,90 @@ describe('WhatsApp Gemini settings', () => {
       .toThrow('El nombre del modelo de Gemini no es válido');
   });
 
+  it('upgrades only moving Gemini aliases to the exact stable model', async () => {
+    const appSetting = {
+      findUnique: jest.fn()
+        .mockResolvedValueOnce({ value: 'gemini-flash-lite-latest' })
+        .mockResolvedValueOnce({ value: 'gemini-2.5-flash' }),
+      upsert: jest.fn().mockResolvedValue(null),
+    };
+    const service = new WhatsappService(
+      { appSetting } as any,
+      { get: jest.fn() } as any,
+      { emitWhatsApp: jest.fn() } as any,
+    );
+
+    await (service as any).preferStableGeminiModel();
+    expect(appSetting.upsert).toHaveBeenCalledWith({
+      where: { key: 'gemini_model' },
+      create: { key: 'gemini_model', value: 'gemini-3.8-flash' },
+      update: { value: 'gemini-3.8-flash' },
+    });
+
+    appSetting.upsert.mockClear();
+    await (service as any).preferStableGeminiModel();
+    expect(appSetting.upsert).not.toHaveBeenCalled();
+  });
+
+  it('extracts an explicit neighborhood without treating payment data as part of its name', () => {
+    const service = createService();
+
+    expect((service as any).extractExplicitNeighborhood([
+      'Cra 56-34, barrio La Pradera y pago en efectivo',
+    ])).toBe('La Pradera');
+    expect((service as any).isMeaningfulGeminiReply('.')).toBe(false);
+    expect((service as any).isMeaningfulGeminiReply('Listo')).toBe(true);
+  });
+
+  it('hands the chat to an advisor when a model tries to invent a total', async () => {
+    const prisma: any = {
+      whatsAppMessage: {
+        findMany: jest.fn().mockResolvedValue([
+          { direction: 'IN', content: 'Dos perros sencillos a domicilio, barrio La Pradera.' },
+        ]),
+      },
+      menuItem: { findMany: jest.fn().mockResolvedValue([]) },
+      deliveryZone: { findMany: jest.fn().mockResolvedValue([{ id: 'zone-1', name: 'La Pradera', rate: 5000 }]) },
+      order: { findMany: jest.fn().mockResolvedValue([]) },
+      appSetting: {
+        findUnique: jest.fn().mockResolvedValue({ value: 'gemini-3.5-flash' }),
+        findMany: jest.fn().mockResolvedValue([]),
+        upsert: jest.fn().mockResolvedValue(null),
+        delete: jest.fn().mockResolvedValue(null),
+      },
+      whatsAppSession: { update: jest.fn().mockResolvedValue(null) },
+    };
+    const socketGateway = { emitWhatsApp: jest.fn() };
+    const service = new WhatsappService(prisma, { get: jest.fn() } as any, socketGateway as any);
+    const send = jest.spyOn(service, 'sendMessage').mockResolvedValue({ sent: true } as any);
+    const fetchSpy = jest.spyOn(global, 'fetch').mockResolvedValue({
+      ok: true,
+      json: jest.fn().mockResolvedValue({
+        candidates: [{ content: { parts: [{ text: 'El total a pagar es $15.000.' }] } }],
+      }),
+    } as any);
+
+    await (service as any).handleGeminiChatbot(
+      { id: 'chat-1', phone: '3001234567', customerName: 'José' },
+      'Dos perros sencillos a domicilio, barrio La Pradera.',
+      ['test-key'],
+    );
+
+    expect(send).toHaveBeenCalledWith(
+      '3001234567',
+      'Gracias. Un asesor verificará la tarifa, el tiempo y el total antes de confirmar tu pedido.',
+    );
+    expect(prisma.whatsAppSession.update).toHaveBeenCalledWith({
+      where: { id: 'chat-1' },
+      data: { waitingForAdvisor: true },
+    });
+    expect(socketGateway.emitWhatsApp).toHaveBeenCalledWith(
+      'whatsappAgentRequest',
+      expect.objectContaining({ sessionId: 'chat-1', waitingForAdvisor: true }),
+    );
+    fetchSpy.mockRestore();
+  });
+
   it('returns a safe diagnostic from a real provider-shaped response', async () => {
     const apiKey = 'test-secret-key-AB12';
     const prisma: any = {

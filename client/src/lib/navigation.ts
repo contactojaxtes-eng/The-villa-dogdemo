@@ -49,7 +49,7 @@ export const allNavItems: NavItem[] = [
   { href: '/chat', label: 'WhatsApp Chat', icon: MessageCircle, roles: ['ADMIN', 'DELIVERY_MANAGER', 'CASHIER'], permission: 'whatsapp.view', section: 'Principal', module: 'whatsapp' },
 
   // SECCIÓN GESTIÓN
-  { href: '/orders', label: 'Historial Domicilios', icon: ScrollText, roles: ['ADMIN', 'CASHIER', 'DELIVERY_MANAGER'], permission: 'orders.view', section: 'Gestion', module: 'orders_history' },
+  { href: '/orders', label: 'Historial Domicilios', icon: ScrollText, roles: ['ADMIN', 'CASHIER', 'DELIVERY_MANAGER', 'DISPATCHER'], permission: 'orders.view', section: 'Gestion', module: 'orders_history' },
   { href: '/tables/history', label: 'Historial Pedidos Mesa', icon: ScrollText, roles: ['ADMIN', 'CASHIER', 'WAITER'], permission: 'tables.view', section: 'Gestion', module: 'tables_history' },
   { href: '/customers', label: 'Clientes', icon: Users, roles: ['ADMIN', 'CASHIER', 'DELIVERY_MANAGER'], permission: 'customers.view', section: 'Gestion', module: 'customers' },
   { href: '/drivers', label: 'Domiciliarios', icon: Bike, roles: ['ADMIN', 'CASHIER', 'DISPATCHER'], permission: 'drivers.view', section: 'Gestion', module: 'drivers' },

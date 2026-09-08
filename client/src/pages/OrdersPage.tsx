@@ -37,7 +37,6 @@ import {
   DollarSign, 
   Edit,
   ClipboardList,
-  Key,
   AlertTriangle
 } from 'lucide-react'
 import { type Socket } from 'socket.io-client'
@@ -127,7 +126,7 @@ const stagger = {
 }
 
 export default function OrdersPage() {
-  const { user } = useAuth()
+  const { user, hasPermission } = useAuth()
   const [searchParams, setSearchParams] = useSearchParams()
   const [orders, setOrders] = useState<Order[]>([])
   const [loading, setLoading] = useState(true)
@@ -157,7 +156,6 @@ export default function OrdersPage() {
   const [collectReference, setCollectReference] = useState<string>('')
   const [isSubmittingPayment, setIsSubmittingPayment] = useState<boolean>(false)
   const [printInvoiceOnCollect, setPrintInvoiceOnCollect] = useState<boolean>(true)
-  const [kickDrawerOnCollect, setKickDrawerOnCollect] = useState<boolean>(true)
   const [dispatchDialog, setDispatchDialog] = useState<{ order: any; shouldKick: boolean } | null>(null)
   const [drivers, setDrivers] = useState<any[]>([])
   const [selectedDriverId, setSelectedDriverId] = useState<string>('')
@@ -601,26 +599,7 @@ export default function OrdersPage() {
           </div>
         </div>
         <div className="flex items-center gap-3">
-          {/* ABRIR MONEDERO */}
-          {(user?.role === 'CASHIER' || user?.role === 'ADMIN' || user?.role === 'SUPERADMIN') && (
-            <motion.div whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.97 }}>
-              <Button
-                onClick={async () => {
-                  const res = await openCashDrawer()
-                  if (res.ok) {
-                    alerts.success('Cajón Abierto', 'Se ha enviado la señal para abrir el monedero.')
-                  } else {
-                    alerts.error('Error', res.error || 'No se pudo abrir el cajón monedero.')
-                  }
-                }}
-                className="bg-zinc-800 text-white font-bold hover:bg-zinc-700 shadow-md rounded-xl h-11 px-5 gap-2 border border-zinc-700 cursor-pointer"
-              >
-                <Key className="h-4 w-4 text-amber-400" /> Abrir Cajón
-              </Button>
-            </motion.div>
-          )}
-
-          {user?.role !== 'CASHIER' && (
+          {hasPermission('orders.create') && (
             <Link to="/orders/new">
               <motion.div whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.97 }}>
                 <Button className="bg-[var(--accent)] text-[var(--accent-fg)] font-bold hover:bg-[var(--accent-hover)] shadow-lg shadow-[var(--accent)]/15 rounded-xl h-11 px-5 gap-2">
@@ -1103,10 +1082,10 @@ export default function OrdersPage() {
                         )}
 
                         {/* Action Tools */}
-                        {['SUPERADMIN', 'ADMIN', 'CASHIER', 'DELIVERY_MANAGER'].includes(user?.role || '') && (
+                        {(hasPermission('orders.reprint') || hasPermission('dispatch.change_status')) && (
                           <>
                             {/* Botón Impresora (Factura de Caja) - Visible para ADMIN, SUPERADMIN y CASHIER */}
-                            {['SUPERADMIN', 'ADMIN', 'CASHIER'].includes(user?.role || '') && (
+                            {hasPermission('orders.reprint') && (
                               <Button 
                                 size="sm" 
                                 variant="ghost" 
@@ -1133,7 +1112,7 @@ export default function OrdersPage() {
                               </Button>
                             )}
                             {/* Botón Trinche (Comanda de Cocina) - Visible para ADMIN, SUPERADMIN, CASHIER y DELIVERY_MANAGER */}
-                            {['SUPERADMIN', 'ADMIN', 'CASHIER', 'DELIVERY_MANAGER'].includes(user?.role || '') && (
+                            {(hasPermission('orders.reprint') || hasPermission('dispatch.change_status')) && (
                               <Button 
                                 size="sm" 
                                 variant="ghost" 
@@ -1146,7 +1125,7 @@ export default function OrdersPage() {
                             )}
                           </>
                         )}
-                        {['PENDING', 'PREPARING', 'READY', 'IN_ROUTE'].includes(order.status) && ['SUPERADMIN', 'ADMIN', 'CASHIER', 'DELIVERY_MANAGER', 'WAITER'].includes(user?.role || '') && (
+                        {hasPermission('orders.edit') && ['PENDING', 'PREPARING', 'READY', 'IN_ROUTE'].includes(order.status) && (
                           <>
                             <Link
                               to={order.tableId ? `/tables/new?tableId=${order.tableId}&editOrderId=${order.id}` : `/orders/new?edit=${order.id}`}
@@ -1622,7 +1601,7 @@ export default function OrdersPage() {
                   <Button variant="outline" className="flex-1 rounded-xl h-10 font-bold text-xs cursor-pointer" onClick={() => setDetailOrder(null)}>
                     Cerrar
                   </Button>
-                  <Button className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl h-10 px-4 text-xs gap-1 cursor-pointer"
+                  {(hasPermission('orders.reprint') || hasPermission('dispatch.change_status')) && <Button className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl h-10 px-4 text-xs gap-1 cursor-pointer"
                     onClick={() => {
                       const orderWithDriver = {
                         ...o,
@@ -1631,7 +1610,7 @@ export default function OrdersPage() {
                       printComandaSmart(orderWithDriver, 'caja', user?.role, false, false);
                     }}>
                     <Printer className="h-4 w-4" /> Imprimir Factura
-                  </Button>
+                  </Button>}
                 </div>
               </div>
             )

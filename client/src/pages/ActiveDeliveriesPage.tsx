@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, useRef } from 'react'
-import { Link, useNavigate, useSearchParams } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -11,7 +11,6 @@ import { useAuth } from '@/hooks/useAuth'
 import { statusAccent, statusOrder } from '@/lib/brand'
 import { formatCurrency, formatDate, getStatusColor, getStatusLabel, cleanNotes, groupOrderItems, formatThousandsInput, parseThousandsInput } from '@/lib/utils'
 import { 
-  Plus, 
   Search, 
   RefreshCw, 
   Clock, 
@@ -36,7 +35,6 @@ import {
   DollarSign, 
   Edit,
   ClipboardList,
-  Key,
   AlertTriangle
 } from 'lucide-react'
 import { type Socket } from 'socket.io-client'
@@ -125,7 +123,7 @@ const stagger = {
 }
 
 export default function ActiveDeliveriesPage() {
-  const { user } = useAuth()
+  const { user, hasPermission } = useAuth()
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
   const [orders, setOrders] = useState<Order[]>([])
@@ -147,7 +145,6 @@ export default function ActiveDeliveriesPage() {
   const [courtesyItemIds, setCourtesyItemIds] = useState<string[]>([])
   const [isSubmittingPayment, setIsSubmittingPayment] = useState<boolean>(false)
   const [printInvoiceOnCollect, setPrintInvoiceOnCollect] = useState<boolean>(true)
-  const [kickDrawerOnCollect, setKickDrawerOnCollect] = useState<boolean>(true)
   const [dispatchDialog, setDispatchDialog] = useState<{ order: any; shouldKick: boolean } | null>(null)
   const [drivers, setDrivers] = useState<any[]>([])
   const [selectedDriverId, setSelectedDriverId] = useState<string>('')
@@ -593,18 +590,9 @@ export default function ActiveDeliveriesPage() {
               </>
             )}
           </div>
-          {(user?.role === 'CASHIER' || user?.role === 'ADMIN' || user?.role === 'SUPERADMIN') && (
-            <Button size="sm" onClick={async () => { const res = await openCashDrawer(); if (res.ok) alerts.success('Cajón Abierto', 'Señal enviada.'); else alerts.error('Error', res.error || 'No se pudo abrir.'); }}
-              className="bg-zinc-800 text-white font-bold hover:bg-zinc-700 rounded-xl h-9 px-3 gap-1.5 border border-zinc-700 cursor-pointer text-xs">
-              <Key className="h-3.5 w-3.5 text-amber-400" /> Cajón
-            </Button>
-          )}
-          <Link to="/orders/new">
-            <Button size="sm" className="bg-[var(--accent)] text-[var(--accent-fg)] font-bold hover:bg-[var(--accent-hover)] rounded-xl h-9 px-3 gap-1.5 text-xs">
-              <Plus className="h-3.5 w-3.5" /> Nuevo
-            </Button>
-          </Link>
           <Button size="sm" variant="outline" onClick={() => { setSearchQuery(''); setSubmittedSearch(''); }}
+            title="Limpiar búsqueda"
+            aria-label="Limpiar búsqueda"
             className="rounded-xl h-9 px-2 border-[var(--border-subtle)] text-[var(--text-muted)] hover:text-[var(--text-primary)]">
             <RefreshCw className="h-3.5 w-3.5" />
           </Button>
@@ -716,7 +704,7 @@ export default function ActiveDeliveriesPage() {
                                 <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg border text-[10px] font-bold text-blue-600 bg-blue-500/10 border-blue-500/30">
                                   {order.orderType === 'PICKUP' ? 'Pasar a Recoger' : 'Mostrador'}
                                 </span>
-                                {order.orderType === 'PICKUP' && order.status !== 'READY' && order.status !== 'DELIVERED' && order.status !== 'CANCELLED' && (
+                                {hasPermission('dispatch.change_status') && order.orderType === 'PICKUP' && order.status !== 'READY' && order.status !== 'DELIVERED' && order.status !== 'CANCELLED' && (
                                   <Button
                                     size="sm"
                                     onClick={() => handleMarkPickupReady(order)}
@@ -741,7 +729,7 @@ export default function ActiveDeliveriesPage() {
                                 <Bike className="h-3 w-3" />
                                 <span>{order.deliveryDriver ? order.deliveryDriver.name : 'Sin Repartidor'}</span>
                               </span>
-                            ) : (
+                            ) : hasPermission('dispatch.change_status') ? (
                               <button
                                 onClick={() => {
                                   setSelectedDriverId(order.deliveryDriverId || '')
@@ -761,6 +749,11 @@ export default function ActiveDeliveriesPage() {
                                 <Bike className="h-3 w-3" />
                                 <span>{order.deliveryDriver ? order.deliveryDriver.name : '⚠ Asignar'}</span>
                               </button>
+                            ) : (
+                              <span className="text-[10px] font-bold px-2 py-0.5 rounded-lg border text-[var(--text-muted)] bg-[var(--bg-subtle)] border-[var(--border-subtle)] inline-flex items-center gap-1">
+                                <Bike className="h-3 w-3" />
+                                <span>{order.deliveryDriver?.name || 'Sin repartidor'}</span>
+                              </span>
                             )}
                           </td>
                           <td className="px-3 py-2.5 text-right">
@@ -787,7 +780,7 @@ export default function ActiveDeliveriesPage() {
                                   <DollarSign className="h-3 w-3" /> Cobrar
                                 </Button>
                               )}
-                              <Button 
+                              {(hasPermission('orders.reprint') || hasPermission('dispatch.change_status')) && <Button
                                 size="sm" 
                                 variant="ghost" 
                                 title="Imprimir Factura Domicilio"
@@ -801,8 +794,8 @@ export default function ActiveDeliveriesPage() {
                                 }}
                               >
                                 <Printer className="h-3.5 w-3.5" />
-                              </Button>
-                               {order.status !== 'CANCELLED' && order.status !== 'DELIVERED' && (
+                              </Button>}
+                               {hasPermission('orders.edit') && order.status !== 'CANCELLED' && order.status !== 'DELIVERED' && (
                                  <Button 
                                    size="sm" 
                                    variant="ghost" 
@@ -1055,7 +1048,7 @@ export default function ActiveDeliveriesPage() {
                     </SelectContent>
                   </Select>
                 </div>
-                <button type="button" onClick={() => setRegisteringDriverInline(true)} className="text-xs text-[var(--accent)] hover:text-[var(--accent-hover)] font-bold cursor-pointer border-0 bg-transparent">+ Registrar nuevo repartidor</button>
+                {hasPermission('drivers.manage') && <button type="button" onClick={() => setRegisteringDriverInline(true)} className="text-xs text-[var(--accent)] hover:text-[var(--accent-hover)] font-bold cursor-pointer border-0 bg-transparent">+ Registrar nuevo repartidor</button>}
               </>
             ) : (
               <div className="space-y-3 p-3 rounded-xl bg-[var(--bg-subtle)] border border-[var(--border-subtle)]">
@@ -1207,7 +1200,7 @@ export default function ActiveDeliveriesPage() {
                         <DollarSign className="h-3.5 w-3.5" /> Cobrar
                       </Button>
                     )}
-                    {o.orderType !== 'PICKUP' && o.orderType !== 'LOCAL' && activeStatuses.includes(o.status) && (
+                    {hasPermission('dispatch.change_status') && o.orderType !== 'PICKUP' && o.orderType !== 'LOCAL' && activeStatuses.includes(o.status) && (
                       <Button size="sm" variant="outline" className={`h-9 px-4 text-xs font-bold rounded-xl gap-1.5 cursor-pointer ${o.deliveryDriver ? 'border-emerald-500/30 text-emerald-600 hover:bg-emerald-500/10' : 'border-amber-500/30 text-amber-600 hover:bg-amber-500/10'}`}
                         onClick={() => { setDetailOrder(null); setSelectedDriverId(o.deliveryDriverId || ''); setRegisteringDriverInline(false); setDispatchError(''); setDispatchDialog({ order: o, shouldKick: false }); }}
                         title={o.deliveryDriver ? 'Cambiar repartidor' : 'Asignar repartidor'}>
@@ -1215,18 +1208,20 @@ export default function ActiveDeliveriesPage() {
                         {o.deliveryDriver ? `Repartidor: ${o.deliveryDriver.name}` : 'Asignar Repartidor'}
                       </Button>
                     )}
-                    {o.status !== 'CANCELLED' && o.status !== 'DELIVERED' && (
+                    {hasPermission('orders.edit') && o.status !== 'CANCELLED' && o.status !== 'DELIVERED' && (
                       <Button size="sm" variant="outline" className="h-9 px-4 text-xs font-bold rounded-xl gap-1.5 cursor-pointer border-amber-500/30 text-amber-600 hover:bg-amber-500/10"
                         onClick={() => { setDetailOrder(null); navigate(`/orders/new?edit=${o.id}`) }}
                         title="Editar pedido">
                         <Edit className="h-3.5 w-3.5" /> Editar Pedido
                       </Button>
                     )}
-                    <a href={whatsapp} target="_blank" rel="noreferrer">
-                      <Button size="sm" variant="outline" className="h-9 px-4 text-xs font-bold rounded-xl gap-1.5 cursor-pointer border-emerald-500/30 text-emerald-600 hover:bg-emerald-500/10">
-                        <MessageCircle className="h-3.5 w-3.5" /> WhatsApp
-                      </Button>
-                    </a>
+                    {hasPermission('whatsapp.reply') && (
+                      <a href={whatsapp} target="_blank" rel="noreferrer">
+                        <Button size="sm" variant="outline" className="h-9 px-4 text-xs font-bold rounded-xl gap-1.5 cursor-pointer border-emerald-500/30 text-emerald-600 hover:bg-emerald-500/10">
+                          <MessageCircle className="h-3.5 w-3.5" /> WhatsApp
+                        </Button>
+                      </a>
+                    )}
                     {activeStatuses.includes(o.status) && ['SUPERADMIN', 'ADMIN'].includes(user?.role || '') && (
                       <Button size="sm" variant="outline" className="h-9 px-4 text-xs font-bold rounded-xl gap-1.5 cursor-pointer border-red-500/30 text-red-500 hover:bg-red-500/10"
                         onClick={() => { setDetailOrder(null); setCancelDialog({ id: o.id, orderNumber: o.orderNumber }); setCancelConfirmStep(false); setCancelReason(''); }}>

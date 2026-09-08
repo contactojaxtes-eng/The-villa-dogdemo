@@ -280,6 +280,42 @@ function normalizeText(text: string): string {
     .trim()
 }
 
+function extractPaymentMethod(text: string): 'CASH' | 'TRANSFER' | null {
+  const matches = Array.from(text.matchAll(/\b(efectivo|transferencia|transferir|nequi|daviplata|bancolombia)\b/gi))
+  const last = matches[matches.length - 1]?.[1]?.toLowerCase()
+  if (!last) return null
+  return last === 'efectivo' ? 'CASH' : 'TRANSFER'
+}
+
+function extractOrderType(text: string): 'delivery' | 'pickup' | null {
+  const matches = Array.from(text.matchAll(/\b(domicilio|domicili[oa]|enviar(?:lo)?|pasar a recoger|recoger(?:lo)?|recojo|voy por (?:el|mi) pedido)\b/gi))
+  const last = matches[matches.length - 1]?.[1]?.toLowerCase() || ''
+  if (!last) return null
+  return /recoger|recojo|voy por/.test(last) ? 'pickup' : 'delivery'
+}
+
+function extractNeighborhood(text: string): string | null {
+  const matches = Array.from(text.matchAll(/\bbarrio\s*[:\-]?\s+([^,\n.;]+)/gi))
+  const raw = matches[matches.length - 1]?.[1] || ''
+  const value = raw
+    .split(/\b(?:direcci[oó]n|pago|efectivo|transferencia|nequi|daviplata|bancolombia|calle|cl|carrera|cra|cr|diagonal|dg|transversal|tv|avenida|av|manzana|mz)\b/i)[0]
+    .replace(/\s+(?:y|con)\s*$/i, '')
+    .trim()
+  return value.length >= 2 ? value : null
+}
+
+function extractStreetAddress(text: string): string | null {
+  const explicitMatches = Array.from(text.matchAll(/\bdirecci[oó]n\s*[:\-]?\s+([^\n,;]+)/gi))
+  const streetMatches = Array.from(text.matchAll(/\b(?:calle|cl|carrera|cra|cr|diagonal|dg|transversal|tv|avenida|av|manzana|mz)\s*[:#\-]?\s*[^\n,;]+/gi))
+  const raw = explicitMatches[explicitMatches.length - 1]?.[1] || streetMatches[streetMatches.length - 1]?.[0] || ''
+  const value = raw
+    .split(/\bbarrio\b/i)[0]
+    .split(/\b(?:pago|efectivo|transferencia|nequi|daviplata|bancolombia)\b/i)[0]
+    .replace(/\s+(?:y|con)\s*$/i, '')
+    .trim()
+  return value.length >= 3 ? value : null
+}
+
 interface ParsedOrderResponse {
   parsedCartItems: {
     menuItem: MenuItem;
@@ -296,7 +332,7 @@ interface ParsedOrderResponse {
   customerAddressReference?: string | null;
   customerNeighborhood?: string | null;
   zoneId?: string | null;
-  paymentMethod?: 'CASH' | 'NEQUI' | 'CARD' | null;
+  paymentMethod?: 'CASH' | 'TRANSFER' | null;
 }
 
 function AdditionDropdown({
@@ -514,7 +550,9 @@ export default function NewOrderPage({
 
   const [showNotes, setShowNotes] = useState<Record<string, boolean>>({})
   const [isCartDrawerOpen, setIsCartDrawerOpen] = useState(false)
-  const [initialLoading, setInitialLoading] = useState(globalCategoriesCache.length === 0)
+  const [initialLoading, setInitialLoading] = useState(
+    globalCategoriesCache.length === 0 || globalZonesCache.length === 0
+  )
   const [editOrderLoaded, setEditOrderLoaded] = useState(false)
 
   // Live WhatsApp Chat Drawer State
@@ -541,11 +579,13 @@ export default function NewOrderPage({
 
   const [quickText, setQuickText] = useState('')
   const [parsingQuickText, setParsingQuickText] = useState(false)
+  const [parsingChatOrder, setParsingChatOrder] = useState(false)
   const [suggestedProducts, setSuggestedProducts] = useState<MenuItem[]>([])
   const [lastOrderItems, setLastOrderItems] = useState<any[]>([])
   const [lastOrderDate, setLastOrderDate] = useState<string>('')
   const [isVoiceSearchingMenu, setIsVoiceSearchingMenu] = useState(false)
   const lastParsedSessionIdRef = useRef<string | null>(null)
+  const restoredDraftUpdatedAtRef = useRef(0)
 
   useEffect(() => {
     cleanupStaleChatDrafts()
@@ -789,6 +829,7 @@ export default function NewOrderPage({
     if (editOrderId) return
     setDraftLoaded(false)
     setHasRestoredDraft(false)
+    restoredDraftUpdatedAtRef.current = 0
     const resetDraftState = () => {
       setCustomerName('')
       setCustomerPhone('')
@@ -842,7 +883,14 @@ export default function NewOrderPage({
         setCart(consolidateCart(cartWithIds))
         setOrderType(draft.orderType === 'pickup' || draft.orderType === 'mostrador' ? 'pickup' : 'delivery')
         if (draft.clientMutationId) setClientMutationId(draft.clientMutationId)
-        setHasRestoredDraft(true)
+        const hasUsefulDraft = cartWithIds.length > 0
+          || Boolean((draft.exactAddress || '').trim())
+          || Boolean((draft.addressReference || '').trim())
+          || Boolean((draft.zoneId || '').trim())
+          || Boolean((draft.paymentReference || '').trim())
+          || Boolean((draft.notes || '').trim())
+        restoredDraftUpdatedAtRef.current = Number(draft.updatedAt || 0)
+        setHasRestoredDraft(hasUsefulDraft)
       } catch {
         localStorage.removeItem(activeDraftKey)
         resetDraftState()
@@ -988,10 +1036,9 @@ export default function NewOrderPage({
       setMapSearch(urlZone)
       setZoneSearch(urlZone)
       if (zones.length > 0) {
-        const normUrlZone = urlZone.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim()
+        const normUrlZone = normalizeText(urlZone)
         const matchedZone = zones.find(z => {
-          const normZ = z.name.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim()
-          return normZ === normUrlZone || normUrlZone.includes(normZ) || normZ.includes(normUrlZone)
+          return normalizeText(z.name) === normUrlZone
         })
         if (matchedZone) {
           setZoneId(matchedZone.id)
@@ -1415,10 +1462,10 @@ export default function NewOrderPage({
       matchedZone = zones.find(z => z.id === extZoneId)
     }
     if (!matchedZone && extNeighborhood) {
-      const normNeigh = extNeighborhood.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim()
+      const normNeigh = extNeighborhood.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, ' ').trim()
       matchedZone = zones.find(z => {
-        const zn = z.name.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim()
-        return zn === normNeigh || zn.includes(normNeigh) || normNeigh.includes(zn)
+        const zn = z.name.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, ' ').trim()
+        return zn === normNeigh
       })
     }
 
@@ -1529,7 +1576,7 @@ export default function NewOrderPage({
 }
 
   useEffect(() => {
-    if (editOrderId || !draftLoaded || loadedDraftKey !== activeDraftKey || hasRestoredDraft) return
+    if (editOrderId || initialLoading || !draftLoaded || loadedDraftKey !== activeDraftKey) return
 
     if (chatSessionId && categories.length > 0 && lastParsedSessionIdRef.current !== chatSessionId) {
       lastParsedSessionIdRef.current = chatSessionId
@@ -1539,17 +1586,20 @@ export default function NewOrderPage({
       const initialUrlName = initialName
       const initialUrlPhone = initialPhone
 
-      // Limpiar el carrito y datos previos para esta orden nueva desde el chat de WhatsApp
-      setCart([])
-      setCustomerName(initialUrlName || '')
-      setCustomerPhone(initialUrlPhone || '')
-      setExactAddress(initialUrlAddress || '')
-      setAddressReference('')
-      setZoneId('')
-      setZoneSearch(initialUrlZone || '')
-      setMapSearch(initialUrlZone || '')
-      setNotes('')
+      // Un borrador útil se conserva; uno vacío no debe impedir que se lea el chat.
+      if (!hasRestoredDraft) {
+        setCart([])
+        setCustomerName(initialUrlName || '')
+        setCustomerPhone(initialUrlPhone || '')
+        setExactAddress(initialUrlAddress || '')
+        setAddressReference('')
+        setZoneId('')
+        setZoneSearch(initialUrlZone || '')
+        setMapSearch(initialUrlZone || '')
+        setNotes('')
+      }
 
+      setParsingChatOrder(true)
       Promise.all([
         api.get<any>(`/whatsapp/sessions/${chatSessionId}`),
         api.get<any[]>(`/whatsapp/sessions/${chatSessionId}/messages`)
@@ -1573,22 +1623,25 @@ export default function NewOrderPage({
             }
           }
 
-          // 1. Encontrar si en el chat hay mensajes de confirmación de pedido o cancelación previos
+          const isPersistedOrderMessage = (message: any) => {
+            if (message?.direction !== 'OUT') return false
+            const content = String(message?.content || '').toLowerCase()
+            const hasOrderNumber = /pedido\s*#\s*\d+/.test(content)
+            return hasOrderNumber && (
+              content.includes('ha sido recibido') ||
+              content.includes('está siendo preparado') ||
+              content.includes('ha sido actualizado') ||
+              content.includes('ha sido cancelado') ||
+              content.includes('ya va en camino') ||
+              content.includes('ha sido entregado')
+            )
+          }
+
+          // Cortar solo después de una confirmación real generada al guardar un
+          // pedido. Una frase del bot con "total" no significa que ya exista.
           let lastOrderMsgIndex = -1
           for (let i = 0; i < messages.length; i++) {
-            const content = (messages[i].content || '').toLowerCase()
-            if (
-              content.includes('tu pedido #') ||
-              content.includes('detalle de tu pedido') ||
-              content.includes('pedido ha sido cancelado') ||
-              content.includes('pedido ya va en camino') ||
-              content.includes('pedido ha sido entregado') ||
-              content.includes('total a pagar') ||
-              content.includes('valor del pedido') ||
-              content.includes('factura:')
-            ) {
-              lastOrderMsgIndex = i
-            }
+            if (isPersistedOrderMessage(messages[i])) lastOrderMsgIndex = i
           }
 
           // Solo tomar mensajes del pedido actual:
@@ -1619,17 +1672,13 @@ export default function NewOrderPage({
               if (!txt) return false
               const txtLower = txt.toLowerCase()
               if (
+                isPersistedOrderMessage(m) ||
                 txt.startsWith('Plantilla Meta:') || 
                 txt.startsWith('Welcome') || 
                 txt.includes('sistemaniche.com') ||
-                txtLower.includes('tu pedido #') ||
-                txtLower.includes('detalle de tu pedido') ||
-                txtLower.includes('total a pagar') ||
-                txtLower.includes('valor del pedido') ||
                 txtLower.includes('pedido ha sido cancelado') ||
                 txtLower.includes('pedido ya va en camino') ||
-                txtLower.includes('pedido ha sido entregado') ||
-                txtLower.includes('factura:')
+                txtLower.includes('pedido ha sido entregado')
               ) return false
               return true
             })
@@ -1639,11 +1688,23 @@ export default function NewOrderPage({
           const hasIncomingCustomerMsg = recentMessages.some(m => m.direction === 'IN')
           if (recentMessages.length === 0 || !hasIncomingCustomerMsg) return
 
+          const latestIncomingAt = recentMessages
+            .filter(m => m.direction === 'IN')
+            .reduce((latest, message) => Math.max(latest, new Date(message.createdAt).getTime() || 0), 0)
+          if (hasRestoredDraft && restoredDraftUpdatedAtRef.current >= latestIncomingAt) return
+
           const customerText = recentMessages
             .filter(m => {
               const cLower = (m.content || '').toLowerCase()
               if (m.direction === 'OUT') {
-                if (cLower.includes('menu digital') || cLower.includes('menú digital') || cLower.includes('opcion 1') || cLower.includes('opción 1')) return false
+                if (
+                  cLower.includes('menu digital') ||
+                  cLower.includes('menú digital') ||
+                  cLower.includes('menú y precios villa dog') ||
+                  cLower.includes('opcion 1') ||
+                  cLower.includes('opción 1') ||
+                  String(m.content || '').length > 1200
+                ) return false
               }
               return true
             })
@@ -1665,15 +1726,18 @@ export default function NewOrderPage({
 
             let { parsedCartItems, detectedOrderType, paymentMethod: extPaymentMethod, independentNotes, customerName: extName, customerPhone: extPhone, customerAddress: extAddress, customerAddressReference: extAddressRef, customerNeighborhood: extNeighborhood, zoneId: extZoneId } = dataToApply
 
+            detectedOrderType ||= extractOrderType(incomingCustomerOnlyText)
+            extPaymentMethod ||= extractPaymentMethod(incomingCustomerOnlyText)
+            extNeighborhood ||= extractNeighborhood(incomingCustomerOnlyText)
+            extAddress ||= extractStreetAddress(incomingCustomerOnlyText)
+
             // Fallback regex for address & neighborhood if empty
             if (!extAddress && !initialUrlAddress) {
-              const streetMatch = customerText.match(/\b(calle|cl|carrera|cra|diagonal|dg|transversal|tv|avenida|av|manzana|mz|lote)\s+[\w\d\s#-]{3,40}/i)
-              if (streetMatch) extAddress = streetMatch[0].trim()
+              extAddress = extractStreetAddress(incomingCustomerOnlyText)
             }
 
             if (!extNeighborhood && !initialUrlZone) {
-              const barrioMatch = customerText.match(/\bbarrio\s+([a-záéíóúñ0-9\s]{3,30})/i)
-              if (barrioMatch) extNeighborhood = barrioMatch[1].trim()
+              extNeighborhood = extractNeighborhood(incomingCustomerOnlyText)
             }
 
             if (extName && extName.trim() && !initialUrlName) {
@@ -1692,10 +1756,10 @@ export default function NewOrderPage({
               matchedZone = zones.find(z => z.id === extZoneId)
             }
             if (!matchedZone && extNeighborhood) {
-              const normNeigh = extNeighborhood.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim()
+              const normNeigh = extNeighborhood.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, ' ').trim()
               matchedZone = zones.find(z => {
-                const zn = z.name.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim()
-                return zn === normNeigh || zn.includes(normNeigh) || normNeigh.includes(zn)
+                const zn = z.name.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, ' ').trim()
+                return zn === normNeigh
               })
             }
 
@@ -1808,16 +1872,22 @@ export default function NewOrderPage({
 
               if (newCart.length > 0) {
                 setCart(consolidateCart(newCart))
+                if (embedded) setStep('delivery')
               }
             }
           }
 
-          // Enviar a la IA para obtener el pedido 100% exacto sin parpadeos ni cambios raros de productos
-          api.post<ParsedOrderResponse>('/whatsapp/parse-order', { text: customerText })
+          // Mostrar inmediatamente lo reconocido y completar los datos con Gemini en segundo plano.
+          if (localParsed) applyData(localParsed)
+
+          return api.post<ParsedOrderResponse>('/whatsapp/parse-order', { text: customerText })
             .then(parsed => {
-              if (parsed && parsed.parsedCartItems && parsed.parsedCartItems.length > 0) {
-                applyData(parsed)
-              } else if (localParsed && localParsed.parsedCartItems && localParsed.parsedCartItems.length > 0) {
+              if (parsed) {
+                const parsedWithFallback = parsed.parsedCartItems?.length > 0
+                  ? parsed
+                  : { ...parsed, parsedCartItems: localParsed?.parsedCartItems || [] }
+                applyData(parsedWithFallback)
+              } else if (localParsed) {
                 applyData(localParsed)
               }
             })
@@ -1828,9 +1898,13 @@ export default function NewOrderPage({
               }
             })
         })
-        .catch(err => console.error('Error fetching chat messages for autocomplete:', err))
+        .catch(err => {
+          lastParsedSessionIdRef.current = null
+          console.error('Error fetching chat messages for autocomplete:', err)
+        })
+        .finally(() => setParsingChatOrder(false))
     }
-  }, [chatSessionId, categories, editOrderLoaded, editOrderId, draftLoaded, loadedDraftKey, activeDraftKey, hasRestoredDraft, initialAddress, initialZone, initialName, initialPhone])
+  }, [chatSessionId, categories, zones, editOrderLoaded, editOrderId, draftLoaded, loadedDraftKey, activeDraftKey, hasRestoredDraft, initialLoading, initialAddress, initialZone, initialName, initialPhone])
 
   useEffect(() => {
     if (editOrderId || !draftLoaded || loadedDraftKey !== activeDraftKey) return
@@ -2322,8 +2396,9 @@ export default function NewOrderPage({
   const missingFields = [
     orderType !== 'delivery' && !customerName && 'cliente',
     !customerPhone && 'teléfono',
-    orderType === 'delivery' && !zoneSearch.trim() && 'barrio o dirección',
-    orderType === 'delivery' && (!zoneRateEdit || isNaN(parseFloat(zoneRateEdit))) && 'valor domicilio',
+    orderType === 'delivery' && !zoneSearch.trim() && 'barrio',
+    orderType === 'delivery' && !exactAddress.trim() && 'dirección exacta',
+    orderType === 'delivery' && (!zoneRateEdit || !Number.isFinite(parseFloat(zoneRateEdit)) || parseFloat(zoneRateEdit) <= 0) && 'tarifa confirmada',
     cart.length === 0 && 'productos',
   ].filter(Boolean)
 
@@ -2514,6 +2589,22 @@ export default function NewOrderPage({
       const isRealPhone = cleanDigits.length >= 7 && cleanDigits.length <= 12 && cleanDigits !== '3000000000' && cleanDigits !== '0000000000'
       if (!isRealPhone) {
         setError('Por favor ingresa el número de celular del cliente (10 dígitos) para el domiciliario.')
+        submittingRef.current = false
+        return
+      }
+      if (!zoneSearch.trim()) {
+        setError('Selecciona o escribe el barrio del domicilio.')
+        submittingRef.current = false
+        return
+      }
+      if (!exactAddress.trim()) {
+        setError('Ingresa la dirección exacta para que el domiciliario pueda entregar el pedido.')
+        submittingRef.current = false
+        return
+      }
+      const confirmedDeliveryFee = Number(zoneRateEdit)
+      if (!Number.isFinite(confirmedDeliveryFee) || confirmedDeliveryFee <= 0) {
+        setError('Selecciona una zona configurada o escribe la tarifa de domicilio confirmada por el asesor.')
         submittingRef.current = false
         return
       }
@@ -3241,7 +3332,7 @@ const renderDeliveryCard = () => {
                   zones={uniqueZones}
                 />
                 <p className="text-[10px] text-[var(--text-muted)] leading-relaxed mt-0.5">
-                  Busca un barrio de Montería o escribe uno nuevo. Si no existe en el sistema, se creará automáticamente.
+                  Selecciona un barrio configurado. Si no aparece, escribe el barrio y confirma manualmente la tarifa antes de crear el pedido.
                 </p>
               </div>
 
@@ -3274,7 +3365,7 @@ const renderDeliveryCard = () => {
                   </Label>
                   <Input
                     type="number"
-                    min={0}
+                    min={500}
                     step={500}
                     value={zoneRateEdit}
                     onChange={e => setZoneRateEdit(e.target.value)}
@@ -3694,9 +3785,14 @@ const renderDeliveryCard = () => {
               {editOrderId ? 'EDITAR PEDIDO' : embedded ? 'PEDIDO RÁPIDO' : 'NUEVO PEDIDO'}
             </h2>
             {embedded && (
-              <p className="mt-1 max-w-[56vw] truncate text-[10px] font-semibold text-[var(--text-muted)]">
-                {customerName || initialName ? `Para ${customerName || initialName} · ` : ''}el borrador se guarda automáticamente
-              </p>
+              <div className="mt-1 flex max-w-[60vw] items-center gap-1.5 text-[10px] font-semibold text-[var(--text-muted)]">
+                {parsingChatOrder && <Loader2 className="h-3 w-3 shrink-0 animate-spin text-[var(--accent)]" />}
+                <span className="truncate">
+                  {parsingChatOrder
+                    ? 'Leyendo productos y datos del chat…'
+                    : `${customerName || initialName ? `Para ${customerName || initialName} · ` : ''}borrador guardado automáticamente`}
+                </span>
+              </div>
             )}
           </div>
         </div>
