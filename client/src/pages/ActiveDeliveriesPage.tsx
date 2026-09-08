@@ -79,6 +79,8 @@ interface Order {
 
 const IMPOCONSUMO_RATE = 0.08
 const activeStatuses = ['PENDING', 'READY', 'IN_ROUTE']
+const DISPATCH_WARNING_MINUTES = 10
+const DISPATCH_ALERT_MINUTES = 15
 
 const statusIcons: Record<string, any> = {
   PENDING: Clock,
@@ -104,12 +106,22 @@ const estimatedDeliveryTimes: Record<string, string> = {
 }
 
 function getElapsedTime(createdAt: string): string {
-  const diff = Date.now() - new Date(createdAt).getTime()
+  const diff = Math.max(0, Date.now() - new Date(createdAt).getTime())
   const minutes = Math.floor(diff / 60000)
   if (minutes < 1) return 'Ahora'
   if (minutes < 60) return `${minutes} min`
   const hours = Math.floor(minutes / 60)
   return `${hours}h ${minutes % 60}m`
+}
+
+function getElapsedMinutes(createdAt: string): number {
+  const timestamp = new Date(createdAt).getTime()
+  if (!Number.isFinite(timestamp)) return 0
+  return Math.max(0, Math.floor((Date.now() - timestamp) / 60000))
+}
+
+function isWaitingForDispatch(order: Order): boolean {
+  return ['RECEIVED', 'PENDING', 'READY'].includes(order.status)
 }
 
 const fadeUp = {
@@ -132,7 +144,7 @@ export default function ActiveDeliveriesPage() {
   const [submittedSearch, setSubmittedSearch] = useState(() => searchParams.get('search') || '')
   const [updatingId, setUpdatingId] = useState<string | null>(null)
   const [statusFilter, setStatusFilter] = useState<'ALL' | 'PENDING' | 'READY' | 'IN_ROUTE'>('ALL')
-  const [, setTick] = useState(0)
+  const [clockTick, setTick] = useState(0)
   const [activeOperators, setActiveOperators] = useState<Record<string, { userId: string; userName: string }>>({})
   const [cancelDialog, setCancelDialog] = useState<{ id: string; orderNumber: number } | null>(null)
   const [cancelReason, setCancelReason] = useState('')
@@ -452,8 +464,7 @@ export default function ActiveDeliveriesPage() {
   // antigua del parámetro `search`.
   const visibleOrders = useMemo(() => {
     const query = submittedSearch.trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-    if (!query) return orders
-    return orders.filter(order => {
+    const matchingOrders = !query ? [...orders] : orders.filter(order => {
       const itemText = (order.items || []).map(item => item.menuItem?.name || '').join(' ')
       const haystack = [
         order.orderNumber,
@@ -465,6 +476,13 @@ export default function ActiveDeliveriesPage() {
         itemText,
       ].filter(Boolean).join(' ').toString().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
       return haystack.includes(query)
+    })
+
+    // Cola FIFO: el pedido que entró primero permanece arriba y cada pedido
+    // nuevo se agrega al final, incluso después de refrescos por Socket.IO.
+    return matchingOrders.sort((a, b) => {
+      const byTime = new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+      return byTime || a.orderNumber - b.orderNumber
     })
   }, [orders, submittedSearch])
 
@@ -555,8 +573,9 @@ export default function ActiveDeliveriesPage() {
       active: orders.filter(order => activeStatuses.includes(order.status)).length,
       delivered: orders.filter(order => order.status === 'DELIVERED').length,
       transfer: orders.filter(order => order.paymentMethod === 'TRANSFER').length,
+      urgent: orders.filter(order => isWaitingForDispatch(order) && getElapsedMinutes(order.createdAt) >= DISPATCH_ALERT_MINUTES).length,
     }
-  }, [orders])
+  }, [orders, clockTick])
 
   const statusCounts = useMemo(() => {
     return statusOrder.reduce<Record<string, number>>((acc, status) => {
@@ -599,7 +618,7 @@ export default function ActiveDeliveriesPage() {
           </div>
           <div>
             <h2 className="antifont text-2xl md:text-3xl tracking-wider text-[var(--text-primary)] leading-none uppercase">Despachos Activos</h2>
-            <p className="text-xs text-[var(--text-secondary)]">{submittedSearch ? `${visibleOrders.length} coincidencias de ` : ''}{orders.length} pedidos en curso</p>
+            <p className="text-xs text-[var(--text-secondary)]">Cola por orden de llegada · el más antiguo se atiende primero</p>
           </div>
         </div>
         <div className="flex items-center gap-2">
@@ -609,6 +628,15 @@ export default function ActiveDeliveriesPage() {
               <span className="text-[var(--text-muted)]">Pendientes:</span>
               <span className="text-amber-500">{summary.active}</span>
             </div>
+            {summary.urgent > 0 && (
+              <>
+                <div className="h-4 w-px bg-[var(--border-subtle)]" />
+                <div className="flex items-center gap-1.5 text-xs font-black text-red-500">
+                  <AlertTriangle className="h-3.5 w-3.5" />
+                  <span>{summary.urgent} fuera de tiempo</span>
+                </div>
+              </>
+            )}
             {user?.role !== 'DELIVERY_MANAGER' && (
               <>
                 <div className="h-4 w-px bg-[var(--border-subtle)]" />
@@ -665,6 +693,26 @@ export default function ActiveDeliveriesPage() {
         </div>
       </motion.div>
 
+      <motion.div
+        variants={fadeUp}
+        className="flex flex-col gap-2 rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] px-4 py-3 sm:flex-row sm:items-center sm:justify-between"
+      >
+        <div className="flex items-center gap-2">
+          <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-emerald-500/10 text-emerald-600">
+            <Timer className="h-4 w-4" />
+          </div>
+          <div>
+            <p className="text-xs font-black text-[var(--text-primary)]">Cola FIFO activa</p>
+            <p className="text-[11px] text-[var(--text-muted)]">Los nuevos pedidos aparecen abajo. Atiende siempre la primera fila.</p>
+          </div>
+        </div>
+        <div className="flex flex-wrap items-center gap-3 text-[10px] font-bold">
+          <span className="inline-flex items-center gap-1 text-emerald-600"><span className="h-2 w-2 rounded-full bg-emerald-500" /> En tiempo</span>
+          <span className="inline-flex items-center gap-1 text-amber-600"><span className="h-2 w-2 rounded-full bg-amber-500" /> Por salir: 10 min</span>
+          <span className="inline-flex items-center gap-1 text-red-600"><span className="h-2 w-2 rounded-full bg-red-500" /> Debe salir: 15 min</span>
+        </div>
+      </motion.div>
+
       {/* ── Compact Table ── */}
       <motion.div variants={fadeUp}>
         <Card className="border border-[var(--border-subtle)] bg-[var(--bg-panel)] shadow-md rounded-2xl overflow-hidden">
@@ -679,7 +727,7 @@ export default function ActiveDeliveriesPage() {
               <table className="w-full text-xs">
                 <thead>
                   <tr className="border-b border-[var(--border-subtle)] bg-[var(--bg-subtle)]">
-                    <th className="text-left px-3 py-2.5 font-extrabold text-[10px] uppercase tracking-wider text-[var(--text-muted)]">#</th>
+                    <th className="text-left px-3 py-2.5 font-extrabold text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Cola / Pedido</th>
                     <th className="text-left px-3 py-2.5 font-extrabold text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Estado</th>
                     <th className="text-left px-3 py-2.5 font-extrabold text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Cliente</th>
                     <th className="text-left px-3 py-2.5 font-extrabold text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Dirección</th>
@@ -693,17 +741,34 @@ export default function ActiveDeliveriesPage() {
                 <tbody>
                   <AnimatePresence>
                     {statusVisibleOrders
-                      .map((order) => {
+                      .map((order, queueIndex) => {
                       const phoneDigits = order.customerPhone.replace(/\D/g, '')
                       const whatsappMsg = buildWhatsAppMessage(order)
                       const whatsapp = phoneDigits ? `https://wa.me/57${phoneDigits}?text=${whatsappMsg}` : '#'
                       const elapsed = getElapsedTime(order.createdAt)
-                      const isUrgent = (Date.now() - new Date(order.createdAt).getTime()) > 45 * 60000
+                      const elapsedMinutes = getElapsedMinutes(order.createdAt)
+                      const waitingForDispatch = isWaitingForDispatch(order)
+                      const isUrgent = waitingForDispatch && elapsedMinutes >= DISPATCH_ALERT_MINUTES
+                      const isWarning = waitingForDispatch && !isUrgent && elapsedMinutes >= DISPATCH_WARNING_MINUTES
+                      const queuePosition = visibleOrders.findIndex(item => item.id === order.id) + 1
                       return (
                         <motion.tr key={order.id} layout initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-                          className="border-b border-[var(--border-subtle)]/50 hover:bg-[var(--bg-hover)] transition-colors">
+                          className={`border-b transition-colors ${
+                            isUrgent
+                              ? 'border-red-500/30 bg-red-500/[0.07] hover:bg-red-500/[0.11]'
+                              : isWarning
+                                ? 'border-amber-500/20 bg-amber-500/[0.04] hover:bg-amber-500/[0.08]'
+                                : 'border-[var(--border-subtle)]/50 hover:bg-[var(--bg-hover)]'
+                          }`}>
                           <td className="px-3 py-2.5">
-                            <button onClick={() => setDetailOrder(order)} className="font-black text-[var(--accent)] hover:underline text-sm cursor-pointer bg-transparent border-0">#{order.orderNumber}</button>
+                            <div className="flex items-center gap-2">
+                              <span className={`flex h-7 min-w-7 items-center justify-center rounded-lg px-1 text-[10px] font-black ${
+                                isUrgent ? 'bg-red-600 text-white' : isWarning ? 'bg-amber-500 text-white' : 'bg-[var(--bg-elevated)] text-[var(--text-muted)]'
+                              }`} title={`Posición ${queuePosition || queueIndex + 1} en la cola`}>
+                                {queuePosition || queueIndex + 1}º
+                              </span>
+                              <button onClick={() => setDetailOrder(order)} className="font-black text-[var(--accent)] hover:underline text-sm cursor-pointer bg-transparent border-0">#{order.orderNumber}</button>
+                            </div>
                           </td>
                           <td className="px-3 py-2.5">
                             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold uppercase"
@@ -781,8 +846,17 @@ export default function ActiveDeliveriesPage() {
                             <span className="font-black text-sm text-[var(--text-primary)]">{formatCurrency(order.total)}</span>
                           </td>
                           <td className="px-3 py-2.5">
-                            <span className={`text-[11px] font-bold ${isUrgent ? 'text-red-500' : 'text-[var(--text-muted)]'}`}>
-                              {isUrgent && '🔥 '}{elapsed}
+                            <span className={`inline-flex items-center gap-1 rounded-lg px-2 py-1 text-[10px] font-black ${
+                              isUrgent
+                                ? 'bg-red-600 text-white shadow-sm shadow-red-500/20'
+                                : isWarning
+                                  ? 'bg-amber-500/15 text-amber-600'
+                                  : waitingForDispatch
+                                    ? 'bg-emerald-500/10 text-emerald-600'
+                                    : 'bg-blue-500/10 text-blue-600'
+                            }`}>
+                              {isUrgent ? <AlertTriangle className="h-3 w-3" /> : <Clock className="h-3 w-3" />}
+                              {isUrgent ? `Debe salir · ${elapsed}` : isWarning ? `Por salir · ${elapsed}` : waitingForDispatch ? elapsed : `En ruta · ${elapsed}`}
                             </span>
                           </td>
                           <td className="px-3 py-2.5">

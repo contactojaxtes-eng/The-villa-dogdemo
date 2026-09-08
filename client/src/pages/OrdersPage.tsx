@@ -28,7 +28,6 @@ import {
   Package, 
   Truck, 
   Headphones, 
-  Radio, 
   Printer, 
   UtensilsCrossed,
   XCircle,
@@ -82,6 +81,7 @@ interface Order {
 
 const IMPOCONSUMO_RATE = 0.08
 const activeStatuses = ['PENDING', 'READY', 'IN_ROUTE']
+const HISTORY_PAGE_SIZE = 20
 
 const statusIcons: Record<string, any> = {
   PENDING: Clock,
@@ -132,10 +132,15 @@ export default function OrdersPage() {
   const [loading, setLoading] = useState(true)
   const [isRefreshing, setIsRefreshing] = useState(false)
   const [statusFilter, setStatusFilter] = useState(() => searchParams.get('status') || 'ALL')
+  const [orderTypeFilter, setOrderTypeFilter] = useState<'ALL' | 'DELIVERY' | 'PICKUP'>(() => {
+    const value = searchParams.get('type')
+    return value === 'DELIVERY' || value === 'PICKUP' ? value : 'ALL'
+  })
   const [search, setSearch] = useState(() => searchParams.get('search') || '')
   const [submittedSearch, setSubmittedSearch] = useState(() => searchParams.get('search') || '')
 
   const handleSearch = () => {
+    setCurrentPage(1)
     setSubmittedSearch(search)
   }
   const todayStr = useMemo(() => getLocalDateString(), [])
@@ -163,6 +168,7 @@ export default function OrdersPage() {
   const [inlineDriverPhone, setInlineDriverPhone] = useState('')
   const [registeringDriverInline, setRegisteringDriverInline] = useState(false)
   const [dispatchError, setDispatchError] = useState('')
+  const [currentPage, setCurrentPage] = useState(1)
   const socketRef = useRef<Socket | null>(null)
 
   const loadDrivers = useCallback(async () => {
@@ -280,6 +286,7 @@ export default function OrdersPage() {
   }
 
   const applyDatePreset = (preset: 'today' | 'yesterday' | 'week' | 'month' | 'range' | 'all') => {
+    setCurrentPage(1)
     setDatePreset(preset)
     const now = new Date()
     if (preset === 'today') {
@@ -420,9 +427,10 @@ export default function OrdersPage() {
   useEffect(() => {
     const params = new URLSearchParams()
     if (statusFilter !== 'ALL') params.set('status', statusFilter)
+    if (orderTypeFilter !== 'ALL') params.set('type', orderTypeFilter)
     if (submittedSearch) params.set('search', submittedSearch)
     setSearchParams(params, { replace: true })
-  }, [setSearchParams, statusFilter, submittedSearch])
+  }, [setSearchParams, statusFilter, orderTypeFilter, submittedSearch])
 
   useEffect(() => {
     loadOrders()
@@ -509,28 +517,33 @@ export default function OrdersPage() {
     return encodeURIComponent(message)
   }
 
+  const ordersForType = useMemo(() => {
+    if (orderTypeFilter === 'ALL') return orders
+    return orders.filter(order => order.orderType === orderTypeFilter)
+  }, [orders, orderTypeFilter])
+
   const summary = useMemo(() => {
-    const total = orders
+    const total = ordersForType
       .filter(order => order.status !== 'CANCELLED')
       .reduce((sum, order) => sum + order.total, 0)
     return {
       total,
-      active: orders.filter(order => activeStatuses.includes(order.status)).length,
-      delivered: orders.filter(order => order.status === 'DELIVERED').length,
-      cancelled: orders.filter(order => order.status === 'CANCELLED').length,
-      transfer: orders.filter(order => order.paymentMethod === 'TRANSFER').length,
+      active: ordersForType.filter(order => activeStatuses.includes(order.status)).length,
+      delivered: ordersForType.filter(order => order.status === 'DELIVERED').length,
+      cancelled: ordersForType.filter(order => order.status === 'CANCELLED').length,
+      transfer: ordersForType.filter(order => order.paymentMethod === 'TRANSFER').length,
     }
-  }, [orders])
+  }, [ordersForType])
 
   const statusCounts = useMemo(() => {
     return statusOrder.reduce<Record<string, number>>((acc, status) => {
-      acc[status] = orders.filter(order => order.status === status).length
+      acc[status] = ordersForType.filter(order => order.status === status).length
       return acc
     }, {})
-  }, [orders])
+  }, [ordersForType])
 
-  const displayedOrders = useMemo(() => {
-    let result = orders
+  const filteredOrders = useMemo(() => {
+    let result = ordersForType
 
     if (statusFilter && statusFilter !== 'ALL') {
       result = result.filter(order => order.status === statusFilter)
@@ -557,8 +570,18 @@ export default function OrdersPage() {
       })
     }
 
-    return result
-  }, [orders, statusFilter, search])
+    return [...result].sort((a, b) => {
+      const byTime = new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+      return byTime || b.orderNumber - a.orderNumber
+    })
+  }, [ordersForType, statusFilter, search])
+
+  const totalPages = Math.max(1, Math.ceil(filteredOrders.length / HISTORY_PAGE_SIZE))
+  const safeCurrentPage = Math.min(currentPage, totalPages)
+  const displayedOrders = useMemo(() => {
+    const start = (safeCurrentPage - 1) * HISTORY_PAGE_SIZE
+    return filteredOrders.slice(start, start + HISTORY_PAGE_SIZE)
+  }, [filteredOrders, safeCurrentPage])
 
   const uniqueOperators = useMemo(() => {
     const ops = new Map<string, { userId: string; userName: string }>()
@@ -584,7 +607,7 @@ export default function OrdersPage() {
   )
 
   return (
-    <motion.div className="space-y-7" initial="hidden" animate="visible" variants={stagger}>
+    <motion.div className="space-y-5" initial="hidden" animate="visible" variants={stagger}>
       
       {/* ── Header ── */}
       <motion.div className="flex flex-wrap items-center justify-between gap-4" variants={fadeUp}>
@@ -611,40 +634,19 @@ export default function OrdersPage() {
         </div>
       </motion.div>
 
-      {/* ── Active Operators ── */}
-      {uniqueOperators.length > 0 && (
-        <motion.div className="flex flex-wrap items-center gap-3" variants={fadeUp}>
-          <div className="flex items-center gap-2 rounded-xl border border-[var(--accent)]/20 bg-[var(--accent)]/5 px-3.5 py-2">
-            <Radio className="h-4 w-4 text-[var(--accent)] animate-pulse" />
-            <span className="text-xs font-bold text-[var(--accent)]">En línea:</span>
-          </div>
-          {uniqueOperators.map((op, i) => (
-            <div
-              key={op.userId}
-              className="flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-semibold"
-              style={{ borderColor: `${getOperatorColor(i)}30`, backgroundColor: `${getOperatorColor(i)}10`, color: getOperatorColor(i) }}
-            >
-              <span className="h-2 w-2 rounded-full animate-pulse" style={{ backgroundColor: getOperatorColor(i) }} />
-              <Headphones className="h-3.5 w-3.5" />
-              {op.userName}
-            </div>
-          ))}
-        </motion.div>
-      )}
-
       {/* ── KPI Cards Grid ── */}
       <motion.div className="grid grid-cols-2 gap-4 md:grid-cols-4" variants={stagger}>
         {(user?.role === 'DELIVERY_MANAGER'
           ? [
-              { label: 'Pedidos Listados', value: orders.length, color: '#10B981', icon: Package, sub: 'En esta consulta' },
+              { label: 'Pedidos Listados', value: ordersForType.length, color: '#10B981', icon: Package, sub: 'En esta consulta' },
               { label: 'Pedidos Activos', value: summary.active, color: '#F59E0B', icon: Timer, sub: 'Pendientes de despacho' },
-              { label: 'Entregados Hoy', value: summary.delivered, color: '#F97316', icon: Bike, sub: 'Domicilios despachados' },
+              { label: 'Entregados', value: summary.delivered, color: '#F97316', icon: Bike, sub: 'En el período elegido' },
               { label: 'Cancelados', value: summary.cancelled, color: '#EF4444', icon: XCircle, sub: 'Pedidos cancelados' },
             ]
           : [
-              { label: 'Pedidos Listados', value: orders.length, color: '#10B981', icon: Package, sub: 'En esta consulta' },
+              { label: 'Pedidos Listados', value: ordersForType.length, color: '#10B981', icon: Package, sub: 'En esta consulta' },
               { label: 'Pedidos Activos', value: summary.active, color: '#F59E0B', icon: Timer, sub: 'Pendientes de despacho' },
-              { label: 'Entregados Hoy', value: summary.delivered, color: '#F97316', icon: Bike, sub: 'Domicilios despachados' },
+              { label: 'Entregados', value: summary.delivered, color: '#F97316', icon: Bike, sub: 'En el período elegido' },
               { label: 'Facturación Total', value: formatCurrency(summary.total), color: '#3B82F6', icon: DollarSign, sub: 'Monto total' },
             ]
         ).map(stat => {
@@ -680,6 +682,15 @@ export default function OrdersPage() {
       <motion.div variants={fadeUp}>
         <Card className="border border-[var(--border-subtle)] bg-[var(--bg-panel)] shadow-md rounded-2xl">
           <CardContent className="space-y-4 p-5">
+            <div className="flex flex-wrap items-start justify-between gap-2 border-b border-[var(--border-subtle)] pb-3">
+              <div>
+                <p className="text-sm font-black text-[var(--text-primary)]">Buscar en el historial</p>
+                <p className="text-xs text-[var(--text-muted)]">Filtra por fecha, tipo de entrega, estado, cliente, barrio, producto o repartidor.</p>
+              </div>
+              <div className="rounded-xl bg-[var(--bg-elevated)] px-3 py-1.5 text-xs font-bold text-[var(--text-secondary)]">
+                {filteredOrders.length} resultado{filteredOrders.length === 1 ? '' : 's'}
+              </div>
+            </div>
             <div className="flex flex-wrap gap-3">
               <div className="relative min-w-[240px] flex-1">
                 <Search className="absolute top-1/2 left-3.5 h-4 w-4 -translate-y-1/2 text-[var(--text-muted)]" />
@@ -687,30 +698,27 @@ export default function OrdersPage() {
                   placeholder="Buscar por cliente, celular, #pedido, barrio, plato, domiciliario..." 
                   className="pl-10 pr-9 h-10.5 bg-[var(--bg-elevated)] border-[var(--border-default)] focus:border-[var(--accent)]/50 focus:ring-1 focus:ring-[var(--accent)]/50 text-sm rounded-xl transition-all" 
                   value={search} 
-                  onChange={e => setSearch(e.target.value)} 
+                  onChange={e => { setSearch(e.target.value); setCurrentPage(1) }}
                   onKeyDown={e => e.key === 'Enter' && handleSearch()} 
                 />
                 {search && (
                   <button
                     type="button"
-                    onClick={() => { setSearch(''); setSubmittedSearch(''); }}
+                    onClick={() => { setSearch(''); setSubmittedSearch(''); setCurrentPage(1) }}
                     className="absolute top-1/2 right-3 -translate-y-1/2 text-[var(--text-muted)] hover:text-[var(--text-primary)] cursor-pointer text-xs font-bold"
                   >
                     <X className="h-4 w-4" />
                   </button>
                 )}
               </div>
-              <Select value={statusFilter} onValueChange={setStatusFilter}>
+              <Select value={orderTypeFilter} onValueChange={value => { setOrderTypeFilter(value as 'ALL' | 'DELIVERY' | 'PICKUP'); setCurrentPage(1) }}>
                 <SelectTrigger className="w-48 h-10.5 bg-[var(--bg-elevated)] border-[var(--border-default)] rounded-xl text-sm focus:border-[var(--accent)]/50 focus:ring-1 focus:ring-[var(--accent)]/50">
-                  <SelectValue placeholder="Todos los estados" />
+                  <SelectValue placeholder="Tipo de entrega" />
                 </SelectTrigger>
                 <SelectContent className="bg-[var(--bg-panel)] border-[var(--border-default)] rounded-2xl">
-                  <SelectItem value="ALL">Todos los estados</SelectItem>
-                  <SelectItem value="PENDING">Pendientes</SelectItem>
-                  <SelectItem value="READY">Listos</SelectItem>
-                  <SelectItem value="IN_ROUTE">En Ruta</SelectItem>
-                  <SelectItem value="DELIVERED">Entregados</SelectItem>
-                  <SelectItem value="CANCELLED">Cancelados</SelectItem>
+                  <SelectItem value="ALL">Domicilio y recoger</SelectItem>
+                  <SelectItem value="DELIVERY">Solo domicilios</SelectItem>
+                  <SelectItem value="PICKUP">Solo para recoger</SelectItem>
                 </SelectContent>
               </Select>
               <div className="flex flex-wrap items-center gap-1.5 bg-[var(--bg-elevated)] border border-[var(--border-default)] p-1 rounded-xl shrink-0">
@@ -766,7 +774,7 @@ export default function OrdersPage() {
                       type="date" 
                       className="w-36 h-9 bg-[var(--bg-elevated)] border-[var(--border-default)] text-xs rounded-xl" 
                       value={startDate} 
-                      onChange={e => { setStartDate(e.target.value); setDatePreset('range'); }} 
+                      onChange={e => { setStartDate(e.target.value); setDatePreset('range'); setCurrentPage(1) }}
                     />
                   </div>
                   <div className="relative">
@@ -775,7 +783,7 @@ export default function OrdersPage() {
                       type="date" 
                       className="w-36 h-9 bg-[var(--bg-elevated)] border-[var(--border-default)] text-xs rounded-xl" 
                       value={endDate} 
-                      onChange={e => { setEndDate(e.target.value); setDatePreset('range'); }} 
+                      onChange={e => { setEndDate(e.target.value); setDatePreset('range'); setCurrentPage(1) }}
                     />
                   </div>
                 </div>
@@ -802,16 +810,16 @@ export default function OrdersPage() {
             <div className="flex gap-2 overflow-x-auto no-scrollbar py-1">
               <button
                 className={`rounded-xl px-3.5 py-1.5 text-xs font-bold transition-all ${statusFilter === 'ALL' ? 'bg-[var(--accent)] text-[var(--accent-fg)] shadow-sm' : 'border border-[var(--border-default)] text-[var(--text-secondary)] hover:border-[var(--text-primary)] bg-[var(--bg-base)]'}`}
-                onClick={() => setStatusFilter('ALL')}
+                onClick={() => { setStatusFilter('ALL'); setCurrentPage(1) }}
               >
-                Todos · {orders.length}
+                Todos · {ordersForType.length}
               </button>
               {statusOrder.map(status => (
                 <button
                   key={status}
                   className={`rounded-xl px-3.5 py-1.5 text-xs font-bold transition-all ${statusFilter === status ? 'text-[#0D0D0D] shadow-sm' : 'border border-[var(--border-default)] text-[var(--text-secondary)] hover:border-[var(--text-primary)] bg-[var(--bg-base)]'}`}
                   style={statusFilter === status ? { backgroundColor: statusAccent[status] } : {}}
-                  onClick={() => setStatusFilter(status)}
+                  onClick={() => { setStatusFilter(status); setCurrentPage(1) }}
                 >
                   {getStatusLabel(status)} · {statusCounts[status] || 0}
                 </button>
@@ -839,7 +847,7 @@ export default function OrdersPage() {
             const whatsapp = phoneDigits ? `https://wa.me/57${phoneDigits}?text=${whatsappMsg}` : '#'
             const StatusIcon = statusIcons[order.status] || Clock
             const estimatedTime = estimatedDeliveryTimes[order.status] || ''
-            const isPickup = order.notes?.includes('[PICKUP]')
+            const isPickup = order.orderType === 'PICKUP'
             const dbAssignee = order.assignee
             const assignedOp = activeOperators[order.id] || (dbAssignee ? { userId: dbAssignee.id, userName: dbAssignee.name } : null)
             const isAssignedToMe = !!user?.id && assignedOp?.userId === user.id
@@ -1159,6 +1167,38 @@ export default function OrdersPage() {
             )
           })}
         </AnimatePresence>
+        {filteredOrders.length > HISTORY_PAGE_SIZE && (
+          <div className="flex flex-col gap-3 rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+            <p className="text-xs font-semibold text-[var(--text-muted)]">
+              Mostrando {(safeCurrentPage - 1) * HISTORY_PAGE_SIZE + 1}–{Math.min(safeCurrentPage * HISTORY_PAGE_SIZE, filteredOrders.length)} de {filteredOrders.length} pedidos
+            </p>
+            <div className="flex items-center gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-9 rounded-xl px-3 text-xs font-bold"
+                disabled={safeCurrentPage === 1}
+                onClick={() => setCurrentPage(page => Math.max(1, page - 1))}
+              >
+                Anterior
+              </Button>
+              <span className="min-w-20 text-center text-xs font-black text-[var(--text-primary)]">
+                {safeCurrentPage} de {totalPages}
+              </span>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-9 rounded-xl px-3 text-xs font-bold"
+                disabled={safeCurrentPage === totalPages}
+                onClick={() => setCurrentPage(page => Math.min(totalPages, page + 1))}
+              >
+                Siguiente
+              </Button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Cancel Order Dialog */}
