@@ -251,9 +251,15 @@ export class OrdersService implements OnModuleInit {
         { customerAddress: { contains: cleanSearch, mode: 'insensitive' } },
         { addressReference: { contains: cleanSearch, mode: 'insensitive' } },
         { notes: { contains: cleanSearch, mode: 'insensitive' } },
+        { zone: { name: { contains: cleanSearch, mode: 'insensitive' } } },
+        { deliveryDriver: { name: { contains: cleanSearch, mode: 'insensitive' } } },
+        { waiter: { name: { contains: cleanSearch, mode: 'insensitive' } } },
+        { items: { some: { menuItem: { name: { contains: cleanSearch, mode: 'insensitive' } } } } },
       ];
 
-      if (!isNaN(searchNum)) {
+      // PostgreSQL `Int` es de 32 bits; un teléfono colombiano de 10 dígitos
+      // no debe terminar como filtro de número de pedido fuera de rango.
+      if (Number.isSafeInteger(searchNum) && searchNum >= 0 && searchNum <= 2147483647) {
         searchConditions.push({ orderNumber: searchNum });
         searchConditions.push({ invoiceNumber: searchNum });
       }
@@ -1704,13 +1710,32 @@ export class OrdersService implements OnModuleInit {
     return updated;
   }
 
-  async getActiveOrders() {
+  async getActiveOrders(search?: string) {
+    const cleanSearch = (search || '').trim();
+    const where: any = {
+      status: { notIn: ['DELIVERED', 'CANCELLED'] },
+      tableId: null,
+      orderType: { in: ['DELIVERY', 'PICKUP'] },
+    };
+    if (cleanSearch) {
+      const digitsOnly = cleanSearch.replace(/\D/g, '');
+      const searchConditions: any[] = [
+        { customerName: { contains: cleanSearch, mode: 'insensitive' } },
+        { customerPhone: { contains: cleanSearch, mode: 'insensitive' } },
+        { customerAddress: { contains: cleanSearch, mode: 'insensitive' } },
+        { addressReference: { contains: cleanSearch, mode: 'insensitive' } },
+        { zone: { name: { contains: cleanSearch, mode: 'insensitive' } } },
+        { deliveryDriver: { name: { contains: cleanSearch, mode: 'insensitive' } } },
+        { items: { some: { menuItem: { name: { contains: cleanSearch, mode: 'insensitive' } } } } },
+      ];
+      const searchNumber = digitsOnly ? Number.parseInt(digitsOnly, 10) : NaN;
+      if (Number.isSafeInteger(searchNumber) && searchNumber >= 0 && searchNumber <= 2147483647) {
+        searchConditions.push({ orderNumber: searchNumber });
+      }
+      where.OR = searchConditions;
+    }
     return this.prisma.order.findMany({
-      where: {
-        status: { notIn: ['DELIVERED', 'CANCELLED'] },
-        tableId: null,
-        orderType: { in: ['DELIVERY', 'PICKUP'] },
-      },
+      where,
       include: {
         waiter: { select: { id: true, name: true } },
         assignee: { select: { id: true, name: true } },

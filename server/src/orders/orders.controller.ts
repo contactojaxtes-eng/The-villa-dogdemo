@@ -46,8 +46,8 @@ export class OrdersController {
   @UseGuards(PermissionsGuard)
   @Permissions('dispatch.view')
   @ApiOperation({ summary: 'Obtener pedidos activos' })
-  getActiveOrders() {
-    return this.ordersService.getActiveOrders();
+  getActiveOrders(@Query('search') search?: string) {
+    return this.ordersService.getActiveOrders(search);
   }
 
   @Get('stats/today')
