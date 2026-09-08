@@ -131,7 +131,7 @@ export default function ActiveDeliveriesPage() {
   const [searchQuery, setSearchQuery] = useState(() => searchParams.get('search') || '')
   const [submittedSearch, setSubmittedSearch] = useState(() => searchParams.get('search') || '')
   const [updatingId, setUpdatingId] = useState<string | null>(null)
-  const [statusFilter, setStatusFilter] = useState<'ALL' | 'PENDING' | 'IN_PREPARATION' | 'READY' | 'IN_ROUTE'>('ALL')
+  const [statusFilter, setStatusFilter] = useState<'ALL' | 'PENDING' | 'READY' | 'IN_ROUTE'>('ALL')
   const [, setTick] = useState(0)
   const [activeOperators, setActiveOperators] = useState<Record<string, { userId: string; userName: string }>>({})
   const [cancelDialog, setCancelDialog] = useState<{ id: string; orderNumber: number } | null>(null)
@@ -221,7 +221,7 @@ export default function ActiveDeliveriesPage() {
       setCollectMethod('CASH')
       setCollectReference('')
       alerts.success('Cobro registrado', 'El pago ha sido registrado correctamente y la comanda ha sido cobrada y entregada.')
-      loadOrders()
+      loadOrders(false, true)
     } catch (err: any) {
       alerts.error('Error al cobrar', err.message || 'No se pudo registrar el pago')
     } finally {
@@ -254,7 +254,7 @@ export default function ActiveDeliveriesPage() {
       }
 
       alerts.success('Pedido Listo', `El pedido #${order.orderNumber} se marcó como LISTO, se envió la notificación a WhatsApp y se imprimió la factura.`)
-      loadOrders()
+      loadOrders(false, true)
     } catch (err: any) {
       console.error('Error al marcar pedido listo:', err)
       alerts.error('Error', err.message || 'No se pudo marcar el pedido como listo.')
@@ -317,18 +317,18 @@ export default function ActiveDeliveriesPage() {
       }
 
       setDispatchDialog(null)
-      loadOrders()
+      loadOrders(false, true)
       alerts.success('Pedido despachado', `Pedido #${orderToUpdate.orderNumber} asignado a repartidor correctamente.`)
     } catch (err: any) {
       setDispatchError(err.message || 'No se pudo despachar el pedido')
     }
   }
 
-  const loadOrders = useCallback((silent = false) => {
+  const loadOrders = useCallback((silent = false, force = false) => {
     if (!silent) setLoading(true)
     const params = new URLSearchParams()
     if (submittedSearch) params.set('search', submittedSearch)
-    api.get<Order[]>(`/orders/active?${params.toString()}`)
+    api.get<Order[]>(`/orders/active?${params.toString()}`, { force })
       .then(data => {
         const deliveryOnly = (data || []).filter(o => !o.tableId && o.orderType !== 'LOCAL' && o.source !== 'TABLE' && o.source !== 'OFFLINE_TABLE')
         setOrders(deliveryOnly)
@@ -374,7 +374,7 @@ export default function ActiveDeliveriesPage() {
     })
 
     socket.on('newOrder', () => { 
-      loadOrders(true)
+      loadOrders(true, true)
       loadDrivers()
     })
     socket.on('orderStatusChanged', (data: { orderId: string; status: string; order?: any }) => {
@@ -401,7 +401,7 @@ export default function ActiveDeliveriesPage() {
           return prev
         })
       }
-      loadOrders(true)
+      loadOrders(true, true)
       loadDrivers()
     })
 
@@ -414,12 +414,12 @@ export default function ActiveDeliveriesPage() {
         }
         setDetailOrder(prev => (prev && prev.id === updatedOrder.id) ? { ...prev, ...updatedOrder } : prev)
       }
-      loadOrders(true)
+      loadOrders(true, true)
       loadDrivers()
     })
 
     socket.on('paymentUpdated', () => {
-      loadOrders(true)
+      loadOrders(true, true)
       loadDrivers()
     })
 
@@ -445,6 +445,35 @@ export default function ActiveDeliveriesPage() {
   const handleSearch = () => {
     setSubmittedSearch(searchQuery.trim())
   }
+
+  // La API entrega todos los pedidos activos y la búsqueda se completa aquí
+  // para incluir también teléfono, barrio, dirección y productos de la comanda.
+  // Así el filtro sigue funcionando aunque el servidor aún tenga una versión
+  // antigua del parámetro `search`.
+  const visibleOrders = useMemo(() => {
+    const query = submittedSearch.trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    if (!query) return orders
+    return orders.filter(order => {
+      const itemText = (order.items || []).map(item => item.menuItem?.name || '').join(' ')
+      const haystack = [
+        order.orderNumber,
+        order.customerName,
+        order.customerPhone,
+        order.customerAddress,
+        order.zone?.name,
+        order.deliveryDriver?.name,
+        itemText,
+      ].filter(Boolean).join(' ').toString().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+      return haystack.includes(query)
+    })
+  }, [orders, submittedSearch])
+
+  const statusVisibleOrders = useMemo(() => {
+    if (statusFilter === 'PENDING') return visibleOrders.filter(o => o.status === 'RECEIVED' || o.status === 'PENDING')
+    if (statusFilter === 'READY') return visibleOrders.filter(o => o.status === 'READY')
+    if (statusFilter === 'IN_ROUTE') return visibleOrders.filter(o => o.status === 'IN_ROUTE')
+    return visibleOrders
+  }, [visibleOrders, statusFilter])
 
   const updateStatus = async (id: string, newStatus: string) => {
     setUpdatingId(id)
@@ -570,7 +599,7 @@ export default function ActiveDeliveriesPage() {
           </div>
           <div>
             <h2 className="antifont text-2xl md:text-3xl tracking-wider text-[var(--text-primary)] leading-none uppercase">Despachos Activos</h2>
-            <p className="text-xs text-[var(--text-secondary)]">{orders.length} pedidos en curso</p>
+            <p className="text-xs text-[var(--text-secondary)]">{submittedSearch ? `${visibleOrders.length} coincidencias de ` : ''}{orders.length} pedidos en curso</p>
           </div>
         </div>
         <div className="flex items-center gap-2">
@@ -610,11 +639,10 @@ export default function ActiveDeliveriesPage() {
         {/* Status Filter Pills */}
         <div className="flex items-center gap-1.5 overflow-x-auto pb-1 md:pb-0 scrollbar-none">
           {[
-            { id: 'ALL', label: 'Todos', count: orders.length },
-            { id: 'PENDING', label: 'Pendientes', count: orders.filter(o => o.status === 'RECEIVED' || o.status === 'PENDING').length },
-            { id: 'IN_PREPARATION', label: 'En Cocina', count: orders.filter(o => o.status === 'IN_PREPARATION').length },
-            { id: 'READY', label: 'Listos', count: orders.filter(o => o.status === 'READY').length },
-            { id: 'IN_ROUTE', label: 'En Ruta', count: orders.filter(o => o.status === 'IN_ROUTE').length },
+            { id: 'ALL', label: 'Todos', count: visibleOrders.length },
+            { id: 'PENDING', label: 'En cocina', count: visibleOrders.filter(o => o.status === 'RECEIVED' || o.status === 'PENDING').length },
+            { id: 'READY', label: 'Listos', count: visibleOrders.filter(o => o.status === 'READY').length },
+            { id: 'IN_ROUTE', label: 'En ruta', count: visibleOrders.filter(o => o.status === 'IN_ROUTE').length },
           ].map(tab => (
             <button
               key={tab.id}
@@ -640,11 +668,11 @@ export default function ActiveDeliveriesPage() {
       {/* ── Compact Table ── */}
       <motion.div variants={fadeUp}>
         <Card className="border border-[var(--border-subtle)] bg-[var(--bg-panel)] shadow-md rounded-2xl overflow-hidden">
-          {orders.length === 0 ? (
+          {statusVisibleOrders.length === 0 ? (
             <CardContent className="py-12 text-center space-y-2">
               <CheckCircle2 className="mx-auto h-10 w-10 text-emerald-400" />
-              <p className="text-[var(--text-primary)] font-bold text-sm">¡Todo al día!</p>
-              <p className="text-xs text-[var(--text-secondary)]">No hay pedidos activos en este momento.</p>
+              <p className="text-[var(--text-primary)] font-bold text-sm">{orders.length === 0 ? '¡Todo al día!' : (visibleOrders.length === 0 ? 'Sin coincidencias' : 'No hay pedidos en este estado')}</p>
+              <p className="text-xs text-[var(--text-secondary)]">{orders.length === 0 ? 'No hay pedidos activos en este momento.' : (visibleOrders.length === 0 ? 'Prueba con otro cliente, teléfono, producto o número de pedido.' : 'Cambia el filtro para ver los demás pedidos activos.')}</p>
             </CardContent>
           ) : (
             <div className="overflow-x-auto">
@@ -664,14 +692,7 @@ export default function ActiveDeliveriesPage() {
                 </thead>
                 <tbody>
                   <AnimatePresence>
-                    {orders
-                      .filter(o => {
-                        if (statusFilter === 'PENDING') return o.status === 'RECEIVED' || o.status === 'PENDING'
-                        if (statusFilter === 'IN_PREPARATION') return o.status === 'IN_PREPARATION'
-                        if (statusFilter === 'READY') return o.status === 'READY'
-                        if (statusFilter === 'IN_ROUTE') return o.status === 'IN_ROUTE'
-                        return true
-                      })
+                    {statusVisibleOrders
                       .map((order) => {
                       const phoneDigits = order.customerPhone.replace(/\D/g, '')
                       const whatsappMsg = buildWhatsAppMessage(order)

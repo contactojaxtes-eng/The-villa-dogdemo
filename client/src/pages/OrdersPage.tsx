@@ -210,7 +210,7 @@ export default function OrdersPage() {
       setCollectMethod('CASH')
       setCollectReference('')
       alerts.success('Cobro registrado', 'El pago ha sido registrado correctamente y la comanda ha sido cobrada y entregada.')
-      loadOrders()
+      loadOrders(false, true)
     } catch (err: any) {
       alerts.error('Error al cobrar', err.message || 'No se pudo registrar el pago')
     } finally {
@@ -272,7 +272,7 @@ export default function OrdersPage() {
       }
 
       setDispatchDialog(null)
-      loadOrders()
+      loadOrders(false, true)
       alerts.success('Pedido despachado', `Pedido #${orderToUpdate.orderNumber} asignado a repartidor correctamente.`)
     } catch (err: any) {
       setDispatchError(err.message || 'No se pudo despachar el pedido')
@@ -308,14 +308,14 @@ export default function OrdersPage() {
     }
   }
 
-  const loadOrders = useCallback((silent = false) => {
+  const loadOrders = useCallback((silent = false, force = false) => {
     if (!silent) setIsRefreshing(true)
     const params = new URLSearchParams()
     params.set('orderType', 'DELIVERY,PICKUP')
     if (submittedSearch) params.set('search', submittedSearch)
     if (startDate) params.set('startDate', startDate)
     if (endDate) params.set('endDate', endDate)
-    api.get<Order[]>(`/orders?${params.toString()}`)
+    api.get<Order[]>(`/orders?${params.toString()}`, { force })
       .then(setOrders)
       .catch(console.error)
       .finally(() => {
@@ -364,7 +364,7 @@ export default function OrdersPage() {
     const debouncedRefresh = () => {
       if (refreshTimer) clearTimeout(refreshTimer)
       refreshTimer = setTimeout(() => {
-        loadOrders(true)
+        loadOrders(true, true)
         loadDrivers()
       }, 1200)
     }
@@ -441,7 +441,7 @@ export default function OrdersPage() {
     try {
       await api.put(`/orders/${id}/status`, { status: newStatus })
       alerts.success('Estado actualizado', 'La comanda ha cambiado de estado.')
-      loadOrders()
+      loadOrders(false, true)
     } catch (err: any) {
       alerts.error('Error al actualizar estado', err.message || 'No se pudo cambiar el estado de la comanda.')
     } finally {
@@ -482,7 +482,7 @@ export default function OrdersPage() {
       setCancelDialog(null)
       setCancelReason('')
       setCancelConfirmStep(false)
-      loadOrders()
+      loadOrders(false, true)
     } catch (err: any) {
       alerts.error('Error al cancelar', err.message || 'No se pudo cancelar el pedido.')
     } finally {

@@ -13,7 +13,6 @@ import { Separator } from '@/components/ui/separator'
 import { Badge } from '@/components/ui/badge'
 import { api } from '@/lib/api'
 import { cn, formatCurrency, groupOrderItems, cleanNotes, getItemRawNote, fuzzyMatch, levenshteinDistance, formatThousandsInput, parseThousandsInput } from '@/lib/utils'
-import { printComandaSmart, getPrinterSettings } from '@/lib/printer'
 import { alerts } from '@/lib/alerts'
 import type { ComandaOrder } from '@/components/orders/ComandaPrint'
 import { estimateDeliveryKm } from '@/lib/distance'
@@ -585,6 +584,10 @@ export default function NewOrderPage({
   const [lastOrderDate, setLastOrderDate] = useState<string>('')
   const [isVoiceSearchingMenu, setIsVoiceSearchingMenu] = useState(false)
   const lastParsedSessionIdRef = useRef<string | null>(null)
+  // Guarda el resultado instantáneo del lector local para que una respuesta
+  // lenta de Gemini no pueda reemplazarlo por un pedido incompleto.
+  const autoParsedCartRef = useRef<CartItem[] | null>(null)
+  const restoredDraftHasItemsRef = useRef(false)
   const restoredDraftUpdatedAtRef = useRef(0)
 
   useEffect(() => {
@@ -848,6 +851,7 @@ export default function NewOrderPage({
       setNotes('')
       setCustomerId('')
       setCart([])
+      restoredDraftHasItemsRef.current = false
       setOrderType('delivery')
       setClientMutationId(createClientMutationId())
     }
@@ -881,6 +885,7 @@ export default function NewOrderPage({
           lineId: i.lineId || `line-${Math.random().toString(36).substring(2, 9)}`
         }))
         setCart(consolidateCart(cartWithIds))
+        restoredDraftHasItemsRef.current = cartWithIds.length > 0
         setOrderType(draft.orderType === 'pickup' || draft.orderType === 'mostrador' ? 'pickup' : 'delivery')
         if (draft.clientMutationId) setClientMutationId(draft.clientMutationId)
         const hasUsefulDraft = cartWithIds.length > 0
@@ -1597,6 +1602,7 @@ export default function NewOrderPage({
       // Un borrador útil se conserva; uno vacío no debe impedir que se lea el chat.
       if (!hasRestoredDraft) {
         setCart([])
+        autoParsedCartRef.current = null
         setCustomerName(initialUrlName || '')
         setCustomerPhone(initialUrlPhone || '')
         setExactAddress(initialUrlAddress || '')
@@ -1701,7 +1707,10 @@ export default function NewOrderPage({
           const latestIncomingAt = recentMessages
             .filter(m => m.direction === 'IN')
             .reduce((latest, message) => Math.max(latest, new Date(message.createdAt).getTime() || 0), 0)
-          if (hasRestoredDraft && restoredDraftUpdatedAtRef.current >= latestIncomingAt) return
+           // Un borrador con datos de entrega, pero sin productos, todavía debe
+           // leer el pedido del chat. Solo omitimos el parseo si el borrador ya
+           // tiene líneas y es más reciente que el último mensaje del cliente.
+           if (hasRestoredDraft && restoredDraftHasItemsRef.current && restoredDraftUpdatedAtRef.current >= latestIncomingAt) return
 
           const customerText = recentMessages
             .filter(m => {
@@ -1723,16 +1732,53 @@ export default function NewOrderPage({
 
           if (!customerText.trim()) return
 
-          const incomingCustomerOnlyText = recentMessages
-            .filter(m => m.direction === 'IN')
-            .map(m => m.content)
-            .join('\n')
+           const incomingCustomerOnlyText = recentMessages
+             .filter(m => m.direction === 'IN')
+             .map(m => m.content)
+             .join('\n')
 
-          // Parseo local instantáneo (0.005s) para mostrar los productos al instante usando ÚNICAMENTE mensajes del cliente
-          const localParsed = parseOrderText(incomingCustomerOnlyText)
+           // En chats donde el cliente confirmó el pedido con una respuesta corta
+           // (“sí”, “domicilio”, etc.), el producto puede aparecer únicamente en
+           // el resumen que el bot ya escribió. Es una fuente válida de contexto
+           // para el producto, pero no para inventar dirección, barrio o precios.
+           const flatCatalog = categories
+             .filter(c => c && !isAdditionCategory(c.name, c.description))
+             .flatMap(c => c.items || [])
+           const likelyOrderSummary = (content: string) => {
+             const normalized = normalizeText(content)
+             if (!normalized || /menu y precios|carta actualizada|categorias principales|detalle de tu pedido|total a pagar|disponibles con sus precios|precios de alguna categoria|agregarlo a tu pedido/.test(normalized)) {
+               return false
+             }
+             const hasProduct = flatCatalog.some(item => {
+               const name = normalizeText(item.name)
+               if (name.length < 4) return false
+               if (normalized.includes(name)) return true
+               const words = name.split(/\s+/).filter(word => word.length > 3)
+               return words.length > 0 && words.every(word => normalized.includes(word))
+             })
+             return hasProduct && /ya tengo|tengo anotad|quedan anotad|excelente eleccion|pedido (?:queda|es|confirmado|para)|productos? anotad|listo/.test(normalized)
+           }
+           const assistantOrderHintMessages = recentMessages
+             .filter(m => m.direction === 'OUT' && likelyOrderSummary(String(m.content || '')))
+           // Un chat puede repetir el mismo resumen varias veces. Tomar solo el
+           // último evita sumar dos veces “dos perros” al reconstruir el carrito.
+           const assistantOrderHintText = assistantOrderHintMessages.length > 0
+             ? String(assistantOrderHintMessages[assistantOrderHintMessages.length - 1].content || '')
+             : ''
 
-          const applyData = (dataToApply: any) => {
-            if (!dataToApply) return
+           // Parseo local instantáneo (sin esperar red). Primero se respetan los
+           // productos escritos por el cliente; si no hay ninguno, se usa el
+           // resumen del bot para recuperar el pedido que ya quedó confirmado.
+           const incomingParsed = parseOrderText(incomingCustomerOnlyText)
+           const assistantParsed = assistantOrderHintText ? parseOrderText(assistantOrderHintText) : null
+           const localParsed = incomingParsed && incomingParsed.parsedCartItems.length > 0
+             ? incomingParsed
+             : (assistantParsed && assistantParsed.parsedCartItems.length > 0
+                 ? { ...incomingParsed, parsedCartItems: assistantParsed.parsedCartItems }
+                 : incomingParsed)
+
+           const applyData = (dataToApply: any, source: 'local' | 'remote' = 'remote') => {
+             if (!dataToApply) return
 
             let { parsedCartItems, detectedOrderType, paymentMethod: extPaymentMethod, independentNotes, customerName: extName, customerPhone: extPhone, customerAddress: extAddress, customerAddressReference: extAddressRef, customerNeighborhood: extNeighborhood, zoneId: extZoneId } = dataToApply
 
@@ -1880,36 +1926,50 @@ export default function NewOrderPage({
                 }
               }
 
-              if (newCart.length > 0) {
-                setCart(consolidateCart(newCart))
+               if (newCart.length > 0) {
+                 const normalizedCart = consolidateCart(newCart)
+                 const cartUnits = (items: CartItem[]) => items.reduce((sum, item) => sum + Math.max(0, Number(item.quantity) || 0), 0)
+                 if (source === 'local') {
+                   autoParsedCartRef.current = normalizedCart
+                   // Un borrador que el asesor ya empezó a editar tiene prioridad.
+                   setCart(prev => prev.length > 0 ? prev : normalizedCart)
+                 } else {
+                   const localUnits = autoParsedCartRef.current ? cartUnits(autoParsedCartRef.current) : 0
+                   const remoteUnits = cartUnits(normalizedCart)
+                   // Gemini puede responder con solo una línea mientras termina
+                   // de leer el historial. Nunca se permite que borre unidades ya
+                   // detectadas de forma local.
+                   if (localUnits > remoteUnits) return
+                   setCart(normalizedCart)
+                 }
                 if (embedded) setStep('delivery')
               }
             }
-          }
+           }
 
           // Mostrar inmediatamente lo reconocido. Gemini queda como
           // enriquecimiento en segundo plano y nunca debe bloquear el panel.
-          if (localParsed) {
-            applyData(localParsed)
-            setParsingChatOrder(false)
-          }
+           if (localParsed) {
+             applyData(localParsed, 'local')
+             setParsingChatOrder(false)
+           }
 
           return api.post<ParsedOrderResponse>('/whatsapp/parse-order', { text: customerText })
             .then(parsed => {
               if (parsed) {
-                const parsedWithFallback = parsed.parsedCartItems?.length > 0
-                  ? parsed
-                  : { ...parsed, parsedCartItems: localParsed?.parsedCartItems || [] }
-                applyData(parsedWithFallback)
-              } else if (localParsed) {
-                applyData(localParsed)
-              }
-            })
+                 const parsedWithFallback = parsed.parsedCartItems?.length > 0
+                   ? parsed
+                   : { ...parsed, parsedCartItems: localParsed?.parsedCartItems || [] }
+                 applyData(parsedWithFallback, parsed.parsedCartItems?.length > 0 ? 'remote' : 'local')
+               } else if (localParsed) {
+                 applyData(localParsed, 'local')
+               }
+             })
             .catch(() => {
               // Si la IA falla por desconexión de red, usar el parseo local como contingencia
-              if (localParsed && localParsed.parsedCartItems && localParsed.parsedCartItems.length > 0) {
-                applyData(localParsed)
-              }
+               if (localParsed && localParsed.parsedCartItems && localParsed.parsedCartItems.length > 0) {
+                 applyData(localParsed, 'local')
+               }
             })
         })
         .catch(err => {
@@ -2690,6 +2750,7 @@ export default function NewOrderPage({
         longitude: isPickup ? undefined : (longitude || undefined),
         customerId: customerId || undefined,
         chatSessionId: chatSessionId || undefined,
+        source: chatSessionId ? 'WHATSAPP' : undefined,
         clientMutationId: editOrderId ? undefined : clientMutationId,
       }
 
@@ -2713,15 +2774,6 @@ export default function NewOrderPage({
             ...(effectiveName && !effectiveName.startsWith('@') && effectiveName !== 'Cliente Mostrador' && effectiveName !== 'Cliente Recoger' ? { customerName: effectiveName } : {})
           }).catch(() => {})
         }
-      }
-
-      try {
-        const settings = await getPrinterSettings()
-        if (settings?.autoPrint !== false && !(savedOrder as any).idempotentReplay) {
-          await printComandaSmart(savedOrder, 'cocina', user?.role, true)
-        }
-      } catch (printErr) {
-        console.warn('Advertencia al imprimir comanda automática:', printErr)
       }
 
       if (editOrderId) {
