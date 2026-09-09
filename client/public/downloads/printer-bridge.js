@@ -291,11 +291,12 @@ function validUsbShareName(value) {
 function printToSharedUsb(data, shareName) {
   return new Promise((resolve, reject) => {
     if (process.platform !== 'win32') {
-      reject(new Error('La impresión USB compartida por red SMB solo está soportada en Windows.'));
+      reject(new Error('La impresión USB local por Windows Spooler o SMB solo está soportada en Windows.'));
       return;
     }
-    if (!validUsbShareName(shareName)) {
-      reject(new Error(`Nombre de recurso USB inválido: "${shareName}"`));
+    const cleanTarget = String(shareName || '').replace(/^USB:\s*/i, '').trim();
+    if (!cleanTarget) {
+      reject(new Error('Nombre de recurso o impresora USB vacío.'));
       return;
     }
 
@@ -307,15 +308,158 @@ function printToSharedUsb(data, shareName) {
       return;
     }
 
-    const destination = `\\\\127.0.0.1\\${shareName}`;
-    const command = `copy /b "${tempFile}" "${destination}" >nul`;
-    execFile(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', command], { windowsHide: true, timeout: 10000 }, (error) => {
+    // Script PowerShell con Win32 Spooler (RawPrinterHelper), detección inteligente de impresoras y fallback
+    const psScript = `
+param([string]\$FilePath, [string]\$RequestedName)
+
+\$typeDef = @"
+using System;
+using System.IO;
+using System.Runtime.InteropServices;
+
+public class Win32RawPrinter
+{
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    public class DOCINFO
+    {
+        [MarshalAs(UnmanagedType.LPWStr)]
+        public string pDocName;
+        [MarshalAs(UnmanagedType.LPWStr)]
+        public string pOutputFile;
+        [MarshalAs(UnmanagedType.LPWStr)]
+        public string pDataType;
+    }
+
+    [DllImport("winspool.Drv", EntryPoint = "OpenPrinterW", SetLastError = true, CharSet = CharSet.Unicode, ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
+    public static extern bool OpenPrinter(string src, out IntPtr hPrinter, IntPtr pd);
+
+    [DllImport("winspool.Drv", EntryPoint = "ClosePrinter", SetLastError = true, ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
+    public static extern bool ClosePrinter(IntPtr hPrinter);
+
+    [DllImport("winspool.Drv", EntryPoint = "StartDocPrinterW", SetLastError = true, CharSet = CharSet.Unicode, ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
+    public static extern bool StartDocPrinter(IntPtr hPrinter, Int32 level, [In, MarshalAs(UnmanagedType.LPStruct)] DOCINFO di);
+
+    [DllImport("winspool.Drv", EntryPoint = "EndDocPrinter", SetLastError = true, ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
+    public static extern bool EndDocPrinter(IntPtr hPrinter);
+
+    [DllImport("winspool.Drv", EntryPoint = "StartPagePrinter", SetLastError = true, ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
+    public static extern bool StartPagePrinter(IntPtr hPrinter);
+
+    [DllImport("winspool.Drv", EntryPoint = "EndPagePrinter", SetLastError = true, ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
+    public static extern bool EndPagePrinter(IntPtr hPrinter);
+
+    [DllImport("winspool.Drv", EntryPoint = "WritePrinter", SetLastError = true, ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
+    public static extern bool WritePrinter(IntPtr hPrinter, IntPtr pBytes, Int32 dwCount, out Int32 dwWritten);
+
+    public static string Send(string printerName, byte[] bytes)
+    {
+        IntPtr pBytes = Marshal.AllocCoTaskMem(bytes.Length);
+        Marshal.Copy(bytes, 0, pBytes, bytes.Length);
+
+        IntPtr hPrinter = IntPtr.Zero;
+        DOCINFO di = new DOCINFO();
+        di.pDocName = "The Villa Dog Receipt";
+        di.pDataType = null;
+
+        string res = "OK";
+        if (!OpenPrinter(printerName, out hPrinter, IntPtr.Zero))
+        {
+            res = "OpenPrinter_Fail_" + Marshal.GetLastWin32Error();
+        }
+        else
+        {
+            if (!StartDocPrinter(hPrinter, 1, di))
+            {
+                res = "StartDocPrinter_Fail_" + Marshal.GetLastWin32Error();
+            }
+            else
+            {
+                if (!StartPagePrinter(hPrinter))
+                {
+                    res = "StartPagePrinter_Fail_" + Marshal.GetLastWin32Error();
+                }
+                else
+                {
+                    int written = 0;
+                    if (!WritePrinter(hPrinter, pBytes, bytes.Length, out written))
+                    {
+                        res = "WritePrinter_Fail_" + Marshal.GetLastWin32Error();
+                    }
+                    EndPagePrinter(hPrinter);
+                }
+                EndDocPrinter(hPrinter);
+            }
+            ClosePrinter(hPrinter);
+        }
+        Marshal.FreeCoTaskMem(pBytes);
+        return res;
+    }
+}
+"@
+
+try { Add-Type -TypeDefinition \$typeDef } catch {}
+
+\$allPrinters = @(Get-Printer | Select-Object -ExpandProperty Name)
+\$normReq = (\$RequestedName -replace '[^a-zA-Z0-9]', '').ToLower()
+
+\$bestMatch = \$allPrinters | Where-Object { \$_ -eq \$RequestedName } | Select-Object -First 1
+if (-not \$bestMatch) {
+    \$bestMatch = \$allPrinters | Where-Object { \$_.ToLower() -eq \$RequestedName.ToLower() } | Select-Object -First 1
+}
+if (-not \$bestMatch) {
+    \$bestMatch = \$allPrinters | Where-Object { ((\$_.ToLower() -replace '[^a-zA-Z0-9]', '')) -eq \$normReq } | Select-Object -First 1
+}
+if (-not \$bestMatch) {
+    \$bestMatch = \$allPrinters | Where-Object { \$_.ToLower().Contains(\$RequestedName.ToLower()) -or \$RequestedName.ToLower().Contains(\$_.ToLower()) } | Select-Object -First 1
+}
+if (-not \$bestMatch) {
+    \$bestMatch = \$allPrinters | Where-Object { ((\$_.ToLower() -replace '[^a-zA-Z0-9]', '')).Contains(\$normReq) -or \$normReq.Contains(((\$_.ToLower() -replace '[^a-zA-Z0-9]', ''))) } | Select-Object -First 1
+}
+
+if (-not \$bestMatch) { \$bestMatch = \$RequestedName }
+Write-Host "MATCHED_PRINTER:\$bestMatch"
+
+\$bytes = [System.IO.File]::ReadAllBytes(\$FilePath)
+\$result = [Win32RawPrinter]::Send(\$bestMatch, \$bytes)
+Write-Host "RESULT:\$result"
+`;
+
+    const psTemp = path.join(os.tmpdir(), `thevilladog_ps_${Date.now()}_${Math.random().toString(36).slice(2, 6)}.ps1`);
+    try {
+      fs.writeFileSync(psTemp, psScript, 'utf8');
+    } catch (e) {
       try { fs.unlinkSync(tempFile); } catch {}
-      if (error) {
-        reject(new Error(`No se pudo imprimir en USB. Comparte la impresora en Windows con el nombre "${shareName}"`));
-        return;
+      reject(new Error(`No se pudo preparar script de impresion: ${e.message}`));
+      return;
+    }
+
+    const args = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', psTemp, '-FilePath', tempFile, '-RequestedName', cleanTarget];
+    execFile('powershell.exe', args, { windowsHide: true, timeout: 15000 }, (error, stdout, stderr) => {
+      try { fs.unlinkSync(tempFile); } catch {}
+      try { fs.unlinkSync(psTemp); } catch {}
+
+      const out = String(stdout || '');
+      const matchedLine = out.match(/MATCHED_PRINTER:(.+)/);
+      const resultLine = out.match(/RESULT:(.+)/);
+      const matched = matchedLine ? matchedLine[1].trim() : cleanTarget;
+      const res = resultLine ? resultLine[1].trim() : '';
+
+      if (res === 'OK') {
+        log(`[USB] Impreso correctamente en impresora Windows "${matched}" (solicitada: "${cleanTarget}")`);
+        resolve();
+      } else {
+        // Fallback secundario a SMB copy si el spooler reporta fallo
+        const destination = `\\\\127.0.0.1\\${cleanTarget}`;
+        const cmd = `copy /b "${tempFile}" "${destination}" >nul`;
+        execFile(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', cmd], { windowsHide: true, timeout: 6000 }, (smbErr) => {
+          if (smbErr) {
+            reject(new Error(`No se pudo imprimir en USB "${cleanTarget}". Verifica que la impresora esté encendida, conectada y visible en Dispositivos e impresoras de Windows (Detalle: ${res || error?.message || smbErr.message})`));
+          } else {
+            log(`[USB] Impreso por recurso SMB local "${cleanTarget}"`);
+            resolve();
+          }
+        });
       }
-      resolve();
     });
   });
 }

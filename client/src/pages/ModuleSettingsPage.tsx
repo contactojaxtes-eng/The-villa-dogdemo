@@ -561,14 +561,14 @@ export default function ModuleSettingsPage() {
     printer.channel || (/domicilio/i.test(printer.name) ? 'DELIVERY' : 'DINING')
 
   const hasValidPrinterAddress = (printer: PrinterConfig) => {
-    const address = String(printer.ip || '').trim()
-    if (address.toUpperCase().startsWith('USB:')) {
-      const shareName = address.slice(4).trim()
-      return /^[\p{L}\p{N} ._()-]{1,80}$/u.test(shareName)
+    const raw = String(printer.ip || '').trim()
+    if (!raw) return false
+    if (raw.toUpperCase().startsWith('USB:')) {
+      const shareName = raw.replace(/^USB:\s*/i, '').trim()
+      return shareName.length > 0
     }
-    const parts = address.split('.')
-    const isIpv4 = parts.length === 4 && parts.every(part => /^\d{1,3}$/.test(part) && Number(part) <= 255)
-    return isIpv4 || address === 'localhost'
+    const host = raw.replace(/^https?:\/\//i, '').split(':')[0].trim()
+    return host.length > 0
   }
 
   const saveDeliveryKitchen = async () => {
@@ -760,12 +760,12 @@ export default function ModuleSettingsPage() {
   }
 
   const setPrinterConnectionType = (printer: PrinterConfig, type: 'NETWORK' | 'USB') => {
-    const currentAddress = String(printer.ip || '').trim()
+    const raw = String(printer.ip || '').trim().replace(/^USB:\s*/i, '')
     if (type === 'USB') {
-      updatePrinter(printer.id, { ip: currentAddress.toUpperCase().startsWith('USB:') ? currentAddress : 'USB:' })
+      updatePrinter(printer.id, { ip: `USB:${raw}` })
       return
     }
-    updatePrinter(printer.id, { ip: currentAddress.toUpperCase().startsWith('USB:') ? '' : currentAddress })
+    updatePrinter(printer.id, { ip: raw })
   }
 
   const addPrinter = () => {
@@ -1012,18 +1012,18 @@ export default function ModuleSettingsPage() {
                 <div className="space-y-3">
                   {deliveryPrinters.map(printer => {
                     const isUsb = String(printer.ip || '').trim().toUpperCase().startsWith('USB:')
-                    const addressValue = isUsb ? String(printer.ip || '').slice(4) : (printer.ip || '')
+                    const addressValue = String(printer.ip || '').trim().replace(/^USB:\s*/i, '')
                     return (
                       <div key={printer.id} className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-3">
                         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-[1.1fr_110px_1fr_82px_110px_auto]">
                           <input value={printer.name} onChange={event => updatePrinter(printer.id, { name: event.target.value })} className={fieldClass} placeholder="Nombre interno" />
                           <select value={isUsb ? 'USB' : 'NETWORK'} onChange={event => setPrinterConnectionType(printer, event.target.value as 'NETWORK' | 'USB')} className={fieldClass} aria-label="Tipo de conexión"><option value="NETWORK">Red / IP</option><option value="USB">USB</option></select>
-                          <input value={addressValue} onChange={event => updatePrinter(printer.id, { ip: isUsb ? `USB:${event.target.value}` : event.target.value })} className={fieldClass} placeholder={isUsb ? 'Nombre compartido (Ej: POS-80)' : 'IP local (Ej: 192.168.1.50)'} aria-label={isUsb ? 'Nombre compartido de la impresora' : 'IP local de la impresora'} />
+                          <input value={addressValue} onChange={event => { const val = event.target.value.replace(/^USB:\s*/i, '').trimStart(); updatePrinter(printer.id, { ip: isUsb ? `USB:${val}` : val }) }} className={fieldClass} placeholder={isUsb ? 'Nombre en Windows (Ej: XP-80C o POS-80)' : 'IP local (Ej: 192.168.1.50)'} aria-label={isUsb ? 'Nombre compartido de la impresora' : 'IP local de la impresora'} />
                           <input type="number" min={1} max={65535} value={printer.port || 9100} onChange={event => updatePrinter(printer.id, { port: Number(event.target.value) || 9100 })} className={cn(fieldClass, isUsb && 'cursor-not-allowed opacity-40')} title={isUsb ? 'USB no usa puerto' : 'Puerto'} disabled={isUsb} />
                           <div className="flex h-10 items-center justify-center rounded-xl border border-emerald-500/20 bg-emerald-500/10 px-2 text-[10px] font-black text-emerald-600">Domicilios</div>
                           <button type="button" onClick={() => setPrinting(current => ({ ...current, printers: current.printers.filter(item => item.id !== printer.id) }))} className="flex h-10 items-center justify-center rounded-xl border border-red-500/20 px-3 text-red-500" title="Eliminar"><Trash2 className="h-4 w-4" /></button>
                         </div>
-                        <p className="mt-2 text-[10px] text-[var(--text-muted)]">{isUsb ? 'Comparte primero la impresora en Windows y escribe aquí solamente ese nombre compartido.' : 'La IP puede cambiarse desde aquí, incluso estando fuera del restaurante.'}</p>
+                        <p className="mt-2 text-[10px] text-[var(--text-muted)]">{isUsb ? 'Escribe el nombre de la impresora tal como aparece en Windows (ej: XP-80C). El puente la detecta e imprime directamente sin necesidad de compartirla.' : 'La IP puede cambiarse desde aquí, incluso estando fuera del restaurante.'}</p>
                         <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
                           <div className="flex items-center gap-3"><label className="flex items-center gap-1.5 text-xs font-bold text-[var(--text-secondary)]"><input type="checkbox" checked={printer.enabled !== false} onChange={event => updatePrinter(printer.id, { enabled: event.target.checked })} className="accent-[var(--accent)]" /> Activa</label><select value={printer.paper || '80'} onChange={event => updatePrinter(printer.id, { paper: event.target.value })} className="h-8 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-panel)] px-2 text-xs text-[var(--text-primary)]"><option value="80">Papel 80 mm</option><option value="58">Papel 58 mm</option></select></div>
                           <button type="button" disabled={testingPrinterId === printer.id || !hasValidPrinterAddress(printer)} onClick={() => testPrinter(printer)} className="flex h-8 items-center gap-1.5 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-panel)] px-3 text-xs font-bold text-[var(--text-secondary)] disabled:opacity-50" title="Enviar una comanda de prueba a esta impresora">{testingPrinterId === printer.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Printer className="h-3.5 w-3.5" />} Probar impresora</button>
