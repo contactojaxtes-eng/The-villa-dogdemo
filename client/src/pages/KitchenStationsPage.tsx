@@ -22,7 +22,8 @@ import {
   Clock,
   Timer,
   BellRing,
-  RotateCcw
+  RotateCcw,
+  Search
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -83,6 +84,8 @@ export default function KitchenStationsPage() {
   const [now, setNow] = useState(Date.now())
   const [loading, setLoading] = useState(true)
   const notifiedBreaks = useRef<Set<string>>(new Set())
+  const [stationQuery, setStationQuery] = useState('')
+  const [stationView, setStationView] = useState<'ALL' | 'ACTIVE' | 'PAUSED'>('ALL')
 
   // Modal de Tiempo de Cena / Descanso
   const [breakModalUser, setBreakModalUser] = useState<User | null>(null)
@@ -338,6 +341,21 @@ export default function KitchenStationsPage() {
   })
 
   const activeStationCount = stations.filter(station => station.active !== false).length
+  const pausedStationCount = stations.length - activeStationCount
+  const assignedCookIds = new Set(stations.flatMap(station => (station.users || []).map(user => user.id)))
+  const activeAssignedCookCount = Array.from(assignedCookIds).filter(userId => cookStatuses[userId]?.active !== false).length
+  const normalizedStationQuery = stationQuery.trim().toLocaleLowerCase()
+  const filteredStations = stations.filter(station => {
+    const matchesView = stationView === 'ALL' || (stationView === 'ACTIVE' ? station.active !== false : station.active === false)
+    if (!matchesView) return false
+    if (!normalizedStationQuery) return true
+    const searchable = [
+      station.name,
+      ...(station.categories || []).map(category => category.name),
+      ...(station.users || []).map(user => user.name),
+    ].join(' ').toLocaleLowerCase()
+    return searchable.includes(normalizedStationQuery)
+  })
   const assignedCookIds = new Set(stations.flatMap(station => (station.users || []).map(user => user.id)))
   const activeAssignedCookCount = Array.from(assignedCookIds).filter(userId => cookStatuses[userId]?.active !== false).length
 
@@ -513,6 +531,58 @@ export default function KitchenStationsPage() {
         </div>
       </section>
 
+      <section className="rounded-3xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-4 shadow-sm sm:p-5">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+          <div>
+            <div className="flex items-center gap-2">
+              <Search className="h-4 w-4 text-[var(--accent)]" />
+              <h2 className="text-xs font-black uppercase tracking-wider text-[var(--text-primary)]">Buscar estación</h2>
+            </div>
+            <p className="mt-1 text-xs text-[var(--text-secondary)]">Filtra por estación, categoría o cocinero asignado.</p>
+          </div>
+          <span className="w-fit rounded-full bg-[var(--bg-elevated)] px-2.5 py-1 text-[11px] font-black text-[var(--text-secondary)]">
+            {filteredStations.length} de {stations.length} visibles
+          </span>
+        </div>
+        <div className="mt-3 flex flex-col gap-2.5 md:flex-row md:items-center">
+          <div className="relative min-w-0 flex-1">
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--text-muted)]" />
+            <Input
+              value={stationQuery}
+              onChange={event => setStationQuery(event.target.value)}
+              placeholder="Buscar estación, categoría o cocinero..."
+              className="h-10 rounded-xl border-[var(--border-subtle)] bg-[var(--bg-elevated)] pl-9 pr-9 text-sm"
+            />
+            {stationQuery && (
+              <button
+                type="button"
+                onClick={() => setStationQuery('')}
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 rounded-md p-1 text-[var(--text-muted)] transition hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]"
+                aria-label="Limpiar búsqueda"
+              >
+                <XCircle className="h-4 w-4" />
+              </button>
+            )}
+          </div>
+          <div className="flex shrink-0 items-center gap-1 rounded-xl bg-[var(--bg-elevated)] p-1">
+            {([
+              ['ALL', `Todas (${stations.length})`],
+              ['ACTIVE', `Activas (${activeStationCount})`],
+              ['PAUSED', `Pausadas (${pausedStationCount})`],
+            ] as const).map(([value, label]) => (
+              <button
+                key={value}
+                type="button"
+                onClick={() => setStationView(value)}
+                className={`rounded-lg px-2.5 py-1.5 text-[11px] font-black transition ${stationView === value ? 'bg-[var(--accent)] text-[var(--accent-fg)] shadow-sm' : 'text-[var(--text-secondary)] hover:bg-[var(--bg-panel)] hover:text-[var(--text-primary)]'}`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+      </section>
+
       {/* Grid de Estaciones */}
       {loading ? (
         <div className="p-12 text-center text-sm text-[var(--text-muted)] animate-pulse">
@@ -527,9 +597,23 @@ export default function KitchenStationsPage() {
             Crear Primera Estación
           </Button>
         </div>
+      ) : filteredStations.length === 0 ? (
+        <div className="rounded-3xl border border-dashed border-[var(--border-default)] bg-[var(--bg-panel)] p-10 text-center shadow-sm">
+          <Search className="mx-auto h-10 w-10 text-[var(--text-muted)] opacity-50" />
+          <h3 className="mt-3 text-base font-black text-[var(--text-primary)]">No encontramos estaciones</h3>
+          <p className="mt-1 text-xs text-[var(--text-secondary)]">Prueba con otro nombre o cambia el filtro de estado.</p>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => { setStationQuery(''); setStationView('ALL') }}
+            className="mt-4 rounded-xl text-xs font-bold"
+          >
+            Ver todas las estaciones
+          </Button>
+        </div>
       ) : (
         <div className="grid items-start grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
-          {stations.map(station => {
+          {filteredStations.map(station => {
             const hasCategories = (station.categories || []).length > 0
             const hasUsers = (station.users || []).length > 0
 
