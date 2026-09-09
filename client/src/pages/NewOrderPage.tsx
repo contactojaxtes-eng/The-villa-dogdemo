@@ -15,7 +15,6 @@ import { api } from '@/lib/api'
 import { cn, formatCurrency, groupOrderItems, cleanNotes, getItemRawNote, fuzzyMatch, levenshteinDistance, formatThousandsInput, parseThousandsInput } from '@/lib/utils'
 import { alerts } from '@/lib/alerts'
 import type { ComandaOrder } from '@/components/orders/ComandaPrint'
-import { estimateDeliveryKm } from '@/lib/distance'
 import { AddressSearch, type AddressResult } from '@/components/orders/AddressSearch'
 import { globalSessionsCache } from '@/lib/chatCache'
 import { ArrowLeft, ShoppingCart, Trash2, Search, Save, Sparkles, Clock, Bike, Store, Loader2, Plus, Minus, MapPin, DollarSign, AlertTriangle, Route, Pizza, CupSoda, ChefHat, Flame, UtensilsCrossed, X, Users, CheckCircle2, Mic, MicOff, ChevronDown, MessageCircle, Send, FileText, Phone, ExternalLink, Download, Eye, RotateCw, ZoomIn, ZoomOut } from 'lucide-react'
@@ -230,7 +229,7 @@ export function isAdditionCategory(catName?: string | null, catDesc?: string | n
          normName === 'adiciones'
 }
 
-interface Zone { id: string; name: string; rate: number; zoneGroup?: string }
+interface Zone { id: string; name: string; rate: number; km?: number | null; zoneGroup?: string }
 interface CartItem { menuItemId: string; name: string; price: number; quantity: number; notes?: string; lineId?: string; isCourtesy?: boolean }
 
 function consolidateCart(items: CartItem[]): CartItem[] {
@@ -268,6 +267,19 @@ function consolidateCart(items: CartItem[]): CartItem[] {
   }
 
   return result
+}
+
+function keepKitchenInstruction(rawNote: string | undefined, productName?: string): string {
+  const note = cleanNotes(rawNote, productName)
+  const normalized = normalizeText(note)
+  if (!normalized) return ''
+
+  // El nombre de otro producto o una variante mal escrita no es una nota para
+  // cocina. Las notas deben ser instrucciones reales: "sin salsa", "sin
+  // cebolla", "con más queso", "aparte", etc.
+  if (/^(?:para llevar|domicilio|recoger|pickup)$/.test(normalized)) return ''
+  if (/^(?:\d+\s*(?:x\s*)?)?(?:perro|hamburguesa|pizza|gaseosa|jugo|combo|salchich\w*|doble\s+salchich\w*|triple\s+salchich\w*)(?:\s+\d+)?$/.test(normalized)) return ''
+  return note
 }
 
 function normalizeText(text: string): string {
@@ -525,6 +537,8 @@ export default function NewOrderPage({
   const [zoneRateEdit, setZoneRateEdit] = useState('')
   const [zoneResultsOpen, setZoneResultsOpen] = useState(false)
   const zoneContainerRef = useRef<HTMLDivElement>(null)
+  const [orderReaderEnabled, setOrderReaderEnabled] = useState(false)
+  const [chatContextMessageCount, setChatContextMessageCount] = useState<number | null>(null)
 
   const [paymentMethod, setPaymentMethod] = useState('CASH')
   const [cashAmountInput, setCashAmountInput] = useState('')
@@ -941,7 +955,7 @@ export default function NewOrderPage({
           setZoneId(history[0].zone.id)
           setZoneSearch(history[0].zone.name)
           setMapSearch(history[0].zone.name)
-          setZoneRateEdit(String(history[0].deliveryFee || ''))
+          setZoneRateEdit(String(history[0].zone.rate ?? history[0].deliveryFee ?? ''))
         }
       } else {
         if (name) setCustomerName(name)
@@ -1393,7 +1407,7 @@ export default function NewOrderPage({
           }
 
           // Extraer notas de cocina reales (descartando nombres de productos y frases vacías)
-          let cleanClauseNotes = cleanNotes(clause, matchedItem.name)
+          let cleanClauseNotes = keepKitchenInstruction(clause, matchedItem.name)
           if (cleanClauseNotes) {
             cleanClauseNotes = cleanClauseNotes
               .replace(/^\d+\s*/, '')
@@ -1404,7 +1418,8 @@ export default function NewOrderPage({
             // Si lo que quedó es solo el nombre del producto o palabras vacías, anular la nota
             const normRemaining = normalizeText(cleanClauseNotes)
             const isJustProductWord = normRemaining.split(/\s+/).every(w => stopWords.has(w) || normalizeText(matchedItem.name).includes(w))
-            if (isJustProductWord) {
+            const isProductFragment = /^(?:\d+\s*(?:x\s*)?)?(?:perro|hamburguesa|pizza|gaseosa|jugo|combo|salchich\w*|doble\s+salchich\w*|triple\s+salchich\w*)(?:\s+\d+)?$/.test(normRemaining)
+            if (isJustProductWord || isProductFragment) {
               cleanClauseNotes = ''
             }
           }
@@ -1622,11 +1637,12 @@ export default function NewOrderPage({
       setParsingChatOrder(true)
       Promise.all([
         api.get<any>(`/whatsapp/sessions/${chatSessionId}`),
-        // Pedir una página amplia y fresca: los chats antiguos también deben
-        // poder completar el pedido al abrirlo desde WhatsApp.
-        api.get<any[]>(`/whatsapp/sessions/${chatSessionId}/messages?limit=200`, { force: true })
+        api.get<any[]>(`/whatsapp/sessions/${chatSessionId}/messages?limit=200`, { force: true }),
+        api.get<{ enabled?: boolean }>('/whatsapp/order-reader-status').catch(() => ({ enabled: false })),
       ])
-        .then(async ([session, messages]) => {
+        .then(async ([session, messages, readerStatus]) => {
+          const readerEnabled = readerStatus?.enabled === true
+          setOrderReaderEnabled(readerEnabled)
           if (session) {
             if (session.customerName && session.customerName !== session.phone && !session.customerName.startsWith('@') && !initialUrlName) {
               setCustomerName(session.customerName)
@@ -1666,21 +1682,23 @@ export default function NewOrderPage({
             if (isPersistedOrderMessage(messages[i])) lastOrderMsgIndex = i
           }
 
-          // Solo tomar mensajes del pedido actual:
-          // Si hubo un pedido previo en el chat, tomar estrictamente los mensajes DESPUÉS de ese pedido.
-          // Si no hubo mensajes nuevos después del pedido previo, no hay pedido nuevo para autollenar.
+          // Nuevo pedido siempre empieza con una ventana reciente. Así un pedido
+          // de las 7:00 p. m. no se mezcla con uno que el mismo cliente hace a
+          // las 10:00 p. m., aunque no haya una confirmación antigua en el chat.
+          const twoHoursAgo = Date.now() - (2 * 60 * 60 * 1000)
+          const isWithinRecentContext = (message: any) => {
+            const timestamp = new Date(message?.createdAt || 0).getTime()
+            return Number.isFinite(timestamp) && timestamp >= twoHoursAgo
+          }
           let relevantSlice: any[] = []
           if (lastOrderMsgIndex >= 0) {
             if (lastOrderMsgIndex < messages.length - 1) {
-              relevantSlice = messages.slice(lastOrderMsgIndex + 1)
+              relevantSlice = messages.slice(lastOrderMsgIndex + 1).filter(isWithinRecentContext)
             } else {
               relevantSlice = []
             }
           } else {
-            // Sin una confirmación previa, el chat completo de esta página es
-            // el contexto del pedido. No usar una ventana de horas: el asesor
-            // también puede abrir conversaciones de ayer o de días anteriores.
-            relevantSlice = messages
+            relevantSlice = messages.filter(isWithinRecentContext)
           }
 
           // 2. Filtrar mensajes de texto relevantes, descartando respuestas automáticas o plantillas
@@ -1706,9 +1724,16 @@ export default function NewOrderPage({
             // la misma ventana y se muestra antes de la llamada remota.
             .slice(-120)
 
+          setChatContextMessageCount(recentMessages.length)
+
           // Si no hay mensajes entrantes del cliente en la conversación actual, no autollenar nada
           const hasIncomingCustomerMsg = recentMessages.some(m => m.direction === 'IN')
           if (recentMessages.length === 0 || !hasIncomingCustomerMsg) return
+
+          // Hoy la toma es manual. El asesor ve los mensajes recientes pero el
+          // sistema no llena productos ni consulta IA mientras esta opción esté
+          // pausada en Configuración técnica.
+          if (!readerEnabled) return
 
           const latestIncomingAt = recentMessages
             .filter(m => m.direction === 'IN')
@@ -1893,8 +1918,8 @@ export default function NewOrderPage({
                   }
                 }
 
-                const cleanPref = parsedItem.preference ? cleanNotes(parsedItem.preference, item.name) : ''
-                const cleanNote = parsedItem.notes ? cleanNotes(parsedItem.notes, item.name) : ''
+                const cleanPref = parsedItem.preference ? keepKitchenInstruction(parsedItem.preference, item.name) : ''
+                const cleanNote = parsedItem.notes ? keepKitchenInstruction(parsedItem.notes, item.name) : ''
 
                 let parentNotes = ''
                 const hasAdditions = additionsToInsert.length > 0
@@ -2222,11 +2247,12 @@ export default function NewOrderPage({
   const total = isGlobalCourtesy ? 0 : (subtotal + tax + deliveryFee)
   const estimatedTime = orderType === 'pickup' ? '10-15 min' : '15-25 min'
   const estimatedKm = useMemo(() => {
-    if (latitude != null && longitude != null) {
-      return estimateDeliveryKm(undefined, latitude, longitude)
-    }
-    return selectedZone ? estimateDeliveryKm(selectedZone.zoneGroup) : null
-  }, [selectedZone, latitude, longitude])
+    // Solo enseñamos una distancia guardada en la zona. No se inventa un
+    // kilometraje aproximado por el nombre del barrio: la tarifa siempre la
+    // confirma o edita el asesor.
+    const savedKm = Number(selectedZone?.km)
+    return Number.isFinite(savedKm) && savedKm > 0 ? savedKm : null
+  }, [selectedZone])
 
   const allItems = useMemo(() => 
     (categories || [])
@@ -3232,7 +3258,7 @@ const renderDeliveryCard = () => {
           <div className="flex items-start justify-between gap-3 flex-wrap">
             <div>
               <CardTitle className="text-base font-bold text-[var(--text-primary)]">Entrega y pago</CardTitle>
-              <CardDescription className="text-xs text-[var(--text-secondary)] mt-0.5">Revisa lo leído del chat antes de confirmar</CardDescription>
+              <CardDescription className="text-xs text-[var(--text-secondary)] mt-0.5">Revisa el pedido, la entrega y el cobro antes de confirmar</CardDescription>
             </div>
             <div className="flex items-center gap-2">
               {cart.length > 0 && (
@@ -3247,6 +3273,16 @@ const renderDeliveryCard = () => {
               )}
             </div>
           </div>
+
+          {chatSessionId && !parsingChatOrder && (
+            <div className={cn('flex items-start gap-2 rounded-xl border px-3 py-2.5 text-[11px]', orderReaderEnabled ? 'border-blue-500/20 bg-blue-500/5 text-blue-700 dark:text-blue-300' : 'border-slate-400/20 bg-[var(--bg-elevated)] text-[var(--text-secondary)]')}>
+              <MessageCircle className="mt-0.5 h-4 w-4 shrink-0" />
+              <div>
+                <p className="font-black">{orderReaderEnabled ? 'Lectura automática: últimas 2 horas del chat' : 'Toma manual: IA pausada'}</p>
+                <p className="mt-0.5 leading-4">{orderReaderEnabled ? `Se usan ${chatContextMessageCount ?? 0} mensaje(s) recientes; los pedidos antiguos no se incluyen.` : 'Revisa el chat y agrega los productos manualmente. La configuración se puede activar desde WhatsApp y chatbot.'}</p>
+              </div>
+            </div>
+          )}
 
           <div className={cn(
             "flex items-start gap-2 rounded-xl border px-3 py-2.5 text-[11px]",
@@ -3474,7 +3510,7 @@ const renderDeliveryCard = () => {
                   zones={uniqueZones}
                 />
                 <p className="text-[10px] text-[var(--text-muted)] leading-relaxed mt-0.5">
-                  Selecciona un barrio configurado. Si no aparece, escribe el barrio y confirma manualmente la tarifa antes de crear el pedido.
+                  El barrio configurado propone su tarifa. Puedes cambiar el valor después de confirmarlo con el cliente.
                 </p>
               </div>
 
@@ -3503,7 +3539,7 @@ const renderDeliveryCard = () => {
                 )}
                 <div className={`space-y-1 ${estimatedKm != null ? 'col-span-1' : 'col-span-2'}`}>
                   <Label className="text-xs font-semibold text-[var(--text-secondary)] uppercase flex items-center gap-1">
-                    <DollarSign className="h-3.5 w-3.5 text-[var(--accent)]" /> Valor Domicilio *
+                    <DollarSign className="h-3.5 w-3.5 text-[var(--accent)]" /> Tarifa confirmada *
                   </Label>
                   <Input
                     type="number"
@@ -3514,6 +3550,7 @@ const renderDeliveryCard = () => {
                     placeholder="Ej: 4000"
                     className="bg-[var(--bg-input)] border-[var(--border-default)] rounded-xl h-10 text-sm focus:border-[var(--accent)] font-bold"
                   />
+                  <p className="text-[10px] text-[var(--text-muted)]">Editable por el asesor. La distancia solo aparece si está guardada en la zona.</p>
                 </div>
               </div>
             </div>
@@ -4295,3 +4332,4 @@ const renderDeliveryCard = () => {
     </div>
   )
 }
+

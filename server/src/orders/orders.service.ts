@@ -841,14 +841,14 @@ export class OrdersService implements OnModuleInit {
           const notesText = item.notes && cleaned && !item.notes.startsWith('Adición para:') ? ` (${cleaned})` : '';
           const itemTotal = (item.unitPrice || 0) * (item.quantity || 1);
           const priceText = itemTotal > 0 ? ` (${formatCOP(itemTotal)})` : '';
-          let line = `• ${item.quantity}x ${item.menuItem?.name || 'Item'}${priceText}${notesText}`;
+          let line = `• *${item.menuItem?.name || 'Item'} x${item.quantity}*${notesText}${priceText}`;
           if (item.additions && item.additions.length > 0) {
             const additionsText = item.additions.map(a => {
               const aCleaned = this.cleanNotes(a.notes);
               const aNotesText = a.notes && aCleaned && !a.notes.startsWith('Adición para:') ? ` (${aCleaned})` : '';
               const aTotal = (a.unitPrice || 0) * (a.quantity || 1);
               const aPriceText = aTotal > 0 ? ` (${formatCOP(aTotal)})` : '';
-              return `\n  + ${a.quantity}x ${a.menuItem?.name || 'Item'}${aPriceText}${aNotesText}`;
+              return `\n  + ${a.menuItem?.name || 'Item'} x${a.quantity}${aNotesText}${aPriceText}`;
             }).join('');
             line += additionsText;
           }
@@ -1154,12 +1154,12 @@ export class OrdersService implements OnModuleInit {
         const itemsList = grouped.map(item => {
           const cleaned = this.cleanNotes(item.notes);
           const notesText = item.notes && cleaned && !item.notes.startsWith('Adición para:') ? ` (${cleaned})` : '';
-          let line = `• ${item.quantity}x ${item.menuItem?.name || 'Item'}${notesText}`;
+          let line = `• *${item.menuItem?.name || 'Item'} x${item.quantity}*${notesText}`;
           if (item.additions && item.additions.length > 0) {
             const additionsText = item.additions.map(a => {
               const aCleaned = this.cleanNotes(a.notes);
               const aNotesText = a.notes && aCleaned && !a.notes.startsWith('Adición para:') ? ` (${aCleaned})` : '';
-              return `\n  + ${a.quantity}x ${a.menuItem?.name || 'Item'}${aNotesText}`;
+              return `\n  + ${a.menuItem?.name || 'Item'} x${a.quantity}${aNotesText}`;
             }).join('');
             line += additionsText;
           }
@@ -1970,7 +1970,15 @@ export class OrdersService implements OnModuleInit {
 
   private cleanNotes(notes?: string | null): string {
     if (!notes) return '';
-    return notes.replace(/\s*\(#[\w-]+\)/g, '').trim();
+    const cleaned = notes.replace(/\s*\(#[\w-]+\)/g, '').trim();
+    const normalized = cleaned.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
+    // Nunca enviar como nota un producto o una variante mal interpretada del
+    // chat. Las notas de cocina deben ser instrucciones, por ejemplo "sin
+    // salsa" o "sin cebolla".
+    if (/^(?:\d+\s*(?:x\s*)?)?(?:perro|hamburguesa|pizza|gaseosa|jugo|combo|salchich\w*|doble\s+salchich\w*|triple\s+salchich\w*)(?:\s+\d+)?$/.test(normalized)) {
+      return '';
+    }
+    return cleaned;
   }
 
   private groupOrderItems(items: any[]): any[] {

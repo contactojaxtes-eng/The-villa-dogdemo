@@ -78,6 +78,7 @@ export class WhatsappService implements OnModuleInit {
       'whatsapp_verify_token',
       'whatsapp_business_phone',
       'chatbot_enabled',
+      'order_reader_enabled',
       'chatbot_menu_share_message',
       'chatbot_menu_text',
       'chatbot_payment_qr_name',
@@ -127,6 +128,7 @@ export class WhatsappService implements OnModuleInit {
       businessPhone: map.whatsapp_business_phone || '',
       verifyTokenConfigured: !!settings.find(s => s.key === 'whatsapp_verify_token'),
       chatbotEnabled: map.chatbot_enabled === 'true', // Estricto: solo true si explícitamente se guardó como 'true'
+      orderReaderEnabled: map.order_reader_enabled === 'true',
       configured: !!(map.whatsapp_phone_id && settings.find(s => s.key === 'whatsapp_token')),
       menuShareMessage: map.chatbot_menu_share_message || 'Mira nuestra carta actualizada y arma tu pedido aquí:',
       menuText,
@@ -814,6 +816,7 @@ export class WhatsappService implements OnModuleInit {
     verifyToken?: string; 
     businessPhone?: string; 
     chatbotEnabled?: boolean; 
+    orderReaderEnabled?: boolean;
     geminiApiKey?: string; 
     geminiModel?: string;
     aiInstructions?: string;
@@ -833,6 +836,7 @@ export class WhatsappService implements OnModuleInit {
     if (data.verifyToken !== undefined) updates.push({ key: 'whatsapp_verify_token', value: data.verifyToken });
     if (data.businessPhone !== undefined) updates.push({ key: 'whatsapp_business_phone', value: data.businessPhone });
     if (data.chatbotEnabled !== undefined) updates.push({ key: 'chatbot_enabled', value: String(data.chatbotEnabled) });
+    if (data.orderReaderEnabled !== undefined) updates.push({ key: 'order_reader_enabled', value: String(data.orderReaderEnabled) });
     
     if (data.geminiApiKey !== undefined) {
       const incomingRaw = data.geminiApiKey.trim();
@@ -1285,6 +1289,14 @@ export class WhatsappService implements OnModuleInit {
         active: true,
       };
 
+      // Una conversación atendida ayer vuelve disponible cuando el cliente
+      // escribe en un día nuevo. Así "Míos" protege la atención del turno
+      // actual, pero no deja chats antiguos amarrados a una asesora.
+      if (session.assignedToId && previousLastMessageAt && previousLastMessageAt < this.getBogotaDayStart()) {
+        updateData.assignedToId = null;
+        updateData.waitingForAdvisor = false;
+      }
+
       if (detectedCallablePhone) {
         if (!session.customerPhone || (session.customerPhone.length > 12 && detectedCallablePhone.length === 10)) {
           updateData.customerPhone = detectedCallablePhone;
@@ -1396,9 +1408,32 @@ export class WhatsappService implements OnModuleInit {
     }
   }
 
-  async getSessionsStats(userId?: string) {
+  private getBogotaDayStart() {
     const bogotaDateStr = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Bogota' });
-    const todayStart = new Date(`${bogotaDateStr}T00:00:00.000-05:00`);
+    return new Date(`${bogotaDateStr}T00:00:00.000-05:00`);
+  }
+
+  private async releasePreviousDayAssignments() {
+    // Algunos entornos de prueba solo exponen las consultas de lectura.
+    // Prisma real siempre implementa updateMany.
+    if (typeof this.prisma.whatsAppSession.updateMany !== 'function') return;
+    const result = await this.prisma.whatsAppSession.updateMany({
+      where: {
+        active: true,
+        assignedToId: { not: null },
+        lastMessageAt: { lt: this.getBogotaDayStart() },
+      },
+      data: { assignedToId: null, waitingForAdvisor: false },
+    });
+
+    if (result.count > 0) {
+      this.socketGateway.emitWhatsApp('whatsappSessionUpdated', { previousDayAssignmentsReleased: result.count });
+    }
+  }
+
+  async getSessionsStats(userId?: string) {
+    await this.releasePreviousDayAssignments();
+    const todayStart = this.getBogotaDayStart();
     const recentLimit = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
 
     const [total, today, unreadSessions, waiting, unassigned, mine, recentIncoming, recentOutgoing] = await Promise.all([
@@ -1481,6 +1516,7 @@ export class WhatsappService implements OnModuleInit {
     cursor?: string,
     cursorMode?: boolean,
   ) {
+    await this.releasePreviousDayAssignments();
     const cleanSearch = search?.trim() ? search.trim().toLowerCase() : '';
     const safePage = Math.max(1, page || 1);
     const requestedLimit = Number.isFinite(limit) ? Math.trunc(limit as number) : (cleanSearch ? 100 : 60);
@@ -4461,7 +4497,17 @@ Restaurante (Tú):
     };
   }
 
+  async getOrderReaderStatus() {
+    return {
+      enabled: (await this.getSetting('order_reader_enabled')) === 'true',
+    };
+  }
+
   async parseOrderWithGemini(text: string) {
+    const readerEnabled = await this.getSetting('order_reader_enabled');
+    if (readerEnabled !== 'true') {
+      throw new BadRequestException('La lectura automática de pedidos está pausada. Toma el pedido manualmente o actívala en Configuración técnica.');
+    }
     const rawApiKey = await this.getSetting('gemini_api_key');
     if (!rawApiKey) {
       throw new BadRequestException('La clave API de Gemini no está configurada.');

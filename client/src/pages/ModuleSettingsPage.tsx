@@ -63,6 +63,7 @@ interface ModuleDef {
 
 interface WhatsappSettings {
   chatbotEnabled: boolean
+  orderReaderEnabled: boolean
   digitalMenuUrl: string
   menuShareMessage: string
   menuText: string
@@ -165,6 +166,7 @@ const textAreaClass = 'min-h-24 w-full resize-y rounded-xl border border-[var(--
 
 const defaultWhatsappSettings = (): WhatsappSettings => ({
   chatbotEnabled: false,
+  orderReaderEnabled: false,
   digitalMenuUrl: '',
   menuShareMessage: '🍽️ *CARTA DIGITAL THE VILLA DOG*\n\nMira nuestra carta actualizada y arma tu pedido aquí:',
   menuText: '📋 *MENÚ Y PRECIOS VILLA DOG*\n\nLa carta se generará automáticamente desde Productos y Menú.',
@@ -253,6 +255,7 @@ export default function ModuleSettingsPage() {
         }
         setWhatsapp({
           chatbotEnabled: wa.chatbotEnabled === true,
+          orderReaderEnabled: wa.orderReaderEnabled === true,
           digitalMenuUrl,
           menuShareMessage: wa.menuShareMessage || fallback.menuShareMessage,
           menuText: wa.menuText || fallback.menuText,
@@ -297,6 +300,7 @@ export default function ModuleSettingsPage() {
       setWhatsapp(current => ({
         ...current,
         ...(typeof updated?.chatbotEnabled === 'boolean' ? { chatbotEnabled: updated.chatbotEnabled } : {}),
+        ...(typeof updated?.orderReaderEnabled === 'boolean' ? { orderReaderEnabled: updated.orderReaderEnabled } : {}),
         ...(updated?.digitalMenuUrl !== undefined ? { digitalMenuUrl: updated.digitalMenuUrl } : {}),
         ...(updated?.menuShareMessage ? { menuShareMessage: updated.menuShareMessage } : {}),
         ...(updated?.menuText !== undefined ? { menuText: updated.menuText } : {}),
@@ -353,6 +357,7 @@ export default function ModuleSettingsPage() {
     try {
       const updated = await api.put<WhatsappSettings>('/whatsapp/settings', {
         chatbotEnabled: whatsapp.chatbotEnabled,
+        orderReaderEnabled: whatsapp.orderReaderEnabled,
         digital_menu_url: menuUrl,
         menuShareMessage: whatsapp.menuShareMessage,
         paymentQrMode: whatsapp.paymentQrMode,
@@ -362,6 +367,7 @@ export default function ModuleSettingsPage() {
       setWhatsapp(current => ({
         ...current,
         chatbotEnabled: updated.chatbotEnabled === true,
+        orderReaderEnabled: updated.orderReaderEnabled === true,
         digitalMenuUrl: updated.digitalMenuUrl !== undefined ? updated.digitalMenuUrl : (menuUrl || current.digitalMenuUrl),
         menuShareMessage: updated.menuShareMessage || current.menuShareMessage,
         menuText: updated.menuText || current.menuText,
@@ -750,6 +756,10 @@ export default function ModuleSettingsPage() {
               <button type="button" onClick={() => setWhatsapp(current => ({ ...current, chatbotEnabled: !current.chatbotEnabled }))} className={cn('h-9 rounded-xl border px-3 text-xs font-black transition', whatsapp.chatbotEnabled ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-600' : 'border-slate-400/30 bg-slate-500/10 text-[var(--text-secondary)]')}>{whatsapp.chatbotEnabled ? 'Activo' : 'Pausado'}</button>
             </div>
             <div className="space-y-4">
+              <label className="flex cursor-pointer items-center justify-between gap-3 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-3">
+                <span><span className="block text-sm font-bold text-[var(--text-primary)]">Lectura automática para Nuevo Pedido</span><span className="mt-0.5 block text-[10px] leading-4 text-[var(--text-muted)]">Cuando está pausada, las asesoras toman el pedido manualmente y no se consulta la IA.</span></span>
+                <button type="button" onClick={() => setWhatsapp(current => ({ ...current, orderReaderEnabled: !current.orderReaderEnabled }))} className={cn('h-9 shrink-0 rounded-xl border px-3 text-xs font-black transition', whatsapp.orderReaderEnabled ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-600' : 'border-slate-400/30 bg-slate-500/10 text-[var(--text-secondary)]')}>{whatsapp.orderReaderEnabled ? 'Activa' : 'Pausada'}</button>
+              </label>
               <label className="block"><span className="mb-1.5 flex items-center gap-1.5 text-xs font-bold text-[var(--text-secondary)]"><Link2 className="h-3.5 w-3.5" /> Enlace público de la carta</span><div className="flex gap-2"><input value={whatsapp.digitalMenuUrl} onChange={event => setWhatsapp(current => ({ ...current, digitalMenuUrl: event.target.value }))} className={fieldClass} placeholder="https://menu.tu-dominio.com/menu" /><a href={whatsapp.digitalMenuUrl || '/menu'} target="_blank" rel="noreferrer" className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-[var(--border-subtle)] text-[var(--text-secondary)] hover:text-[var(--accent)]" title="Abrir carta"><ExternalLink className="h-4 w-4" /></a></div><span className="mt-1.5 block text-[10px] leading-4 text-[var(--text-muted)]">Es el enlace que reciben los clientes. En producción usa un dominio o subdominio separado de la consola y del backend, por ejemplo <strong>menu.tu-dominio.com/menu</strong>. Si lo dejas vacío, WhatsApp enviará solo la lista de precios hasta que configures <strong>PUBLIC_MENU_URL</strong>.</span></label>
               <label className="block"><span className="mb-1.5 block text-xs font-bold text-[var(--text-secondary)]">Mensaje que acompaña la carta</span><textarea value={whatsapp.menuShareMessage} onChange={event => setWhatsapp(current => ({ ...current, menuShareMessage: event.target.value }))} className={textAreaClass} placeholder="Escribe el mensaje. Puedes usar {url}." /><span className="mt-1 block text-[10px] text-[var(--text-muted)]">Si escribes <strong>{'{url}'}</strong>, el enlace se insertará ahí. Si no, se agrega al final.</span></label>
               <label className="block"><span className="mb-1.5 flex items-center justify-between gap-2 text-xs font-bold text-[var(--text-secondary)]"><span>Texto de la carta que se enviará</span><span className="rounded-full bg-emerald-500/10 px-2 py-1 text-[10px] font-black text-emerald-600">Sincronizado</span></span><textarea value={whatsapp.menuText} readOnly className={`${textAreaClass} min-h-64 cursor-default font-mono text-xs leading-5`} aria-label="Texto de la carta sincronizado" /><span className="mt-1 block text-[10px] text-[var(--text-muted)]">Este texto se actualiza y guarda solo cuando agregas, editas, desactivas o reordenas un producto en Productos y Menú. No necesitas pegarlo ni editar código.</span></label>

@@ -52,6 +52,13 @@ export class WhatsappController {
     return settings;
   }
 
+  @Get('order-reader-status')
+  @UseGuards(JwtAuthGuard)
+  @ApiOperation({ summary: 'Estado de lectura automática para nuevo pedido' })
+  getOrderReaderStatus() {
+    return this.whatsappService.getOrderReaderStatus();
+  }
+
   @Get('debug-pdf')
   async debugPdf() {
     const fs = require('fs');
