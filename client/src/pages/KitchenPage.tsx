@@ -21,6 +21,7 @@ import {
   Copy,
   Check,
   Layers,
+  SlidersHorizontal,
   X,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -553,6 +554,15 @@ export default function KitchenPage() {
     }).length
   }, [scopedTickets])
 
+  const activeFilterCount = Number(stationFilter !== 'ALL') + Number(cookFilter !== 'ALL')
+  const activeTabLabel: Record<KitchenTab, string> = {
+    ALL_ACTIVE: 'En cocina',
+    NEW: 'Nuevos',
+    PREPARING: 'En preparación',
+    READY: 'Listos',
+    HISTORY: 'Historial',
+  }
+
   return (
     <div className="space-y-3">
       {/* Encabezado operativo: deja claro que esta pantalla corresponde a las mesas del salón. */}
@@ -650,6 +660,24 @@ export default function KitchenPage() {
 
       {/* Barra de control superior con Filtros de Estado, Estación y Cocinero */}
       <div className="sticky top-2 z-20 space-y-2.5 rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-panel)]/95 p-2.5 shadow-md backdrop-blur sm:p-3.5">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--border-subtle)] pb-2.5">
+          <div className="flex min-w-0 items-center gap-2">
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[var(--accent)]/10 text-[var(--accent)]">
+              <SlidersHorizontal className="h-4 w-4" />
+            </div>
+            <div className="min-w-0">
+              <p className="text-[11px] font-black uppercase tracking-[0.12em] text-[var(--text-primary)]">Filtros de producción</p>
+              <p className="truncate text-[11px] text-[var(--text-secondary)]">{displayTickets.length} comanda(s) visibles en {activeTabLabel[activeTab].toLocaleLowerCase()}</p>
+            </div>
+          </div>
+          <div className="flex shrink-0 items-center gap-1.5">
+            <span className="rounded-full bg-[var(--bg-elevated)] px-2 py-1 text-[10px] font-black text-[var(--text-secondary)]">{activeTabLabel[activeTab]}</span>
+            {activeFilterCount > 0 && (
+              <span className="rounded-full bg-blue-500/10 px-2 py-1 text-[10px] font-black text-blue-700 dark:text-blue-300">{activeFilterCount} filtro(s)</span>
+            )}
+          </div>
+        </div>
+
         {/* Fila 1: Pestañas de estado + Botón Actualizar */}
         <div className="flex items-center justify-between gap-2">
           <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto pb-1 no-scrollbar">
@@ -749,9 +777,9 @@ export default function KitchenPage() {
 
         {/* Fila 2: Filtros de Estación (si hay más de 1) */}
         {stations.length > 1 && (
-          <div className="flex items-center gap-1 pt-2 border-t border-[var(--border-subtle)] overflow-x-auto pb-0.5 no-scrollbar">
+          <div className="flex flex-wrap items-center gap-1.5 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-2">
             <span className="text-[11px] font-bold text-[var(--text-muted)] shrink-0 mr-1 flex items-center gap-1">
-              Estación:
+              <Layers className="h-3.5 w-3.5 text-[var(--accent)]" /> Estación
             </span>
             <Button
               size="sm"
@@ -777,9 +805,9 @@ export default function KitchenPage() {
 
         {/* Fila 3: Filtro de Cocineros e Historial individual (para Admin / Superadmin / Cajero) */}
         {['ADMIN', 'SUPERADMIN', 'CASHIER'].includes(user?.role || '') && availableCooks.length > 0 && (
-          <div className="flex items-center gap-1.5 pt-2 border-t border-[var(--border-subtle)] overflow-x-auto pb-0.5 no-scrollbar">
+          <div className="flex flex-wrap items-center gap-1.5 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-2">
             <span className="text-[11px] font-bold text-[var(--text-muted)] shrink-0 mr-1 flex items-center gap-1">
-              👨‍🍳 Cocinero:
+              <UserCheck className="h-3.5 w-3.5 text-blue-500" /> Cocinero
             </span>
             <Button
               size="sm"
@@ -835,7 +863,7 @@ export default function KitchenPage() {
         )}
 
         {(stationFilter !== 'ALL' || cookFilter !== 'ALL') && (
-          <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[var(--border-subtle)] pt-2">
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-500/20 bg-amber-500/5 p-2.5">
             <div className="flex min-w-0 flex-wrap items-center gap-1.5 text-[11px] text-[var(--text-secondary)]">
               <span className="font-black uppercase tracking-wide text-[var(--text-muted)]">Filtro activo:</span>
               {stationFilter !== 'ALL' && (
