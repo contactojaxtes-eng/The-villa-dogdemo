@@ -3219,16 +3219,23 @@ const renderDeliveryCard = () => {
         </Button>
         
         <div className={cn("flex-1", embedded ? "space-y-4" : "space-y-5")}>
-          <div className="flex items-start justify-between gap-3">
+          <div className="flex items-start justify-between gap-3 flex-wrap">
             <div>
               <CardTitle className="text-base font-bold text-[var(--text-primary)]">Entrega y pago</CardTitle>
               <CardDescription className="text-xs text-[var(--text-secondary)] mt-0.5">Revisa lo leído del chat antes de confirmar</CardDescription>
             </div>
-            {embedded && (
-              <Button type="button" variant="outline" onClick={() => setStep('menu')} className="h-8 shrink-0 rounded-lg px-2.5 text-[10px] font-bold">
-                <ShoppingCart className="mr-1.5 h-3.5 w-3.5" /> Editar productos
-              </Button>
-            )}
+            <div className="flex items-center gap-2">
+              {cart.length > 0 && (
+                <span className="text-xs font-black text-[var(--accent)] bg-[var(--accent)]/10 px-2.5 py-1 rounded-lg border border-[var(--accent)]/20">
+                  Total: {formatCurrency(total)}
+                </span>
+              )}
+              {embedded && (
+                <Button type="button" variant="outline" onClick={() => setStep('menu')} className="h-8 shrink-0 rounded-lg px-2.5 text-[10px] font-bold">
+                  <ShoppingCart className="mr-1.5 h-3.5 w-3.5" /> Editar productos
+                </Button>
+              )}
+            </div>
           </div>
 
           <div className={cn(
@@ -3989,13 +3996,9 @@ const renderDeliveryCard = () => {
               {renderMenuCard()}
             </div>
           ) : (
-            <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 overflow-y-auto pb-3 pr-1 no-scrollbar xl:grid-cols-[minmax(25rem,1.18fr)_minmax(19rem,0.82fr)] xl:overflow-hidden">
-              <div className="min-h-0 xl:overflow-y-auto xl:pr-1 no-scrollbar">
-                {renderDeliveryCard()}
-              </div>
-              <div className="min-h-0 xl:overflow-y-auto xl:pr-1 no-scrollbar">
-                {renderCartCard(true)}
-              </div>
+            <div className="flex-1 min-h-0 overflow-y-auto space-y-4 pr-1 pb-8 no-scrollbar">
+              {renderDeliveryCard()}
+              {renderCartCard(true)}
             </div>
           )}
         </div>

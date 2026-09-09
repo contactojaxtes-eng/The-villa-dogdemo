@@ -3034,7 +3034,7 @@ function ChatPage() {
         <Card className={cn(
           "border-[var(--border-subtle)] bg-[var(--bg-panel)] rounded-2xl flex flex-col overflow-hidden",
           embeddedOrder
-            ? "hidden lg:flex lg:w-[44%] lg:flex-none"
+            ? "hidden lg:flex lg:w-[40%] xl:w-[38%] lg:flex-none"
             : `flex-1 ${!activeSession ? 'hidden md:flex' : 'flex'}`
         )}>
           {activeSession ? (
