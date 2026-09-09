@@ -356,8 +356,7 @@ export default function KitchenStationsPage() {
     ].join(' ').toLocaleLowerCase()
     return searchable.includes(normalizedStationQuery)
   })
-  const assignedCookIds = new Set(stations.flatMap(station => (station.users || []).map(user => user.id)))
-  const activeAssignedCookCount = Array.from(assignedCookIds).filter(userId => cookStatuses[userId]?.active !== false).length
+
 
   const openCreateModal = () => {
     setEditingId(null)
