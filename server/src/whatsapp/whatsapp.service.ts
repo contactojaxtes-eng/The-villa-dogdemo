@@ -4145,6 +4145,8 @@ Restaurante (Tú):
       // cualquier presupuesto de razonamiento evita que una lectura de chat
       // espere tokens que no necesita.
       config.thinkingConfig = { thinkingBudget: 0 };
+    } else if (/thinking/i.test(model)) {
+      // Modelos de razonamiento (thinking) no admiten el parámetro temperature en la API de Google
     } else if (options.temperature !== undefined) {
       config.temperature = options.temperature;
     }
