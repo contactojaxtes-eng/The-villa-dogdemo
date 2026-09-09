@@ -15,7 +15,7 @@ import { Separator } from '@/components/ui/separator'
 import { 
   Users, Search, Plus, Phone, Award, Bike, DollarSign, History, 
   ArrowLeft, Loader2, CheckCircle2, AlertTriangle, Edit, Trash2, ShieldAlert,
-  User, MapPin, ClipboardList, UtensilsCrossed, XCircle, Printer, FileSpreadsheet, FileText, Download, Wallet
+  User, MapPin, ClipboardList, UtensilsCrossed, XCircle, Printer, FileSpreadsheet, FileText, Download, Wallet, RefreshCw, SlidersHorizontal, CalendarDays
 } from 'lucide-react'
 import { formatCurrency, formatDate, getStatusColor, getStatusLabel, cleanNotes, groupOrderItems, formatThousandsInput, parseThousandsInput } from '@/lib/utils'
 import { printComandaSmart } from '@/lib/printer'
@@ -41,6 +41,7 @@ interface Driver {
   active: boolean
   createdAt: string
   completedDeliveries: number
+  activeDeliveries?: number
   totalDeliveryEarnings: number
   totalDeliveredSales?: number
   pendingCash?: number
@@ -67,6 +68,15 @@ interface DriverDetail {
 
 const fadeUp = { hidden: { opacity: 0, y: 15 }, visible: { opacity: 1, y: 0, transition: { duration: 0.3 } } }
 
+const PERIOD_OPTIONS: Array<{ value: string; label: string; description: string }> = [
+  { value: 'CURRENT', label: 'Turno actual', description: 'Caja Domicilios abierta' },
+  { value: 'WEEK', label: 'Esta semana', description: 'Lunes a domingo' },
+  { value: 'MONTH', label: 'Este mes', description: 'Desde el día 1' },
+  { value: 'CLOSING', label: 'Cierre de caja', description: 'Escoge un turno cerrado' },
+  { value: 'DATE', label: 'Por fecha', description: 'Un día específico' },
+  { value: 'ALL', label: 'Histórico', description: 'Todas las cajas' },
+]
+
 export default function DriversPage() {
   const { user, hasRole, hasPermission } = useAuth()
   const [drivers, setDrivers] = useState<Driver[]>([])
@@ -75,7 +85,9 @@ export default function DriversPage() {
   const [selectedClosingId, setSelectedClosingId] = useState<string>('')
   const [selectedDate, setSelectedDate] = useState<string>(new Date().toLocaleDateString('en-CA', { timeZone: 'America/Bogota' }))
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState('')
   const [search, setSearch] = useState('')
+  const [statusFilter, setStatusFilter] = useState<'ALL' | 'ACTIVE' | 'INACTIVE' | 'PENDING_CASH'>('ALL')
   const [exporting, setExporting] = useState<'excel' | 'pdf' | null>(null)
   
   // Dialog state
@@ -100,6 +112,7 @@ export default function DriversPage() {
 
   const loadDrivers = useCallback(async () => {
     setLoading(true)
+    setLoadError('')
     try {
       const params = new URLSearchParams()
       params.append('filterType', filterType)
@@ -113,6 +126,7 @@ export default function DriversPage() {
       setDrivers(data)
     } catch (err) {
       console.error('Error al cargar domiciliarios:', err)
+      setLoadError('No se pudo actualizar la lista de domiciliarios. Revisa la conexión e inténtalo de nuevo.')
     } finally {
       setLoading(false)
     }
@@ -167,8 +181,14 @@ export default function DriversPage() {
         d.name.toLowerCase().includes(q) || 
         d.phone.includes(q)
       )
-      .sort((a, b) => b.completedDeliveries - a.completedDeliveries || a.name.localeCompare(b.name))
-  }, [drivers, search])
+      .filter(d => {
+        if (statusFilter === 'ACTIVE') return d.active
+        if (statusFilter === 'INACTIVE') return !d.active
+        if (statusFilter === 'PENDING_CASH') return (d.pendingCash || 0) > 0
+        return true
+      })
+      .sort((a, b) => (b.active ? 1 : 0) - (a.active ? 1 : 0) || (b.pendingCash || 0) - (a.pendingCash || 0) || b.completedDeliveries - a.completedDeliveries || a.name.localeCompare(b.name))
+  }, [drivers, search, statusFilter])
 
   // Ranking calculation
   const rankedDrivers = useMemo(() => {
@@ -180,10 +200,18 @@ export default function DriversPage() {
   const summary = useMemo(() => {
     const total = drivers.length
     const active = drivers.filter(d => d.active).length
+    const activeDeliveries = drivers.reduce((sum, d) => sum + (d.activeDeliveries || 0), 0)
+    const completed = drivers.reduce((sum, d) => sum + d.completedDeliveries, 0)
     const totalFees = drivers.reduce((sum, d) => sum + d.totalDeliveryEarnings, 0)
     const pendingCash = drivers.reduce((sum, d) => sum + (d.pendingCash || 0), 0)
-    return { total, active, totalFees, pendingCash }
+    return { total, active, activeDeliveries, completed, totalFees, pendingCash }
   }, [drivers])
+
+  const hasLocalFilters = Boolean(search.trim()) || statusFilter !== 'ALL'
+  const clearLocalFilters = () => {
+    setSearch('')
+    setStatusFilter('ALL')
+  }
 
   const openSettlementDialog = (driver: Driver) => {
     setSettlementDriver(driver)
@@ -321,11 +349,11 @@ export default function DriversPage() {
         ['REPORTE DE DOMICILIARIOS — THE VILLA DOG'],
         ['Filtro Aplicado', filterLabel],
         ['Fecha de Generación', new Date().toLocaleString('es-CO')],
-        ['Total Domiciliarios', drivers.length],
+        ['Total Domiciliarios', filteredDrivers.length],
         ['Total Tarifas Entregadas', formatCurrency(summary.totalFees)],
         [''],
         ['DOMICILIARIO', 'TELÉFONO', 'ESTADO', 'DOMICILIOS ENTREGADOS', 'RECAUDO FLETES', 'TOTAL VENTAS ENTREGADAS'],
-        ...drivers.map(d => [
+        ...filteredDrivers.map(d => [
           d.name,
           d.phone,
           d.active ? 'Activo' : 'Inactivo',
@@ -340,7 +368,7 @@ export default function DriversPage() {
 
       // 2. Detalle de Entregas por Fecha
       const allDeliveries: any[] = []
-      for (const d of drivers) {
+      for (const d of filteredDrivers) {
         if (d.orders && d.orders.length > 0) {
           for (const o of d.orders) {
             allDeliveries.push({
@@ -424,7 +452,7 @@ export default function DriversPage() {
       autoTable(doc, {
         startY: y,
         head: [['Domiciliario', 'Teléfono', 'Estado', 'Entregas', 'Recaudo Fletes', 'Total Transportado']],
-        body: drivers.map(d => [
+        body: filteredDrivers.map(d => [
           d.name,
           d.phone,
           d.active ? 'Activo' : 'Inactivo',
@@ -443,7 +471,7 @@ export default function DriversPage() {
 
       // Section 2: DETALLE DE ENTREGAS
       const allDeliveries: any[] = []
-      for (const d of drivers) {
+      for (const d of filteredDrivers) {
         if (d.orders && d.orders.length > 0) {
           for (const o of d.orders) {
             allDeliveries.push({
@@ -499,33 +527,36 @@ export default function DriversPage() {
   }
 
   return (
-    <div className="space-y-6 max-w-7xl pb-12">
+    <div className="mx-auto w-full max-w-7xl space-y-6 pb-12">
       {/* Header */}
-      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 border-b border-[var(--border-subtle)] pb-5">
-        <div>
-          <h2 className="antifont text-4xl tracking-wider text-[var(--text-primary)] leading-none uppercase">Domiciliarios</h2>
-          <p className="text-[var(--text-secondary)] text-xs mt-1.5 font-medium">Control, entrega y ranking de repartidores en tiempo real.</p>
+      <div className="flex flex-col gap-4 border-b border-[var(--border-subtle)] pb-5 lg:flex-row lg:items-end lg:justify-between">
+        <div className="min-w-0">
+          <div className="mb-2 flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.18em] text-[var(--accent)]">
+            <Bike className="h-4 w-4" /> Operación de domicilios
+          </div>
+          <h2 className="antifont text-3xl tracking-wider text-[var(--text-primary)] leading-none uppercase sm:text-4xl">Domiciliarios</h2>
+          <p className="mt-2 max-w-xl text-xs font-medium leading-5 text-[var(--text-secondary)]">Consulta el desempeño, el efectivo pendiente y el estado de cada repartidor en el período seleccionado.</p>
         </div>
         <div className="flex items-center gap-2.5 flex-wrap">
           {hasPermission('drivers.export') && (
             <>
-              <Button 
+              <Button
                 onClick={handleExportExcel}
                 disabled={exporting !== null || loading}
                 variant="outline"
                 className="border-emerald-500/30 text-emerald-500 hover:bg-emerald-500/10 font-bold rounded-xl h-11 px-4 gap-1.5 cursor-pointer text-xs uppercase tracking-wider bg-[var(--bg-panel)]"
               >
                 {exporting === 'excel' ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileSpreadsheet className="h-4 w-4" />}
-                Excel
+                Exportar Excel
               </Button>
-              <Button 
+              <Button
                 onClick={handleExportPDF}
                 disabled={exporting !== null || loading}
                 variant="outline"
                 className="border-red-500/30 text-red-500 hover:bg-red-500/10 font-bold rounded-xl h-11 px-4 gap-1.5 cursor-pointer text-xs uppercase tracking-wider bg-[var(--bg-panel)]"
               >
                 {exporting === 'pdf' ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileText className="h-4 w-4" />}
-                PDF
+                Exportar PDF
               </Button>
             </>
           )}
@@ -534,58 +565,62 @@ export default function DriversPage() {
               onClick={openCreateDialog}
               className="bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-fg)] font-extrabold rounded-xl h-11 px-5 gap-1.5 shadow-md shadow-[var(--accent)]/10 border-0 cursor-pointer text-xs uppercase tracking-wider"
             >
-              <Plus className="h-4.5 w-4.5" /> Agregar Repartidor
+              <Plus className="h-4.5 w-4.5" /> Nuevo domiciliario
             </Button>
           )}
         </div>
       </div>
 
       {/* Summary Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
-        <Card className="border-[var(--border-subtle)] bg-[var(--bg-panel)] shadow-sm rounded-2xl">
-          <CardContent className="p-5 flex items-center justify-between">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <Card className="rounded-2xl border-[var(--border-subtle)] bg-[var(--bg-panel)] shadow-sm">
+          <CardContent className="flex items-center justify-between p-4 sm:p-5">
             <div>
-              <p className="text-[10px] font-bold text-[var(--text-secondary)] uppercase tracking-wider">Total Creados</p>
-              <h3 className="text-3xl font-black text-[var(--text-primary)] mt-1.5">{summary.total}</h3>
+              <p className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-secondary)]">Domiciliarios</p>
+              <h3 className="mt-1.5 text-3xl font-black text-[var(--text-primary)]">{summary.total}</h3>
+              <p className="mt-1 text-[10px] font-semibold text-emerald-600">{summary.active} activos</p>
             </div>
-            <div className="h-12 w-12 rounded-xl bg-[var(--accent-muted)]/40 flex items-center justify-center text-[var(--accent)]">
+            <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-[var(--accent-muted)]/40 text-[var(--accent)]">
               <Users className="h-6 w-6" />
             </div>
           </CardContent>
         </Card>
 
-        <Card className="border-amber-500/25 bg-[var(--bg-panel)] shadow-sm rounded-2xl">
-          <CardContent className="p-5 flex items-center justify-between">
+        <Card className="rounded-2xl border-[var(--border-subtle)] bg-[var(--bg-panel)] shadow-sm">
+          <CardContent className="flex items-center justify-between p-4 sm:p-5">
             <div>
-              <p className="text-[10px] font-bold text-[var(--text-secondary)] uppercase tracking-wider">Efectivo por entregar</p>
-              <h3 className="text-3xl font-black text-amber-500 mt-1.5">{formatCurrency(summary.pendingCash)}</h3>
+              <p className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-secondary)]">Entregas completadas</p>
+              <h3 className="mt-1.5 text-3xl font-black text-[var(--text-primary)]">{summary.completed}</h3>
+              <p className="mt-1 text-[10px] font-semibold text-[var(--text-secondary)]">En {getFilterDescription().toLowerCase()}</p>
             </div>
-            <div className="h-12 w-12 rounded-xl bg-amber-500/10 flex items-center justify-center text-amber-500">
-              <Wallet className="h-6 w-6" />
+            <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-blue-500/10 text-blue-600">
+              <CheckCircle2 className="h-6 w-6" />
             </div>
           </CardContent>
         </Card>
-        
-        <Card className="border-[var(--border-subtle)] bg-[var(--bg-panel)] shadow-sm rounded-2xl">
-          <CardContent className="p-5 flex items-center justify-between">
+
+        <Card className="rounded-2xl border-emerald-500/25 bg-[var(--bg-panel)] shadow-sm">
+          <CardContent className="flex items-center justify-between p-4 sm:p-5">
             <div>
-              <p className="text-[10px] font-bold text-[var(--text-secondary)] uppercase tracking-wider">Choferes Activos</p>
-              <h3 className="text-3xl font-black text-emerald-500 mt-1.5">{summary.active}</h3>
+              <p className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-secondary)]">En ruta ahora</p>
+              <h3 className="mt-1.5 text-3xl font-black text-emerald-600">{summary.activeDeliveries}</h3>
+              <p className="mt-1 text-[10px] font-semibold text-[var(--text-secondary)]">Pedidos asignados</p>
             </div>
-            <div className="h-12 w-12 rounded-xl bg-emerald-500/10 flex items-center justify-center text-emerald-500">
+            <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-emerald-500/10 text-emerald-600">
               <Bike className="h-6 w-6" />
             </div>
           </CardContent>
         </Card>
 
-        <Card className="border-[var(--border-subtle)] bg-[var(--bg-panel)] shadow-sm rounded-2xl">
-          <CardContent className="p-5 flex items-center justify-between">
+        <Card className="rounded-2xl border-amber-500/25 bg-[var(--bg-panel)] shadow-sm">
+          <CardContent className="flex items-center justify-between p-4 sm:p-5">
             <div>
-              <p className="text-[10px] font-bold text-[var(--text-secondary)] uppercase tracking-wider">Tarifas Entregadas</p>
-              <h3 className="text-3xl font-black text-[var(--accent)] mt-1.5">{formatCurrency(summary.totalFees)}</h3>
+              <p className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-secondary)]">Efectivo pendiente</p>
+              <h3 className="mt-1.5 text-3xl font-black text-amber-600">{formatCurrency(summary.pendingCash)}</h3>
+              <p className="mt-1 text-[10px] font-semibold text-[var(--text-secondary)]">Fletes entregados: {formatCurrency(summary.totalFees)}</p>
             </div>
-            <div className="h-12 w-12 rounded-xl bg-[var(--accent-muted)]/40 flex items-center justify-center text-[var(--accent)]">
-              <DollarSign className="h-6 w-6" />
+            <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-amber-500/10 text-amber-600">
+              <Wallet className="h-6 w-6" />
             </div>
           </CardContent>
         </Card>
@@ -594,63 +629,138 @@ export default function DriversPage() {
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
         {/* Left Side: Search & Drivers List */}
         <div className="lg:col-span-8 space-y-4">
-          <Card className="border-[var(--border-subtle)] bg-[var(--bg-panel)] shadow-sm rounded-2xl">
-            <CardContent className="p-4">
-              <div className="flex flex-col sm:flex-row gap-3">
-                <div className="relative flex-1">
-                  <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-[var(--text-muted)]" />
-                  <Input
-                    value={search}
-                    onChange={e => setSearch(e.target.value)}
-                    placeholder="Buscar domiciliario por nombre o teléfono..."
-                    className="bg-[var(--bg-input)] border-[var(--border-default)] rounded-xl h-11 pl-10 text-xs focus:border-[var(--accent)] font-semibold"
-                  />
+          <Card className="rounded-2xl border-[var(--border-subtle)] bg-[var(--bg-panel)] shadow-sm">
+            <CardContent className="space-y-4 p-4 sm:p-5">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <p className="flex items-center gap-1.5 text-sm font-black text-[var(--text-primary)]"><SlidersHorizontal className="h-4 w-4 text-[var(--accent)]" /> Filtros de consulta</p>
+                  <p className="mt-1 text-[10px] leading-4 text-[var(--text-secondary)]">Elige un período y luego busca por nombre, celular o estado.</p>
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => loadDrivers()}
+                  disabled={loading}
+                  className="h-9 shrink-0 rounded-xl border-[var(--border-default)] px-3 text-[10px] font-extrabold text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]"
+                >
+                  <RefreshCw className={`mr-1.5 h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} /> Actualizar
+                </Button>
+              </div>
+
+              <div className="relative">
+                <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--text-muted)]" />
+                <Input
+                  value={search}
+                  onChange={e => setSearch(e.target.value)}
+                  placeholder="Buscar por nombre o teléfono..."
+                  aria-label="Buscar domiciliario por nombre o teléfono"
+                  className="h-11 rounded-xl border-[var(--border-default)] bg-[var(--bg-input)] pl-10 pr-10 text-xs font-semibold focus:border-[var(--accent)]"
+                />
+                {search && (
+                  <button type="button" onClick={() => setSearch('')} title="Limpiar búsqueda" className="absolute right-2.5 top-1/2 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-lg text-[var(--text-muted)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]">
+                    <XCircle className="h-4 w-4" />
+                  </button>
+                )}
+              </div>
+
+              <div className="space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-[10px] font-black uppercase tracking-wider text-[var(--text-secondary)]">Período</p>
+                  <span className="truncate text-[10px] font-semibold text-[var(--accent)]">{getFilterDescription()}</span>
+                </div>
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                  {PERIOD_OPTIONS.map(option => {
+                    const selected = filterType === option.value
+                    return (
+                      <button
+                        key={option.value}
+                        type="button"
+                        onClick={() => setFilterType(option.value)}
+                        aria-pressed={selected}
+                        className={`min-h-[54px] rounded-xl border px-3 py-2 text-left transition-all ${selected ? 'border-[var(--accent)] bg-[var(--accent)]/10 text-[var(--accent)] shadow-sm' : 'border-[var(--border-subtle)] bg-[var(--bg-base)] text-[var(--text-secondary)] hover:border-[var(--accent)]/40 hover:bg-[var(--bg-hover)]'}`}
+                      >
+                        <span className="block text-[11px] font-black">{option.label}</span>
+                        <span className="mt-0.5 block truncate text-[9px] font-medium opacity-75">{option.description}</span>
+                      </button>
+                    )
+                  })}
                 </div>
 
-                <div className="shrink-0 flex flex-col sm:flex-row flex-wrap gap-2 items-stretch sm:items-center">
-                  <select
-                    value={filterType}
-                    onChange={e => setFilterType(e.target.value)}
-                    className="bg-[var(--bg-input)] border border-[var(--border-default)] rounded-xl h-11 px-3 text-xs font-extrabold text-[var(--text-primary)] focus:border-[var(--accent)] cursor-pointer min-w-[220px]"
-                  >
-                    <option value="CURRENT">🟢 Turno Actual</option>
-                    <option value="WEEK">📆 Esta Semana (Lunes a Domingo)</option>
-                    <option value="MONTH">🗓️ Este Mes</option>
-                    <option value="CLOSING">📋 Por Cierre de Caja</option>
-                    <option value="DATE">📆 Por Fecha (Calendario)</option>
-                    <option value="ALL">🌐 Todas las Cajas (Histórico)</option>
-                  </select>
-
-                  {filterType === 'CLOSING' && (
+                {filterType === 'CLOSING' && (
+                  <div className="rounded-xl border border-[var(--accent)]/25 bg-[var(--accent)]/5 p-3">
+                    <label htmlFor="driver-closing" className="mb-1.5 flex items-center gap-1.5 text-[10px] font-black uppercase tracking-wider text-[var(--text-secondary)]"><ClipboardList className="h-3.5 w-3.5 text-[var(--accent)]" /> Selecciona el cierre</label>
                     <select
+                      id="driver-closing"
                       value={selectedClosingId}
                       onChange={e => setSelectedClosingId(e.target.value)}
-                      className="bg-[var(--bg-input)] border border-[var(--accent)]/50 rounded-xl h-11 px-3 text-xs font-extrabold text-[var(--text-primary)] focus:border-[var(--accent)] cursor-pointer min-w-[260px] max-w-full shadow-sm"
+                      className="h-10 w-full rounded-xl border border-[var(--border-default)] bg-[var(--bg-input)] px-3 text-xs font-bold text-[var(--text-primary)] focus:border-[var(--accent)]"
                     >
                       {closings.length === 0 ? (
                         <option value="">Sin cierres registrados</option>
                       ) : (
                         closings.map((c, idx) => (
                           <option key={c.id} value={c.id}>
-                            Turno #{closings.length - idx} — {formatDate(c.shiftStart)} {c.user?.name ? `(${c.user.name})` : ''}
+                            Turno #{closings.length - idx} · {formatDate(c.shiftStart)} {c.user?.name ? `· ${c.user.name}` : ''}
                           </option>
                         ))
                       )}
                     </select>
-                  )}
+                    {closings.length === 0 && <p className="mt-1.5 text-[10px] text-[var(--text-secondary)]">Aún no existe un cierre para consultar.</p>}
+                  </div>
+                )}
 
-                  {filterType === 'DATE' && (
+                {filterType === 'DATE' && (
+                  <div className="rounded-xl border border-[var(--accent)]/25 bg-[var(--accent)]/5 p-3">
+                    <label htmlFor="driver-date" className="mb-1.5 flex items-center gap-1.5 text-[10px] font-black uppercase tracking-wider text-[var(--text-secondary)]"><CalendarDays className="h-3.5 w-3.5 text-[var(--accent)]" /> Selecciona el día</label>
                     <Input
+                      id="driver-date"
                       type="date"
                       value={selectedDate}
                       onChange={e => setSelectedDate(e.target.value)}
-                      className="bg-[var(--bg-input)] border border-[var(--accent)]/50 rounded-xl h-11 px-3 text-xs font-extrabold text-[var(--text-primary)] focus:border-[var(--accent)] cursor-pointer min-w-[170px]"
+                      className="h-10 rounded-xl border-[var(--border-default)] bg-[var(--bg-input)] px-3 text-xs font-bold text-[var(--text-primary)] focus:border-[var(--accent)]"
                     />
-                  )}
+                  </div>
+                )}
+              </div>
+
+              <div className="space-y-2">
+                <p className="text-[10px] font-black uppercase tracking-wider text-[var(--text-secondary)]">Mostrar domiciliarios</p>
+                <div className="flex flex-wrap gap-2">
+                  {([
+                    ['ALL', 'Todos', drivers.length],
+                    ['ACTIVE', 'Activos', summary.active],
+                    ['INACTIVE', 'Inactivos', Math.max(0, summary.total - summary.active)],
+                    ['PENDING_CASH', 'Con efectivo pendiente', drivers.filter(d => (d.pendingCash || 0) > 0).length],
+                  ] as const).map(([value, label, count]) => (
+                    <button
+                      key={value}
+                      type="button"
+                      onClick={() => setStatusFilter(value)}
+                      aria-pressed={statusFilter === value}
+                      className={`rounded-full border px-3 py-1.5 text-[10px] font-extrabold transition-all ${statusFilter === value ? 'border-[var(--accent)] bg-[var(--accent)] text-[var(--accent-fg)] shadow-sm' : 'border-[var(--border-default)] bg-[var(--bg-base)] text-[var(--text-secondary)] hover:border-[var(--accent)]/50 hover:text-[var(--text-primary)]'}`}
+                    >
+                      {label} <span className="ml-1 opacity-75">{count}</span>
+                    </button>
+                  ))}
                 </div>
               </div>
+
+              {hasLocalFilters && (
+                <div className="flex items-center justify-between gap-2 rounded-xl border border-blue-500/20 bg-blue-500/5 px-3 py-2 text-[10px] text-blue-700 dark:text-blue-300">
+                  <span>Filtros locales: {filteredDrivers.length} resultado{filteredDrivers.length === 1 ? '' : 's'}.</span>
+                  <button type="button" onClick={clearLocalFilters} className="font-black underline hover:no-underline">Limpiar</button>
+                </div>
+              )}
             </CardContent>
           </Card>
+
+          {loadError && (
+            <div className="flex items-center gap-3 rounded-2xl border border-[var(--destructive)]/25 bg-[var(--destructive)]/5 px-4 py-3 text-xs text-[var(--destructive)]">
+              <AlertTriangle className="h-4 w-4 shrink-0" />
+              <span className="flex-1 leading-5">{loadError}</span>
+              <Button type="button" variant="outline" onClick={() => loadDrivers()} className="h-8 rounded-lg border-[var(--destructive)]/30 px-2.5 text-[10px] font-black text-[var(--destructive)] hover:bg-[var(--destructive)]/10">Reintentar</Button>
+            </div>
+          )}
 
           {loading ? (
             <div className="flex flex-col items-center py-20 text-[var(--text-secondary)]">
@@ -658,10 +768,12 @@ export default function DriversPage() {
               <span className="text-xs font-semibold mt-2">Cargando domiciliarios...</span>
             </div>
           ) : filteredDrivers.length === 0 ? (
-            <Card className="border-[var(--border-subtle)] bg-[var(--bg-panel)] rounded-2xl p-16 text-center text-[var(--text-muted)]">
-              <Bike className="mx-auto h-12 w-12 opacity-30 animate-bounce" />
-              <p className="font-bold text-sm mt-3 text-[var(--text-primary)]">No hay repartidores registrados</p>
-              <p className="text-xs mt-1">Registra los domiciliarios que realizan las entregas físicas en Montería.</p>
+            <Card className="rounded-2xl border-[var(--border-subtle)] bg-[var(--bg-panel)] p-10 text-center text-[var(--text-muted)] sm:p-16">
+              {hasLocalFilters ? <Search className="mx-auto h-12 w-12 opacity-30" /> : <Bike className="mx-auto h-12 w-12 opacity-30" />}
+              <p className="mt-3 text-sm font-bold text-[var(--text-primary)]">{hasLocalFilters ? 'No hay coincidencias' : 'No hay domiciliarios registrados'}</p>
+              <p className="mt-1 text-xs">{hasLocalFilters ? 'Prueba otro nombre o limpia los filtros de estado.' : 'Registra los domiciliarios que realizan las entregas físicas.'}</p>
+              {hasLocalFilters && <Button type="button" variant="outline" onClick={clearLocalFilters} className="mt-4 h-9 rounded-xl px-3 text-[10px] font-black">Limpiar filtros</Button>}
+              {!hasLocalFilters && hasPermission('drivers.manage') && <Button type="button" onClick={openCreateDialog} className="mt-4 h-9 rounded-xl bg-[var(--accent)] px-3 text-[10px] font-black text-[var(--accent-fg)]">+ Registrar domiciliario</Button>}
             </Card>
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -675,40 +787,51 @@ export default function DriversPage() {
                     exit="hidden"
                     layout
                   >
-                    <Card className={`border border-[var(--border-subtle)] bg-[var(--bg-panel)] rounded-2xl hover:border-[var(--accent)]/30 transition-all duration-200 shadow-md overflow-hidden ${!d.active ? 'opacity-65' : ''}`}>
-                      <CardContent className="p-5 space-y-4">
+                    <Card className={`overflow-hidden rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] shadow-md transition-all duration-200 hover:border-[var(--accent)]/40 ${!d.active ? 'opacity-65' : ''}`}>
+                      <CardContent className="space-y-4 p-4 sm:p-5">
                         <div className="flex items-start justify-between gap-3">
-                          <div className="min-w-0">
-                            <h4 className="font-extrabold text-base text-[var(--text-primary)] truncate leading-snug">{d.name}</h4>
-                            <a href={`tel:${d.phone}`} className="flex items-center gap-1.5 text-xs text-[var(--accent)] font-bold mt-1 hover:underline">
-                              <Phone className="h-3 w-3" />
-                              {d.phone}
-                            </a>
+                          <div className="flex min-w-0 items-center gap-3">
+                            <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-sm font-black ${d.active ? 'bg-emerald-500/10 text-emerald-600' : 'bg-slate-500/10 text-slate-500'}`}>
+                              {d.name.split(' ').map(part => part[0]).join('').slice(0, 2).toUpperCase()}
+                            </div>
+                            <div className="min-w-0">
+                              <h4 className="truncate text-base font-extrabold leading-snug text-[var(--text-primary)]">{d.name}</h4>
+                              <a href={`tel:${d.phone}`} className="mt-1 flex items-center gap-1.5 text-xs font-bold text-[var(--accent)] hover:underline">
+                                <Phone className="h-3 w-3" /> {d.phone}
+                              </a>
+                            </div>
                           </div>
-                          <Badge 
-                            variant="outline" 
-                            className={`rounded-full text-[9px] uppercase px-2 py-0.5 font-extrabold ${
-                              d.active 
-                                ? 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20' 
-                                : 'bg-zinc-500/10 text-zinc-400 border-zinc-500/20'
-                            }`}
+                          <Badge
+                            variant="outline"
+                            className={`shrink-0 rounded-full px-2 py-0.5 text-[9px] font-extrabold uppercase ${d.active ? 'border-emerald-500/20 bg-emerald-500/10 text-emerald-500' : 'border-zinc-500/20 bg-zinc-500/10 text-zinc-400'}`}
                           >
-                            {d.active ? 'Activo' : 'Inactivo'}
+                            <span className="mr-1">●</span>{d.active ? 'Activo' : 'Inactivo'}
                           </Badge>
                         </div>
 
                         <Separator className="bg-[var(--border-subtle)]/50" />
 
-                        <div className="grid grid-cols-2 gap-2 text-center">
-                          <div className="bg-[var(--bg-elevated)]/50 rounded-xl p-2 border border-[var(--border-subtle)]/40">
-                            <p className="text-[9px] font-bold text-[var(--text-secondary)] uppercase tracking-wider">Entregas</p>
-                            <p className="text-base font-black text-[var(--text-primary)] mt-0.5">{d.completedDeliveries}</p>
+                        <div className="grid grid-cols-3 gap-2 text-center">
+                          <div className="rounded-xl border border-[var(--border-subtle)]/40 bg-[var(--bg-elevated)]/50 p-2">
+                            <p className="text-[9px] font-bold uppercase tracking-wider text-[var(--text-secondary)]">Entregas</p>
+                            <p className="mt-0.5 text-base font-black text-[var(--text-primary)]">{d.completedDeliveries}</p>
                           </div>
-                          <div className="bg-[var(--bg-elevated)]/50 rounded-xl p-2 border border-[var(--border-subtle)]/40">
-                            <p className="text-[9px] font-bold text-[var(--text-secondary)] uppercase tracking-wider">Recaudo Flete</p>
-                            <p className="text-base font-black text-[var(--accent)] mt-0.5">{formatCurrency(d.totalDeliveryEarnings)}</p>
+                          <div className="rounded-xl border border-[var(--border-subtle)]/40 bg-[var(--bg-elevated)]/50 p-2">
+                            <p className="text-[9px] font-bold uppercase tracking-wider text-[var(--text-secondary)]">En ruta</p>
+                            <p className="mt-0.5 text-base font-black text-emerald-600">{d.activeDeliveries || 0}</p>
+                          </div>
+                          <div className="rounded-xl border border-[var(--border-subtle)]/40 bg-[var(--bg-elevated)]/50 p-2">
+                            <p className="text-[9px] font-bold uppercase tracking-wider text-[var(--text-secondary)]">Fletes</p>
+                            <p className="mt-0.5 text-sm font-black text-[var(--accent)]">{formatCurrency(d.totalDeliveryEarnings || 0)}</p>
                           </div>
                         </div>
+
+                        {(d.pendingCash || 0) > 0 && (
+                          <div className="flex items-center justify-between gap-2 rounded-xl border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-[10px] font-bold text-amber-700 dark:text-amber-300">
+                            <span className="flex items-center gap-1.5"><Wallet className="h-3.5 w-3.5" /> Efectivo pendiente</span>
+                            <span className="text-xs font-black">{formatCurrency(d.pendingCash || 0)}</span>
+                          </div>
+                        )}
 
                         <div className="flex items-center justify-between gap-2 pt-1.5">
                           <Button
@@ -717,7 +840,7 @@ export default function DriversPage() {
                             onClick={() => handleViewDetail(d.id)}
                             className="h-8 text-[10px] font-bold rounded-xl px-3 border-[var(--border-default)] hover:bg-[var(--bg-hover)] text-[var(--text-secondary)] flex items-center gap-1 cursor-pointer active:scale-95 transition-all"
                           >
-                            <History className="h-3.5 w-3.5" /> Historial
+                            <History className="h-3.5 w-3.5" /> Ver entregas
                           </Button>
                           <div className="flex items-center gap-1">
                             {hasPermission('drivers.manage') && (
@@ -749,7 +872,7 @@ export default function DriversPage() {
                             onClick={() => openSettlementDialog(d)}
                             className="h-10 w-full rounded-xl border border-amber-500/30 bg-amber-500/10 text-xs font-extrabold text-amber-600 hover:bg-amber-500/20"
                           >
-                            <DollarSign className="mr-1.5 h-4 w-4" /> Liquidar {formatCurrency(d.pendingCash || 0)}
+                            <DollarSign className="mr-1.5 h-4 w-4" /> Recibir efectivo · {formatCurrency(d.pendingCash || 0)}
                           </Button>
                         )}
                       </CardContent>

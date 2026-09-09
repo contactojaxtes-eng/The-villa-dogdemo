@@ -64,12 +64,20 @@ export class DeliveryDriversService {
       const monthStartStr = `${todayBogotaStr.substring(0, 7)}-01`;
       const monthStart = new Date(`${monthStartStr}T05:00:00.000-05:00`);
       orderDateFilter = { createdAt: { gte: monthStart } };
-    } else if (filterType === 'DATE' && selectedDate) {
-      const dateStart = new Date(`${selectedDate}T05:00:00.000-05:00`);
-      const dateEnd = getBogotaEndOfDay(selectedDate);
-      orderDateFilter = { createdAt: { gte: dateStart, lte: dateEnd } };
-    } else if (filterType === 'CLOSING' && cashClosingId) {
-      const closing = await this.prisma.cashClosing.findUnique({ where: { id: cashClosingId } });
+    } else if (filterType === 'DATE') {
+      if (selectedDate) {
+        const dateStart = new Date(`${selectedDate}T05:00:00.000-05:00`);
+        const dateEnd = getBogotaEndOfDay(selectedDate);
+        orderDateFilter = { createdAt: { gte: dateStart, lte: dateEnd } };
+      } else {
+        // A date report without a selected date must remain empty instead of
+        // silently falling back to the current shift.
+        orderDateFilter = { id: 'impossible_id_no_selected_date' };
+      }
+    } else if (filterType === 'CLOSING') {
+      const closing = cashClosingId
+        ? await this.prisma.cashClosing.findUnique({ where: { id: cashClosingId } })
+        : null;
       if (closing) {
         orderDateFilter = {
           createdAt: {
@@ -77,6 +85,9 @@ export class DeliveryDriversService {
             ...(closing.shiftEnd ? { lte: closing.shiftEnd } : {}),
           },
         };
+      } else {
+        // Do not show another shift while the user is choosing a closing.
+        orderDateFilter = { id: 'impossible_id_no_selected_closing' };
       }
     } else {
       // Default: 'CURRENT' (Turno Actual)
