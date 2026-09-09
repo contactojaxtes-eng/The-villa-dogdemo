@@ -1,5 +1,4 @@
-// @ts-ignore
-import lamejs from 'lamejs';
+import { Mp3Encoder } from '@breezystack/lamejs';
 
 export class Mp3Recorder {
   private audioContext: AudioContext | null = null;
@@ -65,7 +64,7 @@ export class Mp3Recorder {
 
     const channels = 1; // Mono
     const kbps = 128;
-    const mp3Encoder = new lamejs.Mp3Encoder(channels, sampleRate, kbps);
+    const mp3Encoder = new Mp3Encoder(channels, sampleRate, kbps);
     const mp3Chunks: BlobPart[] = [];
 
     const sampleBlockSize = 1152;
@@ -82,7 +81,7 @@ export class Mp3Recorder {
       mp3Chunks.push(new Uint8Array(flushBuf));
     }
 
-    return new Blob(mp3Chunks, { type: 'audio/mp3' });
+    return new Blob(mp3Chunks, { type: 'audio/mpeg' });
   }
 
   cancel() {
