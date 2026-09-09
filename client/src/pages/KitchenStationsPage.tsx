@@ -337,6 +337,10 @@ export default function KitchenStationsPage() {
     return a.name.localeCompare(b.name)
   })
 
+  const activeStationCount = stations.filter(station => station.active !== false).length
+  const assignedCookIds = new Set(stations.flatMap(station => (station.users || []).map(user => user.id)))
+  const activeAssignedCookCount = Array.from(assignedCookIds).filter(userId => cookStatuses[userId]?.active !== false).length
+
   const openCreateModal = () => {
     setEditingId(null)
     setName('')
@@ -433,32 +437,46 @@ export default function KitchenStationsPage() {
   }
 
   return (
-    <div className="space-y-6 max-w-6xl">
+    <div className="mx-auto max-w-7xl space-y-5">
       {/* Header */}
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h1 className="flex items-center gap-3 text-3xl font-black text-[var(--text-primary)] antifont tracking-wider">
-            <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-orange-500/10 text-orange-500">
-              <ChefHat className="h-6 w-6" />
+      <header className="flex flex-col gap-4 rounded-3xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-4 shadow-sm sm:p-5 lg:flex-row lg:items-center lg:justify-between">
+        <div className="flex min-w-0 items-center gap-3">
+          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-orange-500/10 text-orange-500 ring-1 ring-orange-500/20">
+            <ChefHat className="h-6 w-6" />
+          </div>
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <p className="text-[10px] font-black uppercase tracking-[0.18em] text-orange-600 dark:text-orange-400">Configuración del salón</p>
+              <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-black text-emerald-700 dark:text-emerald-300">
+                <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" /> Operativa
+              </span>
             </div>
-            ESTACIONES DE COCINA · MESAS
-          </h1>
-          <p className="mt-1 text-sm text-[var(--text-secondary)]">
-            Esta pantalla conserva la operación del salón. La cocina de domicilios se configura por separado.
-          </p>
+            <h1 className="truncate text-2xl font-black text-[var(--text-primary)] sm:text-3xl">Estaciones de cocina</h1>
+            <p className="truncate text-xs text-[var(--text-secondary)] sm:text-sm">Organiza las comandas de mesas por estación y cocinero sin tocar domicilios.</p>
+          </div>
         </div>
 
-        <Button
-          onClick={openCreateModal}
-          className="h-11 px-5 rounded-2xl bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-fg)] font-bold text-xs gap-2 shadow-lg shadow-[var(--accent)]/15 cursor-pointer"
-        >
-          <Plus className="h-4 w-4" />
-          Nueva Estación
-        </Button>
-      </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] px-3 py-1.5 text-center">
+            <p className="text-[9px] font-black uppercase tracking-wide text-[var(--text-muted)]">Estaciones</p>
+            <p className="text-lg font-black leading-none text-[var(--text-primary)]">{activeStationCount}/{stations.length}</p>
+          </div>
+          <div className="rounded-xl border border-blue-500/20 bg-blue-500/10 px-3 py-1.5 text-center">
+            <p className="text-[9px] font-black uppercase tracking-wide text-blue-700/80 dark:text-blue-300/80">Cocineros</p>
+            <p className="text-lg font-black leading-none text-blue-700 dark:text-blue-300">{activeAssignedCookCount}</p>
+          </div>
+          <Button
+            onClick={openCreateModal}
+            className="h-10 rounded-xl bg-[var(--accent)] px-4 text-xs font-bold text-[var(--accent-fg)] shadow-lg shadow-[var(--accent)]/15 hover:bg-[var(--accent-hover)] sm:h-11 sm:rounded-2xl sm:px-5"
+          >
+            <Plus className="mr-1.5 h-4 w-4" />
+            Nueva Estación
+          </Button>
+        </div>
+      </header>
 
       {/* Configuración rápida de despacho */}
-      <div className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-4 shadow-sm">
+      <section className="rounded-3xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-4 shadow-sm sm:p-5">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-[var(--border-subtle)] pb-3">
           <div className="flex items-center gap-2">
             <Sliders className="h-4 w-4 text-[var(--accent)]" />
@@ -493,7 +511,7 @@ export default function KitchenStationsPage() {
             <span>Cocina de mesas protegida e independiente de domicilios</span>
           </div>
         </div>
-      </div>
+      </section>
 
       {/* Grid de Estaciones */}
       {loading ? (
@@ -510,7 +528,7 @@ export default function KitchenStationsPage() {
           </Button>
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        <div className="grid items-start grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
           {stations.map(station => {
             const hasCategories = (station.categories || []).length > 0
             const hasUsers = (station.users || []).length > 0
@@ -518,7 +536,7 @@ export default function KitchenStationsPage() {
             return (
               <div
                 key={station.id}
-                className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-4 shadow-sm hover:border-[var(--accent)] transition-all flex flex-col justify-between relative overflow-hidden"
+                className="h-fit rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-4 shadow-sm transition-all hover:border-[var(--accent)] relative overflow-hidden"
               >
                 {/* Borde superior de color de la estación */}
                 <div className="absolute top-0 left-0 right-0 h-1.5" style={{ backgroundColor: station.color || '#EF4444' }} />
