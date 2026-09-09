@@ -4374,8 +4374,11 @@ Restaurante (Tú):
   }
 
   async testMetaConnection(tokenOverride?: string, phoneIdOverride?: string) {
-    const token = tokenOverride?.trim() || await this.getSetting('whatsapp_token');
-    const phoneId = phoneIdOverride?.trim() || await this.getSetting('whatsapp_phone_id');
+    const rawToken = tokenOverride?.trim() || await this.getSetting('whatsapp_token');
+    const rawPhoneId = phoneIdOverride?.trim() || await this.getSetting('whatsapp_phone_id');
+
+    const phoneId = rawPhoneId ? String(rawPhoneId).replace(/\s+/g, '') : '';
+    const token = rawToken ? String(rawToken).replace(/^["']|["']$/g, '').split(/\s+/)[0] : '';
 
     if (!phoneId || !token) {
       return {

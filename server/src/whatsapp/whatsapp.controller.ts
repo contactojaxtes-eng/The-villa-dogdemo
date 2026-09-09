@@ -384,7 +384,7 @@ export class WhatsappController {
 
   @Post('test-meta')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('SUPERADMIN')
+  @Roles('SUPERADMIN', 'ADMIN')
   @ApiOperation({ summary: 'Probar conexión y validez del token con Meta Cloud API' })
   async testMeta(@Body() body?: { token?: string; phoneId?: string }) {
     return this.whatsappService.testMetaConnection(body?.token, body?.phoneId);

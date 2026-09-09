@@ -426,7 +426,10 @@ export default function SuperAdminConfigPage() {
         alerts.error('Error con Meta Cloud API', result.hint ? `${result.message}. ${result.hint}` : result.message)
       }
     } catch (error) {
-      const message = getErrorMessage(error, 'No se pudo conectar con Meta.')
+      const raw = getErrorMessage(error, 'No se pudo conectar con Meta.')
+      const message = raw.includes('Error en la respuesta del servidor')
+        ? 'El servidor tardó en responder o se estaba reiniciando. Por favor presiona el botón nuevamente.'
+        : raw
       setMetaTestResult({ success: false, message })
       alerts.error('Fallo en la prueba', message)
     } finally {
