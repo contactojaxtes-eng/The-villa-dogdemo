@@ -2972,7 +2972,10 @@ export default function NewOrderPage({
               })}
             </div>
 
-            <CardContent className={cn("min-h-0 flex-1 overflow-y-auto p-4 pb-24", !embedded && "md:p-6 md:pb-6")}>
+            <CardContent className={cn(
+              "min-h-0 flex-1 overflow-y-auto overscroll-contain touch-pan-y",
+              embedded ? "p-3 pb-4 sm:p-4" : "p-4 md:p-6 md:pb-6"
+            )}>
           <div className={cn(embedded ? "space-y-3" : "space-y-6")}>
             {/* Quick Natural Language Add Bar */}
             {!embedded && <div className="relative rounded-2xl border border-[var(--accent-border)]/40 bg-[var(--accent-muted)]/15 p-4 shadow-inner">
@@ -4021,12 +4024,17 @@ const renderDeliveryCard = () => {
       </div>
  
       {isCashBlocked && step === 'menu' && (
-        <div className="flex items-center gap-3 rounded-2xl border border-[var(--destructive)]/30 bg-[var(--destructive)]/5 px-4 py-3.5 text-sm text-[var(--destructive)] shrink-0">
+        <div className={cn(
+          "flex items-center gap-3 rounded-2xl border border-[var(--destructive)]/30 bg-[var(--destructive)]/5 text-[var(--destructive)] shrink-0",
+          embedded ? "px-3 py-2.5" : "px-4 py-3.5"
+        )}>
           <AlertTriangle className="h-5 w-5 shrink-0" />
-          <div className="flex-1">
-            <p className="font-bold">{canCreate?.reason || 'La Caja Domicilios está cerrada'}</p>
-            <p className="mt-0.5 text-xs">Puedes armar el pedido; solo falta abrir la caja para confirmarlo.</p>
-            <Link to="/payments" className="mt-1 inline-block text-xs underline font-semibold hover:text-[var(--text-primary)] transition-all">Abrir Caja Domicilios →</Link>
+          <div className="flex min-w-0 flex-1 items-center justify-between gap-3">
+            <div className="min-w-0">
+              <p className="truncate text-sm font-bold">{canCreate?.reason || 'La Caja Domicilios está cerrada'}</p>
+              <p className="mt-0.5 hidden text-xs sm:block">Puedes armar el pedido; solo falta abrir la caja para confirmarlo.</p>
+            </div>
+            <Link to="/payments" className="shrink-0 text-xs font-semibold underline transition-all hover:text-[var(--text-primary)]">Abrir caja →</Link>
           </div>
         </div>
       )}
@@ -4122,7 +4130,7 @@ const renderDeliveryCard = () => {
 
       {/* Resumen flotante para revisar el pedido sin perder la carta. */}
       {step === 'menu' && cart.length > 0 && !isCartDrawerOpen && (
-        <div className={cn("bottom-4 left-4 right-4 z-40", embedded ? "absolute" : "fixed md:hidden")}>
+        <div className={cn("z-40", embedded ? "w-full shrink-0" : "fixed bottom-4 left-4 right-4 md:hidden")}>
           <motion.div
             initial={{ y: 50, opacity: 0 }}
             animate={{ y: 0, opacity: 1 }}
