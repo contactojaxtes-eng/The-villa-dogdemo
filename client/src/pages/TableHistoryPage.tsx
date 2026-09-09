@@ -4,7 +4,7 @@ import { Link } from 'react-router-dom'
 import { ArrowLeft, CheckCircle2, ChevronDown, ChevronUp, Clock, Eye, RefreshCw, Search, UtensilsCrossed, Wallet, ChefHat, Users } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Dialog, DialogContent } from '@/components/ui/dialog'
+import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { api } from '@/lib/api'
 import { formatCurrency } from '@/lib/utils'
 import { useAuth } from '@/hooks/useAuth'
@@ -145,6 +145,7 @@ export default function TableHistoryPage() {
   const [shiftFilter, setShiftFilter] = useState<'CURRENT' | 'ALL'>('CURRENT')
   const [scope, setScope] = useState<'MINE' | 'ALL'>(() => isWaiter ? 'MINE' : 'ALL')
   const [zoomUrl, setZoomUrl] = useState<string | null>(null)
+  const [selectedTable, setSelectedTable] = useState<any | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -573,8 +574,8 @@ export default function TableHistoryPage() {
                       </span>
                     </div>
                     {cookNames && (
-                      <div className="mt-1 flex items-center gap-1 text-[11px] font-bold text-amber-800 dark:text-amber-300 bg-amber-500/10 border border-amber-500/20 px-2 py-0.5 rounded-md w-fit">
-                        <ChefHat className="h-3 w-3 text-amber-600" />
+                      <div className="mt-1 flex w-fit items-center gap-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-elevated)] px-2 py-1 text-[11px] font-bold text-[var(--text-secondary)]">
+                        <ChefHat className="h-3 w-3" />
                         <span>Preparado por: <strong>{cookNames}</strong></span>
                       </div>
                     )}
@@ -620,12 +621,13 @@ export default function TableHistoryPage() {
                     <span className="text-[var(--text-muted)] text-[11px]">Cuenta liquidada</span>
                   )}
 
-                  <Link
-                    to={`/tables/${table.id}`}
-                    className="font-bold text-[var(--accent)] hover:underline"
+                  <button
+                    type="button"
+                    onClick={() => setSelectedTable(table)}
+                    className="rounded-lg border border-[var(--border-default)] bg-[var(--bg-elevated)] px-3 py-1.5 text-[11px] font-black text-[var(--text-primary)] transition hover:bg-[var(--text-primary)] hover:text-[var(--bg-panel)]"
                   >
-                    Ver detalle →
-                  </Link>
+                    Ver detalle
+                  </button>
                 </div>
               </div>
             )
@@ -640,6 +642,119 @@ export default function TableHistoryPage() {
           )}
         </div>
       )}
+
+      {/* El detalle se abre sobre el historial para conservar filtros y contexto. */}
+      <Dialog open={!!selectedTable} onOpenChange={isOpen => !isOpen && setSelectedTable(null)}>
+        <DialogContent className="flex max-h-[90vh] w-[95vw] max-w-3xl flex-col overflow-hidden rounded-3xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-0 shadow-2xl">
+          {selectedTable && (() => {
+            const orders = selectedTable.orders || []
+            const items = orders.flatMap((order: any) => order.items || [])
+            const payment = parseTablePayment(selectedTable)
+            const cooks = Array.from(new Set(
+              orders.flatMap((order: any) => order.kitchenTickets || []).map((ticket: any) => ticket.assignedTo?.name).filter(Boolean)
+            )).join(', ')
+            const customerName = selectedTable.customerName || selectedTable.customer?.name || selectedTable.clientName
+
+            return (
+              <>
+                <header className="border-b border-[var(--border-subtle)] px-5 py-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <DialogTitle className="truncate text-lg font-black text-[var(--text-primary)]">Detalle de {selectedTable.label}</DialogTitle>
+                      <p className="mt-1 text-xs text-[var(--text-secondary)]">Mesa registrada el {formatTableDate(selectedTable.openedAt || selectedTable.createdAt)}</p>
+                    </div>
+                    <span className={`shrink-0 rounded-full px-2.5 py-1 text-[10px] font-black uppercase tracking-wide ${selectedTable.status === 'CLOSED' ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400' : 'bg-amber-500/10 text-amber-700 dark:text-amber-400'}`}>
+                      {selectedTable.status === 'CLOSED' ? 'Cerrada' : 'Abierta'}
+                    </span>
+                  </div>
+                </header>
+
+                <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-5 custom-scrollbar">
+                  <section className="grid gap-2 sm:grid-cols-3">
+                    <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-3">
+                      <p className="text-[10px] font-black uppercase tracking-wide text-[var(--text-muted)]">Total</p>
+                      <p className="mt-1 text-lg font-black text-[var(--accent)]">{formatCurrency(selectedTable.total || 0)}</p>
+                    </div>
+                    <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-3">
+                      <p className="text-[10px] font-black uppercase tracking-wide text-[var(--text-muted)]">Pago</p>
+                      <p className="mt-1 text-xs font-black text-[var(--text-primary)]">{payment.methodLabel}</p>
+                      {payment.cash > 0 && payment.transfer > 0 && <p className="mt-1 text-[10px] text-[var(--text-muted)]">Ef. {formatCurrency(payment.cash)} · Tr. {formatCurrency(payment.transfer)}</p>}
+                    </div>
+                    <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-3">
+                      <p className="text-[10px] font-black uppercase tracking-wide text-[var(--text-muted)]">Responsable</p>
+                      <p className="mt-1 truncate text-xs font-black text-[var(--text-primary)]">{selectedTable.openedBy?.name || 'Sin asignar'}</p>
+                      {customerName && <p className="mt-1 truncate text-[10px] text-[var(--text-muted)]">Cliente: {customerName}</p>}
+                    </div>
+                  </section>
+
+                  <section className="rounded-2xl border border-[var(--border-subtle)]">
+                    <div className="flex items-center justify-between border-b border-[var(--border-subtle)] px-4 py-3">
+                      <div>
+                        <h3 className="text-sm font-black text-[var(--text-primary)]">Productos de la mesa</h3>
+                        <p className="text-[10px] text-[var(--text-muted)]">{items.length} registro{items.length === 1 ? '' : 's'} de producto</p>
+                      </div>
+                      <UtensilsCrossed className="h-4 w-4 text-[var(--text-secondary)]" />
+                    </div>
+                    {items.length > 0 ? (
+                      <div className="divide-y divide-[var(--border-subtle)]">
+                        {items.map((item: any, index: number) => (
+                          <div key={`${item.id || item.menuItemId || item.nameSnapshot}-${index}`} className="flex items-start justify-between gap-4 px-4 py-3">
+                            <div className="min-w-0">
+                              <p className="text-xs font-black text-[var(--text-primary)]">{item.menuItem?.name || item.nameSnapshot || 'Producto'}</p>
+                              {(item.notes || item.note) && <p className="mt-0.5 text-[10px] text-[var(--text-muted)]">Nota: {item.notes || item.note}</p>}
+                            </div>
+                            <span className="shrink-0 rounded-lg bg-[var(--bg-elevated)] px-2 py-1 text-[11px] font-black text-[var(--text-secondary)]">{item.quantity}×</span>
+                          </div>
+                        ))}
+                      </div>
+                    ) : <p className="p-4 text-xs text-[var(--text-muted)]">No hay productos registrados.</p>}
+                  </section>
+
+                  <section className="grid gap-3 md:grid-cols-2">
+                    <div className="rounded-2xl border border-[var(--border-subtle)] p-4">
+                      <p className="text-[10px] font-black uppercase tracking-wide text-[var(--text-muted)]">Cocina</p>
+                      <p className="mt-1 text-xs font-black text-[var(--text-primary)]">{cooks || 'Sin cocinero registrado'}</p>
+                    </div>
+                    <div className="rounded-2xl border border-[var(--border-subtle)] p-4">
+                      <p className="text-[10px] font-black uppercase tracking-wide text-[var(--text-muted)]">Cierre</p>
+                      <p className="mt-1 text-xs font-black text-[var(--text-primary)]">{selectedTable.closedAt ? formatTableDate(selectedTable.closedAt) : selectedTable.status === 'CLOSED' ? 'Mesa cerrada' : 'Pendiente de cierre'}</p>
+                    </div>
+                  </section>
+
+                  <section className="rounded-2xl border border-[var(--border-subtle)]">
+                    <div className="border-b border-[var(--border-subtle)] px-4 py-3">
+                      <h3 className="text-sm font-black text-[var(--text-primary)]">Pedidos registrados</h3>
+                    </div>
+                    {orders.length > 0 ? (
+                      <div className="divide-y divide-[var(--border-subtle)]">
+                        {orders.map((order: any, index: number) => (
+                          <div key={order.id || index} className="flex items-center justify-between gap-3 px-4 py-3 text-xs">
+                            <div className="min-w-0">
+                              <p className="font-black text-[var(--text-primary)]">Pedido {order.orderNumber || order.number || String(order.id || index + 1).slice(-6)}</p>
+                              <p className="mt-0.5 truncate text-[10px] text-[var(--text-muted)]">{formatTableDate(order.createdAt)} · {(order.items || []).length} producto{(order.items || []).length === 1 ? '' : 's'}</p>
+                            </div>
+                            <div className="shrink-0 text-right">
+                              <p className="font-black text-[var(--text-primary)]">{formatCurrency(order.total || 0)}</p>
+                              <p className="mt-0.5 text-[10px] text-[var(--text-muted)]">{order.status || 'Registrado'}</p>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : <p className="p-4 text-xs text-[var(--text-muted)]">No hay pedidos asociados.</p>}
+                  </section>
+                </div>
+
+                <footer className="flex flex-wrap items-center justify-between gap-2 border-t border-[var(--border-subtle)] bg-[var(--bg-elevated)]/60 px-5 py-3">
+                  {payment.hasRealImageProof && payment.proofId ? (
+                    <Button type="button" variant="outline" size="sm" onClick={() => setZoomUrl(`/payment-validation/proofs/${payment.proofId}/image`)} className="gap-1.5 rounded-lg text-xs font-bold"><Eye className="h-3.5 w-3.5" /> Ver comprobante</Button>
+                  ) : <span className="text-[11px] text-[var(--text-muted)]">No hay comprobante adjunto.</span>}
+                  <Button type="button" size="sm" onClick={() => setSelectedTable(null)} className="rounded-lg bg-[var(--accent)] text-xs font-black text-[var(--accent-fg)]">Cerrar detalle</Button>
+                </footer>
+              </>
+            )
+          })()}
+        </DialogContent>
+      </Dialog>
 
       {/* Proof Zoom Modal */}
       <Dialog open={!!zoomUrl} onOpenChange={v => !v && setZoomUrl(null)}>

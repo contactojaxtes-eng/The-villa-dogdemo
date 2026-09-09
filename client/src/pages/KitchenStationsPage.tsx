@@ -67,15 +67,6 @@ interface Station {
   users: User[]
 }
 
-const COLOR_PALETTE = [
-  { label: 'Rojo', hex: '#EF4444' },
-  { label: 'Naranja', hex: '#F97316' },
-  { label: 'Verde', hex: '#10B981' },
-  { label: 'Azul', hex: '#3B82F6' },
-  { label: 'Morado', hex: '#8B5CF6' },
-  { label: 'Rosa', hex: '#EC4899' },
-]
-
 export default function KitchenStationsPage() {
   const [stations, setStations] = useState<Station[]>([])
   const [categories, setCategories] = useState<Category[]>([])
@@ -107,7 +98,9 @@ export default function KitchenStationsPage() {
   const [saving, setSaving] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [name, setName] = useState('')
-  const [color, setColor] = useState('#EF4444')
+  // Se conserva un valor estable para compatibilidad con estaciones ya guardadas.
+  // La interfaz ya no exige escoger colores para identificar una estación.
+  const [color, setColor] = useState('#64748B')
   const [active, setActive] = useState(true)
   const [selectedCategoryIds, setSelectedCategoryIds] = useState<string[]>([])
   const [selectedUserIds, setSelectedUserIds] = useState<string[]>([])
@@ -357,11 +350,10 @@ export default function KitchenStationsPage() {
     return searchable.includes(normalizedStationQuery)
   })
 
-
   const openCreateModal = () => {
     setEditingId(null)
     setName('')
-    setColor('#EF4444')
+    setColor('#64748B')
     setActive(true)
     setSelectedCategoryIds([])
     setSelectedUserIds([])
@@ -371,7 +363,7 @@ export default function KitchenStationsPage() {
   const openEditModal = (station: Station) => {
     setEditingId(station.id)
     setName(station.name)
-    setColor(station.color || '#EF4444')
+    setColor(station.color || '#64748B')
     setActive(station.active !== false)
     setSelectedCategoryIds((station.categories || []).map(c => c.id))
     setSelectedUserIds((station.users || []).map(u => u.id))
@@ -597,19 +589,19 @@ export default function KitchenStationsPage() {
           </Button>
         </div>
       ) : filteredStations.length === 0 ? (
-        <div className="rounded-3xl border border-dashed border-[var(--border-default)] bg-[var(--bg-panel)] p-10 text-center shadow-sm">
-          <Search className="mx-auto h-10 w-10 text-[var(--text-muted)] opacity-50" />
-          <h3 className="mt-3 text-base font-black text-[var(--text-primary)]">No encontramos estaciones</h3>
-          <p className="mt-1 text-xs text-[var(--text-secondary)]">Prueba con otro nombre o cambia el filtro de estado.</p>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => { setStationQuery(''); setStationView('ALL') }}
-            className="mt-4 rounded-xl text-xs font-bold"
-          >
-            Ver todas las estaciones
-          </Button>
-        </div>
+            <div className="rounded-3xl border border-dashed border-[var(--border-default)] bg-[var(--bg-panel)] p-10 text-center shadow-sm">
+              <Search className="mx-auto h-10 w-10 text-[var(--text-muted)] opacity-50" />
+              <h3 className="mt-3 text-base font-black text-[var(--text-primary)]">No encontramos estaciones</h3>
+              <p className="mt-1 text-xs text-[var(--text-secondary)]">Prueba con otro nombre o cambia el filtro de estado.</p>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => { setStationQuery(''); setStationView('ALL') }}
+                className="mt-4 rounded-xl text-xs font-bold"
+              >
+                Ver todas las estaciones
+              </Button>
+            </div>
       ) : (
         <div className="grid items-start grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
           {filteredStations.map(station => {
@@ -619,22 +611,22 @@ export default function KitchenStationsPage() {
             return (
               <div
                 key={station.id}
-                className="h-fit rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-4 shadow-sm transition-all hover:border-[var(--accent)] relative overflow-hidden"
+                className="h-fit overflow-hidden rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] shadow-sm transition hover:border-[var(--border-default)]"
               >
-                {/* Borde superior de color de la estación */}
-                <div className="absolute top-0 left-0 right-0 h-1.5" style={{ backgroundColor: station.color || '#EF4444' }} />
-
-                <div className="space-y-3 pt-1">
+                <div className="space-y-3 p-4">
                   {/* Título y Estado */}
                   <div className="flex items-start justify-between gap-2">
-                    <div>
-                      <h3 className="text-base font-black text-[var(--text-primary)] flex items-center gap-2">
-                        <span className="h-3 w-3 rounded-full shrink-0" style={{ backgroundColor: station.color || '#EF4444' }} />
-                        {station.name}
-                      </h3>
-                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full inline-block mt-1 ${station.active ? 'bg-emerald-500/10 text-emerald-600' : 'bg-zinc-500/10 text-zinc-500'}`}>
-                        {station.active ? '● Activa en Turno' : '○ Pausada'}
+                    <div className="flex min-w-0 items-center gap-2.5">
+                      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] text-[var(--text-secondary)]">
+                        <ChefHat className="h-4 w-4" />
                       </span>
+                      <div className="min-w-0">
+                        <h3 className="truncate text-sm font-black text-[var(--text-primary)]" title={station.name}>{station.name}</h3>
+                        <span className={`mt-1 inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-black ${station.active ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400' : 'bg-[var(--bg-elevated)] text-[var(--text-muted)]'}`}>
+                          <span className={`h-1.5 w-1.5 rounded-full ${station.active ? 'bg-emerald-500' : 'bg-[var(--text-muted)]'}`} />
+                          {station.active ? 'Activa en turno' : 'Pausada'}
+                        </span>
+                      </div>
                     </div>
 
                     <div className="flex items-center gap-1">
@@ -660,10 +652,11 @@ export default function KitchenStationsPage() {
                   </div>
 
                   {/* Platos que prepara */}
-                  <div className="space-y-1 p-2.5 rounded-xl bg-[var(--bg-elevated)] text-xs">
-                    <span className="text-[10px] font-black uppercase tracking-wider text-[var(--text-muted)] flex items-center gap-1">
-                      <Utensils className="h-3 w-3 text-orange-500" /> Platos:
-                    </span>
+                  <div className="space-y-1 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-2.5 text-xs">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] font-black uppercase tracking-wider text-[var(--text-muted)]">Categorías</span>
+                      <span className="text-[10px] font-bold text-[var(--text-muted)]">{hasCategories ? `${station.categories.length} asignada${station.categories.length === 1 ? '' : 's'}` : 'General'}</span>
+                    </div>
                     <div className="flex flex-wrap gap-1 pt-0.5">
                       {hasCategories ? (
                         station.categories.map(c => (
@@ -672,17 +665,15 @@ export default function KitchenStationsPage() {
                           </span>
                         ))
                       ) : (
-                        <span className="text-[11px] font-bold text-amber-600">Todos los platos</span>
+                        <span className="text-[11px] font-bold text-[var(--text-secondary)]">Recibe platos de todas las categorías</span>
                       )}
                     </div>
                   </div>
 
                   {/* Cocineros asignados */}
-                  <div className="space-y-1.5 p-2.5 rounded-xl bg-[var(--bg-elevated)] text-xs">
+                  <div className="space-y-1.5 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-2.5 text-xs">
                     <div className="flex items-center justify-between">
-                      <span className="text-[10px] font-black uppercase tracking-wider text-[var(--text-muted)] flex items-center gap-1">
-                        <Users className="h-3 w-3 text-blue-500" /> Cocineros ({station.users?.length || 0}):
-                      </span>
+                      <span className="text-[10px] font-black uppercase tracking-wider text-[var(--text-muted)]">Equipo ({station.users?.length || 0})</span>
                       <span className="text-[9px] text-[var(--text-muted)] font-bold">
                         Reparto automático
                       </span>
@@ -783,17 +774,17 @@ export default function KitchenStationsPage() {
                         })}
                       </div>
                     ) : (
-                      <span className="text-[11px] text-[var(--text-muted)] italic">Todos los cocineros</span>
+                      <span className="text-[11px] text-[var(--text-muted)]">Sin asignación: reparte entre los cocineros disponibles.</span>
                     )}
                   </div>
                 </div>
 
                 {/* Abrir pantalla */}
-                <div className="mt-3.5 pt-2.5 border-t border-[var(--border-subtle)] flex items-center justify-between">
+                <div className="border-t border-[var(--border-subtle)] bg-[var(--bg-elevated)]/60 px-4 py-3 flex items-center justify-between">
                   <span className="text-[11px] text-[var(--text-muted)]">Pantalla KDS</span>
                   <Link
                     to={`/kitchen?station=${station.id}`}
-                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold bg-[var(--bg-elevated)] hover:bg-[var(--accent)] hover:text-white text-[var(--text-primary)] transition"
+                    className="inline-flex items-center gap-1 rounded-lg border border-[var(--border-default)] bg-[var(--bg-panel)] px-2.5 py-1.5 text-[11px] font-black text-[var(--text-primary)] transition hover:bg-[var(--text-primary)] hover:text-[var(--bg-panel)]"
                   >
                     <span>Abrir Cocina</span>
                     <ExternalLink className="h-3 w-3" />
@@ -811,7 +802,7 @@ export default function KitchenStationsPage() {
           <form onSubmit={handleSave} className="flex min-h-0 flex-1 flex-col">
             <div className="border-b border-[var(--border-subtle)] p-5">
               <DialogTitle className="flex items-center gap-3 text-lg font-black text-[var(--text-primary)]">
-                <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-orange-500/10 text-orange-600">
+                <span className="flex h-10 w-10 items-center justify-center rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] text-[var(--text-secondary)]">
                   <ChefHat className="h-5 w-5" />
                 </span>
                 {editingId ? 'Editar estación de cocina' : 'Nueva estación de cocina'}
@@ -845,33 +836,9 @@ export default function KitchenStationsPage() {
                 </label>
               </div>
 
-              <div>
-                <div className="mb-2 flex flex-wrap items-end justify-between gap-2">
-                  <div>
-                    <p className="text-xs font-black text-[var(--text-primary)]">Color de identificación</p>
-                    <p className="text-[10px] text-[var(--text-muted)]">Solo se usa para reconocer la estación en la cocina.</p>
-                  </div>
-                  <div className="flex items-center gap-2" aria-label="Color de la estación">
-                    {COLOR_PALETTE.map(c => {
-                      const selected = color === c.hex
-                      return (
-                        <button
-                          key={c.hex}
-                          type="button"
-                          onClick={() => setColor(c.hex)}
-                          title={c.label}
-                          aria-label={`Usar color ${c.label}`}
-                          className={`flex h-7 w-7 items-center justify-center rounded-full border-2 transition ${
-                            selected ? 'border-[var(--text-primary)] ring-2 ring-[var(--accent)]/20' : 'border-transparent hover:scale-110'
-                          }`}
-                          style={{ backgroundColor: c.hex }}
-                        >
-                          {selected && <Check className="h-3.5 w-3.5 text-white stroke-[3]" />}
-                        </button>
-                      )
-                    })}
-                  </div>
-                </div>
+              <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] px-3 py-2.5">
+                <p className="text-xs font-black text-[var(--text-primary)]">Identificación simple</p>
+                <p className="mt-0.5 text-[10px] text-[var(--text-muted)]">El nombre, las categorías y el equipo identifican esta estación. No necesitas escoger un color.</p>
               </div>
 
               <div>
