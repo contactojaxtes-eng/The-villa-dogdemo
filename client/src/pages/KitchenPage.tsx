@@ -121,6 +121,17 @@ export default function KitchenPage() {
     })
   }
 
+  const clearFilters = () => {
+    setStationFilter('ALL')
+    setCookFilter('ALL')
+    setSearchParams(prev => {
+      const next = new URLSearchParams(prev)
+      next.delete('station')
+      next.delete('cook')
+      return next
+    })
+  }
+
   // Carga inicial (silenciosa en segundo plano para no hacer parpadear la pantalla)
   const load = useCallback((showSpinner = false) => {
     if (showSpinner) setLoading(true)
@@ -533,8 +544,56 @@ export default function KitchenPage() {
     return diff < 0 ? 0 : diff
   }
 
+  const delayedActiveCount = useMemo(() => {
+    const now = Date.now()
+    return scopedTickets.filter(ticket => {
+      if (!['NEW', 'PREPARING'].includes(ticket.status)) return false
+      const createdAt = new Date(ticket.order?.createdAt || ticket.createdAt || '').getTime()
+      return Number.isFinite(createdAt) && now - createdAt >= 15 * 60 * 1000
+    }).length
+  }, [scopedTickets])
+
   return (
     <div className="space-y-3">
+      {/* Encabezado operativo: deja claro que esta pantalla corresponde a las mesas del salón. */}
+      <header className="flex flex-col gap-3 rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-3.5 shadow-sm sm:flex-row sm:items-center sm:justify-between sm:p-4">
+        <div className="flex min-w-0 items-center gap-3">
+          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-[var(--accent)]/10 text-[var(--accent)] ring-1 ring-[var(--accent)]/20">
+            <ChefHat className="h-6 w-6" />
+          </div>
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <p className="text-[10px] font-black uppercase tracking-[0.18em] text-[var(--accent)]">Operación de salón</p>
+              <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-black text-emerald-700 dark:text-emerald-300">
+                <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-500" /> En vivo
+              </span>
+            </div>
+            <h1 className="truncate text-xl font-black text-[var(--text-primary)] sm:text-2xl">Cocina de mesas</h1>
+            <p className="truncate text-xs text-[var(--text-secondary)]">Comandas del salón ordenadas por llegada y estación.</p>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-3 gap-1.5 sm:flex sm:items-center sm:gap-2">
+          <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] px-2.5 py-1.5 text-center sm:min-w-[88px]">
+            <p className="text-[9px] font-black uppercase tracking-wide text-[var(--text-muted)]">Activas</p>
+            <p className="text-lg font-black leading-none text-[var(--text-primary)]">{countAllActive}</p>
+          </div>
+          <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/10 px-2.5 py-1.5 text-center sm:min-w-[88px]">
+            <p className="text-[9px] font-black uppercase tracking-wide text-emerald-700/80 dark:text-emerald-300/80">Listas</p>
+            <p className="text-lg font-black leading-none text-emerald-700 dark:text-emerald-300">{countReady}</p>
+          </div>
+          <div className={cn(
+            'rounded-xl border px-2.5 py-1.5 text-center sm:min-w-[88px]',
+            delayedActiveCount > 0
+              ? 'border-rose-500/30 bg-rose-500/10'
+              : 'border-[var(--border-subtle)] bg-[var(--bg-elevated)]',
+          )}>
+            <p className={cn('text-[9px] font-black uppercase tracking-wide', delayedActiveCount > 0 ? 'text-rose-700 dark:text-rose-300' : 'text-[var(--text-muted)]')}>+15 min</p>
+            <p className={cn('text-lg font-black leading-none', delayedActiveCount > 0 ? 'text-rose-700 dark:text-rose-300' : 'text-[var(--text-primary)]')}>{delayedActiveCount}</p>
+          </div>
+        </div>
+      </header>
+
       {/* Banner de Cocinero Individual */}
       {user?.role === 'KITCHEN' && (
         <div className="space-y-2">
@@ -590,10 +649,10 @@ export default function KitchenPage() {
       )}
 
       {/* Barra de control superior con Filtros de Estado, Estación y Cocinero */}
-      <div className="bg-[var(--bg-panel)] p-2.5 sm:p-3.5 rounded-2xl border border-[var(--border-subtle)] shadow-xs space-y-2.5">
+      <div className="sticky top-2 z-20 space-y-2.5 rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-panel)]/95 p-2.5 shadow-md backdrop-blur sm:p-3.5">
         {/* Fila 1: Pestañas de estado + Botón Actualizar */}
         <div className="flex items-center justify-between gap-2">
-          <div className="flex items-center gap-1.5 overflow-x-auto pb-1 no-scrollbar flex-1 min-w-0">
+          <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto pb-1 no-scrollbar">
             <Button
               size="sm"
               variant={activeTab === 'ALL_ACTIVE' ? 'default' : 'ghost'}
@@ -660,7 +719,7 @@ export default function KitchenPage() {
             </Button>
           </div>
 
-          <div className="flex items-center gap-1.5 shrink-0">
+          <div className="flex shrink-0 items-center gap-1.5">
             {isAdmin && (
               <Button
                 variant="outline"
@@ -772,6 +831,31 @@ export default function KitchenPage() {
                 <span>Ver Platos por Cocinero</span>
               </Button>
             )}
+          </div>
+        )}
+
+        {(stationFilter !== 'ALL' || cookFilter !== 'ALL') && (
+          <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[var(--border-subtle)] pt-2">
+            <div className="flex min-w-0 flex-wrap items-center gap-1.5 text-[11px] text-[var(--text-secondary)]">
+              <span className="font-black uppercase tracking-wide text-[var(--text-muted)]">Filtro activo:</span>
+              {stationFilter !== 'ALL' && (
+                <span className="rounded-full border border-[var(--accent)]/25 bg-[var(--accent)]/10 px-2 py-0.5 font-bold text-[var(--accent)]">
+                  {stations.find(station => station.id === stationFilter)?.name || 'Estación'}
+                </span>
+              )}
+              {cookFilter !== 'ALL' && selectedCookName && (
+                <span className="rounded-full border border-blue-500/25 bg-blue-500/10 px-2 py-0.5 font-bold text-blue-700 dark:text-blue-300">
+                  {selectedCookName}
+                </span>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={clearFilters}
+              className="inline-flex shrink-0 items-center gap-1 rounded-lg px-2 py-1 text-[11px] font-black text-[var(--text-secondary)] transition hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]"
+            >
+              <X className="h-3 w-3" /> Quitar filtros
+            </button>
           </div>
         )}
       </div>
@@ -920,7 +1004,7 @@ export default function KitchenPage() {
         </div>
       ) : (
         /* GRILLA DE TICKETS */
-        <div className="grid gap-3 grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 2xl:grid-cols-5 items-start">
+        <div className="grid items-start gap-3 grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
           {displayTickets.map(ticket => {
             const hasActiveItems = ticket.items?.some(i => i.changeType !== 'REMOVED')
             const isEditedDelta = Boolean(ticket.isEdited)
