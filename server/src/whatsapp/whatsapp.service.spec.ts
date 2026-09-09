@@ -243,6 +243,23 @@ describe('WhatsApp Gemini settings', () => {
     });
   });
 
+  it('uses nullable values instead of empty enum entries for incomplete orders', () => {
+    const service = createService();
+    const schema = (service as any).buildGeminiOrderResponseSchema();
+
+    expect(schema.properties.detectedOrderType).toEqual({
+      type: 'STRING',
+      enum: ['delivery', 'pickup'],
+      nullable: true,
+    });
+    expect(schema.properties.paymentMethod).toEqual({
+      type: 'STRING',
+      enum: ['CASH', 'TRANSFER'],
+      nullable: true,
+    });
+    expect(JSON.stringify(schema)).not.toContain('""');
+  });
+
   it('uses the administrator model first and keeps stable models only as fallback', async () => {
     const appSetting = {
       findUnique: jest.fn().mockResolvedValue({ value: 'gemini-custom-flash' }),
