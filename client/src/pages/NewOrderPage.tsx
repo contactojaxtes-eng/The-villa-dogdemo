@@ -2946,98 +2946,43 @@ export default function NewOrderPage({
           </div>
         </CardHeader>
 
-        <div className="flex flex-1 min-h-0">
-          {/* Desktop Vertical Category Sidebar */}
-          <div className={cn(
-            "w-[290px] xl:w-[320px] shrink-0 border-r border-[var(--border-subtle)] bg-[var(--bg-panel)] flex-col gap-1.5 p-3 no-scrollbar overflow-hidden",
-            embedded ? "hidden" : "hidden md:flex"
-          )}>
-            <div className="relative group w-full shrink-0 mb-1">
-              <Search className="absolute top-1/2 left-2.5 h-3.5 w-3.5 -translate-y-1/2 text-[var(--text-muted)] group-focus-within:text-[var(--accent)] transition-colors" />
-              <Input
-                className="w-full rounded-xl border-[var(--border-subtle)] bg-[var(--bg-elevated)] py-1 pl-8 pr-2 text-[11px] h-7 focus:border-[var(--accent)] focus:ring-1 focus:ring-[var(--accent)]/15 transition-all"
-                value={catSearch}
-                onChange={e => setCatSearch(e.target.value)}
-                placeholder="Filtrar categorías..."
-              />
-            </div>
-            <div className="flex-1 overflow-y-auto flex flex-col gap-1.5 pr-0.5 no-scrollbar">
-              <button
-                type="button"
-                onClick={() => setCategoryFilter('ALL')}
-                className={`p-2.5 rounded-xl text-xs font-bold transition-all text-left cursor-pointer flex items-center justify-between ${
-                  categoryFilter === 'ALL'
-                    ? 'bg-[var(--accent)] text-[var(--accent-fg)] shadow-sm'
-                    : 'bg-transparent text-[var(--text-secondary)] hover:bg-[var(--bg-elevated)] hover:text-[var(--text-primary)]'
-                }`}
-              >
-                <span>⭐ Todas las Categorías</span>
-              </button>
-              {displayCategories
-                .filter(c => !catSearch.trim() || c.name.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').includes(catSearch.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim()))
-                .map(c => {
-                  const isActive = categoryFilter === c.name;
-                  return (
-                    <button
-                      key={c.id}
-                      type="button"
-                      onClick={() => setCategoryFilter(c.name)}
-                      title={c.name}
-                      className={`p-2.5 rounded-xl text-xs font-bold transition-all text-left cursor-pointer flex items-start justify-between gap-2.5 ${
-                        isActive
-                          ? 'bg-[var(--accent)] text-[var(--accent-fg)] shadow-sm'
-                          : 'bg-transparent text-[var(--text-secondary)] hover:bg-[var(--bg-elevated)] hover:text-[var(--text-primary)]'
-                      }`}
-                    >
-                      <span className="break-words leading-snug flex-1 text-left">{c.name}</span>
-                      <span className={`text-[9px] px-2 py-0.5 rounded-full shrink-0 mt-0.5 ${isActive ? 'bg-white/20 text-white font-extrabold' : 'bg-[var(--border-default)] text-[var(--text-muted)]'}`}>
-                        {c?.items?.length || 0}
-                      </span>
-                    </button>
-                  )
-                })}
-            </div>
+        <div className="flex flex-1 min-h-0 flex-col">
+          {/* Horizontal Category Navigation Bar */}
+          <div className="shrink-0 px-3 sm:px-4 py-2.5 border-b border-[var(--border-subtle)]/50 bg-[var(--bg-panel)]/30 gap-2 overflow-x-auto no-scrollbar scroll-smooth flex">
+            <button
+              type="button"
+              onClick={() => setCategoryFilter('ALL')}
+              className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all shrink-0 cursor-pointer flex items-center gap-1 ${
+                categoryFilter === 'ALL'
+                  ? 'bg-[var(--accent)] text-[var(--accent-fg)] shadow-sm'
+                  : 'bg-[var(--bg-elevated)] border border-[var(--border-subtle)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+              }`}
+            >
+              <span>⭐ Todas las Categorías</span>
+            </button>
+            {displayCategories.map(c => {
+              const isActive = categoryFilter === c.name;
+              return (
+                <button
+                  key={c.id}
+                  type="button"
+                  onClick={() => setCategoryFilter(c.name)}
+                  className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all shrink-0 flex items-center gap-1.5 cursor-pointer ${
+                    isActive
+                      ? 'bg-[var(--accent)] text-[var(--accent-fg)] shadow-sm'
+                      : 'bg-[var(--bg-elevated)] border border-[var(--border-subtle)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+                  }`}
+                >
+                  <span>{c.name}</span>
+                  <span className={`text-[9px] px-1.5 py-0.5 rounded-full ${isActive ? 'bg-white/20 text-white font-extrabold' : 'bg-black/20 text-[var(--text-muted)]'}`}>
+                    {c?.items?.length || 0}
+                  </span>
+                </button>
+              )
+            })}
           </div>
 
           <div className="flex-1 flex flex-col min-w-0 bg-[var(--bg-base)]/30">
-            {/* Mobile Horizontal Category Navigation Bar */}
-            <div className={cn(
-              "shrink-0 px-3 sm:px-4 py-2.5 border-b border-[var(--border-subtle)]/50 bg-[var(--bg-panel)]/30 gap-2 overflow-x-auto no-scrollbar scroll-smooth",
-              embedded ? "flex" : "flex md:hidden"
-            )}>
-              <button
-                type="button"
-                onClick={() => setCategoryFilter('ALL')}
-                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all shrink-0 cursor-pointer ${
-                  categoryFilter === 'ALL'
-                    ? 'bg-[var(--accent)] text-[var(--accent-fg)] shadow-sm'
-                    : 'bg-[var(--bg-elevated)] border border-[var(--border-subtle)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
-                }`}
-              >
-                Todas
-              </button>
-              {displayCategories.map(c => {
-                const isActive = categoryFilter === c.name;
-                return (
-                  <button
-                    key={c.id}
-                    type="button"
-                    onClick={() => setCategoryFilter(c.name)}
-                    className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all shrink-0 flex items-center gap-1.5 cursor-pointer ${
-                      isActive
-                        ? 'bg-[var(--accent)] text-[var(--accent-fg)] shadow-sm'
-                        : 'bg-[var(--bg-elevated)] border border-[var(--border-subtle)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
-                    }`}
-                  >
-                    <span>{c.name}</span>
-                    <span className={`text-[9px] px-1.5 py-0.5 rounded-full ${isActive ? 'bg-white/20 text-white font-extrabold' : 'bg-black/20 text-[var(--text-muted)]'}`}>
-                      {c?.items?.length || 0}
-                    </span>
-                  </button>
-                )
-              })}
-            </div>
-
             <CardContent className={cn(
               "min-h-0 flex-1 overflow-y-auto overscroll-contain touch-pan-y",
               embedded ? "p-3 pb-4 sm:p-4" : "p-4 md:p-6 md:pb-6"
@@ -3201,7 +3146,7 @@ export default function NewOrderPage({
                     </div>
                   </div>
 
-                  <div className={cn("grid grid-cols-1 md:grid-cols-2", embedded ? "gap-2" : "gap-2.5")}>
+                  <div className={cn("grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-2 2xl:grid-cols-3", embedded ? "gap-2" : "gap-2.5")}>
                     {group.items.map(item => {
                       const isInCart = cartItemIds.has(item.id)
                       const cartItem = cart.find(ci => ci.menuItemId === item.id && !ci.notes) || cart.find(ci => ci.menuItemId === item.id)
@@ -3239,7 +3184,7 @@ export default function NewOrderPage({
 
                           <div className="flex-1 min-w-0">
                             <p 
-                              className={`text-xs sm:text-sm font-bold leading-snug break-words ${isInCart ? 'text-[var(--accent)] font-extrabold' : 'text-[var(--text-primary)]'}`}
+                              className={`text-xs sm:text-sm font-bold leading-snug break-normal line-clamp-2 ${isInCart ? 'text-[var(--accent)] font-extrabold' : 'text-[var(--text-primary)]'}`}
                               title={item.name}
                             >
                               {item.name}

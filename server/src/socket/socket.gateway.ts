@@ -12,6 +12,7 @@ export class SocketGateway implements OnGatewayConnection, OnGatewayDisconnect, 
 
   private connectedUsers = new Map<string, Set<string>>();
   private activeOperators: Map<string, { userId: string; userName: string; orderId: string }> = new Map();
+  private activeChatViewers: Map<string, Map<string, string>> = new Map();
 
   constructor(private jwt: JwtService, private prisma: PrismaService) {}
 
@@ -74,6 +75,13 @@ export class SocketGateway implements OnGatewayConnection, OnGatewayDisconnect, 
         this.server.emit('orderUnassigned', { orderId });
       }
     }
+    for (const [sessionId, viewers] of this.activeChatViewers.entries()) {
+      if (viewers.has(userId)) {
+        viewers.delete(userId);
+        if (viewers.size === 0) this.activeChatViewers.delete(sessionId);
+        this.emitChatViewers(sessionId);
+      }
+    }
   }
 
   @SubscribeMessage('joinRoom')
@@ -130,6 +138,58 @@ export class SocketGateway implements OnGatewayConnection, OnGatewayDisconnect, 
       operators[orderId] = { userId: operator.userId, userName: operator.userName };
     }
     client.emit('activeOperators', operators);
+  }
+
+  emitChatViewers(sessionId: string) {
+    const viewers = this.activeChatViewers.get(sessionId);
+    const list = viewers ? Array.from(viewers.entries()).map(([userId, userName]) => ({ userId, userName })) : [];
+    this.server.to('whatsapp').emit('chatViewersUpdated', { sessionId, viewers: list });
+  }
+
+  @SubscribeMessage('chatViewJoin')
+  handleChatViewJoin(client: Socket, data: { sessionId: string }) {
+    const user = client.data.user;
+    if (!user || !data?.sessionId || typeof data.sessionId !== 'string') return;
+    let viewers = this.activeChatViewers.get(data.sessionId);
+    if (!viewers) {
+      viewers = new Map();
+      this.activeChatViewers.set(data.sessionId, viewers);
+    }
+    viewers.set(user.id, user.name);
+    this.emitChatViewers(data.sessionId);
+  }
+
+  @SubscribeMessage('chatViewLeave')
+  handleChatViewLeave(client: Socket, data: { sessionId: string }) {
+    const user = client.data.user;
+    if (!user || !data?.sessionId || typeof data.sessionId !== 'string') return;
+    const viewers = this.activeChatViewers.get(data.sessionId);
+    if (viewers) {
+      viewers.delete(user.id);
+      if (viewers.size === 0) this.activeChatViewers.delete(data.sessionId);
+      this.emitChatViewers(data.sessionId);
+    }
+  }
+
+  @SubscribeMessage('chatTyping')
+  handleChatTyping(client: Socket, data: { sessionId: string; isTyping: boolean }) {
+    const user = client.data.user;
+    if (!user || !data?.sessionId || typeof data.sessionId !== 'string') return;
+    this.server.to('whatsapp').emit('chatTypingUpdated', {
+      sessionId: data.sessionId,
+      userId: user.id,
+      userName: user.name,
+      isTyping: Boolean(data.isTyping),
+    });
+  }
+
+  @SubscribeMessage('getChatViewers')
+  handleGetChatViewers(client: Socket) {
+    const result: Record<string, { userId: string; userName: string }[]> = {};
+    for (const [sessionId, viewers] of this.activeChatViewers.entries()) {
+      result[sessionId] = Array.from(viewers.entries()).map(([userId, userName]) => ({ userId, userName }));
+    }
+    client.emit('allChatViewers', result);
   }
 
   emitNewOrder(order: any) {

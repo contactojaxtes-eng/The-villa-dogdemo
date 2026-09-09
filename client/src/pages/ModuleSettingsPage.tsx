@@ -20,6 +20,7 @@ import {
   MapPin,
   MessageCircle,
   MonitorSmartphone,
+  Package,
   PackagePlus,
   Plus,
   PlusCircle,
@@ -613,6 +614,26 @@ export default function ModuleSettingsPage() {
     }
   }
 
+    const downloadStandaloneExe = () => {
+    const link = document.createElement('a')
+    link.href = '/downloads/TheVillaDogBridge.exe'
+    link.download = 'TheVillaDogBridge.exe'
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    alerts.success('Descargando TheVillaDogBridge.exe', 'Ábrelo con doble clic. Es autónomo y no requiere tener Node.js instalado.')
+  }
+
+  const downloadPortableZip = () => {
+    const link = document.createElement('a')
+    link.href = '/downloads/TheVillaDog-Puente-Portable.zip'
+    link.download = 'TheVillaDog-Puente-Portable.zip'
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    alerts.success('Descargando paquete portable', 'Incluye el .exe, instalador .bat, desinstalador y configuración listos.')
+  }
+
   const downloadConfiguredBridge = async () => {
     setDownloadingBridge(true)
     try {
@@ -620,66 +641,99 @@ export default function ModuleSettingsPage() {
       const token = String(result?.token || '').trim()
       if (token.length < 32) throw new Error('El puente de impresión todavía no tiene una llave válida en el servidor.')
 
-      // This small .cmd launcher downloads the JS bridge and the silent installer
-      // bat from the backend, then runs it. The token is baked into the script.
       const configuredApiUrlFromEnv = String(import.meta.env.VITE_API_URL || '').trim()
       const configuredApiUrl = (/^(https?:\/\/)?(localhost|127\.0\.0\.1)(:\d+)?(\/api)?$/i.test(configuredApiUrlFromEnv) || !configuredApiUrlFromEnv ? window.location.origin : configuredApiUrlFromEnv).replace(/\/+$/, '')
       const backendUrl = configuredApiUrl.replace(/\/api$/i, '')
       const safeToken = token.replace(/[\r\n"]/g, '')
       if (!/^[A-Za-z0-9._~-]{32,}$/.test(safeToken)) throw new Error('La llave del puente tiene un formato inválido.')
+
       const script = [
         '@echo off',
         'setlocal EnableExtensions DisableDelayedExpansion',
-        'title Instalador del puente The Villa Dog',
+        'title Instalador Puente The Villa Dog',
+        'color 0A',
         `set "BRIDGE_TOKEN=${safeToken}"`,
         'set "PRINT_BRIDGE_TOKEN=%BRIDGE_TOKEN%"',
         `set "BRIDGE_BACKEND_URL=${backendUrl}"`,
-        'set "WORK_DIR=%TEMP%\\TheVillaDogBridgeInstall"',
-        'if not exist "%WORK_DIR%" mkdir "%WORK_DIR%" >nul 2>&1',
+        'set "SOURCE_DIR=%~dp0"',
+        'set "INSTALL_DIR=%LOCALAPPDATA%\\TheVillaDog\\PrinterBridge"',
+        'set "TARGET_EXE=%INSTALL_DIR%\\TheVillaDogBridge.exe"',
+        'set "CONFIG_PATH=%INSTALL_DIR%\\config.json"',
+        'set "LAUNCHER_PATH=%INSTALL_DIR%\\iniciar_puente.vbs"',
+        'set "UNINSTALL_PATH=%INSTALL_DIR%\\desinstalar_puente.bat"',
+        'set "STARTUP_DIR=%APPDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\Startup"',
+        'set "SHORTCUT_PATH=%STARTUP_DIR%\\TheVillaDogPrinterBridge.lnk"',
         '',
-        'echo Descargando componentes del puente de impresion...',
-        'echo Servidor: %BRIDGE_BACKEND_URL%',
-        '',
-        'rem --- Descargar printer-bridge.js ---',
-        'set "JS_URL=%BRIDGE_BACKEND_URL%/downloads/printer-bridge.js"',
-        'set "JS_TARGET=%WORK_DIR%\\printer-bridge.js"',
-        'where curl.exe >nul 2>&1',
-        'if not errorlevel 1 (',
-        '  curl.exe --fail --location --retry 3 --retry-delay 2 --connect-timeout 15 --max-time 60 --progress-bar --output "%JS_TARGET%" "%JS_URL%"',
-        ') else (',
-        `  powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$ProgressPreference = 'SilentlyContinue'; try { Invoke-WebRequest -UseBasicParsing -TimeoutSec 60 -Uri $env:JS_URL -OutFile $env:JS_TARGET; exit 0 } catch { Write-Host $_; exit 1 }"`,
-        ')',
-        'if not exist "%JS_TARGET%" (',
-        '  echo No se pudo descargar el componente de impresion.',
-        '  pause',
-        '  exit /b 1',
-        ')',
-        '',
-        'rem --- Descargar instalar_silencioso.bat ---',
-        'set "BAT_URL=%BRIDGE_BACKEND_URL%/downloads/instalar_silencioso.bat"',
-        'set "BAT_TARGET=%WORK_DIR%\\instalar_silencioso.bat"',
-        'where curl.exe >nul 2>&1',
-        'if not errorlevel 1 (',
-        '  curl.exe --fail --location --retry 3 --retry-delay 2 --connect-timeout 15 --max-time 60 --silent --output "%BAT_TARGET%" "%BAT_URL%"',
-        ') else (',
-        `  powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$ProgressPreference = 'SilentlyContinue'; try { Invoke-WebRequest -UseBasicParsing -TimeoutSec 60 -Uri $env:BAT_URL -OutFile $env:BAT_TARGET; exit 0 } catch { Write-Host $_; exit 1 }"`,
-        ')',
-        'if not exist "%BAT_TARGET%" (',
-        '  echo No se pudo descargar el instalador.',
-        '  pause',
-        '  exit /b 1',
-        ')',
-        '',
-        'echo Descarga completa. Iniciando instalador...',
-        'call "%BAT_TARGET%"',
-        'if errorlevel 1 (',
-        '  echo El instalador devolvio un error.',
-        '  pause',
-        '  exit /b 1',
-        ')',
-        'rmdir /S /Q "%WORK_DIR%" >nul 2>&1',
+        'echo ============================================================== ',
+        'echo      INSTALADOR DEL PUENTE DE IMPRESION - THE VILLA DOG       ',
+        'echo ============================================================== ',
+        'echo Servidor : %BRIDGE_BACKEND_URL%',
         'echo.',
-        'echo Instalacion terminada. Puedes cerrar esta ventana.',
+        'if not exist "%INSTALL_DIR%" mkdir "%INSTALL_DIR%" >nul 2>&1',
+        '',
+        'rem 1. Copiar ejecutable local si existe o descargarlo del servidor',
+        'if exist "%SOURCE_DIR%TheVillaDogBridge.exe" (',
+        '  echo Usando TheVillaDogBridge.exe local...',
+        '  copy /Y "%SOURCE_DIR%TheVillaDogBridge.exe" "%TARGET_EXE%" >nul',
+        ') else if not exist "%TARGET_EXE%" (',
+        '  echo Descargando TheVillaDogBridge.exe (autonomo, no requiere Node.js)...',
+        '  where curl.exe >nul 2>&1',
+        '  if not errorlevel 1 (',
+        '    curl.exe --fail --location --retry 3 --retry-delay 2 --connect-timeout 15 --max-time 180 --progress-bar --output "%TARGET_EXE%" "%BRIDGE_BACKEND_URL%/downloads/TheVillaDogBridge.exe"',
+        '  ) else (',
+        `    powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$ProgressPreference = 'SilentlyContinue'; try { Invoke-WebRequest -UseBasicParsing -TimeoutSec 180 -Uri ($env:BRIDGE_BACKEND_URL + '/downloads/TheVillaDogBridge.exe') -OutFile $env:TARGET_EXE; exit 0 } catch { Write-Host $_; exit 1 }"`,
+        '  )',
+        ')',
+        '',
+        'if not exist "%TARGET_EXE%" (',
+        '  echo [ERROR] No se pudo obtener el ejecutable.',
+        '  echo Descarga TheVillaDogBridge.exe directamente desde la consola web y colocalo junto a este instalador.',
+        '  pause',
+        '  exit /b 1',
+        ')',
+        '',
+        'rem 2. Guardar config.json con el token ya incluido',
+        'echo Guardando configuracion...',
+        `powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$cfg = [ordered]@{ backendUrl = $env:BRIDGE_BACKEND_URL; bridgeToken = $env:BRIDGE_TOKEN; pollIntervalMs = 3000 }; $cfg | ConvertTo-Json | Set-Content -LiteralPath $env:CONFIG_PATH -Encoding UTF8"`,
+        '',
+        'rem 3. Detener instancias anteriores si existieran',
+        'echo Deteniendo instancias anteriores...',
+        'taskkill /F /IM TheVillaDogBridge.exe >nul 2>&1',
+        'taskkill /F /IM Instalar-Impresion-TheVillaDog.exe >nul 2>&1',
+        '',
+        'rem 4. Crear lanzador silencioso (sin ventana de consola negra)',
+        '(',
+        '  echo Set shell = CreateObject^("WScript.Shell"^)',
+        '  echo shell.CurrentDirectory = "%INSTALL_DIR%"',
+        '  echo shell.Run """%TARGET_EXE%""", 0, False',
+        ') > "%LAUNCHER_PATH%"',
+        '',
+        'rem 5. Crear acceso directo en el inicio de Windows',
+        `powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \"$ws = New-Object -ComObject WScript.Shell; $s = $ws.CreateShortcut($env:SHORTCUT_PATH); $s.TargetPath = $env:LAUNCHER_PATH; $s.WorkingDirectory = $env:INSTALL_DIR; $s.Description = 'The Villa Dog Printer Bridge'; $s.Save()\"`,
+        '',
+        'rem 6. Crear desinstalador',
+        '(',
+        '  echo @echo off',
+        '  echo title Desinstalar Puente The Villa Dog',
+        '  echo taskkill /F /IM TheVillaDogBridge.exe ^>nul 2^>^&1',
+        '  echo del /Q "%SHORTCUT_PATH%" ^>nul 2^>^&1',
+        '  echo echo [OK] Servicio detenido y acceso directo eliminado.',
+        '  echo pause',
+        ') > "%UNINSTALL_PATH%"',
+        '',
+        'rem 7. Arrancar el puente en segundo plano de inmediato',
+        'echo Arrancando servicio...',
+        'wscript.exe "%LAUNCHER_PATH%"',
+        '',
+        'echo.',
+        'echo ============================================================== ',
+        'echo      [OK] INSTALACION COMPLETADA CORRECTAMENTE                ',
+        'echo ============================================================== ',
+        'echo - Puente instalado en: %INSTALL_DIR%',
+        'echo - Servicio activo en segundo plano.',
+        'echo - Se iniciara automaticamente cada vez que enciendas el PC.',
+        'echo ============================================================== ',
+        'timeout /t 5 >nul 2>&1',
         'exit /b 0',
       ].join('\r\n') + '\r\n'
 
@@ -687,12 +741,12 @@ export default function ModuleSettingsPage() {
       const url = URL.createObjectURL(blob)
       const link = document.createElement('a')
       link.href = url
-      link.download = 'Instalar-Puente-TheVillaDog.cmd'
+      link.download = 'Instalar-Puente-TheVillaDog.bat'
       document.body.appendChild(link)
       link.click()
       link.remove()
       URL.revokeObjectURL(url)
-      alerts.success('Instalador listo', 'Descárgalo y ejecútalo en cada computador. No te pedirá la llave.')
+      alerts.success('Instalador .BAT listo', 'Descárgalo y ejecútalo en cada computador. La llave ya viene incluida y no requiere Node.js.')
     } catch (error: unknown) {
       alerts.error('No se pudo preparar el instalador', getErrorMessage(error, 'Verifica que PRINT_BRIDGE_TOKEN esté guardada en el servidor.'))
     } finally {
@@ -853,15 +907,34 @@ export default function ModuleSettingsPage() {
                   <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-sky-500/10 text-sky-600"><Download className="h-5 w-5" /></span>
                   <div>
                     <h2 className="font-black text-[var(--text-primary)]">Puente de impresión para Windows</h2>
-                    <p className="mt-0.5 max-w-2xl text-xs leading-5 text-[var(--text-muted)]">Instálalo una sola vez en el computador conectado a las impresoras. Inicia con Windows, funciona oculto y se levanta de nuevo si llega a cerrarse.</p>
+                    <p className="mt-0.5 max-w-2xl text-xs leading-5 text-[var(--text-muted)]">Componentes independientes para Windows. <strong>No requiere tener Node.js instalado en el computador</strong>. Elige si prefieres el ejecutable directo (.EXE) o el instalador automático en segundo plano (.BAT).</p>
                   </div>
                 </div>
-                <Button type="button" onClick={downloadConfiguredBridge} disabled={downloadingBridge} className="h-11 shrink-0 rounded-xl bg-sky-600 px-5 text-sm font-black text-white shadow-sm transition hover:bg-sky-700">{downloadingBridge ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Download className="mr-2 h-4 w-4" />} {downloadingBridge ? 'Preparando...' : 'Descargar instalador configurado'}</Button>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button type="button" onClick={downloadStandaloneExe} className="h-10 rounded-xl bg-emerald-600 px-4 text-xs font-black text-white shadow-sm transition hover:bg-emerald-700">
+                    <Download className="mr-1.5 h-4 w-4" /> Descargar .EXE directo
+                  </Button>
+                  <Button type="button" onClick={downloadConfiguredBridge} disabled={downloadingBridge} className="h-10 rounded-xl bg-sky-600 px-4 text-xs font-black text-white shadow-sm transition hover:bg-sky-700">
+                    {downloadingBridge ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Download className="mr-1.5 h-4 w-4" />} Descargar Instalador .BAT
+                  </Button>
+                  <Button type="button" onClick={downloadPortableZip} variant="outline" className="h-10 rounded-xl border-[var(--border-subtle)] px-3 text-xs font-bold text-[var(--text-secondary)] hover:text-[var(--text-primary)]">
+                    <Package className="mr-1.5 h-4 w-4" /> Paquete ZIP portable
+                  </Button>
+                </div>
               </div>
               <div className="grid border-t border-[var(--border-subtle)] bg-[var(--bg-elevated)] sm:grid-cols-3">
-                <div className="p-4"><p className="text-[10px] font-black uppercase tracking-wider text-sky-600">1. Instalar</p><p className="mt-1 text-xs text-[var(--text-secondary)]">Descarga el instalador configurado y ejecútalo. La llave se incluye automáticamente; no tienes que copiarla.</p></div>
-                <div className="border-y border-[var(--border-subtle)] p-4 sm:border-x sm:border-y-0"><p className="text-[10px] font-black uppercase tracking-wider text-sky-600">2. Configurar</p><p className="mt-1 text-xs text-[var(--text-secondary)]">Usa la IP local o selecciona USB y escribe únicamente el nombre compartido.</p></div>
-              <div className="p-4"><p className="text-[10px] font-black uppercase tracking-wider text-sky-600">3. Probar</p><p className="mt-1 text-xs text-[var(--text-secondary)]">Guarda y pulsa <strong>Probar impresora</strong>. Puedes hacerlo desde cualquier dispositivo y lugar.</p></div>
+                <div className="p-4">
+                  <p className="text-[10px] font-black uppercase tracking-wider text-emerald-600">1. .EXE directo (Sin Node)</p>
+                  <p className="mt-1 text-xs text-[var(--text-secondary)]">Descarga <strong>TheVillaDogBridge.exe</strong>, ábrelo con doble clic y empieza a imprimir de inmediato. Es un binario 100% autónomo.</p>
+                </div>
+                <div className="border-y border-[var(--border-subtle)] p-4 sm:border-x sm:border-y-0">
+                  <p className="text-[10px] font-black uppercase tracking-wider text-sky-600">2. .BAT instalador de fondo</p>
+                  <p className="mt-1 text-xs text-[var(--text-secondary)]">Descarga el <strong>instalador .bat</strong> con tu llave preconfigurada. Instala el puente en segundo plano e inicia solo con Windows.</p>
+                </div>
+                <div className="p-4">
+                  <p className="text-[10px] font-black uppercase tracking-wider text-violet-600">3. Paquete ZIP portable</p>
+                  <p className="mt-1 text-xs text-[var(--text-secondary)]">Incluye el .exe, el .bat, desinstalador y configuración listos para descomprimir o llevar en una memoria USB.</p>
+                </div>
               </div>
             </Card>
           )}

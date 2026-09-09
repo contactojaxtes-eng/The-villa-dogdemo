@@ -19,7 +19,7 @@ import {
   Mic, MicOff, Check, CheckCheck, Pencil, Search, Lock,
   ChevronDown, Copy, ChevronLeft, ChevronRight, MapPin, ExternalLink, Download, Forward, QrCode, Reply, X,
   MessageSquareText, Bell, BellOff, Bot, BotOff,
-  Eye, RotateCw, ZoomIn, ZoomOut
+  Eye, Shield, RotateCw, ZoomIn, ZoomOut
 } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Mp3Recorder } from '@/lib/mp3Recorder'
@@ -526,6 +526,7 @@ interface ChatInputBarProps {
   onCancelReply?: () => void
   onSendLocation?: () => void
   sendingLocation?: boolean
+  onTyping?: (isTyping: boolean) => void
 }
 
 const ChatInputBar = React.memo(({
@@ -547,13 +548,29 @@ const ChatInputBar = React.memo(({
   replyingTo,
   onCancelReply,
   onSendLocation,
-  sendingLocation
+  sendingLocation,
+  onTyping
 }: ChatInputBarProps) => {
   const [localText, setLocalText] = useState('')
+  const typingTimerRef = useRef<any>(null)
+
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = e.target.value
+    setLocalText(val)
+    if (onTyping && !disabled) {
+      onTyping(true)
+      if (typingTimerRef.current) clearTimeout(typingTimerRef.current)
+      typingTimerRef.current = setTimeout(() => {
+        onTyping(false)
+      }, 2000)
+    }
+  }
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
     if (!localText.trim() || disabled) return
+    if (typingTimerRef.current) clearTimeout(typingTimerRef.current)
+    onTyping?.(false)
     onSendText(localText.trim())
     setLocalText('')
   }
@@ -648,7 +665,7 @@ const ChatInputBar = React.memo(({
         <Input
           className="min-w-0 flex-1 h-10 sm:h-11 rounded-xl bg-[var(--bg-elevated)] border-[var(--border-subtle)] text-[var(--text-primary)] text-base sm:text-xs px-3 sm:px-4"
           value={localText}
-          onChange={e => setLocalText(e.target.value)}
+          onChange={handleInputChange}
           placeholder={placeholder}
           disabled={disabled || uploadingMedia}
           inputMode="text"
@@ -1152,6 +1169,48 @@ function ChatPage() {
     activeSessionRef.current = activeSession
   }, [activeSession])
 
+  // Real-time chat viewers and typing indicators
+  const [chatViewers, setChatViewers] = useState<Record<string, { userId: string; userName: string }[]>>({})
+  const [typingUsers, setTypingUsers] = useState<Record<string, { userId: string; userName: string; timestamp: number }>>({})
+
+  // Emit chat presence join/leave when activeSession changes
+  useEffect(() => {
+    if (!socketRef.current || !activeSession?.id) return
+    const sId = activeSession.id
+    socketRef.current.emit('chatViewJoin', { sessionId: sId })
+
+    return () => {
+      if (socketRef.current) {
+        socketRef.current.emit('chatViewLeave', { sessionId: sId })
+      }
+    }
+  }, [activeSession?.id])
+
+  // Periodic prune of stale typing indicators (> 3.5s old)
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setTypingUsers(prev => {
+        const now = Date.now()
+        let changed = false
+        const next: typeof prev = {}
+        for (const [k, v] of Object.entries(prev)) {
+          if (now - v.timestamp < 3500) {
+            next[k] = v
+          } else {
+            changed = true
+          }
+        }
+        return changed ? next : prev
+      })
+    }, 1500)
+    return () => clearInterval(interval)
+  }, [])
+
+  const handleTyping = (isTyping: boolean) => {
+    if (!socketRef.current || !activeSession?.id) return
+    socketRef.current.emit('chatTyping', { sessionId: activeSession.id, isTyping })
+  }
+
   const setMessagesCached = (update: React.SetStateAction<Message[]>) => {
     rawSetMessages(previous => {
       const next = typeof update === 'function'
@@ -1557,6 +1616,7 @@ function ChatPage() {
     let connectedOnce = false
     socket.on('connect', () => {
       setRealtimeStatus('connected')
+      socket.emit('getChatViewers')
       if (connectedOnce) loadSessions()
       connectedOnce = true
     })
@@ -1564,6 +1624,25 @@ function ChatPage() {
     socket.on('connect_error', () => setRealtimeStatus(socket.active ? 'connecting' : 'disconnected'))
     socket.io.on('reconnect_attempt', () => setRealtimeStatus('connecting'))
     socket.io.on('reconnect_failed', () => setRealtimeStatus('disconnected'))
+    socket.on('allChatViewers', (data: Record<string, { userId: string; userName: string }[]>) => {
+      setChatViewers(data || {})
+    })
+    socket.on('chatViewersUpdated', ({ sessionId, viewers }: { sessionId: string; viewers: { userId: string; userName: string }[] }) => {
+      setChatViewers(prev => ({ ...prev, [sessionId]: viewers || [] }))
+    })
+    socket.on('chatTypingUpdated', ({ sessionId, userId, userName, isTyping }: { sessionId: string; userId: string; userName: string; isTyping: boolean }) => {
+      setTypingUsers(prev => {
+        const next = { ...prev }
+        if (isTyping) {
+          next[sessionId] = { userId, userName, timestamp: Date.now() }
+        } else {
+          if (next[sessionId]?.userId === userId) {
+            delete next[sessionId]
+          }
+        }
+        return next
+      })
+    })
     socket.on('whatsappSettingsUpdated', (settings: { chatbotEnabled?: boolean }) => {
       if (typeof settings?.chatbotEnabled === 'boolean') setChatbotEnabled(settings.chatbotEnabled)
     })
@@ -2124,10 +2203,6 @@ function ChatPage() {
 
     const cleanText = textToSend.trim()
 
-    if (user && activeSession.assignedToId !== user.id) {
-      if (!await handleClaimSession()) return
-    }
-
     // 1. Mostrar la burbuja de mensaje de inmediato en 0ms
     const tempId = `temp-${Date.now()}`
     const optimisticMsg: Message = {
@@ -2221,10 +2296,6 @@ function ChatPage() {
     }
     lastSendMenuAtRef.current = now
 
-    if (user && activeSession.assignedToId !== user.id) {
-      if (!await handleClaimSession()) return
-    }
-
     setSendingMenu(true)
     try {
       await api.post('/whatsapp/send-menu', { phone: activeSession.phone })
@@ -2247,10 +2318,6 @@ function ChatPage() {
     }
     lastSendQrAtRef.current = now
 
-    if (user && activeSession.assignedToId !== user.id) {
-      if (!await handleClaimSession()) return
-    }
-
     setSendingPaymentQr(true)
     try {
       await api.post('/whatsapp/send-payment-qr', { phone: activeSession.phone })
@@ -2268,10 +2335,6 @@ function ChatPage() {
   // Send GPS Location to active WhatsApp chat
   const handleSendLocation = async () => {
     if (!activeSession || sendingLocation) return
-
-    if (user && activeSession.assignedToId !== user.id) {
-      if (!await handleClaimSession()) return
-    }
 
     if (!navigator.geolocation) {
       alerts.error('No Disponible', 'Tu navegador no soporta geolocalización.')
@@ -2499,10 +2562,6 @@ function ChatPage() {
   const handleSendQuickTemplate = async (sessionToUse?: Session | null) => {
     const s = sessionToUse || activeSession
     if (!s) return
-
-    if (user && s.assignedToId !== user.id) {
-      if (!await handleClaimSession(s, true)) return
-    }
 
     const confirm = await alerts.confirm(
       '¿Enviar Plantilla Meta?',
@@ -3077,14 +3136,28 @@ function ChatPage() {
                             "text-[11px] truncate flex-1 flex items-center gap-1",
                             isUnreadIncoming ? "font-semibold text-[var(--text-primary)]" : "text-[var(--text-secondary)] font-medium"
                           )}>
-                            {s.messages?.[0]?.direction === 'OUT' && (
-                              <MessageStatus status={s.messages?.[0]?.status || 'sent'} direction="OUT" isList={true} />
-                            )}
-                            <span className="truncate">
-                              {searchSnippet
-                                ? <HighlightedSearchText text={searchSnippet} query={chatSearch} />
-                                : latestMsg}
-                            </span>
+                            {(() => {
+                              const sessionTyping = typingUsers[s.id]
+                              if (sessionTyping && Date.now() - sessionTyping.timestamp < 3500) {
+                                return (
+                                  <span className="text-emerald-600 dark:text-emerald-400 font-bold flex items-center gap-1 animate-pulse truncate">
+                                    <span>✍️</span> {sessionTyping.userName} está escribiendo...
+                                  </span>
+                                )
+                              }
+                              return (
+                                <>
+                                  {s.messages?.[0]?.direction === 'OUT' && (
+                                    <MessageStatus status={s.messages?.[0]?.status || 'sent'} direction="OUT" isList={true} />
+                                  )}
+                                  <span className="truncate">
+                                    {searchSnippet
+                                      ? <HighlightedSearchText text={searchSnippet} query={chatSearch} />
+                                      : latestMsg}
+                                  </span>
+                                </>
+                              )
+                            })()}
                           </p>
                           {isUnreadIncoming && (
                             <span className="bg-[#25D366] text-white font-extrabold text-[10px] h-4.5 min-w-[18px] px-1.5 rounded-full flex items-center justify-center shrink-0 shadow-sm animate-pulse">
@@ -3093,8 +3166,8 @@ function ChatPage() {
                           )}
                         </div>
 
-                        <div className="flex items-center justify-between pt-1">
-                          <span className="text-[10px] text-[var(--text-secondary)] font-mono font-semibold flex items-center gap-1.5 truncate max-w-[68%]">
+                        <div className="flex items-center justify-between pt-1 gap-1">
+                          <span className="text-[10px] text-[var(--text-secondary)] font-mono font-semibold flex items-center gap-1.5 truncate max-w-[55%]">
                             <Phone className="h-3 w-3 text-[var(--accent)] shrink-0" />
                             <span className="truncate">{cleanPhone}</span>
                             {s.customerPhone && s.customerPhone !== s.phone && !s.customerPhone.includes('3000000000') && !s.customerPhone.includes('0000000000') && (
@@ -3103,23 +3176,35 @@ function ChatPage() {
                               </span>
                             )}
                           </span>
-                          {isWaiting ? (
-                            <Badge className="text-[8px] uppercase font-extrabold py-0.5 px-2 bg-red-500 hover:bg-red-600 text-white animate-pulse shadow-sm">
-                              Esperando Asesor
-                            </Badge>
-                          ) : assignedInfo.isMine ? (
-                            <Badge variant="outline" className="text-[8px] uppercase font-bold py-0.5 px-2 bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border-emerald-500/30 flex items-center gap-1 shadow-2xs">
-                              <User className="h-2.5 w-2.5 text-emerald-500" /> Atendiendo tú
-                            </Badge>
-                          ) : assignedInfo.isAssigned ? (
-                            <Badge variant="outline" className="text-[8px] uppercase font-bold py-0.5 px-2 bg-amber-500/15 text-amber-600 dark:text-amber-400 border-amber-500/30 flex items-center gap-1 shadow-2xs">
-                              <User className="h-2.5 w-2.5 text-amber-500" /> {assignedInfo.statusText}
-                            </Badge>
-                          ) : (
-                            <Badge variant="outline" className="text-[8px] uppercase font-bold py-0.5 px-2 bg-slate-500/10 text-slate-500 border-slate-500/20 flex items-center gap-1 shadow-2xs">
-                              Disponible
-                            </Badge>
-                          )}
+                          <div className="flex items-center gap-1 shrink-0">
+                            {(() => {
+                              const viewers = chatViewers[s.id] || []
+                              if (viewers.length === 0) return null
+                              return (
+                                <span className="inline-flex items-center gap-0.5 text-[8px] font-bold text-sky-600 dark:text-sky-400 bg-sky-500/15 border border-sky-500/30 px-1.5 py-0.5 rounded-md" title={`Viendo: ${viewers.map(v => v.userName).join(', ')}`}>
+                                  <Eye className="h-2.5 w-2.5" />
+                                  <span className="max-w-[60px] truncate">{viewers[0].userName.split(' ')[0]}</span>
+                                </span>
+                              )
+                            })()}
+                            {isWaiting ? (
+                              <Badge className="text-[8px] uppercase font-extrabold py-0.5 px-2 bg-red-500 hover:bg-red-600 text-white animate-pulse shadow-sm">
+                                Esperando Asesor
+                              </Badge>
+                            ) : assignedInfo.isMine ? (
+                              <Badge variant="outline" className="text-[8px] uppercase font-bold py-0.5 px-2 bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border-emerald-500/30 flex items-center gap-1 shadow-2xs">
+                                <User className="h-2.5 w-2.5 text-emerald-500" /> Atendiendo tú
+                              </Badge>
+                            ) : assignedInfo.isAssigned ? (
+                              <Badge variant="outline" className="text-[8px] uppercase font-bold py-0.5 px-2 bg-amber-500/15 text-amber-600 dark:text-amber-400 border-amber-500/30 flex items-center gap-1 shadow-2xs">
+                                <User className="h-2.5 w-2.5 text-amber-500" /> {assignedInfo.statusText}
+                              </Badge>
+                            ) : (
+                              <Badge variant="outline" className="text-[8px] uppercase font-bold py-0.5 px-2 bg-slate-500/10 text-slate-500 border-slate-500/20 flex items-center gap-1 shadow-2xs">
+                                Disponible
+                              </Badge>
+                            )}
+                          </div>
                         </div>
                       </div>
                     </button>
@@ -3238,6 +3323,17 @@ function ChatPage() {
                         </span>
                       )}
                     </p>
+                    {/* Real-time viewers in this chat */}
+                    {(() => {
+                      const viewers = (chatViewers[activeSession.id] || []).filter(v => v.userId !== user?.id)
+                      if (viewers.length === 0) return null
+                      return (
+                        <div className="flex items-center gap-1 mt-1 text-[10px] font-bold text-sky-600 dark:text-sky-400 bg-sky-500/10 px-2 py-0.5 rounded-md border border-sky-500/25 w-fit">
+                          <Eye className="h-3 w-3 shrink-0 animate-pulse" />
+                          <span>{viewers.map(v => v.userName).join(', ')} en este chat</span>
+                        </div>
+                      )
+                    })()}
                   </div>
                 </div>
 
@@ -3719,55 +3815,117 @@ function ChatPage() {
                         )
                       })
                     })()}
+                    {/* Indicador de que alguien está escribiendo en tiempo real */}
+                    {(() => {
+                      const typing = typingUsers[activeSession.id]
+                      if (!typing || typing.userId === user?.id || Date.now() - typing.timestamp > 3500) return null
+                      return (
+                        <div className="flex items-center gap-2 px-3.5 py-2 bg-[var(--bg-elevated)] border border-[var(--border-subtle)] rounded-2xl w-fit text-[var(--accent)] text-xs font-bold animate-pulse my-2 shadow-sm">
+                          <span className="relative flex h-2 w-2">
+                            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[var(--accent)] opacity-75"></span>
+                            <span className="relative inline-flex rounded-full h-2 w-2 bg-[var(--accent)]"></span>
+                          </span>
+                          <span>✍️ {typing.userName} está escribiendo...</span>
+                        </div>
+                      )
+                    })()}
                     <div ref={messagesEndRef} />
                   </div>
                 )}
               </div>
 
-              {/* CHAT INPUT FORM */}
-              {/* LOCK BANNER IF ASSIGNED TO ANOTHER ADVISOR */}
-              {activeAssignedInfo.isAssigned && !activeAssignedInfo.isMine && (
-                <div className="bg-amber-500/10 border-t border-amber-500/20 px-4 py-2.5 flex items-center justify-between text-amber-500 text-xs font-semibold">
-                  <span className="flex items-center gap-1.5">
-                    <Lock className="w-4 h-4" />
-                    Chat tomado por <strong className="text-amber-400">{activeAssignedInfo.assignedName}</strong>
-                  </span>
-                  <Button
-                    type="button"
-                    size="sm"
-                    className="bg-amber-500 hover:bg-amber-600 text-black font-extrabold text-xs h-7 px-3 rounded-lg cursor-pointer"
-                    onClick={() => handleClaimSession()}
-                  >
-                    <UserPlus className="w-3.5 h-3.5 mr-1" /> Reclamar Chat
-                  </Button>
-                </div>
-              )}
+              {/* CHAT INPUT FORM & PERMISSION BANNERS */}
+              {(() => {
+                const isAdmin = ['ADMIN', 'SUPERADMIN'].includes(user?.role || '')
 
-              <ChatInputBar
-                disabled={activeAssignedInfo.isAssigned && !activeAssignedInfo.isMine}
-                onSendText={handleSendMessageText}
-                onSendMenuCarta={handleSendMenuCarta}
-                sendingMenu={sendingMenu}
-                onSendPaymentQr={handleSendPaymentQr}
-                sendingPaymentQr={sendingPaymentQr}
-                fileInputRef={fileInputRef}
-                handleFileChange={handleFileChange}
-                uploadingMedia={uploadingMedia}
-                isRecording={isRecording}
-                recordingTime={recordingTime}
-                startRecording={startRecording}
-                stopRecording={stopRecording}
-                cancelRecording={cancelRecording}
-                placeholder={
-                  activeAssignedInfo.isAssigned && !activeAssignedInfo.isMine
-                    ? `Chat asignado a ${activeAssignedInfo.assignedName}` 
-                    : "Escribe un mensaje aquí..."
+                if (isAdmin) {
+                  if (activeAssignedInfo.isAssigned && !activeAssignedInfo.isMine) {
+                    return (
+                      <div className="bg-blue-500/10 border-t border-blue-500/20 px-4 py-2 flex items-center justify-between text-blue-600 dark:text-blue-400 text-xs font-medium shrink-0">
+                        <span className="flex items-center gap-1.5">
+                          <Shield className="w-4 h-4 text-blue-500 shrink-0" />
+                          Chat atendido por <strong className="underline ml-0.5">{activeAssignedInfo.assignedName}</strong>. Como administrador puedes responder directamente.
+                        </span>
+                      </div>
+                    )
+                  }
+                  return null
                 }
-                replyingTo={replyingTo}
-                onCancelReply={() => setReplyingTo(null)}
-                onSendLocation={handleSendLocation}
-                sendingLocation={sendingLocation}
-              />
+
+                // Gestoras: manual claim required
+                if (!activeAssignedInfo.isAssigned) {
+                  return (
+                    <div className="bg-emerald-500/10 border-t border-emerald-500/25 px-4 py-2.5 flex items-center justify-between text-emerald-700 dark:text-emerald-300 text-xs font-semibold shrink-0 animate-in fade-in duration-150">
+                      <span className="flex items-center gap-2">
+                        <UserPlus className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                        <span>Para responder a este cliente, debes <strong>Reclamar el Chat</strong> primero.</span>
+                      </span>
+                      <Button
+                        type="button"
+                        size="sm"
+                        className="bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs h-7 px-3.5 rounded-lg cursor-pointer flex items-center gap-1 shadow-sm"
+                        onClick={() => handleClaimSession()}
+                      >
+                        <UserPlus className="w-3.5 h-3.5 mr-1" /> Reclamar Chat
+                      </Button>
+                    </div>
+                  )
+                }
+
+                if (activeAssignedInfo.isAssigned && !activeAssignedInfo.isMine) {
+                  return (
+                    <div className="bg-amber-500/10 border-t border-amber-500/20 px-4 py-2.5 flex items-center justify-between text-amber-500 text-xs font-semibold shrink-0">
+                      <span className="flex items-center gap-1.5">
+                        <Lock className="w-4 h-4 text-amber-500 shrink-0" />
+                        Chat tomado por <strong className="text-amber-400">{activeAssignedInfo.assignedName}</strong>
+                      </span>
+                      <Button
+                        type="button"
+                        size="sm"
+                        className="bg-amber-500 hover:bg-amber-600 text-black font-extrabold text-xs h-7 px-3 rounded-lg cursor-pointer"
+                        onClick={() => handleClaimSession()}
+                      >
+                        <UserPlus className="w-3.5 h-3.5 mr-1" /> Reclamar Chat
+                      </Button>
+                    </div>
+                  )
+                }
+
+                return null
+              })()}
+
+              {(() => {
+                const isAdmin = ['ADMIN', 'SUPERADMIN'].includes(user?.role || '')
+                const isInputDisabled = !isAdmin && (!activeAssignedInfo.isAssigned || !activeAssignedInfo.isMine)
+                const inputPlaceholder = isInputDisabled
+                  ? (!activeAssignedInfo.isAssigned ? "Debes reclamar este chat para responder..." : `Chat asignado a ${activeAssignedInfo.assignedName}`)
+                  : "Escribe un mensaje aquí..."
+
+                return (
+                  <ChatInputBar
+                    disabled={isInputDisabled}
+                    onSendText={handleSendMessageText}
+                    onSendMenuCarta={handleSendMenuCarta}
+                    sendingMenu={sendingMenu}
+                    onSendPaymentQr={handleSendPaymentQr}
+                    sendingPaymentQr={sendingPaymentQr}
+                    fileInputRef={fileInputRef}
+                    handleFileChange={handleFileChange}
+                    uploadingMedia={uploadingMedia}
+                    isRecording={isRecording}
+                    recordingTime={recordingTime}
+                    startRecording={startRecording}
+                    stopRecording={stopRecording}
+                    cancelRecording={cancelRecording}
+                    placeholder={inputPlaceholder}
+                    replyingTo={replyingTo}
+                    onCancelReply={() => setReplyingTo(null)}
+                    onSendLocation={handleSendLocation}
+                    sendingLocation={sendingLocation}
+                    onTyping={handleTyping}
+                  />
+                )
+              })()}
             </>
           ) : (
             <div className="flex-1 flex flex-col items-center justify-center text-[var(--text-secondary)] space-y-4 p-8 bg-[var(--bg-elevated)]/5">

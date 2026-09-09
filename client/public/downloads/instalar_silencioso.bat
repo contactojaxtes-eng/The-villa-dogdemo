@@ -1,215 +1,149 @@
 @echo off
 setlocal EnableExtensions DisableDelayedExpansion
-title Instalar impresion automatica - The Villa Dog
-color 0F
+title Instalar Puente de Impresion - The Villa Dog
+color 0A
 
 set "SOURCE_DIR=%~dp0"
 set "INSTALL_DIR=%LOCALAPPDATA%\TheVillaDog\PrinterBridge"
-set "BRIDGE_JS=%INSTALL_DIR%\printer-bridge.js"
+set "TARGET_EXE=%INSTALL_DIR%\TheVillaDogBridge.exe"
 set "CONFIG_PATH=%INSTALL_DIR%\config.json"
 set "LAUNCHER_PATH=%INSTALL_DIR%\iniciar_puente.vbs"
-set "WATCHDOG_PATH=%INSTALL_DIR%\vigilar_puente.vbs"
 set "UNINSTALL_PATH=%INSTALL_DIR%\desinstalar_puente.bat"
 set "STARTUP_DIR=%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup"
 set "SHORTCUT_PATH=%STARTUP_DIR%\TheVillaDogPrinterBridge.lnk"
-set "TASK_NAME=TheVillaDogPrinterBridgeWatchdog"
-set "NODE_DIR=%INSTALL_DIR%\node"
-set "NODE_EXE=%NODE_DIR%\node.exe"
-set "NODE_VERSION=v20.18.1"
-set "NODE_ARCH=win-x64"
-set "NODE_ZIP=%TEMP%\node-%NODE_VERSION%-%NODE_ARCH%.zip"
-set "NODE_URL=https://nodejs.org/dist/%NODE_VERSION%/node-%NODE_VERSION%-%NODE_ARCH%.zip"
 
-rem --- Backend URL: se sobreescribe si el .cmd lanzador define BRIDGE_BACKEND_URL ---
-if not defined BRIDGE_BACKEND_URL set "BRIDGE_BACKEND_URL=http://localhost:3000"
+rem Backend URL predeterminado si no viene definido
+if not defined BRIDGE_BACKEND_URL (
+  if not "%~2"=="" (
+    set "BRIDGE_BACKEND_URL=%~2"
+  ) else (
+    set "BRIDGE_BACKEND_URL=http://localhost:3000"
+  )
+)
+
+rem Token predeterminado si viene como argumento %1
+if not defined BRIDGE_TOKEN (
+  if not "%~1"=="" set "BRIDGE_TOKEN=%~1"
+)
 
 echo ==============================================================
-echo       IMPRESION AUTOMATICA - THE VILLA DOG
+echo       INSTALADOR DEL PUENTE DE IMPRESION - THE VILLA DOG
 echo ==============================================================
 echo.
-echo Esta instalacion se realiza una sola vez. El puente se iniciara
-echo con Windows y se recuperara solo si otra aplicacion lo cierra.
+echo Esta instalacion configura el puente para que funcione en segundo
+echo plano y arranque solo cada vez que se encienda este computador.
+echo.
 
-rem --- Crear directorio de instalacion ---
+rem 1. Crear carpeta destino
 if not exist "%INSTALL_DIR%" mkdir "%INSTALL_DIR%" >nul 2>&1
 if not exist "%INSTALL_DIR%" (
-  echo [ERROR] Windows no permitio crear la carpeta de instalacion.
-  echo.
+  echo [ERROR] Windows impidio crear la carpeta de instalacion en:
+  echo %INSTALL_DIR%
   pause
   exit /b 1
 )
 
-rem --- Copiar printer-bridge.js desde el directorio del instalador si existe ---
-set "SOURCE_JS=%SOURCE_DIR%printer-bridge.js"
-if exist "%SOURCE_JS%" (
-  copy /Y "%SOURCE_JS%" "%BRIDGE_JS%" >nul
-) else (
-  rem --- Descargar printer-bridge.js del backend ---
-  echo Descargando componente de impresion...
+rem 2. Copiar o descargar el ejecutable autonomo
+if exist "%SOURCE_DIR%TheVillaDogBridge.exe" (
+  echo Copiando ejecutable local TheVillaDogBridge.exe...
+  copy /Y "%SOURCE_DIR%TheVillaDogBridge.exe" "%TARGET_EXE%" >nul
+) else if exist "%SOURCE_DIR%Instalar-Impresion-TheVillaDog.exe" (
+  echo Copiando ejecutable local Instalar-Impresion-TheVillaDog.exe...
+  copy /Y "%SOURCE_DIR%Instalar-Impresion-TheVillaDog.exe" "%TARGET_EXE%" >nul
+) else if not exist "%TARGET_EXE%" (
+  echo Descargando TheVillaDogBridge.exe desde el servidor...
+  echo Servidor: %BRIDGE_BACKEND_URL%
   where curl.exe >nul 2>&1
   if not errorlevel 1 (
-    curl.exe --fail --location --retry 3 --retry-delay 2 --connect-timeout 15 --max-time 60 --progress-bar --output "%BRIDGE_JS%" "%BRIDGE_BACKEND_URL%/downloads/printer-bridge.js"
+    curl.exe --fail --location --retry 3 --retry-delay 2 --connect-timeout 15 --max-time 180 --progress-bar --output "%TARGET_EXE%" "%BRIDGE_BACKEND_URL%/downloads/TheVillaDogBridge.exe"
   ) else (
-    powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$ProgressPreference = 'SilentlyContinue'; try { Invoke-WebRequest -UseBasicParsing -TimeoutSec 60 -Uri ($env:BRIDGE_BACKEND_URL + '/downloads/printer-bridge.js') -OutFile $env:BRIDGE_JS; exit 0 } catch { Write-Host $_; exit 1 }"
-  )
-  if not exist "%BRIDGE_JS%" (
-    echo [ERROR] No se pudo descargar el componente de impresion.
-    echo Comprueba la conexion a Internet o el servidor.
-    pause
-    exit /b 1
+    powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$ProgressPreference = 'SilentlyContinue'; try { Invoke-WebRequest -UseBasicParsing -TimeoutSec 180 -Uri ($env:BRIDGE_BACKEND_URL + '/downloads/TheVillaDogBridge.exe') -OutFile $env:TARGET_EXE; exit 0 } catch { Write-Host $_; exit 1 }"
   )
 )
 
-rem --- Verificar o instalar Node.js portable ---
-if exist "%NODE_EXE%" goto node_ready
-
-echo.
-echo Verificando si Node.js esta disponible...
-where node.exe >nul 2>&1
-if not errorlevel 1 (
-  echo Node.js del sistema detectado.
-  for /f "delims=" %%I in ('where node.exe') do set "NODE_EXE=%%I"
-  goto node_ready
-)
-
-echo Descargando Node.js portable (solo una vez, ~30 MB)...
-if not exist "%NODE_DIR%" mkdir "%NODE_DIR%" >nul 2>&1
-
-where curl.exe >nul 2>&1
-if not errorlevel 1 (
-  curl.exe --fail --location --retry 3 --retry-delay 2 --connect-timeout 15 --max-time 300 --progress-bar --output "%NODE_ZIP%" "%NODE_URL%"
-) else (
-  powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$ProgressPreference = 'SilentlyContinue'; try { Invoke-WebRequest -UseBasicParsing -TimeoutSec 300 -Uri $env:NODE_URL -OutFile $env:NODE_ZIP; exit 0 } catch { Write-Host $_; exit 1 }"
-)
-
-if not exist "%NODE_ZIP%" (
-  echo [ERROR] No se pudo descargar Node.js.
-  echo Instala Node.js manualmente desde https://nodejs.org y ejecuta este instalador de nuevo.
+if not exist "%TARGET_EXE%" (
+  echo [AVISO] No se pudo obtener TheVillaDogBridge.exe de forma automatica.
+  echo Copia el archivo TheVillaDogBridge.exe en la misma carpeta que este instalador y reintenta.
   pause
   exit /b 1
 )
 
-echo Extrayendo Node.js...
-powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "try { Expand-Archive -Path $env:NODE_ZIP -DestinationPath $env:NODE_DIR -Force; exit 0 } catch { Write-Host $_; exit 1 }"
-if errorlevel 1 (
-  echo [ERROR] No se pudo extraer Node.js.
-  pause
-  exit /b 1
-)
+rem 3. Solicitar o conservar la clave PRINT_BRIDGE_TOKEN
+if defined BRIDGE_TOKEN goto token_ok
 
-rem --- Mover node.exe del subdirectorio al directorio raiz de Node ---
-for /d %%D in ("%NODE_DIR%\node-*") do (
-  if exist "%%D\node.exe" (
-    move /Y "%%D\node.exe" "%NODE_EXE%" >nul 2>&1
-    rmdir /S /Q "%%D" >nul 2>&1
-  )
-)
-
-del /Q "%NODE_ZIP%" >nul 2>&1
-
-if not exist "%NODE_EXE%" (
-  echo [ERROR] node.exe no se encontro despues de la extraccion.
-  echo Instala Node.js manualmente desde https://nodejs.org
-  pause
-  exit /b 1
-)
-echo Node.js portable instalado correctamente.
-
-:node_ready
-
-rem --- Solicitar o conservar token ---
-if defined BRIDGE_TOKEN goto token_ready
-set "BRIDGE_TOKEN="
 if exist "%CONFIG_PATH%" (
-  echo Se encontro una instalacion anterior. Se conservara su clave.
-  echo Para reemplazarla, escribe una nueva. Para conservarla, pulsa Enter.
-  set /p "BRIDGE_TOKEN=Nueva clave PRINT_BRIDGE_TOKEN: "
-) else (
-  echo Copia el valor PRINT_BRIDGE_TOKEN del servidor y pegalo aqui.
-  echo Solo se solicita durante esta primera instalacion.
+  echo Se detecto una instalacion previa en este equipo.
+  echo Para conservar la clave actual, presiona ENTER.
+  echo Para cambiarla, escribe la nueva clave.
   set /p "BRIDGE_TOKEN=Clave PRINT_BRIDGE_TOKEN: "
+) else (
+  echo.
+  echo Introduce la clave del puente de impresion (PRINT_BRIDGE_TOKEN)
+  echo Puedes consultarla en Configuración -^> Cocina domicilios en el sistema.
+  echo.
+  set /p "BRIDGE_TOKEN=Pega la clave PRINT_BRIDGE_TOKEN: "
   if not defined BRIDGE_TOKEN (
     echo.
-    echo [ERROR] La clave es obligatoria en la primera instalacion.
+    echo [ERROR] La clave PRINT_BRIDGE_TOKEN es requerida.
     pause
     exit /b 1
   )
 )
-:token_ready
 
-rem --- Detener instancias anteriores ---
-echo Instalando en una ubicacion estable...
-taskkill /F /IM node.exe /FI "WINDOWTITLE eq TheVillaDogBridge" >nul 2>&1
+:token_ok
 
-rem --- Guardar configuracion ---
+rem 4. Guardar archivo config.json
+echo Guardando configuracion...
 if defined BRIDGE_TOKEN (
-  powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$config = [ordered]@{ backendUrl = $env:BRIDGE_BACKEND_URL; bridgeToken = $env:BRIDGE_TOKEN; pollIntervalMs = 3000 }; $config | ConvertTo-Json | Set-Content -LiteralPath $env:CONFIG_PATH -Encoding UTF8"
-  if errorlevel 1 (
-    echo [ERROR] No se pudo guardar la configuracion.
-    pause
-    exit /b 1
+  powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$cfg = [ordered]@{ backendUrl = $env:BRIDGE_BACKEND_URL; bridgeToken = $env:BRIDGE_TOKEN; pollIntervalMs = 3000 }; $cfg | ConvertTo-Json | Set-Content -LiteralPath $env:CONFIG_PATH -Encoding UTF8"
+) else (
+  if not exist "%CONFIG_PATH%" (
+    powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$cfg = [ordered]@{ backendUrl = $env:BRIDGE_BACKEND_URL; bridgeToken = ''; pollIntervalMs = 3000 }; $cfg | ConvertTo-Json | Set-Content -LiteralPath $env:CONFIG_PATH -Encoding UTF8"
   )
 )
 
-rem --- Crear launcher VBS (ejecuta node printer-bridge.js oculto) ---
+rem 5. Detener instancias anteriores si existen
+echo Cerrando instancias previas...
+taskkill /F /IM TheVillaDogBridge.exe >nul 2>&1
+taskkill /F /IM Instalar-Impresion-TheVillaDog.exe >nul 2>&1
+
+rem 6. Crear launcher VBS (ejecuta sin ventana negra de consola)
 (
   echo Set shell = CreateObject^("WScript.Shell"^)
-  echo shell.Run "cmd /c title TheVillaDogBridge & """ ^& "%NODE_EXE%" ^& """ """ ^& "%BRIDGE_JS%" ^& """", 0, False
+  echo shell.CurrentDirectory = "%INSTALL_DIR%"
+  echo shell.Run """%TARGET_EXE%""", 0, False
 ) > "%LAUNCHER_PATH%"
 
-rem --- Crear watchdog VBS ---
-(
-  echo On Error Resume Next
-  echo Set service = GetObject^("winmgmts:\\.\root\cimv2"^)
-  echo Set processes = service.ExecQuery^("Select * From Win32_Process Where CommandLine Like '%%printer-bridge.js%%'"^)
-  echo If processes.Count = 0 Then
-  echo   Set shell = CreateObject^("WScript.Shell"^)
-  echo   shell.Run "cmd /c title TheVillaDogBridge & """ ^& "%NODE_EXE%" ^& """ """ ^& "%BRIDGE_JS%" ^& """", 0, False
-  echo End If
-) > "%WATCHDOG_PATH%"
+rem 7. Crear acceso directo en Inicio de Windows
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$ws = New-Object -ComObject WScript.Shell; $s = $ws.CreateShortcut($env:SHORTCUT_PATH); $s.TargetPath = $env:LAUNCHER_PATH; $s.WorkingDirectory = $env:INSTALL_DIR; $s.Description = 'The Villa Dog Printer Bridge'; $s.Save()"
 
-rem --- Crear desinstalador ---
+rem 8. Crear script de desinstalacion
 (
   echo @echo off
-  echo taskkill /F /FI "WINDOWTITLE eq TheVillaDogBridge" ^>nul 2^>^&1
-  echo schtasks /Delete /TN "%TASK_NAME%" /F ^>nul 2^>^&1
+  echo title Desinstalar Puente The Villa Dog
+  echo echo Deteniendo puente de impresion...
+  echo taskkill /F /IM TheVillaDogBridge.exe ^>nul 2^>^&1
   echo del /Q "%SHORTCUT_PATH%" ^>nul 2^>^&1
-  echo echo Puente de impresion desinstalado.
+  echo echo Acceso directo de inicio eliminado.
+  echo echo Si deseas eliminar los datos, borra la carpeta:
+  echo echo %INSTALL_DIR%
+  echo echo Desinstalacion completada con exito.
   echo pause
-  echo start "" cmd /c "timeout /t 2 ^>nul ^& rmdir /S /Q ""%INSTALL_DIR%"""
 ) > "%UNINSTALL_PATH%"
 
-rem --- Crear acceso directo en Startup ---
-set "SHORTCUT_CREATOR=%TEMP%\the_villa_dog_shortcut_%RANDOM%.vbs"
-(
-  echo Set shell = CreateObject^("WScript.Shell"^)
-  echo Set shortcut = shell.CreateShortcut^("%SHORTCUT_PATH%"^)
-  echo shortcut.TargetPath = "wscript.exe"
-  echo shortcut.Arguments = "//B //NoLogo ""%WATCHDOG_PATH%"""
-  echo shortcut.WorkingDirectory = "%INSTALL_DIR%"
-  echo shortcut.Description = "Puente de impresion The Villa Dog"
-  echo shortcut.Save
-) > "%SHORTCUT_CREATOR%"
-cscript.exe //B //NoLogo "%SHORTCUT_CREATOR%"
-del /Q "%SHORTCUT_CREATOR%" >nul 2>&1
-
-rem --- Crear tarea programada de vigilancia ---
-schtasks /Create /TN "%TASK_NAME%" /TR "wscript.exe //B //NoLogo \"%WATCHDOG_PATH%\"" /SC MINUTE /MO 1 /F >nul 2>&1
-if errorlevel 1 (
-  echo [AVISO] Windows no permitio crear el vigilante por minuto.
-  echo El inicio automatico de Windows si quedo configurado.
-)
-
-rem --- Iniciar el puente ---
-start "" wscript.exe //B //NoLogo "%WATCHDOG_PATH%"
+rem 9. Iniciar el puente en segundo plano
+echo Iniciando puente de impresion...
+wscript.exe "%LAUNCHER_PATH%"
 
 echo.
 echo ==============================================================
-echo [LISTO] Puente instalado e iniciado en segundo plano.
+echo         [OK] INSTALACION COMPLETADA CORRECTAMENTE
 echo ==============================================================
-echo - Inicia automaticamente al entrar a Windows.
-echo - El vigilante lo recupera si se cierra.
-echo - Diagnostico: %INSTALL_DIR%\bridge.log
+echo - El ejecutable quedo en: %INSTALL_DIR%
+echo - Se configuraron las impresoras con el servidor: %BRIDGE_BACKEND_URL%
+echo - El servicio iniciara automaticamente con Windows.
+echo - Para desinstalarlo en el futuro, ejecuta desinstalar_puente.bat
+echo ==============================================================
 echo.
-echo Ya puedes enviar una prueba desde Configuracion - Cocina domicilios.
+timeout /t 5 >nul 2>&1
 exit /b 0

@@ -5,20 +5,49 @@ const { execFile } = require('child_process');
 const os = require('os');
 const http = require('http');
 const https = require('https');
+const readline = require('readline');
 
-const BRIDGE_VERSION = '1.1.0';
+const BRIDGE_VERSION = '1.2.0';
 const DEFAULT_BACKEND_URL = 'http://localhost:3000';
 const MAX_LOG_BYTES = 1024 * 1024;
 const MAX_LOCAL_RECEIPTS = 500;
 const HTTP_TIMEOUT_MS = 15000;
 
+// Determinar el directorio de configuración (sea modo .exe nativo, pkg, o script .js)
 const isPkg = typeof process.pkg !== 'undefined';
-const configDir = isPkg ? path.dirname(process.execPath) : __dirname;
+const isSea = Boolean(process.features && process.features.sea) || !process.argv[1] || process.argv[1] === process.execPath;
+const configDir = (isPkg || isSea) ? path.dirname(process.execPath) : __dirname;
 const configPath = path.join(configDir, 'config.json');
 const logPath = path.join(configDir, 'bridge.log');
 const previousLogPath = path.join(configDir, 'bridge.previous.log');
 const receiptPath = path.join(configDir, 'printed-pending-confirmation.json');
 const lockPath = path.join(configDir, 'bridge.lock');
+
+// Manejo de argumentos por línea de comandos
+const rawArgs = process.argv.slice(1);
+for (const arg of rawArgs) {
+  if (arg === '--version' || arg === '-v') {
+    console.log(`The Villa Dog Printer Bridge v${BRIDGE_VERSION}`);
+    process.exit(0);
+  }
+  if (arg === '--help' || arg === '-h' || arg === '/?') {
+    console.log(`
+===================================================================
+      THE VILLA DOG - PUENTE DE IMPRESION PARA WINDOWS v${BRIDGE_VERSION}
+===================================================================
+Uso:
+  TheVillaDogBridge.exe [opciones]
+
+Opciones:
+  --token=<clave>   Configura la clave PRINT_BRIDGE_TOKEN
+  --url=<url>       Configura la URL del servidor backend
+  --poll=<ms>       Intervalo de consulta en ms (por defecto: 3000)
+  --help            Muestra este mensaje de ayuda
+  --version         Muestra la versión instalada
+`);
+    process.exit(0);
+  }
+}
 
 function stringifyLogPart(value) {
   if (value instanceof Error) return value.stack || value.message;
@@ -74,8 +103,13 @@ function acquireSingleInstanceLock() {
 }
 
 if (!acquireSingleInstanceLock()) {
-  console.log('El puente ya está ejecutándose. Esta copia se cerrará.');
-  process.exit(0);
+  console.log('El puente de impresión ya está activo en este equipo.');
+  if (process.stdin.isTTY) {
+    console.log('Esta ventana se cerrará automáticamente en 3 segundos...');
+    setTimeout(() => process.exit(0), 3000);
+  } else {
+    process.exit(0);
+  }
 }
 
 const releaseLock = () => {
@@ -106,16 +140,40 @@ if (fs.existsSync(configPath)) {
   } catch (error) {
     console.error('No se pudo leer config.json:', error.message);
   }
-} else {
-  try {
-    fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf8');
-  } catch (error) {
-    console.error('No se pudo crear config.json:', error.message);
+}
+
+// Sobrescritura por argumentos CLI
+let configModified = false;
+for (const arg of rawArgs) {
+  if (arg.startsWith('--token=')) {
+    const val = arg.slice(8).trim();
+    if (val) { config.bridgeToken = val; configModified = true; }
+  } else if (arg.startsWith('--url=')) {
+    const val = arg.slice(6).trim();
+    if (val) { config.backendUrl = val.replace(/\/+$/, ''); configModified = true; }
+  } else if (arg.startsWith('--poll=')) {
+    const val = Number(arg.slice(7));
+    if (val >= 1000) { config.pollIntervalMs = val; configModified = true; }
   }
 }
 
-config.bridgeToken = String(process.env.PRINT_BRIDGE_TOKEN || config.bridgeToken || '').trim();
-config.backendUrl = String(config.backendUrl || DEFAULT_BACKEND_URL).trim().replace(/\/$/, '');
+// Sobrescritura por variables de entorno
+if (process.env.PRINT_BRIDGE_TOKEN && !config.bridgeToken) {
+  config.bridgeToken = String(process.env.PRINT_BRIDGE_TOKEN).trim();
+}
+if (process.env.BRIDGE_BACKEND_URL) {
+  config.backendUrl = String(process.env.BRIDGE_BACKEND_URL).trim().replace(/\/+$/, '');
+}
+
+config.backendUrl = String(config.backendUrl || DEFAULT_BACKEND_URL).trim().replace(/\/+$/, '');
+
+if (configModified || !fs.existsSync(configPath)) {
+  try {
+    fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf8');
+  } catch (e) {
+    console.warn('Nota: No se pudo actualizar config.json:', e.message);
+  }
+}
 
 let locallyPrinted = new Set();
 try {
@@ -170,7 +228,7 @@ function makeRequest(urlString, options = {}) {
         });
       });
 
-      request.setTimeout(HTTP_TIMEOUT_MS, () => request.destroy(new Error('Tiempo de espera agotado al conectar con Railway')));
+      request.setTimeout(HTTP_TIMEOUT_MS, () => request.destroy(new Error('Tiempo de espera agotado conectando con el servidor')));
       request.on('error', reject);
       if (options.body) request.write(typeof options.body === 'string' ? options.body : JSON.stringify(options.body));
       request.end();
@@ -282,16 +340,16 @@ async function pollPrintQueue() {
     const authHeaders = config.bridgeToken ? { 'x-print-token': config.bridgeToken } : {};
     const jobs = await makeRequest(queueUrl, { headers: authHeaders });
 
-    if (!Array.isArray(jobs)) throw new Error('Railway devolvió una cola inválida');
+    if (!Array.isArray(jobs)) throw new Error('El servidor devolvió una cola inválida');
     if (jobs.length > 0) {
-      console.log(`Se encontraron ${jobs.length} trabajo(s) pendiente(s).`);
+      console.log(`Se encontraron ${jobs.length} comanda(s) pendiente(s).`);
       const confirmedIds = [];
       let failedCount = 0;
 
       for (const job of jobs) {
         const localId = String(job.id);
         if (locallyPrinted.has(localId)) {
-          console.log(`Trabajo ${job.id} ya impreso; reintentando solamente la confirmación.`);
+          console.log(`Trabajo ${job.id} ya impreso; reintentando confirmación.`);
           confirmedIds.push(job.id);
           continue;
         }
@@ -300,10 +358,10 @@ async function pollPrintQueue() {
           const destination = await printJob(job);
           rememberPrinted(job.id);
           confirmedIds.push(job.id);
-          console.log(`Trabajo ${job.id} impreso correctamente en ${destination}.`);
+          console.log(`Comanda ${job.id} impresa correctamente en ${destination}.`);
         } catch (error) {
           failedCount += 1;
-          console.error(`Trabajo ${job.id} pendiente: ${error.message}`);
+          console.error(`Comanda ${job.id} no se pudo imprimir: ${error.message}`);
         }
       }
 
@@ -315,21 +373,70 @@ async function pollPrintQueue() {
             body: { ids: confirmedIds },
           });
           forgetConfirmed(confirmedIds);
-          console.log(`${confirmedIds.length} trabajo(s) confirmado(s) con Railway.`);
+          console.log(`${confirmedIds.length} comanda(s) confirmada(s) con el servidor.`);
         } catch (error) {
-          console.error(`No se pudo confirmar con Railway: ${error.message}. No se volverán a imprimir localmente.`);
+          console.error(`No se pudo confirmar con el servidor: ${error.message}`);
         }
       }
-      if (failedCount > 0) console.warn(`${failedCount} trabajo(s) quedan en cola para reintentar.`);
+      if (failedCount > 0) console.warn(`${failedCount} comanda(s) quedan pendientes para reintentar.`);
     }
   } catch (error) {
-    console.error(`Conexión pendiente: ${error.message}`);
+    console.error(`Estado de conexión: ${error.message}`);
   } finally {
     setTimeout(pollPrintQueue, config.pollIntervalMs);
   }
 }
 
-console.log(`Puente The Villa Dog v${BRIDGE_VERSION} iniciado.`);
-console.log(`Servidor: ${config.backendUrl} | consulta cada ${config.pollIntervalMs} ms.`);
-if (!config.bridgeToken) console.error('Falta PRINT_BRIDGE_TOKEN. Ejecuta nuevamente el instalador para configurarlo.');
-pollPrintQueue();
+function promptIfMissingToken() {
+  if (config.bridgeToken || !process.stdin.isTTY) {
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => {
+    console.log('\n==============================================================');
+    console.log('       CONFIGURACION INICIAL - THE VILLA DOG');
+    console.log('==============================================================');
+    console.log('No se encontró la clave del restaurante (PRINT_BRIDGE_TOKEN).');
+    console.log('Obtenla en la consola: Configuración -> Cocina de domicilios.');
+    console.log('');
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    rl.question('Pega la clave PRINT_BRIDGE_TOKEN y pulsa Enter: ', (tokenAns) => {
+      const token = tokenAns.trim();
+      if (token) config.bridgeToken = token;
+      rl.question(`URL del servidor [${config.backendUrl}]: `, (urlAns) => {
+        const url = urlAns.trim();
+        if (url) config.backendUrl = url.replace(/\/+$/, '');
+        try {
+          fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf8');
+          console.log('[OK] Configuración guardada en config.json.\n');
+        } catch (e) {
+          console.warn('Nota:', e.message);
+        }
+        rl.close();
+        resolve();
+      });
+    });
+  });
+}
+
+async function start() {
+  await promptIfMissingToken();
+
+  console.log('==============================================================');
+  console.log(`      PUENTE DE IMPRESION - THE VILLA DOG v${BRIDGE_VERSION}`);
+  console.log('==============================================================');
+  console.log(`Servidor : ${config.backendUrl}`);
+  console.log(`Consulta : cada ${config.pollIntervalMs} ms`);
+  console.log(`Carpeta  : ${configDir}`);
+  if (!config.bridgeToken) {
+    console.warn('\n[AVISO] Falta PRINT_BRIDGE_TOKEN. El puente no podrá autenticarse');
+    console.warn('Configura la clave en config.json o pásala con --token=TU_CLAVE\n');
+  } else {
+    console.log('Clave    : [Configurada]');
+  }
+  console.log('==============================================================');
+  console.log('Esperando comandas para imprimir...\n');
+
+  pollPrintQueue();
+}
+
+start();

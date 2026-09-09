@@ -1,0 +1,28 @@
+==============================================================
+       PUENTE DE IMPRESION - THE VILLA DOG (WINDOWS)
+==============================================================
+
+Este paquete te permite recibir comandas desde el sistema web
+e imprimirlas en las impresoras térmicas de cocina o caja (USB o Red).
+
+¡NO REQUIERE TENER NODE.JS INSTALADO EN ESTE COMPUTADOR!
+
+OPCIONES DE USO:
+
+OPCION 1: USO DIRECTO CON EL .EXE (MAS RAPIDO)
+1. Haz doble clic en "TheVillaDogBridge.exe".
+2. Si es la primera vez, te pedirá la clave del restaurante (PRINT_BRIDGE_TOKEN).
+   Pégala y presiona Enter.
+3. ¡Listo! La ventana mostrará "Esperando comandas para imprimir...".
+
+OPCION 2: INSTALAR COMO SERVICIO DE FONDO CON EL .BAT (RECOMENDADO)
+1. Haz clic derecho en "instalar_puente.bat" y elige "Ejecutar como administrador"
+   (o simplemente doble clic).
+2. Se configurará automáticamente para iniciar cada vez que prendas el computador,
+   sin ventanas molestas.
+3. Si en algún momento deseas quitarlo, ejecuta "desinstalar_puente.bat".
+
+CONFIGURACION DE IMPRESORAS EN EL SISTEMA:
+- Impresora de Red: En Configuración > Cocina domicilios, escribe la IP local (ej: 192.168.1.150).
+- Impresora USB: Comparte la impresora en Windows con un nombre simple (ej: "Cocina")
+  y en la web pon "USB:Cocina".
