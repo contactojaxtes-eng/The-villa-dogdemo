@@ -1,6 +1,30 @@
 import { ConflictException } from '@nestjs/common';
 import { WhatsappService } from './whatsapp.service';
 
+describe('WhatsApp scheduled closing', () => {
+  it('sends the configured closing notice even when the conversational bot is paused', async () => {
+    const service = new WhatsappService(
+      {} as any,
+      { get: jest.fn() } as any,
+      { emitWhatsApp: jest.fn() } as any,
+    );
+    const settings: Record<string, string> = {
+      out_of_service_enabled: 'false',
+      business_hours_enabled: 'true',
+      out_of_service_message: 'Estamos cerrados. Volvemos desde las {abre}.',
+      restaurant_hours: '12:00 - 23:00',
+      chatbot_enabled: 'false',
+    };
+    jest.spyOn(service as any, 'getSetting').mockImplementation(async (key: string) => settings[key] || null);
+    jest.spyOn(service as any, 'checkIfWithinBusinessHours').mockReturnValue(false);
+    const send = jest.spyOn(service, 'sendMessage').mockResolvedValue({ sent: true } as any);
+
+    await (service as any).handleChatbot({ phone: '573001234567', assignedToId: null }, 'Hola');
+
+    expect(send).toHaveBeenCalledWith('573001234567', 'Estamos cerrados. Volvemos desde las 12:00.');
+  });
+});
+
 describe('WhatsApp advisor concurrency', () => {
   const createService = (prisma: any) => {
     const socketGateway = { emitWhatsApp: jest.fn() };
