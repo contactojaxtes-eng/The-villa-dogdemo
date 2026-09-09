@@ -104,6 +104,7 @@ export default function CashControlPage() {
   const [filterRegisterId, setFilterRegisterId] = useState<string>('ALL')
   const [filterUserId, setFilterUserId] = useState<string>('ALL')
   const [searchQuery, setSearchQuery] = useState('')
+  const [historyChannel, setHistoryChannel] = useState<'ALL' | 'PRIMARY' | 'DELIVERY'>('ALL')
 
   // Detail modal
   const [selectedClosingId, setSelectedClosingId] = useState<string | null>(null)
@@ -217,6 +218,9 @@ export default function CashControlPage() {
   const filteredClosings = useMemo(() => {
     return closings.filter(c => {
       if (c.isOpen) return false
+      const isDelivery = c.cashRegister?.purpose === 'DELIVERY'
+      if (historyChannel === 'DELIVERY' && !isDelivery) return false
+      if (historyChannel === 'PRIMARY' && isDelivery) return false
       if (filterRegisterId !== 'ALL' && c.cashRegister?.id !== filterRegisterId) return false
       if (filterUserId !== 'ALL' && c.user?.id !== filterUserId) return false
       if (filterDate) {
@@ -236,7 +240,7 @@ export default function CashControlPage() {
       }
       return true
     })
-  }, [closings, filterRegisterId, filterUserId, filterDate, searchQuery, dateMode])
+  }, [closings, filterRegisterId, filterUserId, filterDate, searchQuery, dateMode, historyChannel])
 
   // Grand consolidated total across all registers today
   const globalSummary = useMemo(() => {
@@ -262,6 +266,35 @@ export default function CashControlPage() {
 
     return { totalSales, totalCash, totalTransfers, totalInitial, totalCashInDrawer, totalTips, orderCount, openCount }
   }, [summaries, registers])
+
+  const channelSummary = useMemo(() => {
+    return registers.reduce((channels, register) => {
+      const summary = summaries[register.id]
+      if (!summary) return channels
+      const key = register.purpose === 'DELIVERY' ? 'delivery' : 'primary'
+      channels[key].sales += summary.totalSales || 0
+      channels[key].orders += summary.orderCount || 0
+      channels[key].open += summary.isOpen || register.closings?.some(closing => closing.isOpen) ? 1 : 0
+      return channels
+    }, {
+      primary: { sales: 0, orders: 0, open: 0 },
+      delivery: { sales: 0, orders: 0, open: 0 },
+    })
+  }, [registers, summaries])
+
+  const orderedRegisters = useMemo(() => (
+    [...registers].sort((a, b) => {
+      const aPriority = a.purpose === 'DELIVERY' ? 1 : 0
+      const bPriority = b.purpose === 'DELIVERY' ? 1 : 0
+      return aPriority - bPriority || a.name.localeCompare(b.name, 'es')
+    })
+  ), [registers])
+
+  const getRegisterChannel = (purpose?: CashRegister['purpose']) => {
+    if (purpose === 'DELIVERY') return 'Caja Domicilios'
+    if (purpose === 'DINING') return 'Caja Salón'
+    return 'Caja Principal'
+  }
 
   // Print the detail as professional Reporte Z
   const handlePrintReporteZ = async () => {
@@ -293,7 +326,7 @@ export default function CashControlPage() {
     <motion.div className="space-y-6" initial="hidden" animate="visible" variants={stagger}>
       <PageHeader
         title="CONTROL DE CAJA"
-        description="Controla cada turno y revisa por separado las ventas de salón y la Caja Domicilios."
+        description="Cada canal conserva su turno, sus cobros y su cierre. Revisa Caja Principal y Caja Domicilios por separado."
         actions={
           <Button
             variant="outline"
@@ -357,12 +390,46 @@ export default function CashControlPage() {
         </Card>
       </motion.div>
 
+      <motion.div variants={fadeUp} className="grid gap-4 md:grid-cols-2">
+        <Card className="border border-[var(--border-subtle)] bg-[var(--bg-panel)] rounded-2xl shadow-sm overflow-hidden">
+          <CardContent className="p-5 flex items-center justify-between gap-4">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <Wallet className="h-4 w-4 text-[var(--accent)]" />
+                <p className="text-sm font-extrabold text-[var(--text-primary)]">Caja Principal y salón</p>
+              </div>
+              <p className="mt-1 text-xs text-[var(--text-secondary)]">Mesas y operaciones generales del turno.</p>
+            </div>
+            <div className="shrink-0 text-right">
+              <p className="text-lg font-black text-[var(--text-primary)]">{formatCurrency(channelSummary.primary.sales)}</p>
+              <p className="text-[10px] font-bold uppercase tracking-wide text-[var(--text-muted)]">{channelSummary.primary.orders} pedidos · {channelSummary.primary.open} abierta{channelSummary.primary.open === 1 ? '' : 's'}</p>
+            </div>
+          </CardContent>
+        </Card>
+        <Card className="border border-rose-500/20 bg-[var(--bg-panel)] rounded-2xl shadow-sm overflow-hidden">
+          <CardContent className="p-5 flex items-center justify-between gap-4">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <Bike className="h-4 w-4 text-rose-600" />
+                <p className="text-sm font-extrabold text-[var(--text-primary)]">Caja Domicilios</p>
+                <Badge className="border border-rose-500/20 bg-rose-500/10 text-[9px] font-black uppercase text-rose-600">Independiente</Badge>
+              </div>
+              <p className="mt-1 text-xs text-[var(--text-secondary)]">Domicilios y recoger; se cierra solo cuando todo está liquidado.</p>
+            </div>
+            <div className="shrink-0 text-right">
+              <p className="text-lg font-black text-rose-600">{formatCurrency(channelSummary.delivery.sales)}</p>
+              <p className="text-[10px] font-bold uppercase tracking-wide text-[var(--text-muted)]">{channelSummary.delivery.orders} pedidos · {channelSummary.delivery.open} abierta{channelSummary.delivery.open === 1 ? '' : 's'}</p>
+            </div>
+          </CardContent>
+        </Card>
+      </motion.div>
+
       {/* Tab Switcher & Consolidated Report Button */}
       <motion.div variants={fadeUp} className="flex justify-between items-center flex-wrap gap-4">
         <div className="flex gap-2 p-1 bg-[var(--bg-panel)] rounded-2xl border border-[var(--border-subtle)] w-fit">
           <button type="button" onClick={() => setActiveTab('SUMMARY')}
             className={`flex items-center gap-2 px-5 py-2.5 rounded-xl text-xs font-extrabold transition-all cursor-pointer ${activeTab === 'SUMMARY' ? 'bg-[var(--accent)] text-[var(--accent-fg)] shadow-md' : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)]'}`}>
-            <BarChart2 className="h-4 w-4" /> Resumen por Caja Registradora
+            <BarChart2 className="h-4 w-4" /> Cajas activas
           </button>
           <button type="button" onClick={() => setActiveTab('HISTORY')}
             className={`flex items-center gap-2 px-5 py-2.5 rounded-xl text-xs font-extrabold transition-all cursor-pointer ${activeTab === 'HISTORY' ? 'bg-[var(--accent)] text-[var(--accent-fg)] shadow-md' : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)]'}`}>
@@ -381,7 +448,7 @@ export default function CashControlPage() {
       {/* TAB 1: SUMMARY BY REGISTER */}
       {activeTab === 'SUMMARY' && (
         <motion.div className="grid gap-6 md:grid-cols-2" variants={fadeUp}>
-          {registers.map(reg => {
+          {orderedRegisters.map(reg => {
             const sum = summaries[reg.id]
             const digitalTotal = (sum?.totalTransfer || 0) + (sum?.totalNequi || 0) + (sum?.totalBancolombia || 0) + (sum?.totalDaviplata || 0)
             const openClosing = reg.closings?.find(c => c.isOpen) || (sum?.isOpen ? { id: 'active', isOpen: true, user: { id: 'cajero', name: (sum as any).operatorName || 'Cajero' }, initialCash: sum.initialCash || 0, shiftStart: (sum as any).shiftStart || new Date().toISOString() } : null)
@@ -399,10 +466,10 @@ export default function CashControlPage() {
                         {reg.purpose === 'DELIVERY' ? <Bike className="h-5 w-5 text-rose-600" /> : <Wallet className="h-5 w-5 text-[var(--accent)]" />}
                         <h3 className="font-extrabold text-lg text-[var(--text-primary)] tracking-wide">{reg.name}</h3>
                         <Badge className={reg.purpose === 'DELIVERY' ? 'border border-rose-500/25 bg-rose-500/10 text-[9px] font-black uppercase text-rose-600' : 'border border-[var(--border-subtle)] bg-[var(--bg-elevated)] text-[9px] font-black uppercase text-[var(--text-muted)]'}>
-                          {reg.purpose === 'DELIVERY' ? 'Domicilios' : reg.purpose === 'DINING' ? 'Salón' : 'General'}
+                          {getRegisterChannel(reg.purpose)}
                         </Badge>
                       </div>
-                      {reg.description && <p className="text-xs text-[var(--text-secondary)] font-medium leading-relaxed">{reg.description}</p>}
+                      <p className="text-xs text-[var(--text-secondary)] font-medium leading-relaxed">{reg.description || (reg.purpose === 'DELIVERY' ? 'Solo domicilios y pedidos para recoger.' : 'Solo ventas de salón y operaciones de esta caja.')}</p>
                     </div>
                     <div className="flex items-center gap-2">
                       <Badge className={`text-[10px] font-extrabold uppercase px-2.5 py-0.5 rounded-full tracking-wider ${isOpen ? 'bg-[var(--accent)]/10 text-[var(--accent)] border border-[var(--accent)]/20' : 'bg-[var(--bg-elevated)] text-[var(--text-secondary)] border border-[var(--border-subtle)]'}`}>
@@ -543,6 +610,28 @@ export default function CashControlPage() {
       {/* TAB 2: CLOSINGS HISTORY */}
       {activeTab === 'HISTORY' && (
         <motion.div className="space-y-4" variants={fadeUp}>
+          <div className="flex flex-col gap-3 rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-4 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="text-sm font-extrabold text-[var(--text-primary)]">Cierres realizados</p>
+              <p className="mt-0.5 text-xs text-[var(--text-secondary)]">Cada cierre queda en su propio canal y abre su comprobante al seleccionarlo.</p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {([
+                ['ALL', 'Todos'],
+                ['PRIMARY', 'Caja Principal'],
+                ['DELIVERY', 'Domicilios'],
+              ] as const).map(([channel, label]) => (
+                <button
+                  key={channel}
+                  type="button"
+                  onClick={() => setHistoryChannel(channel)}
+                  className={`rounded-xl border px-3 py-2 text-xs font-extrabold transition-colors ${historyChannel === channel ? 'border-[var(--accent)] bg-[var(--accent)] text-[var(--accent-fg)]' : 'border-[var(--border-default)] bg-[var(--bg-elevated)] text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]'}`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
           <Card className="border border-[var(--border-subtle)] bg-[var(--bg-panel)] rounded-2xl p-4 shadow-sm">
             <div className="grid gap-4 sm:grid-cols-2 md:grid-cols-4">
               <div className="space-y-1.5">
@@ -587,6 +676,10 @@ export default function CashControlPage() {
           </Card>
 
           <Card className="border border-[var(--border-subtle)] bg-[var(--bg-panel)] shadow-xl rounded-2xl overflow-hidden">
+            <div className="flex items-center justify-between gap-3 border-b border-[var(--border-subtle)] px-5 py-3">
+              <p className="text-xs font-bold text-[var(--text-secondary)]"><span className="font-black text-[var(--text-primary)]">{filteredClosings.length}</span> cierre{filteredClosings.length === 1 ? '' : 's'} encontrado{filteredClosings.length === 1 ? '' : 's'}</p>
+              <p className="text-[10px] font-bold uppercase tracking-wide text-[var(--text-muted)]">Selecciona un cierre para ver el reporte</p>
+            </div>
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
@@ -612,7 +705,12 @@ export default function CashControlPage() {
                             Apertura: {new Date(c.shiftStart || c.createdAt).toLocaleString('es-CO', { dateStyle: 'short', timeStyle: 'short' })}
                           </div>
                         </td>
-                        <td className="px-6 py-4 font-extrabold text-[var(--accent)] whitespace-nowrap">{c.cashRegister?.name || 'Caja Principal'}</td>
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <p className="font-extrabold text-[var(--text-primary)]">{c.cashRegister?.name || 'Caja Principal'}</p>
+                          <Badge className={c.cashRegister?.purpose === 'DELIVERY' ? 'mt-1 border border-rose-500/20 bg-rose-500/10 text-[9px] font-black uppercase text-rose-600' : 'mt-1 border border-[var(--border-subtle)] bg-[var(--bg-elevated)] text-[9px] font-black uppercase text-[var(--text-muted)]'}>
+                            {getRegisterChannel(c.cashRegister?.purpose)}
+                          </Badge>
+                        </td>
                         <td className="px-6 py-4 font-bold text-[var(--text-secondary)] whitespace-nowrap">{c.user?.name || 'Operador'}</td>
                         <td className="px-6 py-4 text-xs font-semibold text-[var(--text-muted)] whitespace-nowrap">{formatCurrency(c.initialCash)}</td>
                         <td className="px-6 py-4 font-extrabold text-[var(--text-primary)] whitespace-nowrap">{formatCurrency(c.totalSales)}</td>

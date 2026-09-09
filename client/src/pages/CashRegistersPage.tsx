@@ -113,6 +113,8 @@ export default function CashRegistersPage() {
   const [closeSuccess, setCloseSuccess] = useState(false)
   const pendingDriverCashAtClose = closeRegSummary?.pendingDriverCash || closeSummary?.pendingDriverCash || 0
   const pendingPaymentsAtClose = closeRegSummary?.pendingPaymentCount || closeSummary?.pendingPaymentCount || 0
+  const openingRegister = registers.find(register => register.id === openCashRegisterId)
+  const closingRegister = registers.find(register => register.id === closeCashRegisterId)
 
   const load = async () => {
     setLoading(true)
@@ -370,13 +372,17 @@ export default function CashRegistersPage() {
     )
   }
 
-      const displayRegisters = registers
+      const displayRegisters = [...registers].sort((a, b) => {
+        const aPriority = a.purpose === 'DELIVERY' ? 1 : 0
+        const bPriority = b.purpose === 'DELIVERY' ? 1 : 0
+        return aPriority - bPriority || a.name.localeCompare(b.name, 'es')
+      })
 
       return (
         <div className="space-y-6">
           <PageHeader
             title="CAJA"
-            description="Abre y cierra cada canal por separado. Domicilios y recoger se contabilizan únicamente en Caja Domicilios."
+            description="Abre y cierra cada canal por separado. Caja Domicilios recibe únicamente domicilios y recoger; Caja Principal conserva el salón."
             actions={
               isAdmin ? (
                 <Button 
@@ -418,7 +424,7 @@ export default function CashRegistersPage() {
                         <Badge className={reg.purpose === 'DELIVERY'
                           ? 'border border-rose-500/25 bg-rose-500/10 text-[9px] font-extrabold uppercase tracking-wider text-rose-600'
                           : 'border border-[var(--border-subtle)] bg-[var(--bg-elevated)] text-[9px] font-extrabold uppercase tracking-wider text-[var(--text-secondary)]'}>
-                          {reg.purpose === 'DELIVERY' ? 'Domicilios' : reg.purpose === 'DINING' ? 'Salón' : 'General'}
+                          {reg.purpose === 'DELIVERY' ? 'Canal domicilios' : reg.purpose === 'DINING' ? 'Canal salón' : 'Caja principal'}
                         </Badge>
                       </div>
                       {reg.description && (
@@ -508,6 +514,13 @@ export default function CashRegistersPage() {
                     </div>
                   )}
 
+                  {!isOpen && (
+                    <div className="flex items-start gap-2 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-3 text-xs text-[var(--text-secondary)]">
+                      <Lock className="mt-0.5 h-4 w-4 shrink-0 text-[var(--text-muted)]" />
+                      <p>{reg.purpose === 'DELIVERY' ? 'Turno de domicilios cerrado. Ábrelo antes de confirmar pedidos de domicilio o recoger.' : 'Turno cerrado. Ábrelo para registrar las ventas de este canal.'}</p>
+                    </div>
+                  )}
+
                   {sum && reg.purpose !== 'DELIVERY' && (
                     <div className="grid grid-cols-2 gap-3 text-sm pt-4 border-t border-[var(--border-subtle)]/40">
                       <div className="rounded-xl bg-[var(--bg-elevated)] border border-[var(--border-subtle)] p-3">
@@ -556,6 +569,16 @@ export default function CashRegistersPage() {
                     </div>
                   )}
 
+                  {reg.purpose === 'DELIVERY' && (sum?.pendingPaymentCount || 0) > 0 && (
+                    <div className="flex items-start gap-2 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-700 dark:text-amber-400">
+                      <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                      <div>
+                        <p className="font-extrabold">Hay {sum.pendingPaymentCount} pedido{sum.pendingPaymentCount === 1 ? '' : 's'} sin cobro confirmado</p>
+                        <p className="mt-0.5 text-[10px] text-[var(--text-secondary)]">Confirma los pagos antes del cierre para que el turno quede completo.</p>
+                      </div>
+                    </div>
+                  )}
+
                   {/* Action buttons */}
                   {canOperate && (
                     <div className="flex gap-2 pt-2">
@@ -598,10 +621,12 @@ export default function CashRegistersPage() {
           <div className="p-6">
             <DialogHeader className="pb-4">
               <DialogTitle className="text-xl font-bold text-[var(--text-primary)] flex items-center gap-2">
-                <LockOpen className="h-5 w-5 text-[var(--accent)]" /> Abrir Caja
+                <LockOpen className="h-5 w-5 text-[var(--accent)]" /> Abrir {openingRegister?.name || 'Caja'}
               </DialogTitle>
               <DialogDescription className="text-xs text-[var(--text-secondary)] mt-1">
-                Ingresa el monto inicial en efectivo con el que inicias el turno.
+                {openingRegister?.purpose === 'DELIVERY'
+                  ? 'Este turno registrará únicamente domicilios y pedidos para recoger.'
+                  : 'Este turno registrará únicamente las ventas de esta caja.'}
               </DialogDescription>
             </DialogHeader>
             <div className="space-y-4 pt-2">
@@ -639,10 +664,12 @@ export default function CashRegistersPage() {
           <div className="p-6 overflow-y-auto flex-1">
             <DialogHeader className="pb-4">
               <DialogTitle className="text-xl font-bold text-[var(--text-primary)] flex items-center gap-2">
-                <Receipt className="h-5 w-5 text-[var(--destructive)]" /> Cierre de Caja — Reporte Z
+                <Receipt className="h-5 w-5 text-[var(--destructive)]" /> Cierre de {closingRegister?.name || 'Caja'}
               </DialogTitle>
               <DialogDescription className="text-xs text-[var(--text-secondary)] mt-1">
-                Resumen del turno actual. Confirma para cerrar caja.
+                {closingRegister?.purpose === 'DELIVERY'
+                  ? 'Reporte del turno de domicilios y recoger. No se mezcla con Caja Principal.'
+                  : 'Reporte del turno actual de esta caja. Confirma cuando sus movimientos estén completos.'}
               </DialogDescription>
             </DialogHeader>
 
@@ -669,6 +696,11 @@ export default function CashRegistersPage() {
                 >
                   {/* Report Z Summary */}
                   <div className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-4 space-y-3">
+                    <div className={`rounded-xl border px-3 py-2 text-xs font-bold ${closingRegister?.purpose === 'DELIVERY' ? 'border-rose-500/20 bg-rose-500/10 text-rose-700 dark:text-rose-300' : 'border-[var(--border-subtle)] bg-[var(--bg-panel)] text-[var(--text-secondary)]'}`}>
+                      {closingRegister?.purpose === 'DELIVERY'
+                        ? 'Caja Domicilios: revisa cobros pendientes y liquidaciones antes de cerrar.'
+                        : `Canal: ${closingRegister?.purpose === 'DINING' ? 'Salón y mesas' : 'Caja Principal'}.`}
+                    </div>
                     <div className="flex justify-between items-center pb-2 border-b border-[var(--border-subtle)]/50">
                       <span className="text-xs font-bold uppercase tracking-wider text-[var(--text-secondary)]">Base Inicial</span>
                       <span className="font-bold text-[var(--text-primary)]">{formatCurrency(closeSummary.initialCash)}</span>
