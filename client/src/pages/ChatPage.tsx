@@ -39,8 +39,18 @@ type Session = {
   unreadCount?: number
   /** Query for which the server confirmed a historical message match. */
   searchMatchedFor?: string | null
+  /** The latest message that matched the active global search query. */
+  searchMatches?: SearchMatch[]
   activeOrder?: { id: string; orderNumber: number; status: string; total?: number } | null
   messages: Message[]
+}
+
+type SearchMatch = {
+  id: string
+  content: string
+  direction: 'IN' | 'OUT' | string
+  messageType: string
+  createdAt: string
 }
 
 type SessionPage = {
@@ -772,6 +782,47 @@ const normalizeSearchValue = (value: string) => value
   .normalize('NFD')
   .replace(/[\u0300-\u036f]/g, '')
 
+const escapeSearchRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+const getSearchSnippet = (session: Session, query: string) => {
+  const normalizedQuery = normalizeSearchValue(query.trim())
+  if (!normalizedQuery) return ''
+
+  const candidates = [
+    ...(session.searchMatches || []),
+    ...(session.messages || []),
+  ]
+  const matchingMessage = candidates.find(message =>
+    normalizeSearchValue(message.content || '').includes(normalizedQuery)
+  )
+  if (!matchingMessage?.content) return ''
+
+  const content = matchingMessage.content.trim()
+  const rawIndex = content.toLocaleLowerCase().indexOf(query.trim().toLocaleLowerCase())
+  const normalizedIndex = normalizeSearchValue(content).indexOf(normalizedQuery)
+  const matchIndex = rawIndex >= 0 ? rawIndex : normalizedIndex
+  const radius = 52
+  const start = Math.max(0, matchIndex - radius)
+  const end = Math.min(content.length, matchIndex + query.trim().length + radius)
+  return `${start > 0 ? '…' : ''}${content.slice(start, end)}${end < content.length ? '…' : ''}`
+}
+
+const HighlightedSearchText = ({ text, query }: { text: string; query: string }) => {
+  const cleanQuery = query.trim()
+  if (!cleanQuery || !text) return <>{text}</>
+  const parts = text.split(new RegExp(`(${escapeSearchRegExp(cleanQuery)})`, 'ig'))
+  return (
+    <>
+      {parts.map((part, index) => {
+        const isMatch = part.toLocaleLowerCase() === cleanQuery.toLocaleLowerCase()
+        return isMatch
+          ? <mark key={`${part}-${index}`} className="rounded bg-emerald-200/80 px-0.5 text-emerald-900 dark:bg-emerald-400/30 dark:text-emerald-100">{part}</mark>
+          : <React.Fragment key={`${part}-${index}`}>{part}</React.Fragment>
+      })}
+    </>
+  )
+}
+
 const getSearchSuggestionReason = (session: Session, query: string) => {
   const rawQuery = query.trim()
   const isOrderQuery = /^(#|pedido\s*|orden\s*|factura\s*)/i.test(rawQuery)
@@ -785,6 +836,7 @@ const getSearchSuggestionReason = (session: Session, query: string) => {
   if (isOrderQuery || !normalizedQuery) return '#pedido'
   if (digits && (phone.includes(digits) || customerPhone.includes(digits))) return 'teléfono'
   if (name.includes(normalizedQuery)) return 'cliente'
+  if (session.searchMatches?.length) return 'mensaje'
   if (latestMessage.includes(normalizedQuery)) return 'mensaje'
   if (/^\d+$/.test(normalizedQuery)) return '#pedido'
   return 'coincidencia'
@@ -1055,6 +1107,7 @@ function ChatPage() {
       name: getSessionDisplayName(session),
       phone: formatSessionPhone(getCallablePhoneNumber(session) || session.customerPhone || session.phone),
       reason: getSearchSuggestionReason(session, query),
+      snippet: getSearchSnippet(session, query),
     }))
   }, [chatSearch, filteredSessions])
 
@@ -2766,7 +2819,7 @@ function ChatPage() {
               <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-[var(--text-secondary)] pointer-events-none" />
               <input
                 type="text"
-                placeholder="Buscar cliente, teléfono, @id o #pedido..."
+                placeholder="Buscar cliente, mensaje, teléfono o #pedido..."
                 className="w-full bg-[var(--bg-elevated)] border border-[var(--border-subtle)] rounded-2xl pl-10 pr-9 py-2.5 text-xs sm:text-sm font-medium focus:outline-none focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent)]/15 transition-all shadow-inner placeholder:text-[var(--text-muted)]"
                 value={chatSearch}
                 onChange={e => setChatSearch(e.target.value)}
@@ -2791,14 +2844,24 @@ function ChatPage() {
             </div>
             {searchFocused && chatSearch.trim() && (
               <div className="absolute left-3 right-3 top-[3.85rem] z-50 overflow-hidden rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] shadow-2xl">
-                {searchSuggestions.length > 0 ? searchSuggestions.map(({ session, name, phone, reason }) => (
+                {searchSuggestions.length > 0 ? searchSuggestions.map(({ session, name, phone, reason, snippet }) => (
                   <button
                     key={session.id}
                     type="button"
                     onMouseDown={event => event.preventDefault()}
                     onClick={() => {
-                      setChatSearch(name === 'Cliente' ? (session.phone || chatSearch) : name)
                       setSearchFocused(false)
+                      navigate(`/chat?session=${encodeURIComponent(session.id)}`, { replace: true })
+                      setGlobalActiveSessionIdCache(session.id)
+                      try {
+                        localStorage.setItem('niche_last_active_whatsapp_session_id', session.id)
+                      } catch (e) {}
+                      setReplyingTo(null)
+                      setMessage('')
+                      setActiveOrder(session.activeOrder || null)
+                      setActiveSession({ ...session, unreadCount: 0 })
+                      setSessions(prev => prev.map(item => item.id === session.id ? { ...item, unreadCount: 0 } : item))
+                      api.post(`/whatsapp/sessions/${session.id}/read`).catch(() => {})
                     }}
                     className="flex w-full items-center gap-2.5 border-b border-[var(--border-subtle)]/60 px-3 py-2.5 text-left last:border-b-0 hover:bg-[var(--bg-hover)]"
                   >
@@ -2808,6 +2871,11 @@ function ChatPage() {
                     <span className="min-w-0 flex-1">
                       <span className="block truncate text-xs font-bold text-[var(--text-primary)]">{name}</span>
                       <span className="block truncate text-[10px] text-[var(--text-muted)]">{phone || 'Sin teléfono'} · {reason}</span>
+                      {snippet && (
+                        <span className="mt-0.5 block line-clamp-2 text-[11px] leading-4 text-[var(--text-secondary)]">
+                          <HighlightedSearchText text={snippet} query={chatSearch} />
+                        </span>
+                      )}
                     </span>
                     {session.unreadCount ? <span className="rounded-full bg-[var(--accent)] px-1.5 py-0.5 text-[9px] font-black text-[var(--accent-fg)]">{session.unreadCount}</span> : null}
                   </button>
@@ -2882,6 +2950,7 @@ function ChatPage() {
                   } else if ((s as any).lastMessageContent || (s as any).lastMessageText) {
                     latestMsg = (s as any).lastMessageContent || (s as any).lastMessageText
                   }
+                  const searchSnippet = chatSearch.trim() ? getSearchSnippet(s, chatSearch) : ''
                   
                   const assignedInfo = getAssignedInfo(s, user)
                   
@@ -2978,7 +3047,11 @@ function ChatPage() {
                             {s.messages?.[0]?.direction === 'OUT' && (
                               <MessageStatus status={s.messages?.[0]?.status || 'sent'} direction="OUT" isList={true} />
                             )}
-                            <span className="truncate">{latestMsg}</span>
+                            <span className="truncate">
+                              {searchSnippet
+                                ? <HighlightedSearchText text={searchSnippet} query={chatSearch} />
+                                : latestMsg}
+                            </span>
                           </p>
                           {isUnreadIncoming && (
                             <span className="bg-[#25D366] text-white font-extrabold text-[10px] h-4.5 min-w-[18px] px-1.5 rounded-full flex items-center justify-center shrink-0 shadow-sm animate-pulse">

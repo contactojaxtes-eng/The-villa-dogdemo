@@ -1489,6 +1489,15 @@ export class WhatsappService implements OnModuleInit {
 
     const andClauses: any[] = [{ active: true }];
     let matchingOrders: any[] = [];
+    // When a global search finds a historical message, keep the matching
+    // message so the WhatsApp-style result can show the exact context.
+    const messageMatchesBySession = new Map<string, Array<{
+      id: string;
+      content: string;
+      direction: string;
+      messageType: string;
+      createdAt: Date;
+    }>>();
 
     if (cleanSearch) {
       const searchDigits = cleanSearch.replace(/\D/g, '');
@@ -1548,15 +1557,26 @@ export class WhatsappService implements OnModuleInit {
 
       // 2. Search message history for words or phrases (e.g. "pizza", "salchipapa", "nequi", "domicilio")
       let messageSessionIds: string[] = [];
-      if (cleanSearch.length >= 3 && !isExplicitOrderSearch) {
+      if (cleanSearch.length >= 2 && !isExplicitOrderSearch) {
         const msgMatches = await this.prisma.whatsAppMessage.findMany({
           where: { content: { contains: cleanSearch, mode: 'insensitive' } },
-          select: { sessionId: true },
-          take: 50,
+          select: { id: true, sessionId: true, content: true, direction: true, messageType: true, createdAt: true },
+          take: 100,
           distinct: ['sessionId'],
           orderBy: { createdAt: 'desc' }
         });
         messageSessionIds = msgMatches.map(m => m.sessionId).filter(Boolean);
+        for (const match of msgMatches) {
+          const matches = messageMatchesBySession.get(match.sessionId) || [];
+          matches.push({
+            id: match.id,
+            content: match.content,
+            direction: match.direction,
+            messageType: match.messageType,
+            createdAt: match.createdAt,
+          });
+          messageMatchesBySession.set(match.sessionId, matches);
+        }
       }
 
       const orSearchList: any[] = [
@@ -1883,6 +1903,7 @@ export class WhatsappService implements OnModuleInit {
           ...s,
           lastMessageAt: realLastMessageAt,
           unreadCount: unreadMap.get(s.id) || 0,
+          ...(cleanSearch ? { searchMatches: messageMatchesBySession.get(s.id) || [] } : {}),
         });
       }
     }
