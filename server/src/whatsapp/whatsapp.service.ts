@@ -3739,12 +3739,18 @@ Restaurante (Tú):
             `¡Hola! Vemos que actualmente tienes un pedido activo en curso:\n` +
             `• *Pedido:* #${activeOrder.orderNumber}\n` +
             `• *Estado:* ${statusText}\n\n` +
-            `¿Cómo te podemos ayudar? Responde con el número de la opción:\n\n` +
-            `5. � *Modificar o Editar mi pedido*\n` +
-            `6. � *Hablar con un Asesor*\n` +
-            `7.  *Solicitar Cancelación de mi pedido*\n\n` +
-            `O escribe *hola* para volver a ver estas opciones.`;
+            `En un momento uno de nuestros asesores tomará tu chat personalmente. Si deseas consultar o cambiar algo de tu pedido, déjanos tu mensaje aquí y lo atenderemos de inmediato. ¡Muchas gracias! 😊`;
           await this.sendMessage(session.phone, orderMenuText);
+          await this.prisma.whatsAppSession.update({
+            where: { id: session.id },
+            data: { waitingForAdvisor: true },
+          });
+          this.socketGateway.emitWhatsApp('whatsappAgentRequest', {
+            sessionId: session.id,
+            phone: session.phone,
+            customerName: session.customerName,
+            waitingForAdvisor: true,
+          });
           return;
         }
         
@@ -3810,11 +3816,9 @@ Restaurante (Tú):
 
       if (isLocationQuery) {
         const locationText = 
-          `📍 *Ubicación y Cobertura:*\n\n` +
-          `Somos un restaurante digital y realizamos domicilios en toda la ciudad de Montería.\n` +
-          `No contamos con punto físico para atención presencial en mesa, despachamos todos nuestros pedidos directamente a tu dirección. \n\n` +
-          `El costo del domicilio varía según el barrio de entrega. Al hablar con un asesor podrás cotizar el valor exacto compartiéndonos tu dirección.\n\n` +
-          `Responde *0* para volver al menú principal.`;
+          `📍 *Ubicación y Domicilios - The Villa Dog:*\n\n` +
+          `Despachamos pedidos directamente a tu dirección en toda la ciudad. 🛵🔥\n\n` +
+          `Compártenos tu barrio y dirección para cotizar tu envío y tomar tu pedido. Con gusto te atendemos.`;
         await this.sendMessage(session.phone, locationText);
         return;
       }
@@ -3828,15 +3832,22 @@ Restaurante (Tú):
       const isSimpleGreeting = isGreeting && normalized.length < 20 && !looksLikeOrder && !isLocationQuery && !isAskingForMenu;
 
       if (isSimpleGreeting || isSessionExpired || normalized === 'inicio' || normalized === 'volver' || normalized === '0') {
-        this.logger.log(`Enviando menú de bienvenida a ${session.phone} (greeting=${isGreeting}, expired=${isSessionExpired})`);
+        this.logger.log(`Enviando bienvenida a ${session.phone} (greeting=${isGreeting}, expired=${isSessionExpired})`);
+        const configuredMenuUrl = await this.getSetting('digital_menu_url');
+        const digitalMenuUrl = this.getShareableDigitalMenuUrl(configuredMenuUrl);
+        let menuLinkText = '';
+        if (digitalMenuUrl) {
+          const cleanedPhone = (session.phone.startsWith('57') && session.phone.length === 12) ? session.phone.substring(2) : session.phone;
+          const hasPhoneAsName = session.customerName && /^\d+$/.test(session.customerName.replace(/\D/g, ''));
+          const nameParam = (session.customerName && !hasPhoneAsName) ? `&name=${encodeURIComponent(session.customerName)}` : '';
+          const separator = digitalMenuUrl.includes('?') ? '&' : '?';
+          const fullMenuUrl = `${digitalMenuUrl}${separator}phone=${cleanedPhone}${nameParam}`;
+          const displayUrl = fullMenuUrl.replace(/^https?:\/\//i, '');
+          menuLinkText = `\n\nPuedes ver nuestra carta digital interactiva aquí:\n👉 ${displayUrl}`;
+        }
         const welcomeText = 
-          `¡Hola! Bienvenido a *The Villa Dog* 🍕\n\n` +
-          `¿En qué podemos ayudarte hoy? Por favor responde con el número de la opción:\n\n` +
-          `1. 📜 *Ver nuestro Menú*\n` +
-          `2. 📝 *Hacer un Pedido*\n` +
-          `3. 🕒 *Horarios de Atención*\n` +
-          `4. 🛵 *Zonas de Cobertura*\n` +
-          `5. 👤 *Hablar con un Asesor*`;
+          `¡Hola! Te damos la bienvenida a *The Villa Dog* 🌭🔥\n\n` +
+          `Con gusto te atendemos. Cuéntanos qué te gustaría pedir o en qué podemos ayudarte.${menuLinkText}`;
         await this.sendMessage(session.phone, welcomeText);
         return;
       }
@@ -3870,15 +3881,15 @@ Restaurante (Tú):
         if (matchedCategory && matchedCategory.items.length > 0) {
           const itemList = matchedCategory.items.slice(0, 15).map(i => `• *${i.name}*: $${i.price.toLocaleString('de-DE')}`).join('\n');
           menuText = 
-            `*¡Claro que sí! 🍕 Aquí tienes la variedad de nuestras ${matchedCategory.name}:*\n\n` +
+            `*¡Claro que sí! 🌭 Aquí tienes nuestras opciones:*\n\n` +
             `${itemList}\n\n` +
             `¿Deseas pedir alguna de estas opciones? Escríbenos directamente lo que deseas ordenar.${digitalMenuLine}\n\n` +
-            `Responde *0* para volver al menú principal.`;
+            `Escríbenos lo que deseas pedir y con gusto tomamos tu pedido. 😊`;
         } else {
           const liveMenuText = await this.buildMessagingMenuText();
           menuText = 
             `${liveMenuText}${digitalMenuLine}\n\n` +
-            `Responde *0* para volver al menú principal.`;
+            `Escríbenos lo que deseas pedir y con gusto tomamos tu pedido. 😊`;
         }
           
         await this.sendMessage(session.phone, menuText);
@@ -3886,22 +3897,25 @@ Restaurante (Tú):
       }
 
       if (normalized === '2') {
-        const hasPhoneAsName = session.customerName && /^\d+$/.test(session.customerName.replace(/\D/g, ''));
-        const hasValidName = session.customerName && !hasPhoneAsName;
-        const nameLine = hasValidName ? '' : `*Nombre:* \n`;
         const orderTemplateText = 
-          `¡Perfecto!  Para registrar tu pedido, por favor escríbenos lo que deseas ordenar.\n\n` +
-          `Puedes escribirlo directamente, por ejemplo:\n` +
-          `_"Quiero una pizza personal de queso mozzarella con adición de jamón y un perro súper niche"_\n\n` +
-          `O si prefieres, copia y completa esta plantilla:\n\n` +
-          nameLine +
-          `*Dirección:* (Escribir "Recoger" si pasas por él)\n` +
-          `*Barrio:* \n` +
-          `*¿Es para Domicilio o Recoger?:* \n` +
-          `*Método de Pago:* (Efectivo / Nequi / Tarjeta)\n` +
-          `*Pedido:* \n\n` +
-          `¡Escribe tu pedido y un asesor lo tomará de inmediato! `;
+          `¡Excelente elección! 🌭🔥\n\n` +
+          `Para tomar tu pedido, por favor cuéntanos:\n` +
+          `• *Productos y adiciones* que deseas\n` +
+          `• *¿Para domicilio o para recoger?*\n` +
+          `• *Dirección y barrio* de entrega\n` +
+          `• *Método de pago* (Efectivo / Transferencia)\n\n` +
+          `Uno de nuestros asesores tomará tu pedido de inmediato. ¡Muchas gracias! 😊`;
         await this.sendMessage(session.phone, orderTemplateText);
+        await this.prisma.whatsAppSession.update({
+          where: { id: session.id },
+          data: { waitingForAdvisor: true },
+        });
+        this.socketGateway.emitWhatsApp('whatsappAgentRequest', {
+          sessionId: session.id,
+          phone: session.phone,
+          customerName: session.customerName,
+          waitingForAdvisor: true,
+        });
         return;
       }
 
@@ -3910,7 +3924,7 @@ Restaurante (Tú):
           `� *Nuestros Horarios de Atención:*\n\n` +
           `• Martes a Domingo: 5:30 PM - 11:30 PM\n` +
           `• Lunes: Cerrado por descanso de nuestro equipo.\n\n` +
-          `Responde *0* para volver al menú principal.`;
+          `Escríbenos lo que deseas pedir y con gusto tomamos tu pedido. 😊`;
         await this.sendMessage(session.phone, scheduleText);
         return;
       }
@@ -3926,7 +3940,7 @@ Restaurante (Tú):
           `� *Cobertura y Domicilios en Montería:*\n\n` +
           `${zonesList}\n\n` +
           `*Nota:* Si tu barrio es nuevo o no aparece en la lista, no te preocupes, un asesor definirá el costo al momento de procesar tu pedido. \n\n` +
-          `Responde *0* para volver al menú principal.`;
+          `Escríbenos lo que deseas pedir y con gusto tomamos tu pedido. 😊`;
         await this.sendMessage(session.phone, coverageText);
         return;
       }
@@ -4026,17 +4040,22 @@ Restaurante (Tú):
         return;
       }
 
-      this.logger.log(`Mensaje no reconocido de ${session.phone}: "${normalized}", enviando fallback`);
+      this.logger.log(`Mensaje recibido de ${session.phone}: "${normalized}", derivando a atención personalizada`);
       const fallbackText = 
-        `No entendí tu mensaje �\n\n` +
-        `Por favor responde con el *número* de la opción que deseas:\n\n` +
-        `1.  *Ver nuestro Menú*\n` +
-        `2.  *Hacer un Pedido*\n` +
-        `3. � *Horarios de Atención*\n` +
-        `4. � *Zonas de Cobertura*\n` +
-        `5. � *Hablar con un Asesor*\n\n` +
-        `O escribe *hola* para volver al inicio.`;
+        `¡Hola! 👋 Recibimos tu mensaje en *The Villa Dog* 🌭🔥\n\n` +
+        `En un momento uno de nuestros asesores te responderá personalmente para tomar tu pedido o resolver tus dudas. ¡Muchas gracias por escribirnos! 😊`;
       await this.sendMessage(session.phone, fallbackText);
+      await this.prisma.whatsAppSession.update({
+        where: { id: session.id },
+        data: { waitingForAdvisor: true },
+      });
+      this.socketGateway.emitWhatsApp('whatsappAgentRequest', {
+        sessionId: session.id,
+        phone: session.phone,
+        customerName: session.customerName,
+        waitingForAdvisor: true,
+      });
+      return;
     } catch (error) {
       this.logger.error(`Error en chatbot para ${session.phone}:`, error);
     }
