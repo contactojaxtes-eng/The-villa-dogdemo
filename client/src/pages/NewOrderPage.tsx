@@ -2824,16 +2824,19 @@ export default function NewOrderPage({
    const renderMenuCard = () => {
     return (
       <Card className="flex min-h-0 flex-1 flex-col border border-[var(--border-subtle)] bg-[var(--bg-panel)] shadow-xl rounded-2xl overflow-hidden md:h-full h-auto">
-        <CardHeader className={cn("shrink-0 border-b border-[var(--border-subtle)]", embedded ? "p-3 sm:p-4" : "p-5 pb-3")}>
+        <CardHeader className={cn("shrink-0 border-b border-[var(--border-subtle)]", embedded ? "p-2.5 sm:p-3" : "p-5 pb-3")}>
           <div className={cn(
-            "flex flex-col gap-3",
-            !embedded && "md:flex-row md:items-center md:justify-between"
+            "flex flex-col gap-2",
+            embedded ? "sm:flex-row sm:items-center sm:justify-between sm:gap-3" : "md:flex-row md:items-center md:justify-between"
           )}>
-            <div>
+            <div className={cn("min-w-0", embedded && "sm:shrink-0")}>
               <CardTitle className="text-base font-bold text-[var(--text-primary)]">Carta del Menú</CardTitle>
-              <CardDescription className="text-xs text-[var(--text-secondary)]">Toca un producto para agregarlo al pedido</CardDescription>
+              <CardDescription className="text-xs text-[var(--text-secondary)]">Toca un producto para agregarlo</CardDescription>
             </div>
-            <div className={cn("relative flex w-full items-center gap-2", !embedded && "md:w-80")}>
+            <div className={cn(
+              "relative flex w-full items-center gap-2",
+              embedded ? "sm:w-auto sm:min-w-0 sm:flex-1 sm:max-w-md" : "md:w-80"
+            )}>
               <div className="relative flex-1">
                 <Search className="absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-[var(--text-muted)]" />
                 <Input 
@@ -4032,7 +4035,7 @@ const renderDeliveryCard = () => {
           <div className="flex min-w-0 flex-1 items-center justify-between gap-3">
             <div className="min-w-0">
               <p className="truncate text-sm font-bold">{canCreate?.reason || 'La Caja Domicilios está cerrada'}</p>
-              <p className="mt-0.5 hidden text-xs sm:block">Puedes armar el pedido; solo falta abrir la caja para confirmarlo.</p>
+              <p className={cn("mt-0.5 text-xs", embedded ? "hidden" : "hidden sm:block")}>Puedes armar el pedido; solo falta abrir la caja para confirmarlo.</p>
             </div>
             <Link to="/payments" className="shrink-0 text-xs font-semibold underline transition-all hover:text-[var(--text-primary)]">Abrir caja →</Link>
           </div>
@@ -4135,24 +4138,33 @@ const renderDeliveryCard = () => {
             initial={{ y: 50, opacity: 0 }}
             animate={{ y: 0, opacity: 1 }}
             exit={{ y: 50, opacity: 0 }}
-            className="flex items-center justify-between rounded-2xl border border-[var(--accent-border)] bg-[var(--bg-panel)]/85 backdrop-blur-md p-3 shadow-2xl"
+            className={cn(
+              "flex items-center justify-between rounded-2xl border border-[var(--accent-border)] bg-[var(--bg-panel)]/95 backdrop-blur-md shadow-2xl",
+              embedded ? "gap-2 px-2.5 py-2" : "p-3"
+            )}
           >
-            <div className="flex items-center gap-2">
-              <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-[var(--accent)]/15 border border-[var(--accent)]/30 text-[var(--accent)]">
-                <ShoppingCart className="h-4 w-4" />
+            <div className="flex min-w-0 items-center gap-2">
+              <div className={cn(
+                "flex items-center justify-center rounded-xl bg-[var(--accent)]/15 border border-[var(--accent)]/30 text-[var(--accent)]",
+                embedded ? "h-8 w-8" : "h-9 w-9"
+              )}>
+                <ShoppingCart className={embedded ? "h-3.5 w-3.5" : "h-4 w-4"} />
               </div>
-              <div>
-                <p className="text-xs font-bold text-[var(--text-primary)]">
+              <div className="min-w-0">
+                <p className={cn("font-bold text-[var(--text-primary)]", embedded ? "text-[11px]" : "text-xs")}>
                   {cart.reduce((s, i) => s + i.quantity, 0)} items
                 </p>
-                <p className="text-xs font-extrabold text-[var(--accent)]">
+                <p className={cn("font-extrabold text-[var(--accent)]", embedded ? "text-[11px]" : "text-xs")}>
                   Total: {formatCurrency(total)}
                 </p>
               </div>
             </div>
             <Button
               onClick={() => setStep('delivery')} // Ir directamente a la pestaña de entrega!
-              className="bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-fg)] font-bold text-xs px-4 h-9 rounded-xl flex items-center gap-1.5 shadow-md shadow-[var(--accent)]/10 cursor-pointer"
+              className={cn(
+                "bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-fg)] font-bold rounded-xl flex items-center gap-1.5 shadow-md shadow-[var(--accent)]/10 cursor-pointer",
+                embedded ? "h-8 px-3 text-[11px]" : "h-9 px-4 text-xs"
+              )}
             >
               Revisar y confirmar
             </Button>
@@ -4283,4 +4295,3 @@ const renderDeliveryCard = () => {
     </div>
   )
 }
-
