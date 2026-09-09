@@ -329,135 +329,144 @@ export default function TableHistoryPage() {
         </div>
       </div>
 
-      {/* Scope Buttons: Mis Mesas vs Todas las Mesas */}
-      <div className="flex flex-col sm:flex-row gap-2.5 items-stretch sm:items-center justify-between">
-        <div className="flex items-center gap-1 bg-[var(--bg-panel)] p-1 rounded-xl border border-[var(--border-subtle)] w-fit">
-          <button
-            type="button"
-            onClick={() => setScope('MINE')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-black transition cursor-pointer flex items-center gap-1.5 ${
-              scope === 'MINE'
-                ? 'bg-[var(--accent)] text-white shadow-xs'
-                : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
-            }`}
-          >
-            <span>Mis mesas ({myTablesCount})</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => setScope('ALL')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-black transition cursor-pointer ${
-              scope === 'ALL'
-                ? 'bg-[var(--accent)] text-white shadow-xs'
-                : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
-            }`}
-          >
-            Todas las mesas ({tables.length})
-          </button>
+      {/* Filtros principales del historial */}
+      <section className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-4 shadow-xs">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="flex items-center gap-2.5">
+            <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-[var(--accent)]/10 text-[var(--accent)]">
+              <Search className="h-4 w-4" />
+            </span>
+            <div>
+              <h2 className="text-sm font-black text-[var(--text-primary)]">Consulta de mesas</h2>
+              <p className="text-[11px] text-[var(--text-secondary)]">Filtra por responsable, turno y estado antes de revisar las cuentas.</p>
+            </div>
+          </div>
+          <span className="rounded-full bg-[var(--bg-elevated)] px-2.5 py-1 text-[11px] font-black text-[var(--text-secondary)]">
+            {filtered.length} resultado{filtered.length === 1 ? '' : 's'}
+          </span>
         </div>
 
-        <div className="flex gap-1 bg-[var(--bg-elevated)] p-1 rounded-xl shrink-0 overflow-x-auto">
-          {[
-            { id: 'CURRENT', label: '📅 Turno Actual' },
-            { id: 'ALL', label: '🗂️ Historial Completo' },
-          ].map(sf => (
-            <button
-              key={sf.id}
-              onClick={() => setShiftFilter(sf.id as any)}
-              className={`px-3 py-1.5 text-xs font-black rounded-lg transition-all whitespace-nowrap cursor-pointer ${
-                shiftFilter === sf.id
-                  ? 'bg-amber-500 text-slate-950 shadow-sm'
-                  : 'text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]'
-              }`}
-            >
-              {sf.label}
-            </button>
-          ))}
-        </div>
+        <div className="mt-4 grid gap-3 border-t border-[var(--border-subtle)] pt-3 lg:grid-cols-[auto_auto_1fr]">
+          <div>
+            <p className="mb-1.5 text-[10px] font-black uppercase tracking-wide text-[var(--text-muted)]">Vista</p>
+            <div className="flex w-fit rounded-xl bg-[var(--bg-elevated)] p-1">
+              <button
+                type="button"
+                onClick={() => setScope('MINE')}
+                className={`rounded-lg px-3 py-1.5 text-xs font-black transition ${scope === 'MINE' ? 'bg-[var(--accent)] text-[var(--accent-fg)] shadow-xs' : 'text-[var(--text-secondary)] hover:bg-[var(--bg-panel)]'}`}
+              >
+                Mis mesas ({myTablesCount})
+              </button>
+              <button
+                type="button"
+                onClick={() => setScope('ALL')}
+                className={`rounded-lg px-3 py-1.5 text-xs font-black transition ${scope === 'ALL' ? 'bg-[var(--accent)] text-[var(--accent-fg)] shadow-xs' : 'text-[var(--text-secondary)] hover:bg-[var(--bg-panel)]'}`}
+              >
+                Todas ({tables.length})
+              </button>
+            </div>
+          </div>
 
-        <div className="flex gap-1 bg-[var(--bg-elevated)] p-1 rounded-xl shrink-0 overflow-x-auto">
-          {[
-            { id: 'ALL', label: 'Todos los Estados' },
-            { id: 'OPEN', label: 'Mesas Abiertas' },
-            { id: 'CLOSED', label: 'Cerradas y Pagadas' },
-          ].map(f => (
-            <button
-              key={f.id}
-              onClick={() => setFilterStatus(f.id)}
-              className={`px-3 py-1.5 text-xs font-black rounded-lg transition-all whitespace-nowrap cursor-pointer ${
-                filterStatus === f.id
-                  ? 'bg-[var(--accent)] text-white shadow-sm'
-                  : 'text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]'
-              }`}
-            >
-              {f.label}
-            </button>
-          ))}
-        </div>
-      </div>
+          <div>
+            <p className="mb-1.5 text-[10px] font-black uppercase tracking-wide text-[var(--text-muted)]">Periodo</p>
+            <div className="flex w-fit rounded-xl bg-[var(--bg-elevated)] p-1">
+              {[
+                { id: 'CURRENT', label: 'Turno actual' },
+                { id: 'ALL', label: 'Completo' },
+              ].map(option => (
+                <button
+                  key={option.id}
+                  type="button"
+                  onClick={() => setShiftFilter(option.id as 'CURRENT' | 'ALL')}
+                  className={`rounded-lg px-3 py-1.5 text-xs font-black transition ${shiftFilter === option.id ? 'bg-[var(--text-primary)] text-[var(--bg-panel)] shadow-xs' : 'text-[var(--text-secondary)] hover:bg-[var(--bg-panel)]'}`}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+          </div>
 
-      {/* Panel General de Ventas y Rendimiento por Mesera (Exclusivo para Administradores y Cajeros) */}
+          <div>
+            <p className="mb-1.5 text-[10px] font-black uppercase tracking-wide text-[var(--text-muted)]">Estado de la mesa</p>
+            <div className="flex flex-wrap rounded-xl bg-[var(--bg-elevated)] p-1">
+              {[
+                { id: 'ALL', label: 'Todas' },
+                { id: 'OPEN', label: 'Abiertas' },
+                { id: 'CLOSED', label: 'Cerradas y pagadas' },
+              ].map(option => (
+                <button
+                  key={option.id}
+                  type="button"
+                  onClick={() => setFilterStatus(option.id)}
+                  className={`rounded-lg px-3 py-1.5 text-xs font-black transition ${filterStatus === option.id ? 'bg-[var(--accent)] text-[var(--accent-fg)] shadow-xs' : 'text-[var(--text-secondary)] hover:bg-[var(--bg-panel)]'}`}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* Resumen y rendimiento de las meseras */}
       {canViewFinancials && (
-        <div className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-3.5 shadow-xs space-y-3">
-          <div className="flex items-center justify-between gap-2 flex-wrap">
-            <div className="flex items-center gap-2">
-              <Users className="h-5 w-5 text-[var(--accent)]" />
+        <section className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-4 shadow-xs">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-2.5">
+              <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-[var(--accent)]/10 text-[var(--accent)]">
+                <Wallet className="h-4 w-4" />
+              </span>
               <div>
-                <h2 className="text-sm font-black text-[var(--text-primary)] flex items-center gap-2">
-                  Ventas y Cuentas por Mesera
-                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-[var(--accent)]/15 text-[var(--accent)]">
-                    {waiterStats.length} mesera{waiterStats.length === 1 ? '' : 's'}
-                  </span>
-                </h2>
-                <p className="text-[11px] text-[var(--text-secondary)]">Monitorea cuánto lleva vendido cada mesera, mesas atendidas y pagos recibidos.</p>
+                <h2 className="text-sm font-black text-[var(--text-primary)]">Resumen del salón</h2>
+                <p className="text-[11px] text-[var(--text-secondary)]">Ventas y cuentas agrupadas por mesera.</p>
               </div>
             </div>
-            <div className="flex items-center gap-2">
-              <span className="text-xs font-black text-[var(--text-primary)] bg-[var(--bg-elevated)] px-2.5 py-1 rounded-lg border border-[var(--border-subtle)]">
-                Total Salón: <strong className="text-[var(--accent)]">{formatCurrency(globalSummary.totalSales)}</strong>
-              </span>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setShowWaitersDetail(prev => !prev)}
-                className="h-7 px-2 text-xs font-bold text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]"
-                title={showWaitersDetail ? 'Ocultar desglose' : 'Mostrar desglose'}
-              >
-                {showWaitersDetail ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
-              </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setShowWaitersDetail(prev => !prev)}
+              className="h-8 gap-1.5 rounded-lg text-xs font-bold"
+            >
+              {showWaitersDetail ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+              {showWaitersDetail ? 'Ocultar meseras' : 'Ver meseras'}
+            </Button>
+          </div>
+
+          <div className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+            <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-3">
+              <p className="text-[10px] font-black uppercase tracking-wide text-[var(--text-muted)]">Ventas del salón</p>
+              <p className="mt-1 text-lg font-black text-[var(--accent)]">{formatCurrency(globalSummary.totalSales)}</p>
+              <p className="text-[10px] font-bold text-[var(--text-secondary)]">{globalSummary.totalTables} mesas registradas</p>
+            </div>
+            <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-3">
+              <p className="text-[10px] font-black uppercase tracking-wide text-[var(--text-muted)]">Efectivo</p>
+              <p className="mt-1 text-lg font-black text-emerald-600 dark:text-emerald-400">{formatCurrency(globalSummary.cashSales)}</p>
+              <p className="text-[10px] font-bold text-[var(--text-secondary)]">Dinero físico en caja</p>
+            </div>
+            <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-3">
+              <p className="text-[10px] font-black uppercase tracking-wide text-[var(--text-muted)]">Transferencias</p>
+              <p className="mt-1 text-lg font-black text-blue-600 dark:text-blue-400">{formatCurrency(globalSummary.transferSales)}</p>
+              <p className="text-[10px] font-bold text-[var(--text-secondary)]">Nequi y Bancolombia</p>
+            </div>
+            <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-3">
+              <p className="text-[10px] font-black uppercase tracking-wide text-[var(--text-muted)]">Mesas abiertas</p>
+              <p className="mt-1 text-lg font-black text-[var(--text-primary)]">{globalSummary.openCount}</p>
+              <p className="text-[10px] font-bold text-[var(--text-secondary)]">{globalSummary.closedCount} cerradas y pagadas</p>
             </div>
           </div>
 
           {showWaitersDetail && (
-            <div className="space-y-3 pt-1">
-              {/* 4 Métricas Globales Rápidas */}
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                <div className="bg-[var(--bg-elevated)] p-2.5 rounded-xl border border-[var(--border-subtle)]">
-                  <p className="text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-wider">Total Salón</p>
-                  <p className="text-base font-black text-[var(--accent)]">{formatCurrency(globalSummary.totalSales)}</p>
-                  <p className="text-[10px] text-[var(--text-secondary)] mt-0.5 font-bold">{globalSummary.totalTables} mesas registradas</p>
+            <div className="mt-4 border-t border-[var(--border-subtle)] pt-4">
+              <div className="mb-2.5 flex items-end justify-between gap-2">
+                <div>
+                  <h3 className="text-xs font-black text-[var(--text-primary)]">Rendimiento por mesera</h3>
+                  <p className="text-[10px] text-[var(--text-muted)]">Selecciona una para filtrar el historial de abajo.</p>
                 </div>
-                <div className="bg-[var(--bg-elevated)] p-2.5 rounded-xl border border-[var(--border-subtle)]">
-                  <p className="text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-wider">En Efectivo</p>
-                  <p className="text-base font-black text-emerald-600 dark:text-emerald-400">{formatCurrency(globalSummary.cashSales)}</p>
-                  <p className="text-[10px] text-[var(--text-secondary)] mt-0.5 font-bold">Dinero físico en caja</p>
-                </div>
-                <div className="bg-[var(--bg-elevated)] p-2.5 rounded-xl border border-[var(--border-subtle)]">
-                  <p className="text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-wider">En Transferencia</p>
-                  <p className="text-base font-black text-blue-600 dark:text-blue-400">{formatCurrency(globalSummary.transferSales)}</p>
-                  <p className="text-[10px] text-[var(--text-secondary)] mt-0.5 font-bold">Nequi / Bancolombia</p>
-                </div>
-                <div className="bg-[var(--bg-elevated)] p-2.5 rounded-xl border border-[var(--border-subtle)]">
-                  <p className="text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-wider">Abiertas vs Cerradas</p>
-                  <p className="text-base font-black text-amber-600 dark:text-amber-400">{formatCurrency(globalSummary.openSales)}</p>
-                  <p className="text-[10px] text-[var(--text-secondary)] mt-0.5 font-bold">{globalSummary.openCount} activas · {globalSummary.closedCount} liquidadas</p>
-                </div>
+                <span className="text-[10px] font-bold text-[var(--text-muted)]">{waiterStats.length} registradas</span>
               </div>
-
-              {/* Grid de Tarjetas Individuales por Mesera */}
               {waiterStats.length > 0 ? (
-                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2 pt-1">
-                  {waiterStats.map((w) => {
+                <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+                  {waiterStats.map(w => {
                     const isSelected = selectedWaiter === w.id
                     const percent = globalSummary.totalSales > 0 ? Math.round((w.total / globalSummary.totalSales) * 100) : 0
                     return (
@@ -465,108 +474,63 @@ export default function TableHistoryPage() {
                         key={w.id}
                         type="button"
                         onClick={() => setSelectedWaiter(prev => prev === w.id ? 'ALL' : w.id)}
-                        className={`p-3 rounded-2xl border text-left transition-all cursor-pointer flex flex-col justify-between gap-2 relative overflow-hidden ${
-                          isSelected
-                            ? 'border-[var(--accent)] bg-[var(--accent)]/10 ring-2 ring-[var(--accent)] shadow-md'
-                            : 'border-[var(--border-subtle)] bg-[var(--bg-elevated)] hover:border-[var(--border-default)] hover:bg-[var(--bg-hover)] shadow-xs'
-                        }`}
+                        className={`rounded-xl border p-3 text-left transition ${isSelected ? 'border-[var(--accent)] bg-[var(--accent)]/10 ring-1 ring-[var(--accent)]/20' : 'border-[var(--border-subtle)] bg-[var(--bg-elevated)] hover:border-[var(--border-default)]'}`}
                       >
-                        <div className="flex items-start justify-between gap-2 w-full">
-                          <div className="flex items-center gap-2 min-w-0">
-                            <div className="h-8 w-8 rounded-xl bg-[var(--accent)]/15 text-[var(--accent)] font-black text-xs flex items-center justify-center shrink-0 border border-[var(--accent)]/20 shadow-xs">
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="flex min-w-0 items-center gap-2">
+                            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[var(--bg-panel)] text-xs font-black text-[var(--text-primary)] ring-1 ring-[var(--border-subtle)]">
                               {w.name.charAt(0).toUpperCase()}
-                            </div>
+                            </span>
                             <div className="min-w-0">
-                              <p className="font-black text-xs text-[var(--text-primary)] truncate flex items-center gap-1">
-                                {w.name}
-                                {isSelected && <span className="text-[10px] text-[var(--accent)] font-black">✓</span>}
-                              </p>
-                              <p className="text-[10px] text-[var(--text-secondary)] font-bold">
-                                {w.tablesCount} mesa{w.tablesCount === 1 ? '' : 's'} atendida{w.tablesCount === 1 ? '' : 's'}
-                              </p>
+                              <p className="truncate text-xs font-black text-[var(--text-primary)]">{w.name}</p>
+                              <p className="text-[10px] font-bold text-[var(--text-muted)]">{w.tablesCount} mesas · {percent}% del salón</p>
                             </div>
                           </div>
-                          <div className="text-right shrink-0">
-                            <span className="font-black text-sm text-[var(--accent)] block leading-tight">
-                              {formatCurrency(w.total)}
-                            </span>
-                            <span className="text-[9px] font-bold text-[var(--text-muted)] block mt-0.5">
-                              {percent}% del salón
-                            </span>
-                          </div>
+                          {isSelected && <CheckCircle2 className="h-4 w-4 shrink-0 text-[var(--accent)]" />}
                         </div>
-
-                        <div className="pt-2 border-t border-[var(--border-subtle)] flex items-center justify-between text-[10px] font-bold text-[var(--text-secondary)] w-full">
-                          <span className="text-emerald-600 dark:text-emerald-400">💵 {formatCurrency(w.cashTotal)}</span>
-                          <span className="text-blue-600 dark:text-blue-400">📲 {formatCurrency(w.transferTotal)}</span>
+                        <p className="mt-3 text-base font-black text-[var(--accent)]">{formatCurrency(w.total)}</p>
+                        <div className="mt-2 flex items-center justify-between border-t border-[var(--border-subtle)] pt-2 text-[10px] font-bold text-[var(--text-secondary)]">
+                          <span>Ef. {formatCurrency(w.cashTotal)}</span>
+                          <span>Tr. {formatCurrency(w.transferTotal)}</span>
                         </div>
                       </button>
                     )
                   })}
                 </div>
               ) : (
-                <p className="text-xs text-[var(--text-muted)] text-center py-2">No hay registros de ventas asignados aún.</p>
+                <p className="rounded-xl bg-[var(--bg-elevated)] p-3 text-center text-xs text-[var(--text-muted)]">No hay ventas asignadas aún.</p>
               )}
             </div>
           )}
-        </div>
+        </section>
       )}
 
-      {/* Chips de filtro rápido por mesera (Exclusivo para Administradores y Cajeros) */}
-      {canViewFinancials && waiterStats.length > 1 && (
-        <div className="flex items-center gap-1.5 overflow-x-auto pb-1 text-xs">
-          <span className="text-[11px] font-black text-[var(--text-muted)] uppercase tracking-wider shrink-0 mr-1 flex items-center gap-1">
-            <Users className="h-3.5 w-3.5" /> Filtrar Mesera:
-          </span>
-          <button
-            type="button"
-            onClick={() => setSelectedWaiter('ALL')}
-            className={`px-3 py-1.5 rounded-xl font-black transition cursor-pointer text-xs shrink-0 ${
-              selectedWaiter === 'ALL'
-                ? 'bg-[var(--accent)] text-white shadow-xs'
-                : 'bg-[var(--bg-panel)] text-[var(--text-secondary)] border border-[var(--border-subtle)] hover:text-[var(--text-primary)]'
-            }`}
-          >
-            Todas ({tables.length})
-          </button>
-          {waiterStats.map(w => (
-            <button
-              key={w.id}
-              type="button"
-              onClick={() => setSelectedWaiter(prev => prev === w.id ? 'ALL' : w.id)}
-              className={`px-3 py-1.5 rounded-xl font-black transition cursor-pointer text-xs shrink-0 flex items-center gap-1.5 ${
-                selectedWaiter === w.id
-                  ? 'bg-[var(--accent)] text-white shadow-xs'
-                  : 'bg-[var(--bg-panel)] text-[var(--text-secondary)] border border-[var(--border-subtle)] hover:text-[var(--text-primary)]'
-              }`}
+      {/* Búsqueda y filtro puntual */}
+      <section className="grid gap-3 rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-3 shadow-xs md:grid-cols-[1fr_auto]">
+        <label className="relative block">
+          <span className="mb-1.5 block text-[10px] font-black uppercase tracking-wide text-[var(--text-muted)]">Buscar en el historial</span>
+          <Search className="absolute bottom-3 left-3 h-4 w-4 text-[var(--text-muted)]" />
+          <Input
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            placeholder="Mesa, mesera, cocinero, producto o número de pedido..."
+            className="h-10 rounded-xl pl-9 text-xs"
+          />
+        </label>
+        {canViewFinancials && waiterStats.length > 1 && (
+          <label className="block md:min-w-56">
+            <span className="mb-1.5 block text-[10px] font-black uppercase tracking-wide text-[var(--text-muted)]">Mesera responsable</span>
+            <select
+              value={selectedWaiter}
+              onChange={event => setSelectedWaiter(event.target.value)}
+              className="h-10 w-full rounded-xl border border-[var(--border-default)] bg-[var(--bg-elevated)] px-3 text-xs font-bold text-[var(--text-primary)] outline-none transition focus:border-[var(--accent)]"
             >
-              <span>{w.name}</span>
-              <span className="text-[10px] opacity-85 font-bold">({formatCurrency(w.total)})</span>
-            </button>
-          ))}
-          {selectedWaiter !== 'ALL' && (
-            <button
-              type="button"
-              onClick={() => setSelectedWaiter('ALL')}
-              className="px-2 py-1 rounded-lg text-[10px] font-black text-rose-500 hover:underline shrink-0 cursor-pointer"
-            >
-              ✕ Quitar filtro
-            </button>
-          )}
-        </div>
-      )}
-
-      {/* Search Input */}
-      <div className="relative w-full">
-        <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--text-muted)]" />
-        <Input
-          value={search}
-          onChange={e => setSearch(e.target.value)}
-          placeholder="Buscar por mesa, mesera, cocinero o producto..."
-          className="pl-9 h-10 text-xs rounded-xl"
-        />
-      </div>
-
+              <option value="ALL">Todas las meseras</option>
+              {waiterStats.map(waiter => <option key={waiter.id} value={waiter.id}>{waiter.name}</option>)}
+            </select>
+          </label>
+        )}
+      </section>
       {/* Tables List */}
       {loading ? (
         <div className="p-12 text-center text-sm text-[var(--text-secondary)]">Cargando historial de mesas...</div>
