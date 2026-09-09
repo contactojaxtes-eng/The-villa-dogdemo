@@ -805,171 +805,177 @@ export default function KitchenStationsPage() {
         </div>
       )}
 
-      {/* Modal Sencillo para Crear / Editar Estación */}
+      {/* Modal de estaciones de cocina: mismo patrón limpio de la tablet de domicilios. */}
       <Dialog open={openModal} onOpenChange={setOpenModal}>
-        <DialogContent className="border-[var(--border-subtle)] bg-[var(--bg-panel)] rounded-3xl shadow-2xl p-0 overflow-hidden max-w-xl w-[95vw] max-h-[90vh] flex flex-col">
-          <div className="h-1.5 w-full shrink-0" style={{ backgroundColor: color }} />
-
-          <div className="p-6 pb-3 flex items-center justify-between border-b border-[var(--border-subtle)] shrink-0">
-            <DialogTitle className="text-lg font-black text-[var(--text-primary)] flex items-center gap-2">
-              <ChefHat className="h-5 w-5 text-[var(--accent)]" />
-              {editingId ? 'Editar Estación de Cocina' : 'Crear Nueva Estación de Cocina'}
-            </DialogTitle>
-          </div>
-
-          <form onSubmit={handleSave} className="flex-1 overflow-y-auto p-6 space-y-5 custom-scrollbar">
-            {/* 1. Nombre */}
-            <div className="space-y-1.5">
-              <Label className="text-xs font-black uppercase text-[var(--text-secondary)] tracking-wider">
-                1. Nombre de la Estación *
-              </Label>
-              <Input
-                value={name}
-                onChange={e => setName(e.target.value)}
-                placeholder="Ej: Estación Perros, Plancha Hamburguesas, Domicilios..."
-                className="h-11 rounded-xl bg-[var(--bg-elevated)] border-[var(--border-default)] font-bold text-sm"
-              />
-            </div>
-
-            {/* 2. Color */}
-            <div className="space-y-2">
-              <Label className="text-xs font-black uppercase text-[var(--text-secondary)] tracking-wider">
-                2. Color de Identificación
-              </Label>
-              <div className="flex items-center gap-2.5 flex-wrap">
-                {COLOR_PALETTE.map(c => (
-                  <button
-                    key={c.hex}
-                    type="button"
-                    onClick={() => setColor(c.hex)}
-                    className={`h-9 px-3 rounded-xl border flex items-center gap-2 text-xs font-bold transition-all cursor-pointer ${
-                      color === c.hex
-                        ? 'border-black dark:border-white shadow-md scale-105'
-                        : 'border-transparent opacity-75 hover:opacity-100'
-                    }`}
-                    style={{ backgroundColor: `${c.hex}20`, color: c.hex }}
-                  >
-                    <span className="h-3.5 w-3.5 rounded-full shrink-0" style={{ backgroundColor: c.hex }} />
-                    {c.label}
-                    {color === c.hex && <Check className="h-3.5 w-3.5 ml-1" />}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* 3. Categorías */}
-            <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <Label className="text-xs font-black uppercase text-[var(--text-secondary)] tracking-wider">
-                  3. ¿Qué platos se preparan en esta estación?
-                </Label>
-                <span className="text-[11px] text-[var(--text-muted)]">
-                  {selectedCategoryIds.length === 0 ? 'Todos los platos' : `${selectedCategoryIds.length} seleccionados`}
+        <DialogContent className="flex max-h-[92vh] w-[95vw] max-w-2xl flex-col overflow-hidden rounded-3xl border-[var(--border-subtle)] bg-[var(--bg-panel)] p-0 shadow-2xl">
+          <form onSubmit={handleSave} className="flex min-h-0 flex-1 flex-col">
+            <div className="border-b border-[var(--border-subtle)] p-5">
+              <DialogTitle className="flex items-center gap-3 text-lg font-black text-[var(--text-primary)]">
+                <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-orange-500/10 text-orange-600">
+                  <ChefHat className="h-5 w-5" />
                 </span>
+                {editingId ? 'Editar estación de cocina' : 'Nueva estación de cocina'}
+              </DialogTitle>
+              <p className="ml-[52px] mt-[-8px] text-xs text-[var(--text-muted)]">
+                Configura el puesto sin cambiar cómo trabajan las comandas del salón.
+              </p>
+            </div>
+
+            <div className="flex-1 space-y-5 overflow-y-auto p-5 custom-scrollbar">
+              <div className="grid gap-3 sm:grid-cols-[1fr_auto]">
+                <label>
+                  <span className="mb-1.5 block text-xs font-black text-[var(--text-secondary)]">Nombre de la estación</span>
+                  <Input
+                    autoFocus
+                    required
+                    value={name}
+                    onChange={e => setName(e.target.value)}
+                    placeholder="Ej. Perros, plancha de hamburguesas..."
+                    className="h-11 rounded-xl border-[var(--border-default)] bg-[var(--bg-elevated)] font-semibold text-sm"
+                  />
+                </label>
+                <label className="flex min-w-40 cursor-pointer items-center justify-between gap-3 self-end rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] px-3 py-2.5 text-xs font-bold text-[var(--text-secondary)]">
+                  <span>Estación activa</span>
+                  <input
+                    type="checkbox"
+                    checked={active}
+                    onChange={e => setActive(e.target.checked)}
+                    className="h-4 w-4 accent-[var(--accent)]"
+                  />
+                </label>
               </div>
-              <div className="grid grid-cols-2 gap-2">
-                {categories.map(cat => {
-                  const isChecked = selectedCategoryIds.includes(cat.id)
-                  return (
-                    <button
-                      key={cat.id}
-                      type="button"
-                      onClick={() => toggleCategory(cat.id)}
-                      className={`p-3 rounded-2xl border text-left text-xs font-bold transition-all flex items-center justify-between cursor-pointer ${
-                        isChecked
-                          ? 'bg-[var(--accent)]/10 border-[var(--accent)] text-[var(--accent)] shadow-xs'
-                          : 'bg-[var(--bg-elevated)] border-[var(--border-subtle)] text-[var(--text-secondary)] hover:border-[var(--border-default)]'
-                      }`}
-                    >
-                      <span className="truncate">🍔 {cat.name}</span>
-                      <div
-                        className={`h-4 w-4 rounded-md flex items-center justify-center shrink-0 ml-1 ${
-                          isChecked ? 'bg-[var(--accent)] text-white' : 'border border-[var(--border-default)]'
+
+              <div>
+                <div className="mb-2 flex flex-wrap items-end justify-between gap-2">
+                  <div>
+                    <p className="text-xs font-black text-[var(--text-primary)]">Color de identificación</p>
+                    <p className="text-[10px] text-[var(--text-muted)]">Solo se usa para reconocer la estación en la cocina.</p>
+                  </div>
+                  <div className="flex items-center gap-2" aria-label="Color de la estación">
+                    {COLOR_PALETTE.map(c => {
+                      const selected = color === c.hex
+                      return (
+                        <button
+                          key={c.hex}
+                          type="button"
+                          onClick={() => setColor(c.hex)}
+                          title={c.label}
+                          aria-label={`Usar color ${c.label}`}
+                          className={`flex h-7 w-7 items-center justify-center rounded-full border-2 transition ${
+                            selected ? 'border-[var(--text-primary)] ring-2 ring-[var(--accent)]/20' : 'border-transparent hover:scale-110'
+                          }`}
+                          style={{ backgroundColor: c.hex }}
+                        >
+                          {selected && <Check className="h-3.5 w-3.5 text-white stroke-[3]" />}
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+              </div>
+
+              <div>
+                <div className="mb-2 flex items-end justify-between gap-2">
+                  <div>
+                    <p className="text-xs font-black text-[var(--text-primary)]">¿Qué prepara esta estación?</p>
+                    <p className="text-[10px] text-[var(--text-muted)]">Sin selección, recibe los platos de todas las categorías.</p>
+                  </div>
+                  <span className="text-[10px] font-bold text-[var(--text-muted)]">
+                    {selectedCategoryIds.length === 0 ? 'Todas las categorías' : `${selectedCategoryIds.length} seleccionadas`}
+                  </span>
+                </div>
+                <div className="grid max-h-44 grid-cols-2 gap-2 overflow-y-auto rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-2 sm:grid-cols-3 custom-scrollbar">
+                  {categories.map(cat => {
+                    const selected = selectedCategoryIds.includes(cat.id)
+                    return (
+                      <button
+                        key={cat.id}
+                        type="button"
+                        onClick={() => toggleCategory(cat.id)}
+                        className={`flex min-h-10 items-center justify-between gap-2 rounded-xl border px-3 text-left text-[10px] font-bold transition ${
+                          selected
+                            ? 'border-[var(--accent)] bg-[var(--accent)]/10 text-[var(--accent)]'
+                            : 'border-[var(--border-subtle)] bg-[var(--bg-panel)] text-[var(--text-secondary)] hover:border-[var(--border-default)]'
                         }`}
                       >
-                        {isChecked && <Check className="h-3 w-3 stroke-[3]" />}
-                      </div>
-                    </button>
-                  )
-                })}
+                        <span className="truncate">{cat.name}</span>
+                        <span className={`flex h-4 w-4 shrink-0 items-center justify-center rounded-md border ${selected ? 'border-[var(--accent)] bg-[var(--accent)] text-[var(--accent-fg)]' : 'border-[var(--border-default)]'}`}>
+                          {selected && <Check className="h-3 w-3 stroke-[3]" />}
+                        </span>
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+
+              <div>
+                <div className="mb-2 flex items-end justify-between gap-2">
+                  <div>
+                    <p className="text-xs font-black text-[var(--text-primary)]">Cocineros que comparten esta estación</p>
+                    <p className="text-[10px] text-[var(--text-muted)]">El sistema reparte las comandas entre quienes estén disponibles.</p>
+                  </div>
+                  <span className="text-[10px] font-bold text-[var(--text-muted)]">
+                    {selectedUserIds.length === 0 ? 'Sin asignar' : `${selectedUserIds.length} asignados`}
+                  </span>
+                </div>
+                {kitchenStaff.length === 0 ? (
+                  <p className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-3 text-xs text-[var(--text-muted)]">
+                    Aún no hay cocineros disponibles para asignar.
+                  </p>
+                ) : (
+                  <div className="grid max-h-52 grid-cols-1 gap-2 overflow-y-auto rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-2 sm:grid-cols-2 custom-scrollbar">
+                    {kitchenStaff.map(u => {
+                      const selected = selectedUserIds.includes(u.id)
+                      const isKitchen = u.role === 'KITCHEN'
+                      return (
+                        <button
+                          key={u.id}
+                          type="button"
+                          onClick={() => toggleUser(u.id)}
+                          className={`flex min-h-11 items-center justify-between gap-2 rounded-xl border px-3 text-left transition ${
+                            selected
+                              ? 'border-[var(--accent)] bg-[var(--accent)]/10'
+                              : 'border-[var(--border-subtle)] bg-[var(--bg-panel)] hover:border-[var(--border-default)]'
+                          }`}
+                        >
+                          <span className="min-w-0">
+                            <span className="block truncate text-xs font-bold text-[var(--text-primary)]">{u.name}</span>
+                            <span className="block truncate text-[9px] text-[var(--text-muted)]">
+                              {isKitchen ? 'Cocinero' : u.role}
+                            </span>
+                          </span>
+                          <span className={`flex h-4 w-4 shrink-0 items-center justify-center rounded-md border ${selected ? 'border-[var(--accent)] bg-[var(--accent)] text-[var(--accent-fg)]' : 'border-[var(--border-default)]'}`}>
+                            {selected && <Check className="h-3 w-3 stroke-[3]" />}
+                          </span>
+                        </button>
+                      )
+                    })}
+                  </div>
+                )}
+              </div>
+
+              <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-3 text-xs text-[var(--text-secondary)]">
+                La cola, los tiempos y las comandas del salón siguen funcionando igual. Esta configuración solo define a qué estación y cocineros llegan los pedidos.
               </div>
             </div>
 
-            {/* 4. Cocineros */}
-            <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <Label className="text-xs font-black uppercase text-[var(--text-secondary)] tracking-wider">
-                  4. ¿Quiénes son los cocineros encargados?
-                </Label>
-                <span className="text-[11px] text-[var(--text-muted)]">
-                  {selectedUserIds.length === 0 ? 'Cualquiera' : `${selectedUserIds.length} asignados`}
-                </span>
-              </div>
-              <div className="grid grid-cols-2 gap-2 max-h-48 overflow-y-auto p-1 custom-scrollbar">
-                {kitchenStaff.map(u => {
-                  const isChecked = selectedUserIds.includes(u.id)
-                  const isKitchen = u.role === 'KITCHEN'
-                  return (
-                    <button
-                      key={u.id}
-                      type="button"
-                      onClick={() => toggleUser(u.id)}
-                      className={`p-2.5 rounded-2xl border text-left text-xs font-bold transition-all flex items-center justify-between cursor-pointer ${
-                        isChecked
-                          ? 'bg-blue-500/10 border-blue-500 text-blue-600 dark:text-blue-400 shadow-xs'
-                          : 'bg-[var(--bg-elevated)] border-[var(--border-subtle)] text-[var(--text-secondary)] hover:border-[var(--border-default)]'
-                      }`}
-                    >
-                      <div className="truncate min-w-0 pr-1">
-                        <span className="truncate block font-semibold text-[var(--text-primary)]">
-                          👨‍🍳 {u.name}
-                        </span>
-                        <span className="text-[10px] text-[var(--text-muted)] font-normal block truncate">
-                          {isKitchen ? 'Cocinero' : u.role}
-                        </span>
-                      </div>
-                      <div
-                        className={`h-4 w-4 rounded-md flex items-center justify-center shrink-0 ${
-                          isChecked ? 'bg-blue-600 text-white' : 'border border-[var(--border-default)]'
-                        }`}
-                      >
-                        {isChecked && <Check className="h-3 w-3 stroke-[3]" />}
-                      </div>
-                    </button>
-                  )
-                })}
-              </div>
-            </div>
-
-            {/* Estado Activo */}
-            <label className="flex items-center gap-2.5 p-3 rounded-2xl bg-[var(--bg-elevated)] border border-[var(--border-subtle)] text-xs font-bold cursor-pointer">
-              <input
-                type="checkbox"
-                checked={active}
-                onChange={e => setActive(e.target.checked)}
-                className="rounded border-[var(--border-default)] h-4 w-4 text-[var(--accent)]"
-              />
-              <span>Estación Activa (mostrar en la pantalla de cocina)</span>
-            </label>
-
-            {/* Footer Buttons */}
-            <div className="pt-3 border-t border-[var(--border-subtle)] flex items-center justify-end gap-2">
+            <div className="flex justify-end gap-2 border-t border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-4">
               <Button
                 type="button"
                 variant="outline"
                 onClick={() => setOpenModal(false)}
-                className="h-10 px-4 rounded-xl border-[var(--border-default)] text-xs font-bold"
                 disabled={saving}
+                className="rounded-xl"
               >
                 Cancelar
               </Button>
               <Button
                 type="submit"
                 disabled={saving}
-                className="h-10 px-5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold gap-2 shadow-md cursor-pointer"
+                className="rounded-xl bg-[var(--accent)] font-bold text-[var(--accent-fg)]"
               >
-                <Check className="h-4 w-4" />
-                {saving ? 'Guardando...' : editingId ? 'Guardar Cambios' : 'Crear Estación'}
+                {saving ? <Save className="mr-2 h-4 w-4 animate-pulse" /> : <Save className="mr-2 h-4 w-4" />}
+                {saving ? 'Guardando...' : editingId ? 'Guardar cambios' : 'Guardar estación'}
               </Button>
             </div>
           </form>
