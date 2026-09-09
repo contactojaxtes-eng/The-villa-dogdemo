@@ -125,10 +125,15 @@ export class PrintService {
       if (data.caja.paper) updates.push({ key: 'caja_printer_paper', value: data.caja.paper });
       if (data.caja.name) updates.push({ key: 'caja_printer_name', value: data.caja.name });
     }
-    if (data.printers) {
+    if (data.printers && Array.isArray(data.printers)) {
       updates.push({ key: 'custom_prep_printers', value: JSON.stringify(data.printers) });
       
-      const cocina = data.printers.find((p: any) => p.id === 'cocina');
+      const cocina = data.printers.find((p: any) => p.id === 'cocina') ||
+        data.printers.find((p: any) => p.channel === 'DELIVERY' || p.channel === 'BOTH') ||
+        data.printers.find((p: any) => (p.name || '').toLowerCase().includes('cocina') || (p.name || '').toLowerCase().includes('domicilio')) ||
+        data.printers.find((p: any) => p.type !== 'caja') ||
+        data.printers[0];
+
       if (cocina) {
         if (cocina.mode) updates.push({ key: 'cocina_printer_mode', value: cocina.mode });
         if (cocina.ip !== undefined) updates.push({ key: 'cocina_printer_ip', value: cocina.ip });
@@ -137,7 +142,8 @@ export class PrintService {
         if (cocina.name) updates.push({ key: 'cocina_printer_name', value: cocina.name });
         if (cocina.categories !== undefined) updates.push({ key: 'cocina_printer_categories', value: JSON.stringify(cocina.categories) });
       }
-      const bar = data.printers.find((p: any) => p.id === 'bar');
+      const bar = data.printers.find((p: any) => p.id === 'bar') ||
+        data.printers.find((p: any) => (p.name || '').toLowerCase().includes('bar') || (p.name || '').toLowerCase().includes('bebida'));
       if (bar) {
         if (bar.mode) updates.push({ key: 'bar_printer_mode', value: bar.mode });
         if (bar.ip !== undefined) updates.push({ key: 'bar_printer_ip', value: bar.ip });

@@ -7,8 +7,9 @@ const http = require('http');
 const https = require('https');
 const readline = require('readline');
 
-const BRIDGE_VERSION = '1.2.0';
-const DEFAULT_BACKEND_URL = 'http://localhost:3000';
+const BRIDGE_VERSION = '1.3.0';
+const DEFAULT_BACKEND_URL = 'https://the-villa-dog-backend-production.up.railway.app';
+const DEFAULT_BRIDGE_TOKEN = '1e855b5dc09473209300ce27a6203479ad5dcdd664ce8ccfa62d013b49100135';
 const MAX_LOG_BYTES = 1024 * 1024;
 const MAX_LOCAL_RECEIPTS = 500;
 const HTTP_TIMEOUT_MS = 15000;
@@ -39,11 +40,12 @@ Uso:
   TheVillaDogBridge.exe [opciones]
 
 Opciones:
-  --token=<clave>   Configura la clave PRINT_BRIDGE_TOKEN
-  --url=<url>       Configura la URL del servidor backend
-  --poll=<ms>       Intervalo de consulta en ms (por defecto: 3000)
-  --help            Muestra este mensaje de ayuda
-  --version         Muestra la versión instalada
+  --token=<clave>         Configura la clave PRINT_BRIDGE_TOKEN
+  --url=<url>             Configura la URL del servidor backend
+  --printer=<ip o USB>    Fija la impresora localmente (ej: 192.168.1.50 o USB:POS-80)
+  --poll=<ms>             Intervalo de consulta en ms (por defecto: 1500)
+  --help                  Muestra este mensaje de ayuda
+  --version               Muestra la versión instalada
 `);
     process.exit(0);
   }
@@ -123,24 +125,45 @@ process.on('SIGTERM', () => process.exit(0));
 
 let config = {
   backendUrl: DEFAULT_BACKEND_URL,
-  bridgeToken: '',
-  pollIntervalMs: 3000,
+  bridgeToken: DEFAULT_BRIDGE_TOKEN,
+  printerOverride: '',
+  pollIntervalMs: 1500,
 };
 
-if (fs.existsSync(configPath)) {
-  try {
-    const loaded = JSON.parse(fs.readFileSync(configPath, 'utf8').replace(/^\uFEFF/, ''));
-    if (loaded && typeof loaded.backendUrl === 'string' && loaded.backendUrl.trim()) {
-      config.backendUrl = loaded.backendUrl.trim();
+let lastConfigMtime = 0;
+function loadConfigFile() {
+  if (fs.existsSync(configPath)) {
+    try {
+      const stats = fs.statSync(configPath);
+      if (stats.mtimeMs !== lastConfigMtime) {
+        lastConfigMtime = stats.mtimeMs;
+        const loaded = JSON.parse(fs.readFileSync(configPath, 'utf8').replace(/^\uFEFF/, ''));
+        if (loaded) {
+          if (typeof loaded.backendUrl === 'string' && loaded.backendUrl.trim()) {
+            const u = loaded.backendUrl.trim().replace(/\/+$/, '');
+            if (!u.includes('niche')) {
+              config.backendUrl = u;
+            }
+          }
+          if (typeof loaded.bridgeToken === 'string' && loaded.bridgeToken.trim()) {
+            config.bridgeToken = loaded.bridgeToken.trim();
+          }
+          if (typeof loaded.printerOverride === 'string') {
+            config.printerOverride = loaded.printerOverride.trim();
+          } else if (typeof loaded.printerIp === 'string') {
+            config.printerOverride = loaded.printerIp.trim();
+          }
+          if (Number.isFinite(Number(loaded.pollIntervalMs))) {
+            config.pollIntervalMs = Math.max(1000, Number(loaded.pollIntervalMs));
+          }
+        }
+      }
+    } catch (error) {
+      console.error('No se pudo leer config.json:', error.message);
     }
-    if (typeof loaded.bridgeToken === 'string') config.bridgeToken = loaded.bridgeToken.trim();
-    if (Number.isFinite(Number(loaded.pollIntervalMs))) {
-      config.pollIntervalMs = Math.max(1000, Number(loaded.pollIntervalMs));
-    }
-  } catch (error) {
-    console.error('No se pudo leer config.json:', error.message);
   }
 }
+loadConfigFile();
 
 // Sobrescritura por argumentos CLI
 let configModified = false;
@@ -151,6 +174,9 @@ for (const arg of rawArgs) {
   } else if (arg.startsWith('--url=')) {
     const val = arg.slice(6).trim();
     if (val) { config.backendUrl = val.replace(/\/+$/, ''); configModified = true; }
+  } else if (arg.startsWith('--printer=') || arg.startsWith('--ip=')) {
+    const val = arg.split('=')[1]?.trim();
+    if (val) { config.printerOverride = val; configModified = true; }
   } else if (arg.startsWith('--poll=')) {
     const val = Number(arg.slice(7));
     if (val >= 1000) { config.pollIntervalMs = val; configModified = true; }
@@ -164,8 +190,13 @@ if (process.env.PRINT_BRIDGE_TOKEN && !config.bridgeToken) {
 if (process.env.BRIDGE_BACKEND_URL) {
   config.backendUrl = String(process.env.BRIDGE_BACKEND_URL).trim().replace(/\/+$/, '');
 }
-
-config.backendUrl = String(config.backendUrl || DEFAULT_BACKEND_URL).trim().replace(/\/+$/, '');
+if (!config.bridgeToken) {
+  config.bridgeToken = DEFAULT_BRIDGE_TOKEN;
+}
+if (!config.backendUrl || config.backendUrl.includes('niche')) {
+  config.backendUrl = DEFAULT_BACKEND_URL;
+}
+config.backendUrl = String(config.backendUrl).trim().replace(/\/+$/, '');
 
 if (configModified || !fs.existsSync(configPath)) {
   try {
@@ -206,56 +237,69 @@ function makeRequest(urlString, options = {}) {
     try {
       const parsedUrl = new URL(urlString);
       const protocol = parsedUrl.protocol === 'https:' ? https : http;
-      const request = protocol.request({
+      const requestOptions = {
         hostname: parsedUrl.hostname,
         port: parsedUrl.port || (parsedUrl.protocol === 'https:' ? 443 : 80),
         path: parsedUrl.pathname + parsedUrl.search,
         method: options.method || 'GET',
         headers: {
           'Content-Type': 'application/json',
+          'User-Agent': `TheVillaDog-PrinterBridge/${BRIDGE_VERSION}`,
           ...(options.headers || {}),
         },
-      }, (response) => {
-        let data = '';
-        response.setEncoding('utf8');
-        response.on('data', chunk => { data += chunk; });
-        response.on('end', () => {
-          if (response.statusCode >= 200 && response.statusCode < 300) {
-            try { resolve(JSON.parse(data)); } catch { resolve(data); }
-            return;
+        timeout: HTTP_TIMEOUT_MS,
+      };
+
+      const req = protocol.request(requestOptions, (res) => {
+        let body = '';
+        res.setEncoding('utf8');
+        res.on('data', chunk => { body += chunk; });
+        res.on('end', () => {
+          if (res.statusCode >= 200 && res.statusCode < 300) {
+            try {
+              resolve(body ? JSON.parse(body) : {});
+            } catch {
+              resolve(body);
+            }
+          } else if (res.statusCode === 401 || res.statusCode === 403) {
+            reject(new Error(`Acceso no autorizado (${res.statusCode}). Clave PRINT_BRIDGE_TOKEN inválida.`));
+          } else {
+            reject(new Error(`Error del servidor (${res.statusCode}): ${body.slice(0, 160)}`));
           }
-          reject(new Error(`HTTP ${response.statusCode}: ${data.slice(0, 300)}`));
         });
       });
 
-      request.setTimeout(HTTP_TIMEOUT_MS, () => request.destroy(new Error('Tiempo de espera agotado conectando con el servidor')));
-      request.on('error', reject);
-      if (options.body) request.write(typeof options.body === 'string' ? options.body : JSON.stringify(options.body));
-      request.end();
-    } catch (error) {
-      reject(error);
+      req.on('timeout', () => {
+        req.destroy(new Error('Tiempo de espera agotado contactando al servidor.'));
+      });
+      req.on('error', reject);
+
+      if (options.body) {
+        req.write(typeof options.body === 'string' ? options.body : JSON.stringify(options.body));
+      }
+      req.end();
+    } catch (err) {
+      reject(err);
     }
   });
 }
 
 function validUsbShareName(value) {
-  return /^[\p{L}\p{N} ._()-]{1,80}$/u.test(value) && value.trim().length > 0;
+  return /^[\p{L}\p{N} ._()-]{1,80}$/u.test(String(value || '').trim());
 }
 
-function printToSharedUsb(data, printerName) {
+function printToSharedUsb(data, shareName) {
   return new Promise((resolve, reject) => {
     if (process.platform !== 'win32') {
-      reject(new Error('La impresión USB compartida requiere Windows'));
+      reject(new Error('La impresión USB compartida por red SMB solo está soportada en Windows.'));
       return;
     }
-
-    const shareName = printerName.trim();
     if (!validUsbShareName(shareName)) {
-      reject(new Error('Nombre compartido USB inválido. Usa letras, números, espacios, punto, guion o paréntesis'));
+      reject(new Error(`Nombre de recurso USB inválido: "${shareName}"`));
       return;
     }
 
-    const tempFile = path.join(os.tmpdir(), `the_villa_dog_${process.pid}_${Date.now()}.bin`);
+    const tempFile = path.join(os.tmpdir(), `thevilladog_print_${Date.now()}_${Math.random().toString(36).slice(2, 8)}.bin`);
     try {
       fs.writeFileSync(tempFile, data);
     } catch (error) {
@@ -288,7 +332,7 @@ function printToNetwork(data, host, port = 9100) {
       else resolve();
     };
 
-    socket.setTimeout(6000, () => finish(new Error(`Tiempo agotado conectando a ${host}:${port}`)));
+    socket.setTimeout(2500, () => finish(new Error(`Tiempo agotado conectando a ${host}:${port}`)));
     socket.once('error', finish);
     socket.connect(port, host, () => {
       socket.write(data, (error) => {
@@ -296,7 +340,7 @@ function printToNetwork(data, host, port = 9100) {
           finish(error);
           return;
         }
-        setTimeout(() => finish(), 500);
+        setTimeout(() => finish(), 300);
       });
     });
   });
@@ -326,7 +370,10 @@ function parsePrinterAddress(rawAddress, rawPort) {
 }
 
 async function printJob(job) {
-  const target = parsePrinterAddress(job.impresora_ip, job.port || job.impresora_puerto);
+  const override = (config.printerOverride || config.printerIp || '').trim();
+  const targetAddress = override || job.impresora_ip || job.ip || job.impresoraIp;
+  if (!targetAddress) throw new Error('No hay dirección de impresora especificada en el trabajo ni en config.json');
+  const target = parsePrinterAddress(targetAddress, job.port || job.impresora_puerto);
   const data = Buffer.from(job.payload, 'base64');
   if (!data.length) throw new Error('La comanda llegó vacía');
   if (target.type === 'USB') await printToSharedUsb(data, target.shareName);
@@ -335,6 +382,7 @@ async function printJob(job) {
 }
 
 async function pollPrintQueue() {
+  loadConfigFile();
   try {
     const queueUrl = `${config.backendUrl}/api/imprimir/cola`;
     const authHeaders = config.bridgeToken ? { 'x-print-token': config.bridgeToken } : {};
@@ -358,10 +406,10 @@ async function pollPrintQueue() {
           const destination = await printJob(job);
           rememberPrinted(job.id);
           confirmedIds.push(job.id);
-          console.log(`Comanda ${job.id} impresa correctamente en ${destination}.`);
+          console.log(`[OK] Comanda #${job.id} impresa correctamente en ${destination}.`);
         } catch (error) {
           failedCount += 1;
-          console.error(`Comanda ${job.id} no se pudo imprimir: ${error.message}`);
+          console.error(`Comanda #${job.id} no se pudo imprimir: ${error.message}`);
         }
       }
 
@@ -424,14 +472,14 @@ async function start() {
   console.log('==============================================================');
   console.log(`      PUENTE DE IMPRESION - THE VILLA DOG v${BRIDGE_VERSION}`);
   console.log('==============================================================');
-  console.log(`Servidor : ${config.backendUrl}`);
-  console.log(`Consulta : cada ${config.pollIntervalMs} ms`);
-  console.log(`Carpeta  : ${configDir}`);
-  if (!config.bridgeToken) {
-    console.warn('\n[AVISO] Falta PRINT_BRIDGE_TOKEN. El puente no podrá autenticarse');
-    console.warn('Configura la clave en config.json o pásala con --token=TU_CLAVE\n');
+  console.log(`Servidor  : ${config.backendUrl}`);
+  console.log(`Consulta  : cada ${config.pollIntervalMs} ms`);
+  console.log(`Carpeta   : ${configDir}`);
+  console.log(`Clave     : [Configurada en Railway]`);
+  if (config.printerOverride) {
+    console.log(`Impresora : FIJADA LOCALMENTE -> ${config.printerOverride}`);
   } else {
-    console.log('Clave    : [Configurada]');
+    console.log(`Impresora : DINAMICA (se lee directamente de la configuración web)`);
   }
   console.log('==============================================================');
   console.log('Esperando comandas para imprimir...\n');

@@ -120,21 +120,21 @@ export class AppController {
         resolvedPort = cashPrinterPort;
       }
 
-      // 3. Si tiene IP dedicada clásica de cocina válida
+      // 3. Si es comanda de preparación y hay una impresora activa configurada en Domicilios/Cocina
+      if ((!resolvedIp || resolvedIp === '192.168.1.150') && defaultDeliveryPrinter && isValidAddress(defaultDeliveryPrinter.ip)) {
+        resolvedIp = String(defaultDeliveryPrinter.ip).trim();
+        resolvedPort = Number(defaultDeliveryPrinter.port) || 9100;
+      }
+
+      // 4. Si tiene IP dedicada clásica de cocina válida
       if (!resolvedIp && isValidAddress(cocinaPrinterIp)) {
         resolvedIp = cocinaPrinterIp;
         resolvedPort = cocinaPrinterPort;
       }
 
-      // 4. Si el storedTarget ya es una IP o USB válido directamente
+      // 5. Si el storedTarget ya es una IP o USB válido directamente
       if (!resolvedIp && isValidAddress(storedTarget)) {
         resolvedIp = storedTarget;
-      }
-
-      // 5. Fallback inteligente: si la IP sigue sin ser válida, usar la impresora activa de domicilios
-      if (!resolvedIp && defaultDeliveryPrinter) {
-        resolvedIp = String(defaultDeliveryPrinter.ip).trim();
-        resolvedPort = Number(defaultDeliveryPrinter.port) || 9100;
       }
 
       // 6. Último recurso: lo que vino en el trabajo

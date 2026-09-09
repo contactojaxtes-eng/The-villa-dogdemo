@@ -17,13 +17,17 @@ if not defined BRIDGE_BACKEND_URL (
   if not "%~2"=="" (
     set "BRIDGE_BACKEND_URL=%~2"
   ) else (
-    set "BRIDGE_BACKEND_URL=http://localhost:3000"
+    set "BRIDGE_BACKEND_URL=https://the-villa-dog-backend-production.up.railway.app"
   )
 )
 
-rem Token predeterminado si viene como argumento %1
+rem Token predeterminado si viene como argumento %1 o preconfigurado de Railway
 if not defined BRIDGE_TOKEN (
-  if not "%~1"=="" set "BRIDGE_TOKEN=%~1"
+  if not "%~1"=="" (
+    set "BRIDGE_TOKEN=%~1"
+  ) else (
+    set "BRIDGE_TOKEN=1e855b5dc09473209300ce27a6203479ad5dcdd664ce8ccfa62d013b49100135"
+  )
 )
 
 echo ==============================================================

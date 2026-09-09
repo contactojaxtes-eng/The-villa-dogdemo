@@ -1,0 +1,6 @@
+{
+  "backendUrl": "https://the-villa-dog-backend-production.up.railway.app",
+  "bridgeToken": "1e855b5dc09473209300ce27a6203479ad5dcdd664ce8ccfa62d013b49100135",
+  "printerOverride": "",
+  "pollIntervalMs": 1500
+}

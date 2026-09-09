@@ -220,6 +220,7 @@ export default function ModuleSettingsPage() {
   const [downloadingBridge, setDownloadingBridge] = useState(false)
   const [uploadingQr, setUploadingQr] = useState(false)
   const [testingPrinterId, setTestingPrinterId] = useState<string | null>(null)
+  const [clearingQueue, setClearingQueue] = useState(false)
   const [whatsapp, setWhatsapp] = useState<WhatsappSettings>(() => defaultWhatsappSettings())
   const [restaurantSchedule, setRestaurantSchedule] = useState(() => parseRestaurantSchedule(defaultWhatsappSettings().restaurantHours))
   const [kitchen, setKitchen] = useState<KitchenSettings>(defaultKitchenSettings)
@@ -788,6 +789,18 @@ export default function ModuleSettingsPage() {
     }
   }
 
+  const clearPrintQueue = async () => {
+    setClearingQueue(true)
+    try {
+      await api.delete('/print/queue')
+      alerts.success('Cola de impresión vaciada', 'Se eliminaron las comandas pendientes que estaban acumuladas.')
+    } catch (error: unknown) {
+      alerts.error('No se pudo limpiar la cola', getErrorMessage(error, 'Inténtalo nuevamente.'))
+    } finally {
+      setClearingQueue(false)
+    }
+  }
+
   const activeCount = accessibleModules.filter(module => !hiddenModules.includes(module.id)).length
   const tabs: Array<{ id: SettingsTab; label: string; description: string; icon: LucideIcon }> = [
     { id: 'MODULES', label: 'Módulos', description: 'Organiza el menú lateral', icon: SlidersHorizontal },
@@ -992,7 +1005,7 @@ export default function ModuleSettingsPage() {
 
             {['PRINT', 'BOTH'].includes(kitchen.deliveryKitchenMode) && (
             <Card className="rounded-2xl border-[var(--border-subtle)] bg-[var(--bg-panel)] p-5">
-              <div className="mb-4 flex items-center justify-between gap-3"><div><h2 className="font-black text-[var(--text-primary)]">Impresoras de preparación</h2><p className="text-xs text-[var(--text-muted)]">La IP se cambia aquí y el puente local la recibe desde el servidor.</p></div><Button variant="outline" onClick={addPrinter} className="h-9 rounded-xl text-xs font-bold"><Plus className="mr-1 h-4 w-4" /> Agregar</Button></div>
+              <div className="mb-4 flex flex-wrap items-center justify-between gap-3"><div><h2 className="font-black text-[var(--text-primary)]">Impresoras de preparación</h2><p className="text-xs text-[var(--text-muted)]">La IP se cambia aquí y el puente local la recibe desde el servidor.</p></div><div className="flex items-center gap-2"><Button variant="outline" onClick={clearPrintQueue} disabled={clearingQueue} className="h-9 rounded-xl border-rose-500/30 text-xs font-bold text-rose-500 hover:bg-rose-500/10" title="Elimina comandas pendientes acumuladas">{clearingQueue ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <Trash2 className="mr-1 h-3.5 w-3.5" />} Limpiar cola pendiente</Button><Button variant="outline" onClick={addPrinter} className="h-9 rounded-xl text-xs font-bold"><Plus className="mr-1 h-4 w-4" /> Agregar</Button></div></div>
               {deliveryPrinters.length === 0 ? (
                 <button type="button" onClick={addPrinter} className="w-full rounded-2xl border border-dashed border-[var(--border-default)] p-8 text-sm font-bold text-[var(--text-muted)] hover:text-[var(--accent)]"><Plus className="mx-auto mb-2 h-5 w-5" /> Agregar impresora de domicilios</button>
               ) : (
@@ -1005,7 +1018,7 @@ export default function ModuleSettingsPage() {
                         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-[1.1fr_110px_1fr_82px_110px_auto]">
                           <input value={printer.name} onChange={event => updatePrinter(printer.id, { name: event.target.value })} className={fieldClass} placeholder="Nombre interno" />
                           <select value={isUsb ? 'USB' : 'NETWORK'} onChange={event => setPrinterConnectionType(printer, event.target.value as 'NETWORK' | 'USB')} className={fieldClass} aria-label="Tipo de conexión"><option value="NETWORK">Red / IP</option><option value="USB">USB</option></select>
-                          <input value={addressValue} onChange={event => updatePrinter(printer.id, { ip: isUsb ? `USB:${event.target.value}` : event.target.value })} className={fieldClass} placeholder={isUsb ? 'Nombre compartido' : '192.168.1.150'} aria-label={isUsb ? 'Nombre compartido de la impresora' : 'IP local de la impresora'} />
+                          <input value={addressValue} onChange={event => updatePrinter(printer.id, { ip: isUsb ? `USB:${event.target.value}` : event.target.value })} className={fieldClass} placeholder={isUsb ? 'Nombre compartido (Ej: POS-80)' : 'IP local (Ej: 192.168.1.50)'} aria-label={isUsb ? 'Nombre compartido de la impresora' : 'IP local de la impresora'} />
                           <input type="number" min={1} max={65535} value={printer.port || 9100} onChange={event => updatePrinter(printer.id, { port: Number(event.target.value) || 9100 })} className={cn(fieldClass, isUsb && 'cursor-not-allowed opacity-40')} title={isUsb ? 'USB no usa puerto' : 'Puerto'} disabled={isUsb} />
                           <div className="flex h-10 items-center justify-center rounded-xl border border-emerald-500/20 bg-emerald-500/10 px-2 text-[10px] font-black text-emerald-600">Domicilios</div>
                           <button type="button" onClick={() => setPrinting(current => ({ ...current, printers: current.printers.filter(item => item.id !== printer.id) }))} className="flex h-10 items-center justify-center rounded-xl border border-red-500/20 px-3 text-red-500" title="Eliminar"><Trash2 className="h-4 w-4" /></button>
