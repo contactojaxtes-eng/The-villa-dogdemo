@@ -272,7 +272,12 @@ export class WhatsappController {
   async sendMessage(@Body() body: { phone: string; text: string; replyToWaMessageId?: string; replyToContent?: string }) {
     const result = await this.whatsappService.sendMessage(body.phone, body.text, body.replyToWaMessageId, body.replyToContent);
     if (!result.sent) {
-      const errorMsg = result.data?.error?.message || result.reason || 'Error al enviar mensaje de WhatsApp';
+      const resAny = result as any;
+      const errorMsg = resAny.error?.message 
+        || (resAny.error?.code ? `Error de Meta (#${resAny.error.code}): ${resAny.error?.message || ''}` : null)
+        || resAny.data?.error?.message 
+        || resAny.reason 
+        || 'Error al enviar mensaje de WhatsApp';
       throw new BadRequestException(errorMsg);
     }
     return result;
@@ -375,6 +380,14 @@ export class WhatsappController {
       throw new BadRequestException(result.reason || 'Error al reenviar mensaje');
     }
     return result;
+  }
+
+  @Post('test-meta')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('SUPERADMIN')
+  @ApiOperation({ summary: 'Probar conexión y validez del token con Meta Cloud API' })
+  async testMeta(@Body() body?: { token?: string; phoneId?: string }) {
+    return this.whatsappService.testMetaConnection(body?.token, body?.phoneId);
   }
 
   @Post('test-gemini')

@@ -225,6 +225,15 @@ export default function SuperAdminConfigPage() {
   const [waVerifyToken, setWaVerifyToken] = useState('')
   const [geminiKeys, setGeminiKeys] = useState<string[]>([''])
   const [savingMeta, setSavingMeta] = useState(false)
+  const [testingMeta, setTestingMeta] = useState(false)
+  const [metaTestResult, setMetaTestResult] = useState<{
+    success: boolean
+    message: string
+    code?: number
+    hint?: string
+    displayPhoneNumber?: string
+    verifiedName?: string
+  } | null>(null)
   const [savingAi, setSavingAi] = useState(false)
   const [savingChatbot, setSavingChatbot] = useState(false)
   const [testingGemini, setTestingGemini] = useState(false)
@@ -392,6 +401,36 @@ export default function SuperAdminConfigPage() {
       alerts.error('No se pudo guardar WhatsApp', getErrorMessage(error, 'Revisa las credenciales.'))
     } finally {
       setSavingMeta(false)
+    }
+  }
+
+  const testMeta = async () => {
+    setTestingMeta(true)
+    setMetaTestResult(null)
+    try {
+      const result = await api.post<{
+        success: boolean
+        message: string
+        code?: number
+        hint?: string
+        displayPhoneNumber?: string
+        verifiedName?: string
+      }>('/whatsapp/test-meta', {
+        token: waToken.trim() || undefined,
+        phoneId: wa.phoneId.trim() || undefined,
+      })
+      setMetaTestResult(result)
+      if (result.success) {
+        alerts.success('Conexión con Meta exitosa', result.message)
+      } else {
+        alerts.error('Error con Meta Cloud API', result.hint ? `${result.message}. ${result.hint}` : result.message)
+      }
+    } catch (error) {
+      const message = getErrorMessage(error, 'No se pudo conectar con Meta.')
+      setMetaTestResult({ success: false, message })
+      alerts.error('Fallo en la prueba', message)
+    } finally {
+      setTestingMeta(false)
     }
   }
 
@@ -596,7 +635,27 @@ export default function SuperAdminConfigPage() {
               <label className="block"><span className="mb-1.5 block text-xs font-bold text-[var(--text-secondary)]">Token de acceso de Meta</span><input type="password" value={waToken} onChange={event => setWaToken(event.target.value)} className={fieldClass} placeholder={wa.configured ? 'Guardado · escribe solo para cambiarlo' : 'Pega el token permanente'} /></label>
               <label className="block"><span className="mb-1.5 block text-xs font-bold text-[var(--text-secondary)]">Token de verificación del webhook</span><input type="password" value={waVerifyToken} onChange={event => setWaVerifyToken(event.target.value)} className={fieldClass} placeholder={wa.verifyTokenConfigured ? 'Guardado · escribe solo para cambiarlo' : 'Define el token del webhook'} /></label>
             </div>
-            <Button type="button" onClick={saveMeta} disabled={savingMeta} className="mt-5 h-11 w-full rounded-xl bg-[var(--accent)] font-black text-[var(--accent-fg)]">{savingMeta ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />} Guardar conexión</Button>
+            <div className="mt-5 flex flex-col gap-2 sm:flex-row">
+              <Button type="button" onClick={saveMeta} disabled={savingMeta} className="h-11 flex-1 rounded-xl bg-[var(--accent)] font-black text-[var(--accent-fg)]">
+                {savingMeta ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />} Guardar conexión
+              </Button>
+              <Button type="button" variant="outline" onClick={testMeta} disabled={testingMeta || !wa.phoneId} className="h-11 rounded-xl font-black">
+                {testingMeta ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />} Probar token y conexión
+              </Button>
+            </div>
+
+            {metaTestResult && (
+              <div className={cn('mt-4 rounded-xl border p-4 text-xs', metaTestResult.success ? 'border-emerald-500/30 bg-emerald-500/5 text-emerald-700 dark:text-emerald-300' : 'border-red-500/30 bg-red-500/5 text-red-700 dark:text-red-400')}>
+                <div className="flex items-start gap-2">
+                  {metaTestResult.success ? <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-500" /> : <XCircle className="mt-0.5 h-4 w-4 shrink-0 text-red-500" />}
+                  <div>
+                    <p className="font-bold">{metaTestResult.message}</p>
+                    {metaTestResult.hint && <p className="mt-1 font-semibold text-amber-700 dark:text-amber-300">{metaTestResult.hint}</p>}
+                    {metaTestResult.displayPhoneNumber && <p className="mt-1 font-mono text-[11px]">Número registrado: {metaTestResult.displayPhoneNumber} · {metaTestResult.verifiedName || 'Sin verificar'}</p>}
+                  </div>
+                </div>
+              </div>
+            )}
           </Card>
 
           <Card className="h-fit rounded-2xl border-[var(--border-subtle)] bg-[var(--bg-panel)] p-4 shadow-sm sm:p-5">

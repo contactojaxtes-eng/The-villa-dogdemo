@@ -4367,6 +4367,57 @@ Restaurante (Tú):
     };
   }
 
+  async testMetaConnection(tokenOverride?: string, phoneIdOverride?: string) {
+    const token = tokenOverride?.trim() || await this.getSetting('whatsapp_token');
+    const phoneId = phoneIdOverride?.trim() || await this.getSetting('whatsapp_phone_id');
+
+    if (!phoneId || !token) {
+      return {
+        success: false,
+        message: 'Falta configurar el Phone Number ID o el Token de acceso de Meta.',
+      };
+    }
+
+    try {
+      const res = await fetch(`https://graph.facebook.com/v21.0/${phoneId}?fields=display_phone_number,verified_name,quality_rating,code_verification_status`, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+      const data = await res.json();
+
+      if (!res.ok) {
+        const error = data?.error;
+        let hint = '';
+        if (error?.code === 190) {
+          hint = 'El Token de Meta ha caducado o es un token temporal de 24h. Genera un token permanente de Usuario del Sistema en Meta Business Manager.';
+        } else if (error?.code === 100 || error?.code === 200) {
+          hint = 'El Token no tiene permisos sobre este Phone Number ID o pertenece a otra cuenta comercial de Meta.';
+        }
+        return {
+          success: false,
+          code: error?.code,
+          message: error?.message || 'Error al validar con Meta',
+          hint,
+        };
+      }
+
+      return {
+        success: true,
+        displayPhoneNumber: data.display_phone_number,
+        verifiedName: data.verified_name,
+        qualityRating: data.quality_rating,
+        status: data.code_verification_status,
+        message: `Conexión exitosa con Meta Cloud API. Número verificado: ${data.display_phone_number || phoneId} (${data.verified_name || 'Sin nombre verificado'}).`,
+      };
+    } catch (err: any) {
+      return {
+        success: false,
+        message: err.message || 'No se pudo contactar con los servidores de Meta.',
+      };
+    }
+  }
+
   async testGeminiConnection(key?: string, prompt?: string, model?: string) {
     const existingSetting = await this.prisma.appSetting.findUnique({ where: { key: 'gemini_api_key' } });
     const existingKeys = (existingSetting?.value || '').split(',').map(k => k.trim()).filter(Boolean);
