@@ -2398,9 +2398,6 @@ function ChatPage() {
       const assignedTo = updated.assignedTo || { id: user.id, name: user.name }
       setActiveSession(prev => prev?.id === updated.id ? { ...prev, ...updated, assignedTo, assignedToId: user.id } : prev)
       setSessions(prev => prev.map(s => s.id === updated.id ? { ...s, ...updated, assignedTo, assignedToId: user.id } : s))
-      if (!silent) {
-        alerts.success('Chat Reclamado', 'Ahora estás atendiendo esta conversación.')
-      }
       return true
     } catch (err: any) {
       alerts.error('No se pudo tomar el chat', err?.message || 'Otra asesora tomó esta conversación primero.')
