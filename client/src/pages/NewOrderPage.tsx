@@ -282,6 +282,13 @@ function keepKitchenInstruction(rawNote: string | undefined, productName?: strin
   return note
 }
 
+function serializeItemNote(item: CartItem): string | undefined {
+  if (item.notes?.startsWith('Adición para:')) return item.notes
+  const tag = item.notes?.match(/\s?(\(#[\w-]+\))/)?.[1] || ''
+  const instruction = keepKitchenInstruction(item.notes, item.name)
+  return instruction ? `${instruction}${tag ? ` ${tag}` : ''}` : (tag || undefined)
+}
+
 function normalizeText(text: string): string {
   return text
     .toLowerCase()
@@ -1556,8 +1563,8 @@ export default function NewOrderPage({
             }
           }
 
-          const cleanPref = parsedItem.preference ? cleanNotes(parsedItem.preference, item.name) : ''
-          const cleanNote = parsedItem.notes ? cleanNotes(parsedItem.notes, item.name) : ''
+          const cleanPref = parsedItem.preference ? keepKitchenInstruction(parsedItem.preference, item.name) : ''
+          const cleanNote = parsedItem.notes ? keepKitchenInstruction(parsedItem.notes, item.name) : ''
 
           let parentNotes = ''
           const hasAdditions = additionsToInsert.length > 0
@@ -2778,7 +2785,7 @@ export default function NewOrderPage({
         paymentReference: paymentReference || undefined,
         orderType: finalOrderType,
         notes: finalNotes,
-        items: cart.map(item => ({ menuItemId: item.menuItemId, quantity: item.quantity, notes: item.notes, isCourtesy: item.isCourtesy || false })),
+        items: cart.map(item => ({ menuItemId: item.menuItemId, quantity: item.quantity, notes: serializeItemNote(item), isCourtesy: item.isCourtesy || false })),
         deliveryFee: (isPickup || isGlobalCourtesy) ? 0 : (parseFloat(zoneRateEdit) || 0),
         tax: tax,
         latitude: isPickup ? undefined : (latitude || undefined),
@@ -3686,6 +3693,7 @@ const renderDeliveryCard = () => {
           <AnimatePresence>
             {groupedCart.map(item => {
               const keyId = item.lineId || item.menuItemId;
+              const visibleKitchenNote = keepKitchenInstruction(getItemRawNote(item.notes), item.name)
               return (
                 <motion.div
                   key={keyId}
@@ -3757,7 +3765,7 @@ const renderDeliveryCard = () => {
                           onClick={() => handleAddNoteClick(item)}
                           className="text-[10px] font-bold text-[var(--accent)] hover:underline flex items-center gap-1 cursor-pointer bg-[var(--accent)]/10 hover:bg-[var(--accent)]/20 px-2 py-0.5 rounded-lg transition-all"
                         >
-                          <Plus className="h-3 w-3" /> {getItemRawNote(item.notes).trim() ? 'Editar nota' : '+ Nota'}
+                          <Plus className="h-3 w-3" /> {visibleKitchenNote ? 'Editar nota' : '+ Nota'}
                         </button>
                       )}
 
@@ -3789,7 +3797,7 @@ const renderDeliveryCard = () => {
                     {showNotes[keyId] && (
                       <div className="flex items-center gap-1.5 bg-[var(--bg-elevated)] border border-[var(--accent)]/40 p-1.5 rounded-xl">
                         <Input 
-                          value={getItemRawNote(item.notes)} 
+                          value={visibleKitchenNote}
                           onChange={e => updateItemNotes(item.lineId!, e.target.value)}
                           onKeyDown={e => {
                             if (e.key === 'Enter') {
@@ -3824,9 +3832,9 @@ const renderDeliveryCard = () => {
                     )}
 
                     {/* Saved Note Badge Display */}
-                    {!showNotes[keyId] && getItemRawNote(item.notes).trim() && (
+                    {!showNotes[keyId] && visibleKitchenNote && (
                       <div className="flex items-center justify-between gap-1 text-[11px] bg-[var(--accent)]/10 border border-[var(--accent)]/20 text-[var(--accent)] font-semibold px-2.5 py-1 rounded-xl">
-                        <span className="truncate">📝 {getItemRawNote(item.notes).trim()}</span>
+                        <span className="truncate">📝 {visibleKitchenNote}</span>
                         <div className="flex items-center gap-1 shrink-0">
                           <button
                             type="button"
