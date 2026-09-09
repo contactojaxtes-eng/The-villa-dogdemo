@@ -7,7 +7,7 @@ const http = require('http');
 const https = require('https');
 
 const BRIDGE_VERSION = '1.1.0';
-const DEFAULT_BACKEND_URL = 'https://the-villa-dog-backend-production.up.railway.app';
+const DEFAULT_BACKEND_URL = 'http://localhost:3000';
 const MAX_LOG_BYTES = 1024 * 1024;
 const MAX_LOCAL_RECEIPTS = 500;
 const HTTP_TIMEOUT_MS = 15000;

@@ -1,6 +1,167 @@
 import { ConflictException } from '@nestjs/common';
 import { WhatsappService } from './whatsapp.service';
 
+describe('WhatsApp webhook burst handling', () => {
+  const createService = () => {
+    let nextSession = 0;
+    let nextMessage = 0;
+    const prisma: any = {
+      whatsAppSession: {
+        findFirst: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockImplementation(async ({ data }: any) => ({
+          id: `session-${++nextSession}`,
+          ...data,
+          assignedToId: null,
+          assignedTo: null,
+        })),
+      },
+      whatsAppMessage: {
+        findFirst: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockImplementation(async ({ data }: any) => ({
+          id: `message-${++nextMessage}`,
+          ...data,
+          createdAt: new Date(),
+        })),
+      },
+    };
+    const socketGateway = { emitWhatsApp: jest.fn() };
+    const service = new WhatsappService(prisma, { get: jest.fn() } as any, socketGateway as any);
+    return { service, prisma, socketGateway };
+  };
+
+  it('keeps ten simultaneous customer conversations independent and emits each one immediately', async () => {
+    const { service, prisma, socketGateway } = createService();
+    jest.spyOn(service as any, 'handleChatbot').mockResolvedValue(undefined);
+
+    const messages = Array.from({ length: 10 }, (_, index) => ({
+      id: `wamid.test-${index}`,
+      from: `5730012345${index}`,
+      type: 'text',
+      text: { body: `Pedido simultáneo ${index + 1}` },
+    }));
+    const contacts = messages.map((message, index) => ({
+      wa_id: message.from,
+      profile: { name: `Cliente ${index + 1}` },
+    }));
+
+    await (service as any)._processWebhookAsync({
+      object: 'whatsapp_business_account',
+      entry: [{ changes: [{ field: 'messages', value: { messages, contacts } }] }],
+    });
+
+    expect(prisma.whatsAppSession.create).toHaveBeenCalledTimes(10);
+    expect(prisma.whatsAppMessage.create).toHaveBeenCalledTimes(10);
+    expect(socketGateway.emitWhatsApp.mock.calls.filter(([event]: [string]) => event === 'whatsappMessage')).toHaveLength(10);
+    expect(prisma.whatsAppMessage.create.mock.calls.map(([call]: any[]) => call.data.content)).toEqual(
+      messages.map(message => message.text.body),
+    );
+  });
+
+  it('accepts photo, voice note and video without delaying the live inbox', async () => {
+    const { service, prisma, socketGateway } = createService();
+    jest.spyOn(service as any, 'handleMultimediaChatbot').mockResolvedValue(undefined);
+    jest.spyOn(service as any, 'transcribeIncomingAudio').mockResolvedValue(undefined);
+    const messages = [
+      { id: 'wamid.image', from: '573001230001', type: 'image', image: { id: 'media-image', caption: 'Foto del pedido' } },
+      { id: 'wamid.audio', from: '573001230002', type: 'audio', audio: { id: 'media-audio' } },
+      { id: 'wamid.video', from: '573001230003', type: 'video', video: { id: 'media-video', caption: 'Video del pedido' } },
+    ];
+    const contacts = messages.map((message, index) => ({
+      wa_id: message.from,
+      profile: { name: `Multimedia ${index + 1}` },
+    }));
+
+    await (service as any)._processWebhookAsync({
+      object: 'whatsapp_business_account',
+      entry: [{ changes: [{ field: 'messages', value: { messages, contacts } }] }],
+    });
+
+    const stored = prisma.whatsAppMessage.create.mock.calls.map(([call]: any[]) => call.data);
+    expect(stored.map((message: any) => message.messageType)).toEqual(['image', 'audio', 'video']);
+    expect(stored.map((message: any) => message.content)).toEqual([
+      '/api/whatsapp/media/media-image|Foto del pedido',
+      '/api/whatsapp/media/media-audio',
+      '/api/whatsapp/media/media-video|Video del pedido',
+    ]);
+    expect(socketGateway.emitWhatsApp.mock.calls.filter(([event]: [string]) => event === 'whatsappMessage')).toHaveLength(3);
+  });
+});
+
+describe('WhatsApp voice-note transcription for order intake', () => {
+  it('transcribes an incoming voice note for Nuevo pedido without replying to the customer', async () => {
+    const prisma: any = {
+      whatsAppMessage: {
+        update: jest.fn().mockResolvedValue({
+          id: 'message-audio',
+          waMessageId: 'wamid.audio',
+          createdAt: new Date('2026-09-09T18:00:00.000Z'),
+        }),
+      },
+    };
+    const socketGateway = { emitWhatsApp: jest.fn() };
+    const service = new WhatsappService(prisma, { get: jest.fn() } as any, socketGateway as any);
+    const settings: Record<string, string> = {
+      order_reader_enabled: 'true',
+      gemini_api_key: 'test-key',
+      gemini_model: 'gemini-3.5-flash-lite',
+    };
+    jest.spyOn(service as any, 'getSetting').mockImplementation(async (key: string) => settings[key] || null);
+    jest.spyOn(service as any, 'getMediaBuffer').mockResolvedValue({
+      buffer: Buffer.from('voice-note'),
+      contentType: 'audio/ogg; codecs=opus',
+    });
+    jest.spyOn(service as any, 'getGeminiModels').mockResolvedValue(['gemini-3.5-flash-lite']);
+    jest.spyOn(service as any, 'incrementGeminiUsage').mockResolvedValue(undefined);
+    const fetchSpy = jest.spyOn(global, 'fetch' as any).mockResolvedValue({
+      ok: true,
+      json: async () => ({ candidates: [{ content: { parts: [{ text: 'Dos perros sencillos, uno sin cebolla.' }] } }] }),
+    } as any);
+    const sendSpy = jest.spyOn(service, 'sendMessage').mockResolvedValue({ sent: true } as any);
+
+    try {
+      await (service as any).transcribeIncomingAudio({
+        session: { id: 'session-audio', phone: '573001234567', customerName: 'Cliente audio' },
+        messageId: 'message-audio',
+        mediaId: 'media-audio',
+        content: '/api/whatsapp/media/media-audio',
+      });
+    } finally {
+      fetchSpy.mockRestore();
+    }
+
+    expect(prisma.whatsAppMessage.update).toHaveBeenCalledWith({
+      where: { id: 'message-audio' },
+      data: { content: '/api/whatsapp/media/media-audio|📝 Transcripción: Dos perros sencillos, uno sin cebolla.' },
+    });
+    expect(socketGateway.emitWhatsApp).toHaveBeenCalledWith(
+      'whatsappAudioTranscribed',
+      expect.objectContaining({
+        sessionId: 'session-audio',
+        messageId: 'message-audio',
+        transcript: 'Dos perros sencillos, uno sin cebolla.',
+      }),
+    );
+    expect(sendSpy).not.toHaveBeenCalled();
+  });
+
+  it('does not process voice notes when the order reader is paused', async () => {
+    const prisma: any = { whatsAppMessage: { update: jest.fn() } };
+    const service = new WhatsappService(prisma, { get: jest.fn() } as any, { emitWhatsApp: jest.fn() } as any);
+    jest.spyOn(service as any, 'getSetting').mockResolvedValue('false');
+    const mediaSpy = jest.spyOn(service as any, 'getMediaBuffer');
+
+    await (service as any).transcribeIncomingAudio({
+      session: { id: 'session-audio', phone: '573001234567' },
+      messageId: 'message-audio',
+      mediaId: 'media-audio',
+      content: '/api/whatsapp/media/media-audio',
+    });
+
+    expect(mediaSpy).not.toHaveBeenCalled();
+    expect(prisma.whatsAppMessage.update).not.toHaveBeenCalled();
+  });
+});
+
 describe('WhatsApp scheduled closing', () => {
   it('sends the configured closing notice even when the conversational bot is paused', async () => {
     const service = new WhatsappService(
@@ -86,6 +247,54 @@ describe('WhatsApp advisor concurrency', () => {
     })).rejects.toThrow(new ConflictException('Esta conversación ya fue tomada por Ana'));
     expect(prisma.whatsAppSession.update).not.toHaveBeenCalled();
     expect(socketGateway.emitWhatsApp).not.toHaveBeenCalled();
+  });
+
+  it('lets ten delivery managers claim different chats at the same time', async () => {
+    const sessions = new Map(Array.from({ length: 10 }, (_, index) => {
+      const id = `chat-${index + 1}`;
+      return [id, { id, phone: `30012345${String(index).padStart(2, '0')}`, assignedToId: null, waitingForAdvisor: true }];
+    }));
+    const prisma: any = {
+      user: {
+        findUnique: jest.fn(({ where }: any) => Promise.resolve({ id: where.id, active: true })),
+      },
+      whatsAppSession: {
+        findUnique: jest.fn(({ where }: any) => Promise.resolve(sessions.get(where.id) || null)),
+        updateMany: jest.fn(({ where, data }: any) => {
+          const id = where.id;
+          if (!id) return Promise.resolve({ count: 0 });
+          const session = sessions.get(id);
+          if (!session || (session.assignedToId && session.assignedToId !== data.assignedToId)) {
+            return Promise.resolve({ count: 0 });
+          }
+          Object.assign(session, data);
+          return Promise.resolve({ count: 1 });
+        }),
+        update: jest.fn(({ where, data }: any) => {
+          const session = sessions.get(where.id)!;
+          Object.assign(session, data);
+          return Promise.resolve({
+            ...session,
+            assignedTo: session.assignedToId ? { id: session.assignedToId, name: session.assignedToId } : null,
+          });
+        }),
+      },
+    };
+    const { service } = createService(prisma);
+
+    const claimed = await Promise.all(Array.from({ length: 10 }, (_, index) => {
+      const advisorId = `advisor-${index + 1}`;
+      return service.assignSession(`chat-${index + 1}`, advisorId, {
+        id: advisorId,
+        name: `Asesora ${index + 1}`,
+        role: 'DELIVERY_MANAGER',
+      });
+    }));
+
+    expect(claimed.map(session => session.assignedToId)).toEqual(
+      Array.from({ length: 10 }, (_, index) => `advisor-${index + 1}`),
+    );
+    expect(prisma.whatsAppSession.updateMany).toHaveBeenCalledTimes(20);
   });
 
   it('loads a bounded message page and returns it in chronological order', async () => {
@@ -284,7 +493,7 @@ describe('WhatsApp Gemini settings', () => {
     expect(JSON.stringify(schema)).not.toContain('""');
   });
 
-  it('uses the administrator model first and keeps stable models only as fallback', async () => {
+  it('uses the administrator model first and keeps current production models as fallback', async () => {
     const appSetting = {
       findUnique: jest.fn().mockResolvedValue({ value: 'gemini-custom-flash' }),
     };
@@ -296,8 +505,9 @@ describe('WhatsApp Gemini settings', () => {
 
     await expect((service as any).getGeminiModels()).resolves.toEqual([
       'gemini-custom-flash',
+      'gemini-3.5-flash-lite',
+      'gemini-3.6-flash',
       'gemini-2.5-flash-lite',
-      'gemini-2.5-flash',
     ]);
   });
 

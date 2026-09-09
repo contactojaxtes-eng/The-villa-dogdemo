@@ -1868,6 +1868,31 @@ function ChatPage() {
       })
     })
 
+    socket.on('whatsappAudioTranscribed', (payload: {
+      messageId: string
+      waMessageId?: string
+      sessionId: string
+      content: string
+    }) => {
+      if (!payload?.messageId || !payload?.sessionId || !payload?.content) return
+      const matchesMessage = (message: Message) => (
+        message.id === payload.messageId || (!!payload.waMessageId && message.waMessageId === payload.waMessageId)
+      )
+      const withTranscript = (message: Message) => matchesMessage(message) ? { ...message, content: payload.content } : message
+
+      setSessions(previous => previous.map(session => session.id === payload.sessionId
+        ? { ...session, messages: (session.messages || []).map(withTranscript) }
+        : session,
+      ))
+      setMessagesCached(previous => {
+        const next = previous.map(withTranscript)
+        if (activeSessionRef.current?.id === payload.sessionId) {
+          messagesCacheRef.current[payload.sessionId] = next
+        }
+        return next
+      })
+    })
+
     socket.on('whatsappMessageReaction', (payload: { messageId: string; waMessageId: string; sessionId: string; reaction: string | null }) => {
       setMessagesCached(prevMsgs => prevMsgs.map(m => {
         if (m.id === payload.messageId || (payload.waMessageId && m.waMessageId === payload.waMessageId)) {

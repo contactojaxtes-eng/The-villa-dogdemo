@@ -139,7 +139,7 @@ export class WhatsappService implements OnModuleInit {
       paymentAccountText: map.chatbot_payment_account_text || '',
       geminiApiKey: map.gemini_api_key || '',
       geminiKeyCount,
-      geminiModel: map.gemini_model || 'gemini-2.5-flash-lite',
+      geminiModel: map.gemini_model || 'gemini-3.5-flash-lite',
       aiInstructions: map.chatbot_ai_instructions || '',
       geminiRequestsToday,
       // Mientras no exista un dominio público explícito, no mostramos ni
@@ -1409,11 +1409,27 @@ export class WhatsappService implements OnModuleInit {
       assignedTo: session.assignedTo,
     });
 
-    // Ejecutar el procesamiento de chatbot de forma asíncrona no bloqueante
-    // para que los mensajes entrantes se muestren de inmediato (< 5ms) en el POS sin esperar a Gemini AI
+    // La entrada se muestra primero y la IA corre fuera de la ruta del webhook.
+    // La lectura de pedidos puede transcribir una nota de voz aunque el bot esté
+    // pausado; esta operación nunca envía una respuesta al cliente.
     if (dbMessageType === 'text') {
       this.handleChatbot(session, content, previousLastMessageAt).catch(err => {
         this.logger.error(`Error en chatbot de texto para ${session.phone}:`, err);
+      });
+    } else if (dbMessageType === 'audio') {
+      const mediaId = this.getMediaIdFromContent(content);
+      if (mediaId) {
+        this.transcribeIncomingAudio({
+          session,
+          messageId: newMsg.id,
+          mediaId,
+          content,
+        }).catch(err => {
+          this.logger.error(`Error transcribiendo nota de voz para ${session.phone}:`, err);
+        });
+      }
+      this.handleMultimediaChatbot(session, dbMessageType, mediaId || content).catch(err => {
+        this.logger.error(`Error en chatbot multimedia para ${session.phone}:`, err);
       });
     } else {
       this.handleMultimediaChatbot(session, dbMessageType, content).catch(err => {
@@ -4231,8 +4247,9 @@ Restaurante (Tú):
     return Array.from(new Set([
       requested,
       this.isValidGeminiModel(configured) ? configured : '',
+      'gemini-3.5-flash-lite',
+      'gemini-3.6-flash',
       'gemini-2.5-flash-lite',
-      'gemini-2.5-flash',
     ].filter(Boolean)));
   }
 
@@ -4344,9 +4361,9 @@ Restaurante (Tú):
     });
     const preferredNames = [
       'gemini-3.5-flash-lite',
-      'gemini-2.5-flash-lite',
+      'gemini-3.6-flash',
       'gemini-3.5-flash',
-      'gemini-2.5-flash',
+      'gemini-2.5-flash-lite',
     ];
     const recommended = preferredNames.map(name => productionCandidates.find((entry: any) => entry.name === name)).find(Boolean)
       || productionCandidates.find((entry: any) => /flash/i.test(entry.name))
@@ -4985,6 +5002,120 @@ Responde solo con JSON válido.`;
       this.logger.error('Error al parsear pedido con Gemini:', err);
       throw new Error(`Error al procesar el pedido con Inteligencia Artificial: ${err.message}`);
     }
+  }
+
+  private getMediaIdFromContent(content: string): string {
+    const rawMediaId = String(content || '').split('|')[0].trim();
+    if (!rawMediaId) return '';
+    return rawMediaId.includes('/') ? (rawMediaId.split('/').pop() || '') : rawMediaId;
+  }
+
+  private async transcribeIncomingAudio(params: {
+    session: any;
+    messageId: string;
+    mediaId: string;
+    content: string;
+  }): Promise<void> {
+    const readerEnabled = await this.getSetting('order_reader_enabled');
+    if (readerEnabled !== 'true') return;
+
+    const rawApiKeys = await this.getSetting('gemini_api_key');
+    const apiKeys = String(rawApiKeys || '').split(',').map(key => key.trim()).filter(Boolean);
+    if (apiKeys.length === 0) return;
+
+    const media = await this.getMediaBuffer(params.mediaId);
+    if (!media?.buffer?.length) {
+      this.logger.warn(`No fue posible descargar la nota de voz ${params.mediaId} para transcribirla.`);
+      return;
+    }
+
+    // WhatsApp limita las notas de voz entrantes; este tope evita saturar la
+    // memoria si un proveedor entrega un archivo anormalmente grande.
+    if (media.buffer.length > 20 * 1024 * 1024) {
+      this.logger.warn(`La nota de voz ${params.mediaId} excede 20 MB y no se transcribirá automáticamente.`);
+      return;
+    }
+
+    const audioData = media.buffer.toString('base64');
+    const mimeType = String(media.contentType || 'audio/ogg').split(';')[0].trim() || 'audio/ogg';
+    const prompt = `Transcribe esta nota de voz de WhatsApp en español colombiano.
+
+Devuelve únicamente la transcripción, sin saludo, sin resumen, sin markdown y sin inventar datos. Conserva cantidades, productos, direcciones, barrios, forma de pago y notas de cocina como “sin cebolla”, “sin salsa” o “con más queso”.`;
+    let transcript = '';
+    let modelUsed = '';
+    const modelsToTry = await this.getGeminiModels();
+
+    for (const key of apiKeys) {
+      for (const model of modelsToTry) {
+        try {
+          const response = await fetch(
+            `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`,
+            {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                contents: [{
+                  parts: [
+                    { inlineData: { mimeType, data: audioData } },
+                    { text: prompt },
+                  ],
+                }],
+                generationConfig: this.buildGeminiGenerationConfig(model, { maxOutputTokens: 1000 }),
+              }),
+              signal: AbortSignal.timeout(12_000),
+            },
+          );
+
+          if (!response.ok) {
+            if (response.status === 429 || response.status === 403) {
+              this.logger.warn(`API Key (...${key.slice(-4)}) devolvió HTTP ${response.status} al transcribir audio. Se usará la siguiente llave.`);
+              break;
+            }
+            this.logger.warn(`Modelo ${model} no pudo transcribir audio: HTTP ${response.status}.`);
+            continue;
+          }
+
+          const data: any = await response.json();
+          transcript = String(data?.candidates?.[0]?.content?.parts?.[0]?.text || '')
+            .replace(/\s+/g, ' ')
+            .trim()
+            .slice(0, 3_000);
+          if (transcript) {
+            modelUsed = model;
+            await this.incrementGeminiUsage();
+            break;
+          }
+        } catch (error: any) {
+          this.logger.warn(`Error transcribiendo audio con ${model} y la llave (...${key.slice(-4)}): ${error?.message || error}`);
+        }
+      }
+      if (transcript) break;
+    }
+
+    if (!transcript) return;
+
+    const transcriptLabel = `📝 Transcripción: ${transcript}`;
+    const contentWithTranscript = params.content.includes('|')
+      ? `${params.content}
+
+${transcriptLabel}`
+      : `${params.content}|${transcriptLabel}`;
+    const updated = await this.prisma.whatsAppMessage.update({
+      where: { id: params.messageId },
+      data: { content: contentWithTranscript },
+    });
+
+    this.socketGateway.emitWhatsApp('whatsappAudioTranscribed', {
+      messageId: updated.id,
+      waMessageId: updated.waMessageId,
+      sessionId: params.session.id,
+      phone: params.session.phone,
+      customerName: params.session.customerName || params.session.phone,
+      content: contentWithTranscript,
+      transcript,
+      modelUsed,
+      createdAt: updated.createdAt,
+    });
   }
 
   private async handleAudioWithGemini(session: any, mediaId: string): Promise<boolean> {

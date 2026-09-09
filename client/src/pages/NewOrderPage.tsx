@@ -546,6 +546,7 @@ export default function NewOrderPage({
   const zoneContainerRef = useRef<HTMLDivElement>(null)
   const [orderReaderEnabled, setOrderReaderEnabled] = useState(false)
   const [chatContextMessageCount, setChatContextMessageCount] = useState<number | null>(null)
+  const [chatTranscriptRevision, setChatTranscriptRevision] = useState(0)
 
   const [paymentMethod, setPaymentMethod] = useState('CASH')
   const [cashAmountInput, setCashAmountInput] = useState('')
@@ -757,6 +758,22 @@ export default function NewOrderPage({
           const sid = data.sessionId || targetSessionId
           api.get<any[]>(`/whatsapp/sessions/${sid}/messages`).then(msgs => {
             if (msgs && Array.isArray(msgs)) setChatDrawerMessages(msgs)
+          }).catch(() => {})
+        }
+      }
+    })
+
+    socket.on('whatsappAudioTranscribed', (data: any) => {
+      if (!data?.sessionId) return
+      const activeSession = chatDrawerSessionRef.current
+      const targetSessionId = chatSessionIdRef.current || activeSession?.id
+      if (targetSessionId && data.sessionId === targetSessionId) {
+        // Si la asesora ya abrió “Nuevo pedido”, reintenta la lectura cuando la
+        // transcripción llega, sin obligarla a cerrar ni recargar el panel.
+        setChatTranscriptRevision(current => current + 1)
+        if (showChatDrawerRef.current) {
+          api.get<any[]>(`/whatsapp/sessions/${data.sessionId}/messages`).then(messages => {
+            if (Array.isArray(messages)) setChatDrawerMessages(messages)
           }).catch(() => {})
         }
       }
@@ -1617,8 +1634,9 @@ export default function NewOrderPage({
   useEffect(() => {
     if (editOrderId || initialLoading || !draftLoaded || loadedDraftKey !== activeDraftKey) return
 
-    if (chatSessionId && categories.length > 0 && lastParsedSessionIdRef.current !== chatSessionId) {
-      lastParsedSessionIdRef.current = chatSessionId
+    const chatParseKey = chatSessionId ? `${chatSessionId}:${chatTranscriptRevision}` : null
+    if (chatSessionId && categories.length > 0 && lastParsedSessionIdRef.current !== chatParseKey) {
+      lastParsedSessionIdRef.current = chatParseKey
       
       const initialUrlAddress = initialAddress
       const initialUrlZone = initialZone
@@ -1708,9 +1726,21 @@ export default function NewOrderPage({
             relevantSlice = messages.filter(isWithinRecentContext)
           }
 
-          // 2. Filtrar mensajes de texto relevantes, descartando respuestas automáticas o plantillas
+          const getAudioTranscript = (content: unknown) => {
+            const raw = String(content || '')
+            const marker = raw.match(/(?:^|\|)\s*📝\s*Transcripción:\s*([\s\S]+)/i)
+            return marker?.[1]?.trim() || ''
+          }
+          const messageForOrderReader = (message: any) => message.messageType === 'audio'
+            ? `Nota de voz transcrita: ${getAudioTranscript(message.content)}`
+            : String(message.content || '')
+
+          // Se incluyen textos y notas de voz ya transcritas. Las imágenes,
+          // videos y archivos siguen siendo revisables en el chat sin que la
+          // IA invente contenido a partir de ellos.
           let recentMessages = relevantSlice
             .filter(m => {
+              if (m.messageType === 'audio') return Boolean(getAudioTranscript(m.content))
               if (m.messageType && m.messageType !== 'text') return false
               const txt = (m.content || '').trim()
               if (!txt) return false
@@ -1765,14 +1795,14 @@ export default function NewOrderPage({
               }
               return true
             })
-            .map(m => `${m.direction === 'IN' ? 'Cliente' : 'Asistente'}: ${m.content}`)
+            .map(m => `${m.direction === 'IN' ? 'Cliente' : 'Asistente'}: ${messageForOrderReader(m)}`)
             .join('\n')
 
           if (!customerText.trim()) return
 
            const incomingCustomerOnlyText = recentMessages
              .filter(m => m.direction === 'IN')
-             .map(m => m.content)
+             .map(messageForOrderReader)
              .join('\n')
 
            // En chats donde el cliente confirmó el pedido con una respuesta corta
@@ -2017,7 +2047,7 @@ export default function NewOrderPage({
         })
         .finally(() => setParsingChatOrder(false))
     }
-  }, [chatSessionId, categories, zones, editOrderLoaded, editOrderId, draftLoaded, loadedDraftKey, activeDraftKey, hasRestoredDraft, initialLoading, initialAddress, initialZone, initialName, initialPhone])
+  }, [chatSessionId, chatTranscriptRevision, categories, zones, editOrderLoaded, editOrderId, draftLoaded, loadedDraftKey, activeDraftKey, hasRestoredDraft, initialLoading, initialAddress, initialZone, initialName, initialPhone])
 
   useEffect(() => {
     if (editOrderId || !draftLoaded || loadedDraftKey !== activeDraftKey) return
