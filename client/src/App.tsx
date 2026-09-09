@@ -121,13 +121,13 @@ function App() {
       }>
         <Route index element={<HomeRedirect />} />
         <Route path="dashboard" element={
-          <ProtectedRoute allowedRoles={['SUPERADMIN', 'ADMIN', 'CASHIER', 'DELIVERY_MANAGER']}><DashboardPage /></ProtectedRoute>
+          <ProtectedRoute allowedRoles={['SUPERADMIN', 'ADMIN', 'CASHIER', 'DELIVERY_MANAGER', 'DISPATCHER']}><DashboardPage /></ProtectedRoute>
         } />
         <Route path="dispatch" element={
-          <ProtectedRoute requiredPermission="dispatch.view" allowedRoles={['SUPERADMIN', 'ADMIN', 'CASHIER', 'DELIVERY_MANAGER']}><ActiveDeliveriesPage /></ProtectedRoute>
+          <ProtectedRoute requiredPermission="dispatch.view" allowedRoles={['SUPERADMIN', 'ADMIN', 'CASHIER', 'DELIVERY_MANAGER', 'DISPATCHER']}><ActiveDeliveriesPage /></ProtectedRoute>
         } />
         <Route path="orders" element={
-          <ProtectedRoute requiredPermission="orders.view" allowedRoles={['SUPERADMIN', 'ADMIN', 'CASHIER', 'DELIVERY_MANAGER']}><OrdersPage /></ProtectedRoute>
+          <ProtectedRoute requiredPermission="orders.view" allowedRoles={['SUPERADMIN', 'ADMIN', 'CASHIER', 'DELIVERY_MANAGER', 'DISPATCHER']}><OrdersPage /></ProtectedRoute>
         } />
         <Route path="orders/new" element={
           <ProtectedRoute requiredPermission="orders.create" allowedRoles={['SUPERADMIN', 'ADMIN', 'CASHIER', 'DELIVERY_MANAGER']}><NewOrderPage /></ProtectedRoute>
@@ -151,10 +151,10 @@ function App() {
           <ProtectedRoute requiredPermission="payment_validation.view" allowedRoles={['SUPERADMIN', 'ADMIN', 'CASHIER']}><PaymentValidationPage /></ProtectedRoute>
         } />
         <Route path="orders/active" element={
-          <ProtectedRoute requiredPermission="dispatch.view" allowedRoles={['SUPERADMIN', 'ADMIN', 'CASHIER', 'DELIVERY_MANAGER']}><ActiveDeliveriesPage /></ProtectedRoute>
+          <ProtectedRoute requiredPermission="dispatch.view" allowedRoles={['SUPERADMIN', 'ADMIN', 'CASHIER', 'DELIVERY_MANAGER', 'DISPATCHER']}><ActiveDeliveriesPage /></ProtectedRoute>
         } />
         <Route path="orders/:id" element={
-          <ProtectedRoute requiredPermission="orders.view" allowedRoles={['SUPERADMIN', 'ADMIN', 'CASHIER', 'DELIVERY_MANAGER']}><OrderDetailPage /></ProtectedRoute>
+          <ProtectedRoute requiredPermission="orders.view" allowedRoles={['SUPERADMIN', 'ADMIN', 'CASHIER', 'DELIVERY_MANAGER', 'DISPATCHER']}><OrderDetailPage /></ProtectedRoute>
         } />
         <Route path="products" element={
           <ProtectedRoute requiredPermission="products.view" allowedRoles={['SUPERADMIN', 'ADMIN']}><ProductsPage /></ProtectedRoute>
@@ -163,7 +163,7 @@ function App() {
           <ProtectedRoute requiredPermission="customers.view" allowedRoles={['SUPERADMIN', 'ADMIN', 'CASHIER', 'DELIVERY_MANAGER']}><CustomersPage /></ProtectedRoute>
         } />
         <Route path="drivers" element={
-          <ProtectedRoute requiredPermission="drivers.view" allowedRoles={['SUPERADMIN', 'ADMIN', 'CASHIER']}><DriversPage /></ProtectedRoute>
+          <ProtectedRoute requiredPermission="drivers.view" allowedRoles={['SUPERADMIN', 'ADMIN', 'CASHIER', 'DISPATCHER']}><DriversPage /></ProtectedRoute>
         } />
         <Route path="payments" element={
           <ProtectedRoute requiredPermission="cash.view" allowedRoles={['SUPERADMIN', 'ADMIN', 'CASHIER']}><PaymentsPage /></ProtectedRoute>

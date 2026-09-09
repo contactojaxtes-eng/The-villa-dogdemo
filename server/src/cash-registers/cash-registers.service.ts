@@ -10,23 +10,6 @@ export class CashRegistersService {
   ) {}
 
   async findAll() {
-    const unassignedOpen = await this.prisma.cashClosing.findFirst({
-      where: { isOpen: true, cashRegisterId: null },
-      orderBy: { shiftStart: 'desc' },
-    });
-    if (unassignedOpen) {
-      const defaultRegister = await this.prisma.cashRegister.findFirst({
-        where: { active: true, purpose: { not: 'DELIVERY' } },
-        orderBy: { name: 'asc' },
-      });
-      if (defaultRegister) {
-        await this.prisma.cashClosing.update({
-          where: { id: unassignedOpen.id },
-          data: { cashRegisterId: defaultRegister.id },
-        });
-      }
-    }
-
     return this.prisma.cashRegister.findMany({
       where: { active: true },
       include: {
@@ -72,6 +55,9 @@ export class CashRegistersService {
     }
     if (data.purpose) {
       data.purpose = this.normalizePurpose(data.purpose);
+      if (current.purpose === 'DELIVERY' && data.purpose !== 'DELIVERY') {
+        throw new BadRequestException('La Caja Domicilios es necesaria para tomar pedidos y no se puede cambiar de canal.');
+      }
       if (data.purpose !== current.purpose) {
         const [closingCount, orderCount] = await Promise.all([
           this.prisma.cashClosing.count({ where: { cashRegisterId: id } }),
@@ -117,6 +103,7 @@ export class CashRegistersService {
       const orphanOrders = await this.prisma.order.findMany({
         where: {
           cashRegisterId: null,
+          orderType: 'LOCAL',
           status: { not: 'CANCELLED' },
           OR: [
             { status: 'DELIVERED' },
@@ -137,7 +124,9 @@ export class CashRegistersService {
       }, 0);
       const totalTransfer = orphanOrders.reduce((s, o) => {
         const m = o.payment?.method || o.paymentMethod;
-        if (['TRANSFER', 'NEQUI', 'BANCOLOMBIA', 'DAVIPLATA'].includes(m || '')) return s + o.total;
+        // totalTransfer representa únicamente transferencias bancarias; las
+        // billeteras se exponen por separado para poder sumarlas sin duplicar.
+        if (m === 'TRANSFER') return s + o.total;
         if (m === 'MIXED') return s + (o.transferAmount || o.payment?.transferAmount || 0);
         return s;
       }, 0);
@@ -172,22 +161,6 @@ export class CashRegistersService {
       include: { user: { select: { id: true, name: true } } },
       orderBy: { shiftStart: 'desc' },
     });
-
-    // Si la caja no tiene turno explícito pero hay un turno activo en el sistema, vincularlo
-    if (!openClosing && !isDeliveryRegister) {
-      const unassignedClosing = await this.prisma.cashClosing.findFirst({
-        where: { isOpen: true, cashRegisterId: null },
-        include: { user: { select: { id: true, name: true } } },
-        orderBy: { shiftStart: 'desc' },
-      });
-      if (unassignedClosing) {
-        await this.prisma.cashClosing.update({
-          where: { id: unassignedClosing.id },
-          data: { cashRegisterId: registerId },
-        });
-        openClosing = { ...unassignedClosing, cashRegisterId: registerId };
-      }
-    }
 
     // Si no hay ningún turno activo abierto para esta caja:
     if (!openClosing) {
@@ -255,7 +228,7 @@ export class CashRegistersService {
       const totalTransfer = shiftOrders.reduce((sum, order) => {
         if (!isCollected(order)) return sum;
         const method = paymentMethod(order);
-        if (['TRANSFER', 'NEQUI', 'BANCOLOMBIA', 'DAVIPLATA'].includes(method)) return sum + (order.total || 0);
+        if (method === 'TRANSFER') return sum + (order.total || 0);
         if (method === 'MIXED') return sum + (order.transferAmount || order.payment?.transferAmount || 0);
         return sum;
       }, 0);
@@ -292,32 +265,8 @@ export class CashRegistersService {
       };
     }
 
-    // Si la caja está ABIERTA (turno activo en progreso):
-    // Reasociar pedidos y mesas creados durante este turno activo que no tengan caja asignada
-    await this.prisma.order.updateMany({
-      where: {
-        cashRegisterId: null,
-        orderType: 'LOCAL',
-        createdAt: { gte: openClosing.shiftStart },
-      },
-      data: {
-        cashRegisterId: registerId,
-      },
-    }).catch(err => console.warn('Error reasociando pedidos a caja:', err));
-
-    await this.prisma.diningTable.updateMany({
-      where: {
-        cashRegisterId: null,
-        status: 'OPEN',
-        openedAt: { gte: openClosing.shiftStart },
-      },
-      data: {
-        cashRegisterId: registerId,
-        cashClosingId: openClosing.id,
-      },
-    }).catch(err => console.warn('Error reasociando mesas a caja:', err));
-
-    // Consultar pedidos que pertenecen estrictamente a este turno activo (a partir de shiftStart)
+    // El resumen no modifica pedidos ni mesas. Así una consulta nunca puede
+    // apropiarse de movimientos de otra caja abierta.
     const orders = await this.prisma.order.findMany({
       where: {
         status: { not: 'CANCELLED' },
@@ -328,7 +277,6 @@ export class CashRegistersService {
             createdAt: { gte: openClosing.shiftStart },
             OR: [
               { cashRegisterId: registerId },
-              { cashRegisterId: null },
               { diningTable: { cashRegisterId: registerId } },
               { diningTable: { cashClosingId: openClosing.id } },
             ],
@@ -345,7 +293,8 @@ export class CashRegistersService {
             },
             OR: [
               { cashRegisterId: registerId },
-              { cashRegisterId: null },
+              { diningTable: { cashRegisterId: registerId } },
+              { diningTable: { cashClosingId: openClosing.id } },
             ],
           },
         ],
@@ -358,7 +307,7 @@ export class CashRegistersService {
 
     // Si hay varias cajas, filtrar pedidos explícitamente asignados a otra caja
     const shiftOrders = orders.filter(
-      o => !o.cashRegisterId || o.cashRegisterId === registerId || o.diningTable?.cashRegisterId === registerId || o.diningTable?.cashClosingId === openClosing.id
+      o => o.cashRegisterId === registerId || o.diningTable?.cashRegisterId === registerId || o.diningTable?.cashClosingId === openClosing.id,
     );
 
     let totalExpenses = 0;
@@ -382,7 +331,7 @@ export class CashRegistersService {
 
     const transferSales = shiftOrders.reduce((sum, o) => {
       const method = String(o.payment?.method || o.paymentMethod || '').toUpperCase().trim();
-      if (['TRANSFER', 'NEQUI', 'BANCOLOMBIA', 'DAVIPLATA'].includes(method)) return sum + (o.total || 0);
+      if (method === 'TRANSFER') return sum + (o.total || 0);
       if (method === 'MIXED') return sum + (o.transferAmount || o.payment?.transferAmount || 0);
       return sum;
     }, 0);

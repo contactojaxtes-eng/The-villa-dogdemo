@@ -39,8 +39,44 @@ export class PaymentsService {
 
   async confirmPayment(id: string, confirmedBy: string) {
     const user = await this.prisma.user.findUnique({ where: { id: confirmedBy } });
+    const payment = await this.prisma.payment.findUnique({ where: { id } });
+    if (!payment) {
+      // Conserva la protección de caja para cajeros incluso ante un enlace de
+      // pago vencido o inválido; un domicilio válido se resuelve más abajo por
+      // su propio turno compartido.
+      if (user?.role === 'CASHIER') {
+        const activeClosing = await this.prisma.cashClosing.findFirst({
+          where: { userId: confirmedBy, isOpen: true },
+        });
+        if (!activeClosing) {
+          throw new BadRequestException('Debes tener una caja abierta para registrar o confirmar cobros.');
+        }
+      }
+      throw new NotFoundException('Pago no encontrado');
+    }
+
+    const currentOrder = await this.prisma.order.findUnique({
+      where: { id: payment.orderId },
+      select: { cashClosingId: true, cashRegisterId: true, orderType: true },
+    });
+    if (!currentOrder) throw new NotFoundException('Pedido no encontrado');
+
+    const isDeliveryOrder = ['DELIVERY', 'PICKUP'].includes(currentOrder.orderType);
     let activeClosing: any = null;
-    if (user?.role === 'CASHIER') {
+    if (isDeliveryOrder) {
+      // Los pagos de domicilio siempre quedan en el turno compartido de domicilios.
+      // Nunca deben absorberse por la caja personal de quien confirma el pago.
+      activeClosing = await this.prisma.cashClosing.findFirst({
+        where: {
+          isOpen: true,
+          cashRegister: { purpose: 'DELIVERY', active: true },
+        },
+        orderBy: { shiftStart: 'desc' },
+      });
+      if (!activeClosing) {
+        throw new BadRequestException('La Caja Domicilios está cerrada. Ábrela antes de confirmar el cobro.');
+      }
+    } else if (user?.role === 'CASHIER') {
       activeClosing = await this.prisma.cashClosing.findFirst({
         where: { userId: confirmedBy, isOpen: true },
       });
@@ -53,12 +89,6 @@ export class PaymentsService {
       });
     }
 
-    const payment = await this.prisma.payment.findUnique({ where: { id } });
-    if (!payment) throw new NotFoundException('Pago no encontrado');
-    const currentOrder = await this.prisma.order.findUnique({
-      where: { id: payment.orderId },
-      select: { cashClosingId: true },
-    });
     const updated = await this.prisma.payment.update({
       where: { id },
       data: { status: 'CONFIRMED', confirmedAt: new Date(), confirmedBy },
@@ -67,11 +97,14 @@ export class PaymentsService {
       where: { id: payment.orderId },
       data: { 
         paymentStatus: 'CONFIRMED',
-        ...(!currentOrder?.cashClosingId && activeClosing?.cashRegisterId
+        ...(!currentOrder.cashClosingId && activeClosing?.cashRegisterId
           ? { cashRegisterId: activeClosing.cashRegisterId, cashClosingId: activeClosing.id }
           : {})
       },
     });
+    this.socketGateway.server.emit('paymentUpdated', updated);
+    this.socketGateway.server.emit('orderUpdated', updatedOrder);
+    this.socketGateway.server.emit('cashRegistersChanged');
     if (updatedOrder.customerPhone) {
       await this.whatsappService.unassignSessionByPhone(updatedOrder.customerPhone).catch(() => {});
     }
@@ -95,10 +128,13 @@ export class PaymentsService {
       where: { id },
       data: { status: 'REJECTED', confirmedBy },
     });
-    await this.prisma.order.update({
+    const updatedOrder = await this.prisma.order.update({
       where: { id: payment.orderId },
       data: { paymentStatus: 'REJECTED' },
     });
+    this.socketGateway.server.emit('paymentUpdated', updated);
+    this.socketGateway.server.emit('orderUpdated', updatedOrder);
+    this.socketGateway.server.emit('cashRegistersChanged');
     return updated;
   }
 
@@ -130,6 +166,12 @@ export class PaymentsService {
         totalTips: 0,
         totalExpenses: 0,
         orderCount: 0,
+        deliveryCount: 0,
+        pickupCount: 0,
+        paidOrderCount: 0,
+        pendingPaymentCount: 0,
+        pendingPaymentAmount: 0,
+        totalCollected: 0,
         isOpen: false,
         initialCash: 0,
         creditSales: 0,
@@ -150,30 +192,6 @@ export class PaymentsService {
       : null;
     const isDeliveryRegister = register?.purpose === 'DELIVERY';
 
-    if (openCash.cashRegisterId && !isDeliveryRegister) {
-      await this.prisma.order.updateMany({
-        where: {
-          createdAt: { gte: start, lte: end },
-          cashRegisterId: null,
-        },
-        data: {
-          cashRegisterId: openCash.cashRegisterId,
-        },
-      });
-    }
-
-    if (openCash.cashRegisterId && isDeliveryRegister) {
-      await this.prisma.order.updateMany({
-        where: {
-          cashRegisterId: openCash.cashRegisterId,
-          cashClosingId: null,
-          orderType: { in: ['DELIVERY', 'PICKUP'] },
-          createdAt: { gte: start, lte: end },
-        },
-        data: { cashClosingId: openCash.id },
-      });
-    }
-
     let orders: any[] = [];
     try {
       orders = await this.prisma.order.findMany({
@@ -187,6 +205,7 @@ export class PaymentsService {
           : {
               createdAt: { gte: start, lte: end },
               status: { not: 'CANCELLED' },
+              orderType: 'LOCAL',
               ...(openCash.cashRegisterId
                 ? { cashRegisterId: openCash.cashRegisterId }
                 : (targetIsCashier ? {
@@ -203,6 +222,7 @@ export class PaymentsService {
         where: {
           createdAt: { gte: start, lte: end },
           status: { not: 'CANCELLED' },
+          ...(isDeliveryRegister ? {} : { orderType: 'LOCAL' }),
           ...(isDeliveryRegister
             ? { cashClosingId: openCash.id, orderType: { in: ['DELIVERY', 'PICKUP'] } }
             : (openCash.cashRegisterId ? { cashRegisterId: openCash.cashRegisterId } : {}))
@@ -210,9 +230,13 @@ export class PaymentsService {
       }).catch(() => []);
     }
 
-    const cashWasCollected = (order: any) => !isDeliveryRegister || order.paymentStatus === 'CONFIRMED';
+    const paymentIsSettled = (order: any) =>
+      order.paymentStatus === 'CONFIRMED' ||
+      order.payment?.status === 'CONFIRMED' ||
+      ['CREDIT', 'CORTESIA'].includes(order.paymentMethod);
+    const cashWasCollected = (order: any) => !isDeliveryRegister || paymentIsSettled(order);
     const byMethod = (method: string) => orders
-      .filter(order => order.paymentMethod === method && (method !== 'CASH' || cashWasCollected(order)))
+      .filter(order => order.paymentMethod === method && cashWasCollected(order))
       .reduce((sum, order) => sum + order.total, 0);
 
     // Ventas a crédito creadas durante este turno
@@ -229,7 +253,7 @@ export class PaymentsService {
             paymentMethod: 'CREDIT',
             ...(isDeliveryRegister
               ? { cashClosingId: openCash.id, orderType: { in: ['DELIVERY', 'PICKUP'] } }
-              : (openCash.cashRegisterId ? { cashRegisterId: openCash.cashRegisterId } : {}))
+              : { orderType: 'LOCAL', ...(openCash.cashRegisterId ? { cashRegisterId: openCash.cashRegisterId } : {}) })
           },
           ...(!openCash.cashRegisterId && targetIsCashier ? { confirmedBy: targetUserId } : {})
         }
@@ -257,7 +281,7 @@ export class PaymentsService {
     const customerPaymentsCash = customerPayments.filter(p => p.method === 'CASH').reduce((sum, p) => sum + p.amount, 0);
     const customerPaymentsTransfer = customerPayments.filter(p => p.method === 'TRANSFER').reduce((sum, p) => sum + p.amount, 0);
     const mixedCash = orders.filter(o => o.paymentMethod === 'MIXED' && cashWasCollected(o)).reduce((sum, o) => sum + (o.cashAmount || 0), 0);
-    const mixedTransfer = orders.filter(o => o.paymentMethod === 'MIXED').reduce((sum, o) => sum + (o.transferAmount || 0), 0);
+    const mixedTransfer = orders.filter(o => o.paymentMethod === 'MIXED' && cashWasCollected(o)).reduce((sum, o) => sum + (o.transferAmount || 0), 0);
 
     const totalCash = byMethod('CASH') + mixedCash + creditByMethod('CASH') + customerPaymentsCash;
     const totalTransfers = byMethod('TRANSFER') + mixedTransfer + creditByMethod('TRANSFER') + customerPaymentsTransfer;
@@ -274,6 +298,17 @@ export class PaymentsService {
           if (order.paymentMethod === 'MIXED') return sum + (order.cashAmount || 0);
           return sum;
         }, 0)
+      : 0;
+    const pendingPaymentOrders = isDeliveryRegister
+      ? orders.filter(order =>
+          !['CREDIT', 'CORTESIA'].includes(order.paymentMethod) && !paymentIsSettled(order),
+        )
+      : [];
+    const deliveryCount = isDeliveryRegister
+      ? orders.filter(order => order.orderType === 'DELIVERY').length
+      : 0;
+    const pickupCount = isDeliveryRegister
+      ? orders.filter(order => order.orderType === 'PICKUP').length
       : 0;
 
     let totalExpenses = 0;
@@ -300,6 +335,12 @@ export class PaymentsService {
       totalTips,
       totalExpenses,
       orderCount: orders.length,
+      deliveryCount,
+      pickupCount,
+      paidOrderCount: isDeliveryRegister ? orders.filter(paymentIsSettled).length : orders.length,
+      pendingPaymentCount: pendingPaymentOrders.length,
+      pendingPaymentAmount: pendingPaymentOrders.reduce((sum, order) => sum + order.total, 0),
+      totalCollected: totalCash + totalTransfers + totalNequi + totalBancolombia + totalDaviplata,
       isOpen: true,
       initialCash: openCash.initialCash || 0,
       creditSales,
@@ -366,6 +407,19 @@ export class PaymentsService {
       });
       if (pendingDriverCash > 0) {
         throw new BadRequestException(`No se puede cerrar la Caja Domicilios. Hay ${pendingDriverCash} pedido(s) con efectivo pendiente por entregar del domiciliario.`);
+      }
+
+      const pendingPayments = await this.prisma.order.count({
+        where: {
+          cashClosingId: openClosing.id,
+          orderType: { in: ['DELIVERY', 'PICKUP'] },
+          status: { not: 'CANCELLED' },
+          paymentMethod: { notIn: ['CREDIT', 'CORTESIA'] },
+          paymentStatus: { not: 'CONFIRMED' },
+        },
+      });
+      if (pendingPayments > 0) {
+        throw new BadRequestException(`No se puede cerrar la Caja Domicilios. Hay ${pendingPayments} pedido(s) con pago pendiente de confirmar.`);
       }
     }
 
@@ -459,7 +513,7 @@ export class PaymentsService {
       where,
       include: { 
         user: { select: { id: true, name: true } },
-        cashRegister: { select: { id: true, name: true } }
+        cashRegister: { select: { id: true, name: true, purpose: true } }
       },
       orderBy: { shiftEnd: 'desc' },
     });
@@ -535,13 +589,21 @@ export class PaymentsService {
     if (!order) throw new NotFoundException('Pedido no encontrado');
     if (order.paymentMethod !== 'CREDIT') throw new BadRequestException('El pedido no fue registrado a crédito');
 
-    // Buscar si el cajero actual tiene una caja abierta
+    const isDeliveryOrder = ['DELIVERY', 'PICKUP'].includes(order.orderType);
+    // Un abono de domicilio siempre se registra en Caja Domicilios. Un pago
+    // hecho por un cajero no puede mover ese pedido a su caja personal.
     const activeClosing = await this.prisma.cashClosing.findFirst({
-      where: { userId: cashierId, isOpen: true },
+      where: isDeliveryOrder
+        ? { isOpen: true, cashRegister: { purpose: 'DELIVERY', active: true } }
+        : { userId: cashierId, isOpen: true },
+      orderBy: isDeliveryOrder ? { shiftStart: 'desc' } : undefined,
     });
 
     const user = await this.prisma.user.findUnique({ where: { id: cashierId } });
-    if (user?.role === 'CASHIER' && !activeClosing) {
+    if (isDeliveryOrder && !activeClosing) {
+      throw new BadRequestException('La Caja Domicilios está cerrada. Ábrela antes de registrar el pago.');
+    }
+    if (!isDeliveryOrder && user?.role === 'CASHIER' && !activeClosing) {
       throw new BadRequestException('Debes tener una caja abierta para registrar pagos de crédito.');
     }
 
@@ -551,7 +613,9 @@ export class PaymentsService {
       where: { id: orderId },
       data: {
         paymentStatus: 'CONFIRMED',
-        ...(activeClosing?.cashRegisterId ? { cashRegisterId: activeClosing.cashRegisterId } : {}),
+        ...(!order.cashClosingId && activeClosing?.cashRegisterId
+          ? { cashRegisterId: activeClosing.cashRegisterId, cashClosingId: activeClosing.id }
+          : {}),
       },
     });
 
@@ -597,6 +661,7 @@ export class PaymentsService {
 
     this.socketGateway.server.emit('paymentUpdated', payment);
     this.socketGateway.server.emit('orderUpdated', orderId);
+    this.socketGateway.server.emit('cashRegistersChanged');
 
     if (order.customerPhone) {
       await this.whatsappService.unassignSessionByPhone(order.customerPhone).catch(() => {});
@@ -618,31 +683,8 @@ export class PaymentsService {
     const effectiveEnd = closing.isOpen ? new Date() : (closing.shiftEnd || new Date());
     const isDeliveryRegister = closing.cashRegister?.purpose === 'DELIVERY';
 
-    if (closing.cashRegisterId && !isDeliveryRegister) {
-      await this.prisma.order.updateMany({
-        where: {
-          createdAt: { gte: closing.shiftStart, lte: effectiveEnd },
-          cashRegisterId: null,
-        },
-        data: {
-          cashRegisterId: closing.cashRegisterId,
-        },
-      });
-    }
-
-    if (closing.cashRegisterId && isDeliveryRegister) {
-      await this.prisma.order.updateMany({
-        where: {
-          cashRegisterId: closing.cashRegisterId,
-          cashClosingId: null,
-          orderType: { in: ['DELIVERY', 'PICKUP'] },
-          createdAt: { gte: closing.shiftStart, lte: effectiveEnd },
-        },
-        data: { cashClosingId: closing.id },
-      });
-    }
-
-    // Obtener pedidos del turno (entregados o con pago confirmado)
+    // El detalle es estrictamente de lectura: los pedidos se vinculan al turno
+    // cuando se crean, así un reporte histórico no altera ni absorbe movimientos.
     const whereOrders: any = isDeliveryRegister
       ? {
           cashClosingId: closing.id,
@@ -653,6 +695,7 @@ export class PaymentsService {
       : {
           createdAt: { gte: closing.shiftStart, lte: effectiveEnd },
           status: { not: 'CANCELLED' },
+          orderType: 'LOCAL',
           ...(closing.cashRegisterId ? { cashRegisterId: closing.cashRegisterId } : {}),
         };
 
@@ -674,7 +717,7 @@ export class PaymentsService {
           paymentMethod: 'CREDIT',
           ...(isDeliveryRegister
             ? { cashClosingId: closing.id, orderType: { in: ['DELIVERY', 'PICKUP'] } }
-            : (closing.cashRegisterId ? { cashRegisterId: closing.cashRegisterId } : {})),
+            : { orderType: 'LOCAL', ...(closing.cashRegisterId ? { cashRegisterId: closing.cashRegisterId } : {}) }),
         },
       },
     });

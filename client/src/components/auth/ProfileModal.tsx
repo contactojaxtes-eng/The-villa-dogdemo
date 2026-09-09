@@ -34,6 +34,7 @@ const roleLabels: Record<string, string> = {
   ADMIN: 'Administrador General',
   CASHIER: 'Cajero / Punto de Venta',
   DELIVERY_MANAGER: 'Gestor de Domicilios',
+  DISPATCHER: 'Despachador de Domicilios',
   WAITER: 'Mesero',
   KITCHEN: 'Cocinero',
   ACCOUNTANT: 'Contador',

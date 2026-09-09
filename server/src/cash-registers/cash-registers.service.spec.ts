@@ -21,7 +21,7 @@ describe('CashRegistersService delivery isolation', () => {
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
         findMany: jest.fn().mockResolvedValue([
           { orderType: 'DELIVERY', total: 30_000, tip: 0, status: 'DELIVERED', paymentStatus: 'CONFIRMED', paymentMethod: 'CASH', cashAmount: 30_000, payment: null },
-          { orderType: 'PICKUP', total: 25_000, tip: 0, status: 'DELIVERED', paymentStatus: 'CONFIRMED', paymentMethod: 'TRANSFER', transferAmount: 25_000, payment: null },
+          { orderType: 'PICKUP', total: 25_000, tip: 0, status: 'DELIVERED', paymentStatus: 'CONFIRMED', paymentMethod: 'NEQUI', transferAmount: 25_000, payment: null },
           { orderType: 'DELIVERY', total: 12_000, tip: 0, status: 'DELIVERED', paymentStatus: 'DRIVER_CASH_PENDING', paymentMethod: 'CASH', cashAmount: 12_000, payment: null },
         ]),
       },
@@ -53,7 +53,8 @@ describe('CashRegistersService delivery isolation', () => {
       totalCollected: 55_000,
       totalCash: 30_000,
       pendingDriverCash: 12_000,
-      totalTransfer: 25_000,
+      totalTransfer: 0,
+      totalNequi: 25_000,
       cashInDrawer: 50_000,
     });
   });
@@ -70,5 +71,40 @@ describe('CashRegistersService delivery isolation', () => {
 
     await expect(service.remove('delivery-register')).rejects.toThrow('La Caja Domicilios es necesaria');
     expect(prisma.cashRegister.update).not.toHaveBeenCalled();
+  });
+
+  it('keeps a regular cash-register summary read-only when several registers are open', async () => {
+    const prisma: any = {
+      cashRegister: {
+        findUnique: jest.fn().mockResolvedValue({ id: 'regular-register', purpose: 'GENERAL' }),
+      },
+      cashClosing: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: 'regular-shift',
+          cashRegisterId: 'regular-register',
+          userId: 'cashier-1',
+          initialCash: 10_000,
+          shiftStart: new Date('2026-09-08T14:00:00.000Z'),
+          user: { id: 'cashier-1', name: 'Luis' },
+        }),
+        update: jest.fn(),
+      },
+      order: {
+        findMany: jest.fn().mockResolvedValue([]),
+        updateMany: jest.fn(),
+      },
+      diningTable: { updateMany: jest.fn() },
+      expense: { findMany: jest.fn().mockResolvedValue([]) },
+    };
+    const service = new CashRegistersService(prisma, { server: { emit: jest.fn() } } as any);
+
+    await service.getSummary('regular-register');
+
+    expect(prisma.order.updateMany).not.toHaveBeenCalled();
+    expect(prisma.diningTable.updateMany).not.toHaveBeenCalled();
+    expect(prisma.cashClosing.update).not.toHaveBeenCalled();
+    expect(prisma.order.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ orderType: 'LOCAL' }),
+    }));
   });
 });

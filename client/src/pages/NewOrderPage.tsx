@@ -2476,7 +2476,6 @@ export default function NewOrderPage({
 
   const missingFields = [
     cart.length === 0 && 'productos',
-    orderType === 'pickup' && !customerName.trim() && 'nombre del cliente',
     orderType === 'delivery' && !customerPhone.trim() && 'teléfono',
     orderType === 'delivery' && !zoneSearch.trim() && 'barrio',
     orderType === 'delivery' && !exactAddress.trim() && 'dirección exacta',
@@ -3388,7 +3387,7 @@ const renderDeliveryCard = () => {
                         })()}
                       </div>
                       <div className="space-y-1">
-                        <Label className="text-xs font-semibold text-[var(--text-secondary)] uppercase">Nombre del Cliente {orderType === 'delivery' ? '(Opcional)' : '*'}</Label>
+                        <Label className="text-xs font-semibold text-[var(--text-secondary)] uppercase">Nombre del Cliente (opcional)</Label>
                         <Input 
                           value={customerName} 
                           onChange={e => setCustomerName(e.target.value)} 

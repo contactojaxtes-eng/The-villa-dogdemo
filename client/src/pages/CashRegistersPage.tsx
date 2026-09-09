@@ -397,9 +397,10 @@ export default function CashRegistersPage() {
           >
             {displayRegisters.map(reg => {
               const sum = summaries[reg.id]
-          const openClosing = reg.closings.find(c => c.isOpen)
-          const isOpen = !!openClosing
-          const isOperator = openClosing?.user?.id === user?.id
+              const digitalTotal = (sum?.totalTransfer || 0) + (sum?.totalNequi || 0) + (sum?.totalBancolombia || 0) + (sum?.totalDaviplata || 0)
+              const openClosing = reg.closings.find(c => c.isOpen)
+              const isOpen = !!openClosing
+              const isOperator = openClosing?.user?.id === user?.id
           const canOperate = isAdmin || (isOpen ? isOperator : user?.role === 'CASHIER')
 
           return (
@@ -501,8 +502,8 @@ export default function CashRegistersPage() {
                       </div>
                       <div className="rounded-xl border border-blue-500/20 bg-blue-500/5 p-3">
                         <p className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)]">Pagos digitales</p>
-                        <p className="mt-0.5 text-base font-extrabold text-blue-600">{formatCurrency(isOpen ? (sum.totalTransfer || 0) : 0)}</p>
-                        <p className="mt-0.5 text-[10px] text-[var(--text-secondary)]">Transferencias confirmadas</p>
+                        <p className="mt-0.5 text-base font-extrabold text-blue-600">{formatCurrency(isOpen ? digitalTotal : 0)}</p>
+                        <p className="mt-0.5 text-[10px] text-[var(--text-secondary)]">Pagos digitales confirmados</p>
                       </div>
                     </div>
                   )}
@@ -530,7 +531,7 @@ export default function CashRegistersPage() {
                       <div className="rounded-xl bg-[var(--bg-elevated)] border border-[var(--border-subtle)] p-3">
                         <p className="text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-wider">Transferencias & Digitales</p>
                         <p className="text-base font-extrabold text-[var(--text-primary)] mt-0.5">
-                          {formatCurrency(isOpen ? (sum.totalTransfer || 0) : 0)}
+                          {formatCurrency(isOpen ? digitalTotal : 0)}
                         </p>
                         <p className="text-[10px] text-[var(--text-secondary)] mt-0.5">Bancos / Nequi / Daviplata</p>
                       </div>

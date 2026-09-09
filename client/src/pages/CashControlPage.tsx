@@ -251,7 +251,7 @@ export default function CashControlPage() {
     Object.values(summaries).forEach(s => {
       totalSales += s.totalSales || 0
       totalCash += s.totalCash || 0
-      totalTransfers += s.totalTransfer || 0
+      totalTransfers += (s.totalTransfer || 0) + (s.totalNequi || 0) + (s.totalBancolombia || 0) + (s.totalDaviplata || 0)
       totalInitial += s.initialCash || 0
       totalCashInDrawer += s.cashInDrawer ?? ((s.initialCash || 0) + (s.totalCash || 0))
       totalTips += s.totalTips || 0
@@ -383,6 +383,7 @@ export default function CashControlPage() {
         <motion.div className="grid gap-6 md:grid-cols-2" variants={fadeUp}>
           {registers.map(reg => {
             const sum = summaries[reg.id]
+            const digitalTotal = (sum?.totalTransfer || 0) + (sum?.totalNequi || 0) + (sum?.totalBancolombia || 0) + (sum?.totalDaviplata || 0)
             const openClosing = reg.closings?.find(c => c.isOpen) || (sum?.isOpen ? { id: 'active', isOpen: true, user: { id: 'cajero', name: (sum as any).operatorName || 'Cajero' }, initialCash: sum.initialCash || 0, shiftStart: (sum as any).shiftStart || new Date().toISOString() } : null)
             const isOpen = !!openClosing || !!sum?.isOpen
             const lastClosedId = closings.find(c => !c.isOpen && c.cashRegister?.id === reg.id)?.id
@@ -453,7 +454,7 @@ export default function CashControlPage() {
                         <div className="rounded-xl bg-[var(--bg-elevated)] border border-[var(--border-subtle)] p-3.5">
                           <p className="text-[10px] font-extrabold text-[var(--text-muted)] uppercase tracking-wider">Transferencias & Digitales</p>
                           <p className="text-xl font-black text-[var(--text-primary)] mt-1">
-                            {formatCurrency(sum.totalTransfer || 0)}
+                            {formatCurrency(digitalTotal)}
                           </p>
                           <p className="text-[11px] text-[var(--text-secondary)] mt-0.5 truncate">Bancos / Nequi / Daviplata</p>
                         </div>

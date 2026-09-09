@@ -1637,12 +1637,19 @@ export class OrdersService implements OnModuleInit {
     let cashRegisterId: string | undefined = undefined;
     let cashClosingId: string | undefined = undefined;
     let confirmedBy: string | undefined = undefined;
+    const isDeliveryOrder = ['DELIVERY', 'PICKUP'].includes(order.orderType);
 
     if (user) {
       confirmedBy = user.id;
       const activeClosing = await this.prisma.cashClosing.findFirst({
-        where: { userId: user.id, isOpen: true },
+        where: isDeliveryOrder
+          ? { isOpen: true, cashRegister: { purpose: 'DELIVERY', active: true } }
+          : { userId: user.id, isOpen: true },
+        ...(isDeliveryOrder ? { orderBy: { shiftStart: 'desc' } } : {}),
       });
+      if (isDeliveryOrder && paymentStatus === 'CONFIRMED' && !activeClosing) {
+        throw new BadRequestException('La Caja Domicilios está cerrada. Ábrela antes de confirmar el pago.');
+      }
       if (activeClosing) {
         cashRegisterId = activeClosing.cashRegisterId || undefined;
         cashClosingId = activeClosing.id;

@@ -33,7 +33,7 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
     void this.checkDelayedDiningKitchenTickets();
     this.diningDelayTimerInterval = setInterval(() => {
       void this.checkDelayedDiningKitchenTickets();
-    }, 10_000);
+    }, 15_000);
   }
 
   onModuleDestroy() {

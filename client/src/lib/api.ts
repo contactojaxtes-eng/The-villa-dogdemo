@@ -188,8 +188,24 @@ class ApiClient {
       return
     }
     const list = Array.isArray(prefixes) ? prefixes : [prefixes]
+    const matchesPrefix = (endpoint: string) => list.some(prefix => endpoint.startsWith(prefix))
+    let invalidated = false
     for (const key of this.getCache.keys()) {
-      if (list.some(prefix => key.startsWith(prefix))) this.getCache.delete(key)
+      if (matchesPrefix(key)) {
+        this.getCache.delete(key)
+        invalidated = true
+      }
+    }
+    // Si una petición vieja todavía está llegando, evitar que vuelva a llenar
+    // la caché después de un evento de Socket.IO más reciente.
+    for (const endpoint of this.getRequests.keys()) {
+      if (matchesPrefix(endpoint)) {
+        invalidated = true
+        break
+      }
+    }
+    if (invalidated) {
+      this.cacheVersion += 1
     }
   }
 
@@ -203,7 +219,7 @@ class ApiClient {
       return
     }
     if (event.includes('Payment') || event.startsWith('payment') || event.startsWith('cash')) {
-      this.invalidateCache(['/payments', '/payment-validation', '/orders', '/tables', '/orders/dashboard-stats'])
+      this.invalidateCache(['/payments', '/payment-validation', '/orders', '/tables', '/cash-registers', '/orders/dashboard-stats'])
       return
     }
     if (event.includes('Kitchen') || event.startsWith('kitchen')) {
@@ -211,11 +227,11 @@ class ApiClient {
       return
     }
     if (event.includes('Order') || event.startsWith('order')) {
-      this.invalidateCache(['/orders', '/tables', '/payments', '/payment-validation', '/orders/dashboard-stats', '/whatsapp/sessions'])
+      this.invalidateCache(['/orders', '/tables', '/payments', '/payment-validation', '/cash-registers', '/orders/dashboard-stats', '/whatsapp/sessions'])
       return
     }
     if (event.includes('Table') || event.startsWith('table')) {
-      this.invalidateCache(['/tables', '/orders', '/payments'])
+      this.invalidateCache(['/tables', '/orders', '/payments', '/cash-registers'])
     }
   }
 
@@ -224,11 +240,11 @@ class ApiClient {
     if (path.startsWith('/whatsapp/')) {
       this.invalidateCache('/whatsapp/')
     } else if (path.startsWith('/orders')) {
-      this.invalidateCache(['/orders', '/tables', '/payments', '/payment-validation', '/orders/dashboard-stats', '/whatsapp/sessions'])
+      this.invalidateCache(['/orders', '/tables', '/payments', '/payment-validation', '/cash-registers', '/orders/dashboard-stats', '/whatsapp/sessions'])
     } else if (path.startsWith('/tables')) {
-      this.invalidateCache(['/tables', '/orders', '/payments', '/payment-validation'])
+      this.invalidateCache(['/tables', '/orders', '/payments', '/payment-validation', '/cash-registers'])
     } else if (path.startsWith('/payments') || path.startsWith('/payment-validation')) {
-      this.invalidateCache(['/payments', '/payment-validation', '/orders', '/tables', '/orders/dashboard-stats'])
+      this.invalidateCache(['/payments', '/payment-validation', '/orders', '/tables', '/cash-registers', '/orders/dashboard-stats'])
     } else if (path.startsWith('/menu')) {
       this.invalidateCache(['/menu/', '/public/menu/'])
     } else if (path.startsWith('/zones')) {

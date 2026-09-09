@@ -15,13 +15,13 @@ import { toast } from 'sonner'
 
 const navItems = [
   { href: '/chat', label: 'WhatsApp', roles: ['ADMIN', 'SUPERADMIN', 'DELIVERY_MANAGER', 'CASHIER'] },
-  { href: '/dashboard', label: 'Dashboard', roles: ['ADMIN', 'CASHIER', 'DELIVERY_MANAGER'] },
-  { href: '/orders', label: 'Domicilios', roles: ['ADMIN', 'CASHIER', 'DELIVERY_MANAGER'] },
+  { href: '/dashboard', label: 'Dashboard', roles: ['ADMIN', 'CASHIER', 'DELIVERY_MANAGER', 'DISPATCHER'] },
+  { href: '/orders', label: 'Domicilios', roles: ['ADMIN', 'CASHIER', 'DELIVERY_MANAGER', 'DISPATCHER'] },
   { href: '/orders/new', label: 'Nuevo', roles: ['ADMIN', 'CASHIER', 'DELIVERY_MANAGER'] },
   { href: '/products', label: 'Productos', roles: ['ADMIN'] },
   { href: '/zones', label: 'Barrios', roles: ['ADMIN', 'SUPERADMIN', 'CASHIER', 'DELIVERY_MANAGER'] },
   { href: '/cash-registers', label: 'Caja', roles: ['ADMIN', 'CASHIER'] },
-  { href: '/drivers', label: 'Repartidores', roles: ['ADMIN', 'CASHIER'] },
+  { href: '/drivers', label: 'Repartidores', roles: ['ADMIN', 'CASHIER', 'DISPATCHER'] },
   { href: '/cash-control', label: 'Control de Caja', roles: ['ADMIN'] },
   { href: '/users', label: 'Usuarios', roles: ['ADMIN'] },
 ]
@@ -31,6 +31,7 @@ const roleLabels: Record<string, string> = {
   ADMIN: 'Administrador',
   CASHIER: 'Cajero',
   DELIVERY_MANAGER: 'Gestor Domicilios',
+  DISPATCHER: 'Despachador de Domicilios',
   WAITER: 'Mesero',
   KITCHEN: 'Cocinero',
   ACCOUNTANT: 'Contador',
