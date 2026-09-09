@@ -831,9 +831,15 @@ export class WhatsappService implements OnModuleInit {
     restaurantHours?: string;
   }) {
     const updates: { key: string; value: string }[] = [];
-    if (data.phoneId !== undefined) updates.push({ key: 'whatsapp_phone_id', value: data.phoneId });
-    if (data.token && !data.token.includes('••')) updates.push({ key: 'whatsapp_token', value: data.token });
-    if (data.verifyToken !== undefined) updates.push({ key: 'whatsapp_verify_token', value: data.verifyToken });
+    if (data.phoneId !== undefined) updates.push({ key: 'whatsapp_phone_id', value: data.phoneId.trim() });
+    if (data.token && !data.token.includes('••')) {
+      const cleanToken = data.token.trim().replace(/^["']|["']$/g, '').split(/\s+/)[0];
+      updates.push({ key: 'whatsapp_token', value: cleanToken });
+    }
+    if (data.verifyToken !== undefined && !data.verifyToken.includes('••')) {
+      const cleanVerify = data.verifyToken.trim().replace(/^["']|["']$/g, '').split(/\s+/)[0];
+      updates.push({ key: 'whatsapp_verify_token', value: cleanVerify });
+    }
     if (data.businessPhone !== undefined) updates.push({ key: 'whatsapp_business_phone', value: data.businessPhone });
     if (data.chatbotEnabled !== undefined) updates.push({ key: 'chatbot_enabled', value: String(data.chatbotEnabled) });
     if (data.orderReaderEnabled !== undefined) updates.push({ key: 'order_reader_enabled', value: String(data.orderReaderEnabled) });
