@@ -45,6 +45,17 @@ type Session = {
   messages: Message[]
 }
 
+type ChatFilter = 'TODAY' | 'ALL' | 'UNREAD' | 'WAITING' | 'MINE' | 'UNASSIGNED'
+
+const orderSessionsForFilter = (items: Session[], filter: ChatFilter) => {
+  if (filter !== 'UNREAD') return items
+  return [...items].sort((a, b) => {
+    const aTime = new Date(a.lastMessageAt || 0).getTime() || 0
+    const bTime = new Date(b.lastMessageAt || 0).getTime() || 0
+    return aTime - bTime
+  })
+}
+
 type SearchMatch = {
   id: string
   content: string
@@ -866,7 +877,7 @@ function ChatPage() {
   
   const [chatSearch, setChatSearch] = useState('')
   const [searchFocused, setSearchFocused] = useState(false)
-  const [chatFilter, setChatFilter] = useState<'TODAY' | 'ALL' | 'UNREAD' | 'WAITING' | 'MINE' | 'UNASSIGNED'>('TODAY')
+  const [chatFilter, setChatFilter] = useState<ChatFilter>('TODAY')
   const [displayLimit, setDisplayLimit] = useState(100)
   const [isMutedWa, setIsMutedWa] = useState(() => localStorage.getItem('niche_mute_wa_toasts') === 'true')
   const [realtimeStatus, setRealtimeStatus] = useState<'connecting' | 'connected' | 'disconnected'>('connecting')
@@ -1033,7 +1044,7 @@ function ChatPage() {
         todayStart.setHours(0, 0, 0, 0)
         baseList = baseList.filter(s => new Date(s.lastMessageAt).getTime() >= todayStart.getTime())
       }
-      return baseList
+      return orderSessionsForFilter(baseList, chatFilter)
     }
 
     // 2. Si HAY búsqueda activa en la lupa, la búsqueda es GLOBAL (sobre todos los resultados encontrados)
@@ -1043,7 +1054,7 @@ function ChatPage() {
     // IMPORTANTE: Al buscar texto o números, NO restringir por la pestaña (TODAY/MINE) para mostrar coincidencias globales
     const searchBase = dedupedList
 
-    return searchBase.filter(s => {
+    return orderSessionsForFilter(searchBase.filter(s => {
       // Cuando la API encontró la coincidencia en un mensaje antiguo, la
       // sesión solo trae el último mensaje como resumen. No la descartes al
       // volver a filtrar en el cliente: hacerlo ocultaba chats históricos.
@@ -1096,7 +1107,7 @@ function ChatPage() {
       if (latestMsg && latestMsg.includes(rawQ)) return true
 
       return false
-    })
+    }), chatFilter)
   }, [sessions, chatSearch, chatFilter, user, activeSession, messages])
 
   const searchSuggestions = useMemo(() => {
@@ -2716,8 +2727,8 @@ function ChatPage() {
           {([
             ['TODAY', 'Hoy', tabCounts.countToday],
             ['ALL', 'Todos', tabCounts.countAll],
-            ['UNASSIGNED', 'Sin asignar', tabCounts.countUnassigned],
             ['UNREAD', 'No leídos', tabCounts.countUnread],
+            ['UNASSIGNED', 'Sin asignar', tabCounts.countUnassigned],
             ['WAITING', 'En espera', tabCounts.countWaiting],
             ['MINE', 'Míos', tabCounts.countMine],
           ] as const).map(([filter, label, count]) => (
