@@ -122,6 +122,8 @@ const releaseLock = () => {
 process.on('exit', releaseLock);
 process.on('SIGINT', () => process.exit(0));
 process.on('SIGTERM', () => process.exit(0));
+process.on('uncaughtException', (err) => { console.error('Error imprevisto:', err?.stack || err?.message || err); });
+process.on('unhandledRejection', (reason) => { console.error('Rechazo no capturado:', reason?.stack || reason?.message || reason); });
 
 let config = {
   backendUrl: DEFAULT_BACKEND_URL,
@@ -445,7 +447,7 @@ Write-Host "RESULT:\$result"
       const res = resultLine ? resultLine[1].trim() : '';
 
       if (res === 'OK') {
-        log(`[USB] Impreso correctamente en impresora Windows "${matched}" (solicitada: "${cleanTarget}")`);
+        console.log(`[USB] Impreso correctamente en impresora Windows "${matched}" (solicitada: "${cleanTarget}")`);
         resolve();
       } else {
         // Fallback secundario a SMB copy si el spooler reporta fallo
@@ -455,7 +457,7 @@ Write-Host "RESULT:\$result"
           if (smbErr) {
             reject(new Error(`No se pudo imprimir en USB "${cleanTarget}". Verifica que la impresora esté encendida, conectada y visible en Dispositivos e impresoras de Windows (Detalle: ${res || error?.message || smbErr.message})`));
           } else {
-            log(`[USB] Impreso por recurso SMB local "${cleanTarget}"`);
+            console.log(`[USB] Impreso por recurso SMB local "${cleanTarget}"`);
             resolve();
           }
         });
