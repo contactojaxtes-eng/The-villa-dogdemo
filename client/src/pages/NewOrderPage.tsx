@@ -2481,6 +2481,9 @@ export default function NewOrderPage({
     orderType === 'delivery' && !exactAddress.trim() && 'dirección exacta',
     orderType === 'delivery' && (!zoneRateEdit || !Number.isFinite(parseFloat(zoneRateEdit)) || parseFloat(zoneRateEdit) <= 0) && 'tarifa confirmada',
   ].filter(Boolean) as string[]
+  const itemCount = cart.reduce((sum, item) => sum + item.quantity, 0)
+  const isCashBlocked = !canCreate?.allowed && !editOrderId
+  const isOrderReadyToConfirm = !parsingChatOrder && !isCashBlocked && missingFields.length === 0
 
   const selectZone = (zone: Zone) => {
     setZoneId(zone.id)
@@ -3206,6 +3209,8 @@ export default function NewOrderPage({
 }
 
 const renderDeliveryCard = () => {
+  const deliveryFieldsMissing = missingFields.filter(field => field !== 'productos')
+
   return (
       <Card className={cn("flex flex-col border border-[var(--border-subtle)] bg-[var(--bg-panel)] rounded-2xl h-auto", embedded ? "p-3.5 shadow-sm" : "p-5 shadow-xl")}>
         <Button
@@ -3239,24 +3244,46 @@ const renderDeliveryCard = () => {
 
           <div className={cn(
             "flex items-start gap-2 rounded-xl border px-3 py-2.5 text-[11px]",
-            parsingChatOrder
+            isCashBlocked
+              ? "border-[var(--destructive)]/30 bg-[var(--destructive)]/5 text-[var(--destructive)]"
+              : parsingChatOrder
               ? "border-blue-500/25 bg-blue-500/5 text-blue-600"
-              : missingFields.length === 0
+              : isOrderReadyToConfirm
                 ? "border-emerald-500/25 bg-emerald-500/5 text-emerald-600"
                 : "border-amber-500/25 bg-amber-500/5 text-amber-700"
           )}>
-            {parsingChatOrder
+            {isCashBlocked
+              ? <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+              : parsingChatOrder
               ? <Loader2 className="mt-0.5 h-4 w-4 shrink-0 animate-spin" />
-              : missingFields.length === 0
+              : isOrderReadyToConfirm
                 ? <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
                 : <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />}
             <div className="min-w-0">
               <p className="font-black">
-                {parsingChatOrder ? 'Completando datos desde el chat…' : missingFields.length === 0 ? 'Pedido listo para confirmar' : 'Completa los datos pendientes'}
+                {isCashBlocked
+                  ? 'Caja Domicilios pendiente de apertura'
+                  : parsingChatOrder
+                    ? 'Completando datos desde el chat…'
+                    : isOrderReadyToConfirm
+                      ? 'Pedido listo para confirmar'
+                      : 'Completa los datos pendientes'}
               </p>
-              {!parsingChatOrder && missingFields.length > 0 && <p className="mt-0.5 leading-4">Falta: {missingFields.join(', ')}.</p>}
-              {!parsingChatOrder && missingFields.length === 0 && <p className="mt-0.5 leading-4">Productos, entrega y cobro están completos.</p>}
-              {!parsingChatOrder && orderReaderModel && <p className="mt-1 truncate font-mono text-[9px] opacity-80">IA usada: {orderReaderModel}</p>}
+              {isCashBlocked ? (
+                <p className="mt-0.5 leading-4">
+                  {canCreate?.reason || 'Ábrela antes de confirmar pedidos de domicilio.'}{' '}
+                  <Link to="/payments" className="font-bold underline hover:opacity-80">Abrir Caja Domicilios</Link>
+                </p>
+              ) : !parsingChatOrder && missingFields.length > 0 ? (
+                <p className="mt-0.5 leading-4">
+                  {missingFields.includes('productos') && deliveryFieldsMissing.length === 0
+                    ? 'Vuelve a Productos para agregar al menos un plato.'
+                    : `Falta: ${missingFields.join(', ')}.`}
+                </p>
+              ) : !parsingChatOrder ? (
+                <p className="mt-0.5 leading-4">Productos, entrega y cobro están completos.</p>
+              ) : null}
+              {!parsingChatOrder && !isCashBlocked && orderReaderModel && <p className="mt-1 truncate text-[9px] opacity-80">Datos leídos con {orderReaderModel}</p>}
             </div>
           </div>
 
@@ -3586,7 +3613,7 @@ const renderDeliveryCard = () => {
     )
   }
 
-  const renderCartCard = (showSubmitButtonDirectly = false) => {
+  const renderCartCard = (showSubmitButtonDirectly = false, hideSubmitButton = false) => {
     return (
       <Card className={cn(
         "flex flex-col bg-gradient-to-b from-[var(--bg-panel)] to-[var(--bg-elevated)] rounded-2xl relative overflow-visible h-auto",
@@ -3832,33 +3859,83 @@ const renderDeliveryCard = () => {
               <Separator className="bg-[var(--border-subtle)] my-1" />
               <div className="flex justify-between text-sm font-bold text-[var(--text-primary)]"><span>TOTAL</span><span className="text-[var(--accent)] font-extrabold text-base">{formatCurrency(total)}</span></div>
             </div>
-            {error && <p className="rounded-xl border border-[var(--destructive)]/20 bg-[var(--destructive)]/5 p-2 text-xs text-[var(--destructive)] leading-relaxed">{error}</p>}
-            
-            {(step === 'menu' && !showSubmitButtonDirectly) ? (
-              <Button 
-                className="w-full bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-fg)] font-bold h-10 rounded-xl shadow-lg shadow-[var(--accent)]/15 transition-all text-xs uppercase tracking-wider cursor-pointer" 
-                onClick={() => setStep('delivery')}
-              >
-                Continuar a Datos de Entrega
-              </Button>
-            ) : (
-              <Button 
-                className="w-full bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-fg)] font-bold h-10 rounded-xl shadow-lg shadow-[var(--accent)]/15 transition-all text-xs uppercase tracking-wider cursor-pointer" 
-                onClick={handleSubmit} 
-                disabled={loading || (!canCreate?.allowed && !editOrderId)}
-              >
-                {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-                {loading ? 'Guardando Pedido...' : editOrderId ? 'GUARDAR CAMBIOS' : 'CONFIRMAR Y CREAR PEDIDO'}
-              </Button>
+            {!hideSubmitButton && (
+              <>
+                {error && <p className="rounded-xl border border-[var(--destructive)]/20 bg-[var(--destructive)]/5 p-2 text-xs text-[var(--destructive)] leading-relaxed">{error}</p>}
+
+                {(step === 'menu' && !showSubmitButtonDirectly) ? (
+                  <Button
+                    className="w-full bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-fg)] font-bold h-10 rounded-xl shadow-lg shadow-[var(--accent)]/15 transition-all text-xs uppercase tracking-wider cursor-pointer"
+                    onClick={() => setStep('delivery')}
+                  >
+                    Continuar a Datos de Entrega
+                  </Button>
+                ) : (
+                  <Button
+                    className="w-full bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-fg)] font-bold h-10 rounded-xl shadow-lg shadow-[var(--accent)]/15 transition-all text-xs uppercase tracking-wider cursor-pointer"
+                    onClick={handleSubmit}
+                    disabled={loading || isCashBlocked}
+                  >
+                    {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                    {loading ? 'Guardando Pedido...' : editOrderId ? 'GUARDAR CAMBIOS' : 'CONFIRMAR Y CREAR PEDIDO'}
+                  </Button>
+                )}
+
+                <p className="flex items-center justify-center gap-1 text-[9px] text-[var(--text-muted)]">
+                  <Save className="h-3 w-3" />
+                  {editOrderId ? 'Guardando modificaciones · Re-imprime Comanda' : 'Borrador guardado automáticamente · Imprime Comanda'}
+                </p>
+              </>
             )}
-            
-            <p className="flex items-center justify-center gap-1 text-[9px] text-[var(--text-muted)]">
-              <Save className="h-3 w-3" /> 
-              {editOrderId ? 'Guardando modificaciones · Re-imprime Comanda' : 'Borrador guardado automáticamente · Imprime Comanda'}
-            </p>
           </div>
         )}
       </Card>
+    )
+  }
+
+  const renderEmbeddedConfirmationBar = () => {
+    const isBlocked = loading || parsingChatOrder || isCashBlocked || missingFields.length > 0
+    const statusText = isCashBlocked
+      ? 'Caja Domicilios cerrada'
+      : parsingChatOrder
+        ? 'Leyendo el chat…'
+        : missingFields.length > 0
+          ? `Falta: ${missingFields.join(', ')}`
+          : 'Listo para enviar a cocina'
+
+    return (
+      <div className="shrink-0 rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-2.5 shadow-lg shadow-black/5">
+        {error && <p className="mb-2 rounded-xl border border-[var(--destructive)]/20 bg-[var(--destructive)]/5 px-2.5 py-2 text-[11px] leading-relaxed text-[var(--destructive)]">{error}</p>}
+        <div className="flex items-center justify-between gap-2">
+          <div className="min-w-0 pl-1">
+            <p className="text-[10px] font-bold uppercase tracking-wide text-[var(--text-secondary)]">
+              {itemCount} {itemCount === 1 ? 'producto' : 'productos'} · {orderType === 'delivery' ? 'Domicilio' : 'Recoger'}
+            </p>
+            <p className={cn(
+              "mt-0.5 truncate text-xs font-bold",
+              isOrderReadyToConfirm ? 'text-emerald-600' : isCashBlocked ? 'text-[var(--destructive)]' : 'text-[var(--text-secondary)]'
+            )}>
+              {statusText}
+            </p>
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            <span className="hidden text-sm font-black text-[var(--accent)] sm:inline">{formatCurrency(total)}</span>
+            <Button
+              type="button"
+              onClick={handleSubmit}
+              disabled={isBlocked}
+              title={isBlocked ? statusText : 'Confirmar el pedido y enviarlo a cocina'}
+              className="h-10 rounded-xl bg-[var(--accent)] px-3 text-xs font-black text-[var(--accent-fg)] shadow-md shadow-[var(--accent)]/15 hover:bg-[var(--accent-hover)]"
+            >
+              {loading ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="mr-1.5 h-3.5 w-3.5" />}
+              {loading ? 'Guardando…' : editOrderId ? 'Guardar' : 'Confirmar'}
+            </Button>
+          </div>
+        </div>
+        <p className="mt-1.5 px-1 text-[9px] text-[var(--text-muted)]">
+          {isCashBlocked ? 'El borrador queda guardado mientras abres la caja.' : 'El borrador se guarda automáticamente.'}
+        </p>
+      </div>
     )
   }
 
@@ -3899,7 +3976,7 @@ const renderDeliveryCard = () => {
                 <span className="truncate">
                   {parsingChatOrder
                     ? 'Leyendo productos y datos del chat…'
-                    : `${customerName || initialName ? `Para ${customerName || initialName} · ` : ''}${orderReaderModel ? `IA ${orderReaderModel}` : 'lectura rápida local'} · borrador guardado`}
+                    : `${customerName || initialName ? `Para ${customerName || initialName} · ` : ''}datos del chat listos · borrador guardado`}
                 </span>
               </div>
             )}
@@ -3943,12 +4020,13 @@ const renderDeliveryCard = () => {
         </div>
       </div>
  
-      {!canCreate?.allowed && !editOrderId && (
+      {isCashBlocked && step === 'menu' && (
         <div className="flex items-center gap-3 rounded-2xl border border-[var(--destructive)]/30 bg-[var(--destructive)]/5 px-4 py-3.5 text-sm text-[var(--destructive)] shrink-0">
           <AlertTriangle className="h-5 w-5 shrink-0" />
           <div className="flex-1">
-            <p className="font-bold">{canCreate?.reason || 'Caja cerrada'}</p>
-            <Link to="/payments" className="text-xs underline font-semibold hover:text-[var(--text-primary)] transition-all">Ir a la sección de Caja para habilitar operaciones →</Link>
+            <p className="font-bold">{canCreate?.reason || 'La Caja Domicilios está cerrada'}</p>
+            <p className="mt-0.5 text-xs">Puedes armar el pedido; solo falta abrir la caja para confirmarlo.</p>
+            <Link to="/payments" className="mt-1 inline-block text-xs underline font-semibold hover:text-[var(--text-primary)] transition-all">Abrir Caja Domicilios →</Link>
           </div>
         </div>
       )}
@@ -3965,7 +4043,7 @@ const renderDeliveryCard = () => {
         >
           <span className="inline-flex items-center justify-center gap-1.5">
             {cart.length > 0 && step !== 'menu' ? <CheckCircle2 className="h-3.5 w-3.5" /> : <ShoppingCart className="h-3.5 w-3.5" />}
-            Productos <span className="opacity-80">({cart.reduce((s, i) => s + i.quantity, 0)})</span>
+            <span>1. Productos</span> <span className="opacity-80">({itemCount})</span>
           </span>
         </button>
         <button
@@ -3982,8 +4060,8 @@ const renderDeliveryCard = () => {
           title={embedded && cart.length === 0 ? 'Agrega al menos un producto para continuar' : 'Completar datos y confirmar pedido'}
         >
           <span className="inline-flex items-center justify-center gap-1.5">
-            <MapPin className="h-3.5 w-3.5" />
-            Entrega y pago <span className="opacity-80">({cart.length > 0 ? formatCurrency(total) : '$0'})</span>
+            {isOrderReadyToConfirm ? <CheckCircle2 className="h-3.5 w-3.5" /> : <MapPin className="h-3.5 w-3.5" />}
+            <span>2. Entrega y pago</span> <span className="opacity-80">({cart.length > 0 ? formatCurrency(total) : '$0'})</span>
           </span>
         </button>
       </div>
@@ -3995,10 +4073,13 @@ const renderDeliveryCard = () => {
               {renderMenuCard()}
             </div>
           ) : (
-            <div className="flex-1 min-h-0 overflow-y-auto space-y-4 pr-1 pb-8 no-scrollbar">
-              {renderDeliveryCard()}
-              {renderCartCard(true)}
-            </div>
+            <>
+              <div className="flex-1 min-h-0 overflow-y-auto space-y-4 pr-1 pb-3 no-scrollbar">
+                {renderDeliveryCard()}
+                {renderCartCard(true, true)}
+              </div>
+              {renderEmbeddedConfirmationBar()}
+            </>
           )}
         </div>
       ) : (

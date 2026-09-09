@@ -16,7 +16,7 @@ import {
 import { BrandLogo } from '@/components/brand/BrandLogo'
 import { Button } from '@/components/ui/button'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
-import { Bell, BellOff, ChevronLeft, ChevronRight, Crown, GripVertical, LogOut, Moon, Sun, X } from 'lucide-react'
+import { Bell, BellOff, ChevronLeft, ChevronRight, Crown, GripVertical, LogOut, Moon, Search, Sun, X } from 'lucide-react'
 import { isNotificationsMuted, toggleNotificationsMuted } from '@/lib/notificationSettings'
 
 const roleLabels: Record<string, string> = {
@@ -87,12 +87,26 @@ export function Sidebar({ onClose, isCollapsed = false, onToggleCollapse }: Side
   const [isEditing, setIsEditing] = useState(false)
   const [draggedIdx, setDraggedIdx] = useState<number | null>(null)
   const [dragOverIdx, setDragOverIdx] = useState<number | null>(null)
+  const [navQuery, setNavQuery] = useState('')
 
   const displayItems = navOrder
     .map(href => allNavItems.find(i => i.href === href))
     .filter((item): item is NavItem => Boolean(item && hasItemAccess(item)))
   const missingItems = allNavItems.filter(i => !navOrder.includes(i.href) && hasItemAccess(i))
   const finalItems = [...displayItems, ...missingItems]
+  const normalizedNavQuery = navQuery.trim().toLocaleLowerCase('es-CO')
+  const visibleItems = isEditing || !normalizedNavQuery
+    ? finalItems
+    : finalItems.filter(item => `${item.label} ${item.section}`.toLocaleLowerCase('es-CO').includes(normalizedNavQuery))
+  const isItemActive = (item: NavItem) => location.pathname === item.href || (
+    item.href !== '/dashboard' &&
+    item.href !== '/orders/new' &&
+    item.href !== '/orders' &&
+    item.href !== '/superadmin' &&
+    location.pathname.startsWith(item.href + '/')
+  )
+  const activeItem = finalItems.find(isItemActive)
+  const compactActiveLabel = activeItem?.label.replace(/^WhatsApp\s+/i, '')?.split(' ')[0] || 'Menú'
 
   const moveItem = (index: number, direction: 'up' | 'down') => {
     if (direction === 'up' && index === 0) return
@@ -167,17 +181,35 @@ export function Sidebar({ onClose, isCollapsed = false, onToggleCollapse }: Side
       </div>
 
       <nav className={cn("flex-1 min-h-0 overflow-y-auto overflow-x-hidden", isCollapsed ? "px-2 py-2" : "px-3 py-2")}>
+        {!isCollapsed && (
+          <div className="relative mb-3 px-1">
+            <Search className="pointer-events-none absolute left-4 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--text-muted)]" />
+            <input
+              type="search"
+              value={navQuery}
+              onChange={event => setNavQuery(event.target.value)}
+              disabled={isEditing}
+              placeholder="Buscar módulo..."
+              aria-label="Buscar módulo en el menú"
+              className="h-9 w-full rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-base)] py-2 pl-9 pr-8 text-xs font-medium text-[var(--text-primary)] outline-none transition-colors placeholder:text-[var(--text-muted)] focus:border-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-60"
+            />
+            {navQuery && !isEditing && (
+              <button
+                type="button"
+                onClick={() => setNavQuery('')}
+                className="absolute right-2.5 top-1/2 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded-md text-[var(--text-muted)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]"
+                title="Limpiar búsqueda"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            )}
+          </div>
+        )}
         <ul className={cn("space-y-1", !isCollapsed && "mt-2")}>
-          {finalItems.map((item, index) => {
+          {visibleItems.map((item, index) => {
             const Icon = item.icon
-            const active = location.pathname === item.href || (
-              item.href !== '/dashboard' &&
-              item.href !== '/orders/new' &&
-              item.href !== '/orders' &&
-              item.href !== '/superadmin' &&
-              location.pathname.startsWith(item.href + '/')
-            )
-            const showHeader = index === 0 || item.section !== finalItems[index - 1].section
+            const active = isItemActive(item)
+            const showHeader = index === 0 || item.section !== visibleItems[index - 1].section
             return (
               <li
                 key={item.href}
@@ -219,9 +251,11 @@ export function Sidebar({ onClose, isCollapsed = false, onToggleCollapse }: Side
                             RESTABLECER
                           </button>
                         )}
-                        <button onClick={() => setIsEditing(!isEditing)} className={cn("text-[9px] font-bold px-2 py-0.5 rounded-md border cursor-pointer", isEditing ? "bg-[var(--accent)] text-white border-transparent" : "text-[var(--text-muted)] border-[var(--border-subtle)] hover:bg-[var(--bg-hover)]")}>
-                          {isEditing ? 'LISTO' : 'ORGANIZAR'}
-                        </button>
+                        {!navQuery && (
+                          <button onClick={() => setIsEditing(!isEditing)} className={cn("text-[9px] font-bold px-2 py-0.5 rounded-md border cursor-pointer", isEditing ? "bg-[var(--accent)] text-white border-transparent" : "text-[var(--text-muted)] border-[var(--border-subtle)] hover:bg-[var(--bg-hover)]")}>
+                            {isEditing ? 'LISTO' : 'ORGANIZAR'}
+                          </button>
+                        )}
                       </div>
                     )}
                   </div>
@@ -238,9 +272,10 @@ export function Sidebar({ onClose, isCollapsed = false, onToggleCollapse }: Side
                         to={item.href}
                         onClick={e => { if (isEditing) e.preventDefault() }}
                         aria-label={isCollapsed ? item.label : undefined}
+                        aria-current={active ? 'page' : undefined}
                         className={cn(
                           'relative flex items-center text-sm z-10 transition-all duration-200 flex-1 rounded-xl',
-                          isCollapsed ? 'h-10 justify-center px-0' : 'py-2.5 gap-3 px-3',
+                          isCollapsed ? (active ? 'min-h-12 flex-col justify-center gap-0.5 px-0 py-1' : 'h-10 justify-center px-0') : 'py-2.5 gap-3 px-3',
                           active && !isCollapsed && (item.section === 'SuperAdmin' ? 'font-semibold text-amber-500 pl-3' : 'font-semibold text-[var(--accent)] pl-3'),
                           active && isCollapsed && (item.section === 'SuperAdmin' ? 'text-amber-500' : 'text-[var(--accent)]'),
                           !active && 'text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)]'
@@ -255,6 +290,9 @@ export function Sidebar({ onClose, isCollapsed = false, onToggleCollapse }: Side
                         )}
                         <Icon className={cn("shrink-0", isCollapsed ? "h-[19px] w-[19px]" : "h-4 w-4")} />
                         {!isCollapsed && <span className="relative line-clamp-1">{item.label}</span>}
+                        {isCollapsed && active && (
+                          <span className="max-w-[58px] truncate text-[8px] font-black uppercase tracking-[0.08em]">{compactActiveLabel}</span>
+                        )}
                       </Link>
                     </TooltipPrimitive.Trigger>
                     {isCollapsed && (
@@ -285,6 +323,11 @@ export function Sidebar({ onClose, isCollapsed = false, onToggleCollapse }: Side
               </li>
             )
           })}
+          {!isCollapsed && visibleItems.length === 0 && (
+            <li className="rounded-xl border border-dashed border-[var(--border-subtle)] px-3 py-6 text-center text-xs text-[var(--text-secondary)]">
+              No hay módulos que coincidan con “{navQuery}”.
+            </li>
+          )}
         </ul>
       </nav>
 
