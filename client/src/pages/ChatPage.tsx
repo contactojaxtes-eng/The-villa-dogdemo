@@ -1424,7 +1424,11 @@ function ChatPage() {
                 JSON.stringify(updatedPrev.assignedTo) === JSON.stringify(prevActive.assignedTo)) {
               return prevActive
             }
-            return { ...prevActive, ...updatedPrev }
+            return {
+              ...prevActive,
+              ...updatedPrev,
+              messages: (prevActive.messages && prevActive.messages.length > 0) ? prevActive.messages : (updatedPrev.messages || []),
+            }
           }
           return prevActive
         }
@@ -2480,16 +2484,37 @@ function ChatPage() {
       const updated = await api.put<Session>(`/whatsapp/sessions/${targetSession.id}/assign`, {
         userId: user.id
       })
-      const assignedTo = updated.assignedTo || { id: user.id, name: user.name }
-      setActiveSession(prev => prev?.id === updated.id ? { ...prev, ...updated, assignedTo, assignedToId: user.id } : prev)
-      setSessions(prev => prev.map(s => s.id === updated.id ? { ...s, ...updated, assignedTo, assignedToId: user.id } : s))
+      const assignedTo = updated?.assignedTo || { id: user.id, name: user.name }
+      setActiveSession(prev => {
+        if (!prev || prev.id !== targetSession.id) return prev
+        return {
+          ...prev,
+          ...(updated || {}),
+          assignedTo,
+          assignedToId: user.id,
+          waitingForAdvisor: false,
+          messages: prev.messages || [],
+        }
+      })
+      setSessions(prev => (prev || []).map(s => {
+        if (s.id !== targetSession.id) return s
+        return {
+          ...s,
+          ...(updated || {}),
+          assignedTo,
+          assignedToId: user.id,
+          waitingForAdvisor: false,
+          messages: s.messages || [],
+        }
+      }))
       if (!silent) {
         alerts.success('Chat Reclamado', 'Ahora estás atendiendo este chat en tiempo real.')
       }
       return true
     } catch (err: any) {
+      console.error('Error al reclamar chat:', err)
       alerts.error('No se pudo tomar el chat', err?.message || 'Otra asesora tomó esta conversación primero.')
-      await loadSessions(undefined, chatSearch.trim(), false, chatFilter)
+      await loadSessions(targetSession.id, chatSearch.trim(), false, chatFilter).catch(() => {})
       return false
     }
   }
@@ -2513,12 +2538,31 @@ function ChatPage() {
       const updated = await api.put<Session>(`/whatsapp/sessions/${target.id}/assign`, {
         userId: null
       })
-      setActiveSession(prev => prev?.id === updated.id ? { ...prev, ...updated, assignedToId: null, assignedTo: null } : prev)
-      setSessions(prev => prev.map(s => s.id === updated.id ? { ...s, ...updated, assignedToId: null, assignedTo: null } : s))
+      setActiveSession(prev => {
+        if (!prev || prev.id !== target.id) return prev
+        return {
+          ...prev,
+          ...(updated || {}),
+          assignedToId: null,
+          assignedTo: null,
+          messages: prev.messages || [],
+        }
+      })
+      setSessions(prev => (prev || []).map(s => {
+        if (s.id !== target.id) return s
+        return {
+          ...s,
+          ...(updated || {}),
+          assignedToId: null,
+          assignedTo: null,
+          messages: s.messages || [],
+        }
+      }))
       alerts.success('Chat Liberado', 'La conversación volvió a estar disponible en la cola general.')
     } catch (err: any) {
+      console.error('Error al liberar chat:', err)
       alerts.error('No se pudo liberar el chat', err?.message || 'Actualiza la bandeja e inténtalo nuevamente.')
-      await loadSessions(undefined, chatSearch.trim(), false, chatFilter)
+      await loadSessions(target.id, chatSearch.trim(), false, chatFilter).catch(() => {})
     }
   }
 
@@ -3613,6 +3657,7 @@ function ChatPage() {
                     {(() => {
                       let prevDateStr: string | null = null
                       return messages.map((m, index) => {
+                        if (!m) return null
                         const isIncoming = m.direction === 'IN'
                         const mDate = m.createdAt ? new Date(m.createdAt) : new Date()
                         const currentDateStr = isNaN(mDate.getTime()) ? 'Hoy' : mDate.toDateString()
@@ -4356,7 +4401,7 @@ class ChatPageErrorBoundary extends React.Component<{ children: React.ReactNode 
           <Button
             onClick={() => {
               try { localStorage.removeItem('niche_last_active_whatsapp_session_id') } catch(e){}
-              window.location.reload()
+              window.location.href = '/chat'
             }}
             className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs px-4 py-2 rounded-xl cursor-pointer"
           >

@@ -162,6 +162,7 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
     'whatsapp.view',
     'whatsapp.reply',
     'whatsapp.media',
+    'whatsapp.assign',
     'whatsapp.order_create',
     'zones.view',
     'drivers.view',

@@ -247,7 +247,7 @@ export class WhatsappController {
 
   @Put('sessions/:id/assign')
   @UseGuards(JwtAuthGuard, PermissionsGuard)
-  @Permissions('whatsapp.assign')
+  @Permissions('whatsapp.view', 'whatsapp.reply', 'whatsapp.assign')
   assignSession(
     @Param('id') id: string,
     @Body('userId') userId: string | null,

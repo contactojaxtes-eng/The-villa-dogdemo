@@ -55,7 +55,7 @@ export class SocketGateway implements OnGatewayConnection, OnGatewayDisconnect, 
     client.join(`user:${user.id}`);
     if (['ADMIN', 'SUPERADMIN'].includes(user.role)) client.join('admins');
     if (user.role === 'CASHIER') client.join('cashiers');
-    if (this.hasPermission(user, 'whatsapp.view') || ['ADMIN', 'SUPERADMIN', 'WA_ADVISOR', 'CASHIER'].includes(user.role)) client.join('whatsapp');
+    if (user.role !== 'KITCHEN' && (this.hasPermission(user, 'whatsapp.view') || ['ADMIN', 'SUPERADMIN', 'WA_ADVISOR', 'DELIVERY_MANAGER', 'CASHIER'].includes(user.role))) client.join('whatsapp');
     client.data.expiryTimer = setTimeout(() => client.disconnect(true), Math.max(0, Math.min(client.data.expiresAt - Date.now(), 2_147_483_647)));
     if (sockets.size === 1) this.server.emit('userConnected', { userId: user.id, userName: user.name, connected: true });
   }
@@ -92,7 +92,7 @@ export class SocketGateway implements OnGatewayConnection, OnGatewayDisconnect, 
       room === `user:${user.id}` || 
       (room === 'admins' && ['ADMIN', 'SUPERADMIN'].includes(user.role)) || 
       (room === 'cashiers' && user.role === 'CASHIER') ||
-      (room === 'whatsapp' && (this.hasPermission(user, 'whatsapp.view') || ['ADMIN', 'SUPERADMIN', 'WA_ADVISOR', 'CASHIER'].includes(user.role)))
+      (room === 'whatsapp' && user.role !== 'KITCHEN' && (this.hasPermission(user, 'whatsapp.view') || ['ADMIN', 'SUPERADMIN', 'WA_ADVISOR', 'DELIVERY_MANAGER', 'CASHIER'].includes(user.role)))
     ) {
       client.join(room);
     }

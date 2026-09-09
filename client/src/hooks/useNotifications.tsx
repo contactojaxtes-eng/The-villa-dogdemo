@@ -260,6 +260,8 @@ export function useNotifications() {
 
     socket.on('orderStatusChanged', (data: { orderId: string; status: string; order?: any }) => {
       if (isMuted()) return
+      // Cocineros NO deben recibir alertas de cambio de estado de pedidos ni domicilios
+      if (user.role === 'KITCHEN') return
       const labels: Record<string, string> = {
         READY: 'Listo para despacho',
         IN_ROUTE: 'En ruta',
@@ -346,6 +348,7 @@ export function useNotifications() {
 
     socket.on('paymentRejected', (payload: any) => {
       if (isMuted()) return
+      if (!['ADMIN', 'SUPERADMIN', 'CASHIER'].includes(user.role || '')) return
       toast.error('Pago rechazado', {
         description: payload?.reason || payload?.table?.label || 'Revisar mesa',
         icon: <XCircle className="h-4 w-4 text-[#EF4444]" />,
@@ -467,6 +470,9 @@ export function useNotifications() {
       assignedToId?: string | null
       assignedTo?: { id: string; name: string } | null
     }) => {
+      // Cocineros NO atienden WhatsApp ni deben recibir alertas sonoras ni emergentes de chat
+      if (user.role === 'KITCHEN') return
+
       // Mantiene la bandeja y los mensajes calientes incluso mientras el usuario
       // trabaja en otra pantalla. Al volver a WhatsApp aparecen de inmediato.
       cacheWhatsappMessage(payload)
@@ -506,6 +512,9 @@ export function useNotifications() {
       customerName: string
       sessionId: string
     }) => {
+      // Cocineros NO gestionan asesores de WhatsApp ni deben recibir alertas
+      if (user.role === 'KITCHEN') return
+
       toast.warning('🙋 Cliente solicita asesor', {
         description: `${data.customerName} (${data.phone}) necesita hablar con un asesor. ¡Reclama el chat!`,
         icon: <UserPlus className="h-4 w-4 text-[#F59E0B]" />,
