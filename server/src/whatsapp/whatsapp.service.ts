@@ -2370,9 +2370,23 @@ export class WhatsappService implements OnModuleInit {
     return updated;
   }
 
-  async markSessionMessagesAsRead(sessionId: string) {
+  async markSessionMessagesAsRead(sessionId: string, force = false) {
     const session = await this.prisma.whatsAppSession.findUnique({ where: { id: sessionId } });
     if (!session) return;
+
+    // REGLA SOLICITADA POR EL USUARIO:
+    // Un chat no se puede marcar como leído hasta que la última respuesta sea de un asesor o administrador.
+    // Si el último mensaje fue enviado por el cliente ('IN'), debe continuar apareciendo como NO LEÍDO
+    // aunque un asesor abra el chat para leerlo, evitando que se olvide responderlo.
+    if (!force) {
+      const lastMessage = await this.prisma.whatsAppMessage.findFirst({
+        where: { sessionId },
+        orderBy: { createdAt: 'desc' },
+      });
+      if (!lastMessage || lastMessage.direction === 'IN') {
+        return;
+      }
+    }
 
     // Capturar únicamente los mensajes que realmente están pendientes antes de
     // actualizar la BD. Así no reenviamos a Meta todo el historial cada vez que
@@ -2779,6 +2793,7 @@ export class WhatsappService implements OnModuleInit {
           createdAt: newMsg.createdAt,
         });
 
+        await this.markSessionMessagesAsRead(session.id, true);
         return { sent: true, messageId: newMsg.id };
       }
       return { sent: false, error: data?.error };
@@ -2891,6 +2906,7 @@ export class WhatsappService implements OnModuleInit {
           replyToDirection: replyToDirection || null,
         };
         this.socketGateway.emitWhatsApp('whatsappMessage', persistedMessage);
+        await this.markSessionMessagesAsRead(session.id, true);
       }
 
       return { sent: ok, data, message: persistedMessage };
@@ -2971,6 +2987,7 @@ export class WhatsappService implements OnModuleInit {
           assignedTo: session.assignedToId,
           createdAt: newMsg.createdAt,
         });
+        await this.markSessionMessagesAsRead(session.id, true);
       }
 
       return { sent: ok, data };
@@ -3129,6 +3146,7 @@ The Villa Dog • Montería`;
           lastMessageAt: session.lastMessageAt,
           lastMessageText: templateSummary,
         });
+        await this.markSessionMessagesAsRead(session.id, true);
       }
 
       return { sent: ok, data };
@@ -3254,6 +3272,7 @@ The Villa Dog • Montería`;
           createdAt: newMsg.createdAt,
         };
         this.socketGateway.emitWhatsApp('whatsappMessage', persistedMessage);
+        await this.markSessionMessagesAsRead(session.id, true);
       }
 
       return { sent: sendOk, data: sendData, message: persistedMessage };
@@ -4629,6 +4648,13 @@ Restaurante (Tú):
         })
       ]);
 
+      // Identificar adiciones a partir del catálogo
+      const dbAdditions = dbItems.filter(i => {
+        const cat = (i.category?.name || '').toLowerCase();
+        const name = i.name.toLowerCase();
+        return cat.includes('adicion') || cat.includes('adicional') || cat.includes('borde') || name.startsWith('adición') || name.startsWith('adicion');
+      });
+
       // Deduplicar items (mismo nombre+categoría = mismo plato, usar primer ID)
       const uniqueMap = new Map<string, typeof dbItems[0]>();
       for (const item of dbItems) {
@@ -4637,7 +4663,7 @@ Restaurante (Tú):
       }
       const uniqueItems = Array.from(uniqueMap.values());
 
-      // Agrupar por categoría para formato compacto
+      // Agrupar por categoría para formato compacto y claro
       const byCategory = new Map<string, typeof uniqueItems>();
       for (const item of uniqueItems) {
         const cat = item.category?.name || 'General';
@@ -4649,32 +4675,62 @@ Restaurante (Tú):
       for (const [cat, items] of byCategory) {
         menuSummary += `\n## ${cat}\n`;
         for (const i of items) {
-          menuSummary += `${i.id} | ${i.name} | $${i.price}\n`;
+          const desc = i.description ? ` (${i.description})` : '';
+          menuSummary += `${i.id} | ${i.name}${desc} | $${i.price}\n`;
         }
       }
 
+      const additionSummary = dbAdditions.length > 0
+        ? dbAdditions.map(a => `${a.id} | ${a.name} | $${a.price}`).join('\n')
+        : 'No hay adiciones registradas.';
+
       const zoneSummary = dbZones.map(z => `${z.id} | ${z.name} | $${z.rate}`).join('\n');
 
-      const prompt = `Eres un extractor de pedidos de WhatsApp para Villa Dog.
-Lee la conversación completa y devuelve únicamente el estado FINAL que el cliente confirmó. No converses, no calcules precios y no inventes datos.
+      const prompt = `Eres el asistente inteligente oficial de The Villa Dog especializado en extraer pedidos de clientes con máxima precisión.
+Lee la conversación y devuelve únicamente el pedido FINAL que el cliente solicitó o confirmó. No inventes platos ni datos.
 
-CATÁLOGO VIGENTE (ID | producto | precio):
+CATÁLOGO VIGENTE DE PRODUCTOS (ID | Nombre del producto | Precio):
 ${menuSummary}
 
-ZONAS VIGENTES (ID | barrio | tarifa):
+ADICIONES VIGENTES (ID | Nombre de adición | Precio):
+${additionSummary}
+
+ZONAS DE DOMICILIO VIGENTES (ID | Barrio | Tarifa):
 ${zoneSummary || 'No hay zonas configuradas.'}
 
-Reglas obligatorias:
-- Extrae productos y cantidades solo de mensajes marcados como "Cliente:". Los mensajes del asistente sirven únicamente como contexto de lo que el cliente confirmó.
-- Corrige faltas ortográficas y abreviaturas únicamente cuando permitan identificar sin duda un producto del catálogo. Usa siempre su ID exacto. Si hay ambigüedad, omite ese producto.
-- Consolida cambios y correcciones posteriores: devuelve el pedido final, sin duplicar versiones anteriores.
-- quantity debe ser un entero entre 1 y 99.
-- preference y notes contienen solo instrucciones explícitas del cliente para ese producto. additions contiene únicamente IDs exactos de adiciones vigentes.
-- detectedOrderType es "delivery" si pidió domicilio y "pickup" si pasa a recoger. Si no está confirmado, usa null.
-- paymentMethod es "CASH" para efectivo y "TRANSFER" para Nequi, Daviplata, Bancolombia o transferencia. Si no está confirmado, usa null.
-- Extrae barrio, dirección y referencia solo si el cliente los escribió.
-- zoneId solo puede ser el ID de una zona vigente cuando el barrio coincide claramente, ignorando mayúsculas y tildes. Si no coincide, déjalo en null. Nunca inventes una tarifa, zona, total ni tiempo.
-- Los datos faltantes deben ser null para detectedOrderType y paymentMethod, cadena vacía para los demás textos y arreglo vacío para las listas.
+REGLAS DE RECONOCIMIENTO Y RELACIÓN DE PRODUCTOS (THE VILLA DOG):
+- PERROS CALIENTES:
+  * "un perro", "un perro sencillo", "perro" -> "Perro Sencillo"
+  * "un perro especial" -> "Perro Especial The Villa Dog"
+  * "perro super", "super villa dog" -> "Perro Super The Villa Dog"
+  * "perro suizo" -> "Perro Suizo" (¡IMPORTANTE! Si dice "perro suizo" es un perro caliente, no el plato suizo).
+  * "perro americano", "perro ranchero", "perro con pollo", "perro con tocineta", "chori perro", "perro gemelo", "perro escocés", "perro italo suizo", "perro italo ranchero", "perro suizito", "perro combo" -> Asigna exactamente su ID.
+- HAMBURGUESAS:
+  * "una hamburguesa", "una burger", "hamburguesa sencilla" -> "Hamburguesa Sencilla"
+  * "hamburguesa especial" -> "Hamburguesa Especial The Villa Dog"
+  * "hamburguesa super", "hamburguesa super especial" -> "Hamburguesa Super Especial The Villa Dog"
+  * "hamburguesa mixta", "hamburguesa doble carne", "hamburguesa con pollo", "hamburguesa ranchera especial", "hamburguesa combo" -> Asigna exactamente su ID.
+- SALVAJADAS:
+  * Platos para compartir: "Salvajada Chica", "Salvajada Matrimonio", "Salvajada Trío", "Salvajada Super", "Salvajada The Villa Dog", "Salvajada Extralargue", "Salvajada Salvajadita". Si pide "salvajada chica" o "salvajada pequeña", asigna "Salvajada Chica". Asigna la variante sencilla o gratinada según lo que pida.
+- PATACONES RELLENOS:
+  * "patacon mixto", "patacon con todo", "patacon trifasico", "señor patacon", etc.
+- SUIZOS Y PLATOS:
+  * Si el cliente dice "un suizo", "suizo al plato", "suizo con papas", "suizo gratinado", "mini suizo", asigna al plato correspondiente de la categoría Suizos (con papas a la francesa por defecto salvo que diga al vapor).
+- BEBIDAS:
+  * "coca cola", "postobon manzana", "kola roman", "quatro", "jugo hit", "agua", "hatsu", "bretaña".
+  * Si no menciona tamaño familiar (1.5L o 3L), asume la presentación personal PET 400ml / 500ml.
+- ADICIONES:
+  * Si el cliente pide queso extra, tocineta extra, salchicha extra, piña extra, etc., busca y asigna el ID exacto en "additions".
+- INSTRUCCIONES DE PREPARACIÓN:
+  * Si el cliente escribe "sin cebolla", "sin salsas", "con tártara aparte", "sin ripio", "bien cocido", etc., colócalo en "preference" o "notes" del producto correspondiente.
+- CANTIDADES:
+  * Detecta cantidades explícitas al inicio o al final (ej: "2 perros sencillos", "perro sencillo x2", "tres hamburguesas"). quantity debe ser entero entre 1 y 99.
+- TIPO DE ENTREGA Y PAGO:
+  * detectedOrderType: "delivery" si es a domicilio; "pickup" si pasa a recoger o come en mesa; null si no lo especifica.
+  * paymentMethod: "CASH" para efectivo; "TRANSFER" para Nequi, Daviplata, Bancolombia; null si no se confirma.
+- DATOS DEL CLIENTE:
+  * Extrae nombre, teléfono, dirección, barrio y referencia si el cliente los escribió.
+  * zoneId: solo el ID de una zona vigente si coincide claramente con el barrio escrito; de lo contrario null.
 
 Devuelve exactamente este JSON:
 {
@@ -4807,7 +4863,18 @@ Responde solo con JSON válido.`;
             this.logger.log(`[parseOrder] Encontrado por nombre: ${nameMatch.name} (id=${nameMatch.id})`);
             menuItem = nameMatch;
           } else {
-            continue;
+            const fuzzyMatch = normalizedRawId
+              ? dbItems.find(i => {
+                  const normItem = this.normalizeSpanishLookup(i.name);
+                  return normItem.includes(normalizedRawId) || normalizedRawId.includes(normItem);
+                })
+              : undefined;
+            if (fuzzyMatch) {
+              this.logger.log(`[parseOrder] Encontrado por coincidencia aproximada: ${fuzzyMatch.name} (id=${fuzzyMatch.id})`);
+              menuItem = fuzzyMatch;
+            } else {
+              continue;
+            }
           }
         }
         // CORRECCIÓN DETERMINÍSTICA DE TAMAÑO DE PIZZAS:
@@ -4909,7 +4976,12 @@ Responde solo con JSON válido.`;
           if (cleanAddId.startsWith('[ID:')) {
             cleanAddId = cleanAddId.replace('[ID:', '').replace(']', '').trim();
           }
-          const add = dbItems.find(i => i.id === cleanAddId);
+          let add = dbItems.find(i => i.id === cleanAddId);
+          if (!add && cleanAddId) {
+            const normAdd = this.normalizeSpanishLookup(cleanAddId);
+            add = dbItems.find(i => this.normalizeSpanishLookup(i.name) === normAdd)
+              || dbItems.find(i => this.normalizeSpanishLookup(i.name).includes(normAdd) || normAdd.includes(this.normalizeSpanishLookup(i.name)));
+          }
           if (add) additions.push(add);
         }
 

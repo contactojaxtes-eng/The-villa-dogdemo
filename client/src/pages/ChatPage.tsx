@@ -1312,6 +1312,8 @@ function ChatPage() {
       formData.append('type', 'audio')
 
       await api.post('/whatsapp/send-media', formData)
+      setActiveSession(prev => prev && prev.id === activeSession!.id ? { ...prev, unreadCount: 0 } : prev)
+      setSessions(prev => prev.map(s => s.id === activeSession!.id ? { ...s, unreadCount: 0 } : s))
       loadSessions(activeSession!.id)
     } catch (err: any) {
       console.error('Error enviando nota de voz:', err)
@@ -1835,9 +1837,9 @@ function ChatPage() {
             ...target,
             customerName: payload.customerName || target.customerName,
             lastMessageAt: payload.createdAt || new Date().toISOString(),
-            // Si la conversación está abierta, el mensaje se marca como leído
-            // en el servidor y no debe volver a aparecer como pendiente en la lista.
-            unreadCount: isActiveIncoming ? 0 : (isIncoming ? currentUnread + 1 : currentUnread),
+            // REGLA OBLIGATORIA: Un chat no se marca como leído hasta que la última respuesta sea de un asesor/admin.
+            // Aunque el chat esté abierto en pantalla, los mensajes entrantes aumentan el contador de no leídos hasta responder.
+            unreadCount: isIncoming ? currentUnread + 1 : currentUnread,
             messages: updatedMsgs,
             ...(payloadAssignedId !== undefined ? { assignedToId: payloadAssignedId } : {}),
             ...(payloadAssignedObj !== null ? { assignedTo: payloadAssignedObj } : {})
@@ -1861,24 +1863,12 @@ function ChatPage() {
             lastMessageAt: payload.createdAt || new Date().toISOString(),
             assignedToId: payloadAssignedId,
             assignedTo: payloadAssignedObj,
-            unreadCount: isActiveIncoming ? 0 : (isIncoming ? 1 : 0),
+            unreadCount: isIncoming ? 1 : 0,
             messages: [updatedMsg]
           }
           return [newSession, ...filteredPrev]
         }
       })
-
-      // Agrupar los mensajes que llegan mientras la asesora está dentro del
-      // chat evita una petición por mensaje y mantiene el estado leído para
-      // todas las pestañas conectadas.
-      if (isActiveIncoming) {
-        const previousTimer = readSyncTimersRef.current[payload.sessionId]
-        if (previousTimer) clearTimeout(previousTimer)
-        readSyncTimersRef.current[payload.sessionId] = setTimeout(() => {
-          delete readSyncTimersRef.current[payload.sessionId]
-          api.post(`/whatsapp/sessions/${payload.sessionId}/read`).catch(() => {})
-        }, 180)
-      }
 
       // 2. If it's the active chat, update active session and append message
       setActiveSession(current => {
@@ -2185,7 +2175,8 @@ function ChatPage() {
 
     try {
       await api.post('/whatsapp/send-media', formData)
-      // NO loadSessions here – WebSocket already appends the message
+      setActiveSession(prev => prev && prev.id === activeSession.id ? { ...prev, unreadCount: 0 } : prev)
+      setSessions(prev => prev.map(s => s.id === activeSession.id ? { ...s, unreadCount: 0 } : s))
     } catch (err: any) {
       console.error('Error enviando archivo:', err)
       alert(err.message || 'Error al enviar el archivo de WhatsApp.')
@@ -2226,11 +2217,13 @@ function ChatPage() {
     setSessions(prev => {
       const updated = prev.map(s => s.id === activeSession.id ? {
         ...s,
+        unreadCount: 0,
         lastMessageAt: new Date().toISOString(),
         messages: [optimisticMsg, ...(s.messages?.filter(m => m.id !== optimisticMsg.id) || [])]
       } : s)
       return updated.sort((a, b) => (new Date(b.lastMessageAt || 0).getTime() || 0) - (new Date(a.lastMessageAt || 0).getTime() || 0))
     })
+    setActiveSession(prev => prev && prev.id === activeSession.id ? { ...prev, unreadCount: 0 } : prev)
 
     // 2. Enviar a la API en segundo plano
     try {
@@ -2299,7 +2292,8 @@ function ChatPage() {
     setSendingMenu(true)
     try {
       await api.post('/whatsapp/send-menu', { phone: activeSession.phone })
-      // NO loadSessions here – WebSocket already appends the message
+      setActiveSession(prev => prev && prev.id === activeSession.id ? { ...prev, unreadCount: 0 } : prev)
+      setSessions(prev => prev.map(s => s.id === activeSession.id ? { ...s, unreadCount: 0 } : s))
     } catch (err: any) {
       console.error('Error enviando carta:', err)
       alerts.error('Error al enviar carta', err.message || 'No se pudo entregar la carta.')
@@ -2321,7 +2315,8 @@ function ChatPage() {
     setSendingPaymentQr(true)
     try {
       await api.post('/whatsapp/send-payment-qr', { phone: activeSession.phone })
-      // NO loadSessions here – WebSocket already appends the message
+      setActiveSession(prev => prev && prev.id === activeSession.id ? { ...prev, unreadCount: 0 } : prev)
+      setSessions(prev => prev.map(s => s.id === activeSession.id ? { ...s, unreadCount: 0 } : s))
     } catch (err: any) {
       console.error('Error enviando QR de pago:', err)
       alerts.error('Error al enviar QR de pago', err.message || 'No se pudo entregar el QR de pago.')
@@ -2360,6 +2355,8 @@ function ChatPage() {
         name: 'The Villa Dog',
         address: 'Punto de Domicilios'
       })
+      setActiveSession(prev => prev && prev.id === activeSession.id ? { ...prev, unreadCount: 0 } : prev)
+      setSessions(prev => prev.map(s => s.id === activeSession.id ? { ...s, unreadCount: 0 } : s))
     } catch (err: any) {
       if (err?.code === 1) {
         alerts.error('Permiso Denegado', 'Debes permitir el acceso a la ubicación en tu navegador.')
@@ -2586,6 +2583,8 @@ function ChatPage() {
         params: ['Cliente']
       })
       alerts.success('Plantilla Enviada', 'La plantilla de WhatsApp se entregó con éxito.')
+      setActiveSession(prev => prev && prev.id === s.id ? { ...prev, unreadCount: 0 } : prev)
+      setSessions(prev => prev.map(item => item.id === s.id ? { ...item, unreadCount: 0 } : item))
     } catch (err: any) {
       alerts.error('Error al enviar plantilla', err.message || 'No se pudo entregar la plantilla.')
     }
@@ -2979,9 +2978,7 @@ function ChatPage() {
                       setReplyingTo(null)
                       setMessage('')
                       setActiveOrder(session.activeOrder || null)
-                      setActiveSession({ ...session, unreadCount: 0 })
-                      setSessions(prev => prev.map(item => item.id === session.id ? { ...item, unreadCount: 0 } : item))
-                      api.post(`/whatsapp/sessions/${session.id}/read`).catch(() => {})
+                      setActiveSession(session)
                     }}
                     className="flex w-full items-center gap-2.5 border-b border-[var(--border-subtle)]/60 px-3 py-2.5 text-left last:border-b-0 hover:bg-[var(--bg-hover)]"
                   >
@@ -3104,11 +3101,9 @@ function ChatPage() {
                           setActiveOrder(s.activeOrder)
                         }
                         
-                        // Abrir el chat para visualizarlo SIN reclamarlo automáticamente.
-                        // Se reclamará cuando la asesora responda o pulse explícitamente "Reclamar".
-                        setActiveSession({ ...s, unreadCount: 0 })
-                        setSessions(prev => prev.map(item => item.id === s.id ? { ...item, unreadCount: 0 } : item))
-                        api.post(`/whatsapp/sessions/${s.id}/read`).catch(() => {})
+                        // Abrir el chat para visualizarlo SIN reclamarlo ni marcarlo como leído automáticamente.
+                        // Solo se marcará como leído cuando un asesor/admin envíe una respuesta.
+                        setActiveSession(s)
                       }}
                       className={btnClass}
                     >
@@ -3635,13 +3630,13 @@ function ChatPage() {
                             )}
                             
                             <div className={`flex ${isIncoming ? 'justify-start' : 'justify-end'} group relative`}>
-                              <div className={`max-w-[85%] sm:max-w-[75%] rounded-2xl p-3 pr-7 shadow-md flex flex-col space-y-1 relative group/msg ${
+                              <div className={`max-w-[85%] sm:max-w-[75%] min-w-[110px] rounded-2xl p-3 pr-11 sm:pr-12 shadow-md flex flex-col space-y-1 relative group/msg ${
                                 isIncoming 
                                   ? 'bg-[var(--bg-elevated)] text-[var(--text-primary)] rounded-tl-none border border-[var(--border-subtle)]/50' 
                                   : 'bg-[var(--accent)] text-[var(--accent-fg)] rounded-tr-none'
                               }`}>
-                                {/* Botón Chevron & Menú de Opciones al estilo WhatsApp */}
-                                <div className="absolute top-1.5 right-1.5 z-20">
+                                {/* Botón Chevron & Menú de Opciones al estilo WhatsApp - Con margen y separación para no tapar nunca texto o números */}
+                                <div className="absolute top-2 right-2 z-20">
                                   <button
                                     type="button"
                                     onClick={(e) => {
@@ -3649,12 +3644,12 @@ function ChatPage() {
                                       setActiveMsgMenuId(activeMsgMenuId === m.id ? null : m.id)
                                     }}
                                     className={cn(
-                                      "p-1 rounded-full transition-all cursor-pointer",
+                                      "p-1 rounded-full transition-all cursor-pointer opacity-80 hover:opacity-100",
                                       isIncoming 
                                         ? "bg-[var(--bg-panel)]/90 hover:bg-[var(--bg-panel)] text-[var(--text-secondary)] shadow-sm border border-[var(--border-subtle)]" 
                                         : "bg-black/30 hover:bg-black/50 text-white shadow-sm"
                                     )}
-                                    title="Opciones del mensaje"
+                                    title="Opciones del mensaje (responder o reenviar)"
                                   >
                                     <ChevronDown className="h-3.5 w-3.5" />
                                   </button>
@@ -3831,7 +3826,7 @@ function ChatPage() {
                                   </div>
                                 ) : (
                                   <p className={cn(
-                                    "text-[12px] leading-relaxed whitespace-pre-wrap break-words font-medium",
+                                    "text-[12px] leading-relaxed whitespace-pre-wrap break-words font-medium pr-2",
                                     m.status === 'deleted' || m.content === '🚫 Este mensaje fue eliminado' ? "italic opacity-70 flex items-center gap-1 text-slate-400" : ""
                                   )}>
                                     {formatTemplateContent(m.content || '')}

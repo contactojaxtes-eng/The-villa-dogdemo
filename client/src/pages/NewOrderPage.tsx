@@ -1319,7 +1319,7 @@ export default function NewOrderPage({
             }
           }
 
-          // DISTINCIÓN ENTRE PERROS CALIENTES Y SUIZOS
+          // DISTINCIÓN ENTRE PERROS CALIENTES, HAMBURGUESAS, SUIZOS, SALVAJADAS Y BEBIDAS
           const isPerroItem = normalizedName.includes('perro')
           const isSuizoDishItem = !isPerroItem && normalizedName.includes('suizo')
           const clauseHasPerro = normalizedClause.includes('perro')
@@ -1327,16 +1327,54 @@ export default function NewOrderPage({
 
           if (clauseHasPerro && clauseHasSuizo) {
             // Cliente pide "perro suizo"
-            if (normalizedName === 'perro suizo') score += 120
+            if (normalizedName === 'perro suizo') score += 140
             else if (isSuizoDishItem) score -= 80
           } else if (clauseHasPerro && !clauseHasSuizo) {
             // Cliente pide otro perro
-            if (isPerroItem) score += 40
-            else if (isSuizoDishItem) score -= 80
+            if (isPerroItem) {
+              score += 50
+              if (normalizedClause.includes('sencillo') && normalizedName.includes('sencillo')) score += 80
+              if (normalizedClause.includes('especial') && normalizedName.includes('especial')) score += 80
+              if (normalizedClause.includes('super') && normalizedName.includes('super')) score += 80
+              if (normalizedClause.includes('combo') && normalizedName.includes('combo')) score += 80
+            } else if (isSuizoDishItem) {
+              score -= 80
+            }
           } else if (!clauseHasPerro && clauseHasSuizo) {
             // Cliente pide suizo al plato
-            if (isSuizoDishItem) score += 60
+            if (isSuizoDishItem) score += 70
             else if (isPerroItem) score -= 80
+          }
+
+          // HAMBURGUESAS
+          const isBurgerItem = normalizedName.includes('hamburguesa') || normalizedName.includes('burger')
+          const clauseHasBurger = normalizedClause.includes('hamburguesa') || normalizedClause.includes('burger')
+          if (clauseHasBurger) {
+            if (isBurgerItem) {
+              score += 60
+              if (normalizedClause.includes('sencilla') && normalizedName.includes('sencilla')) score += 80
+              if (normalizedClause.includes('especial') && normalizedName.includes('especial')) score += 80
+              if (normalizedClause.includes('super') && normalizedName.includes('super')) score += 80
+              if (normalizedClause.includes('mixta') && normalizedName.includes('mixta')) score += 80
+              if (normalizedClause.includes('combo') && normalizedName.includes('combo')) score += 80
+            } else {
+              score -= 60
+            }
+          }
+
+          // SALVAJADAS
+          const isSalvajadaItem = normalizedName.includes('salvajada')
+          const clauseHasSalvajada = normalizedClause.includes('salvajada')
+          if (clauseHasSalvajada) {
+            if (isSalvajadaItem) {
+              score += 70
+              if ((normalizedClause.includes('chica') || normalizedClause.includes('pequena')) && normalizedName.includes('chica')) score += 80
+              if (normalizedClause.includes('matrimonio') && normalizedName.includes('matrimonio')) score += 80
+              if (normalizedClause.includes('trio') && normalizedName.includes('trio')) score += 80
+              if (normalizedClause.includes('super') && normalizedName.includes('super')) score += 80
+            } else {
+              score -= 70
+            }
           }
 
           // Verificación de tamaño
