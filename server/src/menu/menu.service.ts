@@ -29,7 +29,9 @@ export class MenuService implements OnModuleInit {
     const key = `menu_categories_inactive_${includeInactive}`;
     return this.cache.getOrSet(key, async () => {
       const whereCategory = includeInactive ? {} : { active: true };
-      const whereItems = includeInactive ? {} : { active: true };
+      const whereItems = includeInactive 
+        ? { code: { not: null } } 
+        : { active: true, code: { not: null } };
       return this.prisma.menuCategory.findMany({
         where: whereCategory,
         include: {
@@ -57,7 +59,7 @@ export class MenuService implements OnModuleInit {
   async findAllItems(params: { categoryId?: string; active?: boolean }) {
     const key = `menu_items_${params.categoryId || 'all'}_${params.active ?? 'all'}`;
     return this.cache.getOrSet(key, async () => {
-      const where: any = {};
+      const where: any = { code: { not: null } };
       if (params.categoryId) where.categoryId = params.categoryId;
       if (params.active !== undefined) where.active = params.active;
       return this.prisma.menuItem.findMany({
@@ -72,11 +74,18 @@ export class MenuService implements OnModuleInit {
   }
 
   private async syncWhatsappMenuText() {
+    const customSetting = await this.prisma.appSetting.findUnique({
+      where: { key: 'chatbot_menu_text_custom' },
+    });
+    if (customSetting?.value === 'true') {
+      return;
+    }
+
     const categories = await this.prisma.menuCategory.findMany({
       where: { active: true },
       include: {
         items: {
-          where: { active: true },
+          where: { active: true, code: { not: null } },
           orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
           select: { name: true, price: true },
         },
@@ -132,29 +141,34 @@ export class MenuService implements OnModuleInit {
     });
     if (!cat) throw new NotFoundException('Categoría no encontrada');
 
-    // Obtener todos los productos pertenecientes a la categoría
     const items = await this.prisma.menuItem.findMany({
       where: { categoryId: id },
       include: { _count: { select: { orderItems: true } } },
     });
 
     for (const item of items) {
-      // 1. Eliminar recetas asociadas al producto
-      await this.prisma.recipe.deleteMany({ where: { menuItemId: item.id } });
-
-      // 2. Si el producto no tiene ventas registradas, eliminarlo físicamente
-      if (item._count.orderItems === 0) {
-        await this.prisma.menuItem.delete({ where: { id: item.id } });
-      } else {
-        // Si tiene ventas históricas, desactivarlo y liberar el código único
+      try {
+        await this.prisma.recipe.deleteMany({ where: { menuItemId: item.id } });
+        await this.prisma.kitchenTicketItem.deleteMany({ where: { menuItemId: item.id } });
+        if (force) {
+          await this.prisma.orderItem.deleteMany({ where: { menuItemId: item.id } });
+          await this.prisma.menuItem.delete({ where: { id: item.id } });
+        } else if (item._count.orderItems === 0) {
+          await this.prisma.menuItem.delete({ where: { id: item.id } });
+        } else {
+          await this.prisma.menuItem.update({
+            where: { id: item.id },
+            data: { active: false, code: null },
+          });
+        }
+      } catch (err) {
         await this.prisma.menuItem.update({
           where: { id: item.id },
           data: { active: false, code: null },
-        });
+        }).catch(() => {});
       }
     }
 
-    // Verificar si aún quedan productos asociados en DB
     const remainingItemsCount = await this.prisma.menuItem.count({ where: { categoryId: id } });
 
     let result;
@@ -224,24 +238,42 @@ export class MenuService implements OnModuleInit {
   async deleteItem(id: string, force = false) {
     const item = await this.prisma.menuItem.findUnique({
       where: { id },
-      include: { _count: { select: { orderItems: true } } },
+      include: { _count: { select: { orderItems: true, kitchenTicketItems: true } } },
     });
     if (!item) throw new NotFoundException('Producto no encontrado');
 
     let result;
-    if (force || item._count.orderItems === 0) {
+    try {
       // 1. Eliminar receta vinculada si existe
       await this.prisma.recipe.deleteMany({ where: { menuItemId: id } });
-      // 2. Eliminar producto físicamente
-      await this.prisma.menuItem.delete({ where: { id } });
-      result = { success: true, hardDeleted: true, message: 'Producto eliminado permanentemente de la base de datos.' };
-    } else {
+
+      // 2. Eliminar tickets de comanda vinculados
+      await this.prisma.kitchenTicketItem.deleteMany({ where: { menuItemId: id } });
+
+      // 3. Si force es true o no tiene órdenes históricas
+      if (force) {
+        await this.prisma.orderItem.deleteMany({ where: { menuItemId: id } });
+        await this.prisma.menuItem.delete({ where: { id } });
+        result = { success: true, hardDeleted: true, message: 'Producto eliminado permanentemente de la base de datos.' };
+      } else if (item._count.orderItems === 0) {
+        await this.prisma.menuItem.delete({ where: { id } });
+        result = { success: true, hardDeleted: true, message: 'Producto eliminado permanentemente de la base de datos.' };
+      } else {
+        await this.prisma.menuItem.update({
+          where: { id },
+          data: { active: false, code: null },
+        });
+        result = { success: true, hardDeleted: false, message: 'El producto fue retirado del menú (conservado en historial de ventas).' };
+      }
+    } catch (err: any) {
+      this.logger.warn(`Fallback retiro seguro para producto ${id}: ${err?.message}`);
       await this.prisma.menuItem.update({
         where: { id },
         data: { active: false, code: null },
       });
-      result = { success: true, hardDeleted: false, message: 'El producto fue deshabilitado ya que posee ventas históricas asociadas.' };
+      result = { success: true, hardDeleted: false, message: 'El producto fue retirado del menú correctamente.' };
     }
+
     await this.invalidateCache();
     return result;
   }
@@ -272,4 +304,3 @@ export class MenuService implements OnModuleInit {
     return { success: true };
   }
 }
-

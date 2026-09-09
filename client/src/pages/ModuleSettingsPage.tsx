@@ -211,6 +211,8 @@ const defaultKitchenSettings: KitchenSettings = {
 
 const getErrorMessage = (error: unknown, fallback: string) => error instanceof Error ? error.message : fallback
 
+
+
 export default function ModuleSettingsPage() {
   const { user } = useAuth()
   const [activeTab, setActiveTab] = useState<SettingsTab>('MODULES')
@@ -233,6 +235,7 @@ export default function ModuleSettingsPage() {
   const [savingStation, setSavingStation] = useState(false)
   const [busyCookId, setBusyCookId] = useState<string | null>(null)
   const [clockNow, setClockNow] = useState(Date.now())
+  const [regeneratingMenu, setRegeneratingMenu] = useState(false)
 
   const accessibleModules = useMemo(
     () => MODULE_DEFINITIONS.filter(def => allNavItems.some(item => item.module === def.id && hasNavItemAccess(user, item))),
@@ -398,6 +401,7 @@ export default function ModuleSettingsPage() {
         restaurantHours: `${restaurantSchedule.openingTime} - ${restaurantSchedule.closingTime}`,
         digital_menu_url: menuUrl,
         menuShareMessage: whatsapp.menuShareMessage,
+        menuText: whatsapp.menuText,
         paymentQrMode: whatsapp.paymentQrMode,
         paymentAccountText: whatsapp.paymentAccountText,
         paymentQrCaption: whatsapp.paymentQrCaption,
@@ -423,6 +427,21 @@ export default function ModuleSettingsPage() {
       alerts.error('No se pudo guardar', getErrorMessage(error, 'Inténtalo nuevamente.'))
     } finally {
       setSavingSection(null)
+    }
+  }
+
+  const regenerateMenu = async () => {
+    setRegeneratingMenu(true)
+    try {
+      const res = await api.post<{ ok: boolean; menuText: string }>('/whatsapp/settings/regenerate-menu-text')
+      if (res?.menuText) {
+        setWhatsapp(current => ({ ...current, menuText: res.menuText }))
+        alerts.success('Carta sincronizada', 'El texto se generó a partir de los productos y precios actuales del catálogo.')
+      }
+    } catch (error: unknown) {
+      alerts.error('Error al regenerar', getErrorMessage(error, 'No se pudo actualizar el texto de la carta.'))
+    } finally {
+      setRegeneratingMenu(false)
     }
   }
 
@@ -887,7 +906,37 @@ export default function ModuleSettingsPage() {
               </section>
               <label className="block"><span className="mb-1.5 flex items-center gap-1.5 text-xs font-bold text-[var(--text-secondary)]"><Link2 className="h-3.5 w-3.5" /> Enlace público de la carta</span><div className="flex gap-2"><input value={whatsapp.digitalMenuUrl} onChange={event => setWhatsapp(current => ({ ...current, digitalMenuUrl: event.target.value }))} className={fieldClass} placeholder="https://menu.tu-dominio.com/menu" /><a href={whatsapp.digitalMenuUrl || '/menu'} target="_blank" rel="noreferrer" className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-[var(--border-subtle)] text-[var(--text-secondary)] hover:text-[var(--accent)]" title="Abrir carta"><ExternalLink className="h-4 w-4" /></a></div><span className="mt-1.5 block text-[10px] leading-4 text-[var(--text-muted)]">Es el enlace que reciben los clientes. En producción usa un dominio o subdominio separado de la consola y del backend, por ejemplo <strong>menu.tu-dominio.com/menu</strong>. Si lo dejas vacío, WhatsApp enviará solo la lista de precios hasta que configures <strong>PUBLIC_MENU_URL</strong>.</span></label>
               <label className="block"><span className="mb-1.5 block text-xs font-bold text-[var(--text-secondary)]">Mensaje que acompaña la carta</span><textarea value={whatsapp.menuShareMessage} onChange={event => setWhatsapp(current => ({ ...current, menuShareMessage: event.target.value }))} className={textAreaClass} placeholder="Escribe el mensaje. Puedes usar {url}." /><span className="mt-1 block text-[10px] text-[var(--text-muted)]">Si escribes <strong>{'{url}'}</strong>, el enlace se insertará ahí. Si no, se agrega al final.</span></label>
-              <label className="block"><span className="mb-1.5 flex items-center justify-between gap-2 text-xs font-bold text-[var(--text-secondary)]"><span>Texto de la carta que se enviará</span><span className="rounded-full bg-emerald-500/10 px-2 py-1 text-[10px] font-black text-emerald-600">Sincronizado</span></span><textarea value={whatsapp.menuText} readOnly className={`${textAreaClass} min-h-64 cursor-default font-mono text-xs leading-5`} aria-label="Texto de la carta sincronizado" /><span className="mt-1 block text-[10px] text-[var(--text-muted)]">Este texto se actualiza y guarda solo cuando agregas, editas, desactivas o reordenas un producto en Productos y Menú. No necesitas pegarlo ni editar código.</span></label>
+              <label className="block">
+                <span className="mb-1.5 flex items-center justify-between gap-2 text-xs font-bold text-[var(--text-secondary)]">
+                  <span>Texto de la carta que se enviará</span>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={regenerateMenu}
+                      disabled={regeneratingMenu}
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-elevated)] px-2.5 py-1 text-[11px] font-bold text-[var(--text-secondary)] hover:bg-[var(--bg-panel)] hover:text-[var(--text-primary)] transition disabled:opacity-50"
+                      title="Volver a generar el texto con base en los productos y precios actuales del catálogo"
+                    >
+                      <RotateCcw className={cn('h-3 w-3', regeneratingMenu && 'animate-spin')} />
+                      {regeneratingMenu ? 'Regenerando...' : 'Regenerar desde productos'}
+                    </button>
+                    <span className="rounded-full bg-emerald-500/10 px-2 py-1 text-[10px] font-black text-emerald-600">
+                      Editable
+                    </span>
+                  </div>
+                </span>
+                <textarea
+                  value={whatsapp.menuText}
+                  onChange={event => setWhatsapp(current => ({ ...current, menuText: event.target.value }))}
+                  className={`${textAreaClass} min-h-64 font-mono text-xs leading-5`}
+                  placeholder="Escribe o edita el texto de la carta que recibirán tus clientes..."
+                  aria-label="Texto de la carta que se enviará"
+                />
+                <span className="mt-1 block text-[10px] text-[var(--text-muted)]">
+                  Puedes editar libremente nombres, precios, notas o promociones. Para guardar los cambios pulsa <strong>Guardar WhatsApp y envíos</strong>. Si deseas restaurarlo automáticamente desde los productos vivos, pulsa <strong>Regenerar desde productos</strong>.
+                </span>
+              </label>
+
               <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-3 text-xs text-emerald-700 dark:text-emerald-300"><p className="font-bold">Carta sincronizada con Productos y Menú</p><p className="mt-0.5 opacity-80">El botón Carta de WhatsApp usa exactamente este contenido y recibe los cambios en vivo mediante Socket.IO.</p></div>
             </div>
           </Card>

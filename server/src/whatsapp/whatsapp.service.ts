@@ -699,12 +699,15 @@ export class WhatsappService implements OnModuleInit {
     this.menuSendingLocks.set(cleanPhone, now);
 
     const rows = await this.prisma.appSetting.findMany({
-      where: { key: { in: ['digital_menu_url', 'chatbot_menu_share_message'] } },
+      where: { key: { in: ['digital_menu_url', 'chatbot_menu_share_message', 'chatbot_menu_text'] } },
     });
     const values = Object.fromEntries(rows.map(row => [row.key, row.value])) as Record<string, string>;
     const link = this.getShareableDigitalMenuUrl(values.digital_menu_url);
     const customMessage = String(values.chatbot_menu_share_message || '').trim();
-    const menuText = await this.buildMessagingMenuText();
+    let menuText = String(values.chatbot_menu_text || '').trim();
+    if (!menuText) {
+      menuText = await this.buildMessagingMenuText();
+    }
     const intro = customMessage || 'Aquí tienes nuestra carta actualizada:';
     const introWithoutPlaceholder = intro.replaceAll('{url}', '').replace(/\n{3,}/g, '\n\n').trim();
     const linkText = link
@@ -822,6 +825,7 @@ export class WhatsappService implements OnModuleInit {
     aiInstructions?: string;
     digital_menu_url?: string;
     menuShareMessage?: string;
+    menuText?: string;
     paymentQrMode?: 'IMAGE' | 'ACCOUNT';
     paymentAccountText?: string;
     paymentQrCaption?: string;
@@ -892,6 +896,11 @@ export class WhatsappService implements OnModuleInit {
       if (menuShareMessage.length > 3500) throw new BadRequestException('El mensaje de la carta es demasiado largo');
       updates.push({ key: 'chatbot_menu_share_message', value: menuShareMessage });
     }
+    if (data.menuText !== undefined) {
+      const cleanMenuText = String(data.menuText).trim();
+      updates.push({ key: 'chatbot_menu_text', value: cleanMenuText });
+      updates.push({ key: 'chatbot_menu_text_custom', value: 'true' });
+    }
     if (data.paymentQrMode !== undefined) {
       if (!['IMAGE', 'ACCOUNT'].includes(data.paymentQrMode)) throw new BadRequestException('Modo de cobro inválido');
       updates.push({ key: 'chatbot_payment_qr_mode', value: data.paymentQrMode });
@@ -940,6 +949,27 @@ export class WhatsappService implements OnModuleInit {
     }
     return currentSettings;
   }
+
+  async regenerateMessagingMenuText(): Promise<string> {
+    const menuText = await this.buildMessagingMenuText();
+    await this.prisma.appSetting.upsert({
+      where: { key: 'chatbot_menu_text' },
+      create: { key: 'chatbot_menu_text', value: menuText },
+      update: { value: menuText },
+    });
+    await this.prisma.appSetting.upsert({
+      where: { key: 'chatbot_menu_text_custom' },
+      create: { key: 'chatbot_menu_text_custom', value: 'false' },
+      update: { value: 'false' },
+    });
+    this.settingCache.delete('chatbot_menu_text');
+    this.settingCache.delete('chatbot_menu_text_custom');
+    if (this.socketGateway) {
+      this.socketGateway.emitWhatsApp('whatsappSettingsUpdated', { menuText });
+    }
+    return menuText;
+  }
+
   async verifyWebhook(mode: string, token: string, challenge: string) {
     const dbToken = await this.getSetting('whatsapp_verify_token');
     const verifyToken = dbToken || this.config.get('WHATSAPP_VERIFY_TOKEN') || 'the_villa_dog_verify_token';

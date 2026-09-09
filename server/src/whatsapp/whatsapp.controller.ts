@@ -122,6 +122,14 @@ export class WhatsappController {
     return this.whatsappService.updateSettings(body);
   }
 
+  @Post('settings/regenerate-menu-text')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('ADMIN', 'SUPERADMIN')
+  async regenerateMenuText() {
+    const menuText = await this.whatsappService.regenerateMessagingMenuText();
+    return { ok: true, menuText };
+  }
+
   @Post('settings/payment-qr-file')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('ADMIN', 'SUPERADMIN')
