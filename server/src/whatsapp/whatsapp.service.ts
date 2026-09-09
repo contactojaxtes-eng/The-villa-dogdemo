@@ -4423,6 +4423,44 @@ Restaurante (Tú):
     };
   }
 
+  private buildGeminiOrderResponseSchema() {
+    return {
+      type: 'OBJECT',
+      properties: {
+        items: {
+          type: 'ARRAY',
+          items: {
+            type: 'OBJECT',
+            properties: {
+              menuItemId: { type: 'STRING' },
+              quantity: { type: 'INTEGER' },
+              preference: { type: 'STRING' },
+              notes: { type: 'STRING' },
+              additions: { type: 'ARRAY', items: { type: 'STRING' } },
+            },
+            required: ['menuItemId', 'quantity', 'preference', 'notes', 'additions'],
+          },
+        },
+        // Gemini rechaza los valores vacíos dentro de enum. Los campos aún no
+        // confirmados se representan como null y el parser los normaliza a null.
+        detectedOrderType: { type: 'STRING', enum: ['delivery', 'pickup'], nullable: true },
+        paymentMethod: { type: 'STRING', enum: ['CASH', 'TRANSFER'], nullable: true },
+        independentNotes: { type: 'ARRAY', items: { type: 'STRING' } },
+        customerName: { type: 'STRING' },
+        customerPhone: { type: 'STRING' },
+        customerAddress: { type: 'STRING' },
+        customerAddressReference: { type: 'STRING' },
+        customerNeighborhood: { type: 'STRING' },
+        zoneId: { type: 'STRING' },
+      },
+      required: [
+        'items', 'detectedOrderType', 'paymentMethod', 'independentNotes',
+        'customerName', 'customerPhone', 'customerAddress',
+        'customerAddressReference', 'customerNeighborhood', 'zoneId',
+      ],
+    };
+  }
+
   async parseOrderWithGemini(text: string) {
     const rawApiKey = await this.getSetting('gemini_api_key');
     if (!rawApiKey) {
@@ -4487,11 +4525,11 @@ Reglas obligatorias:
 - Consolida cambios y correcciones posteriores: devuelve el pedido final, sin duplicar versiones anteriores.
 - quantity debe ser un entero entre 1 y 99.
 - preference y notes contienen solo instrucciones explícitas del cliente para ese producto. additions contiene únicamente IDs exactos de adiciones vigentes.
-- detectedOrderType es "delivery" si pidió domicilio y "pickup" si pasa a recoger.
-- paymentMethod es "CASH" para efectivo y "TRANSFER" para Nequi, Daviplata, Bancolombia o transferencia.
+- detectedOrderType es "delivery" si pidió domicilio y "pickup" si pasa a recoger. Si no está confirmado, usa null.
+- paymentMethod es "CASH" para efectivo y "TRANSFER" para Nequi, Daviplata, Bancolombia o transferencia. Si no está confirmado, usa null.
 - Extrae barrio, dirección y referencia solo si el cliente los escribió.
 - zoneId solo puede ser el ID de una zona vigente cuando el barrio coincide claramente, ignorando mayúsculas y tildes. Si no coincide, déjalo en null. Nunca inventes una tarifa, zona, total ni tiempo.
-- Los datos faltantes deben ser cadena vacía o arreglo vacío según el esquema.
+- Los datos faltantes deben ser null para detectedOrderType y paymentMethod, cadena vacía para los demás textos y arreglo vacío para las listas.
 
 Devuelve exactamente este JSON:
 {
@@ -4502,8 +4540,8 @@ Devuelve exactamente este JSON:
     "notes": "",
     "additions": []
   }],
-  "detectedOrderType": "delivery"|"pickup"|"",
-  "paymentMethod": "CASH"|"TRANSFER"|"",
+  "detectedOrderType": "delivery"|"pickup"|null,
+  "paymentMethod": "CASH"|"TRANSFER"|null,
   "independentNotes": [],
   "customerName": "",
   "customerPhone": "",
@@ -4537,39 +4575,7 @@ Responde solo con JSON válido.`;
               }],
               generationConfig: {
                 responseMimeType: "application/json",
-                responseSchema: {
-                  type: 'OBJECT',
-                  properties: {
-                    items: {
-                      type: 'ARRAY',
-                      items: {
-                        type: 'OBJECT',
-                        properties: {
-                          menuItemId: { type: 'STRING' },
-                          quantity: { type: 'INTEGER' },
-                          preference: { type: 'STRING' },
-                          notes: { type: 'STRING' },
-                          additions: { type: 'ARRAY', items: { type: 'STRING' } },
-                        },
-                        required: ['menuItemId', 'quantity', 'preference', 'notes', 'additions'],
-                      },
-                    },
-                    detectedOrderType: { type: 'STRING', enum: ['delivery', 'pickup', ''] },
-                    paymentMethod: { type: 'STRING', enum: ['CASH', 'TRANSFER', ''] },
-                    independentNotes: { type: 'ARRAY', items: { type: 'STRING' } },
-                    customerName: { type: 'STRING' },
-                    customerPhone: { type: 'STRING' },
-                    customerAddress: { type: 'STRING' },
-                    customerAddressReference: { type: 'STRING' },
-                    customerNeighborhood: { type: 'STRING' },
-                    zoneId: { type: 'STRING' },
-                  },
-                  required: [
-                    'items', 'detectedOrderType', 'paymentMethod', 'independentNotes',
-                    'customerName', 'customerPhone', 'customerAddress',
-                    'customerAddressReference', 'customerNeighborhood', 'zoneId',
-                  ],
-                },
+                responseSchema: this.buildGeminiOrderResponseSchema(),
                 ...this.buildGeminiGenerationConfig(model, {
                   temperature: 0.0,
                   maxOutputTokens: 4096,
