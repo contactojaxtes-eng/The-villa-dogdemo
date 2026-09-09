@@ -897,8 +897,20 @@ export class WhatsappService implements OnModuleInit {
     }
     if (data.businessHoursEnabled !== undefined) updates.push({ key: 'business_hours_enabled', value: String(data.businessHoursEnabled) });
     if (data.outOfServiceEnabled !== undefined) updates.push({ key: 'out_of_service_enabled', value: String(data.outOfServiceEnabled) });
-    if (data.outOfServiceMessage !== undefined) updates.push({ key: 'out_of_service_message', value: data.outOfServiceMessage });
-    if (data.restaurantHours !== undefined) updates.push({ key: 'restaurant_hours', value: data.restaurantHours });
+    if (data.outOfServiceMessage !== undefined) {
+      const message = String(data.outOfServiceMessage).trim();
+      if (message.length > 1200) throw new BadRequestException('El mensaje de cierre no puede superar 1.200 caracteres');
+      updates.push({ key: 'out_of_service_message', value: message });
+    }
+    if (data.restaurantHours !== undefined) {
+      const hours = String(data.restaurantHours).trim();
+      const timePattern = /^(?:[01]?\d|2[0-3]):[0-5]\d\s*(?:am|pm)?$/i;
+      const parts = hours.split('-').map(part => part.trim());
+      if (parts.length !== 2 || !timePattern.test(parts[0]) || !timePattern.test(parts[1])) {
+        throw new BadRequestException('El horario debe tener una hora de apertura y una de cierre válidas');
+      }
+      updates.push({ key: 'restaurant_hours', value: hours });
+    }
     if (data.paymentQrCaption !== undefined) {
       const paymentQrCaption = String(data.paymentQrCaption).trim();
       if (paymentQrCaption.length > 1024) throw new BadRequestException('El texto del QR es demasiado largo');
@@ -3229,8 +3241,41 @@ The Villa Dog • Montería`;
     }
   }
 
+  private formatClosedBusinessMessage(message: string, hours: string): string {
+    const [opening = '', closing = ''] = String(hours || '').split('-').map(part => part.trim());
+    const fallback = `¡Hola! En este momento estamos cerrados. Volvemos a atender desde las ${opening || 'hora habitual'}.`;
+    return (String(message || '').trim() || fallback)
+      .replace(/\{\{?\s*(?:abre|apertura)\s*\}?\}/gi, opening || 'hora habitual')
+      .replace(/\{\{?\s*(?:cierra|cierre)\s*\}?\}/gi, closing || '')
+      .replace(/\{\{?\s*horario\s*\}?\}/gi, hours || 'horario habitual')
+      .trim();
+  }
+
+  private async getClosedBusinessReply(): Promise<string | null> {
+    const [outOfServiceEnabled, businessHoursEnabled, outOfServiceMessage, restaurantHours] = await Promise.all([
+      this.getSetting('out_of_service_enabled'),
+      this.getSetting('business_hours_enabled'),
+      this.getSetting('out_of_service_message'),
+      this.getSetting('restaurant_hours'),
+    ]);
+    const hours = restaurantHours || '12:00 - 23:00';
+    if (outOfServiceEnabled === 'true') return this.formatClosedBusinessMessage(outOfServiceMessage || '', hours);
+    if (businessHoursEnabled === 'true' && !this.checkIfWithinBusinessHours(hours)) {
+      return this.formatClosedBusinessMessage(outOfServiceMessage || '', hours);
+    }
+    return null;
+  }
+
   private async handleChatbot(session: any, userText: string, previousLastMessageAt?: Date | null) {
     try {
+      // El cierre programado es una respuesta operativa, independiente de la
+      // IA. Por eso sigue funcionando aunque el bot conversacional esté pausado.
+      const closedReply = await this.getClosedBusinessReply();
+      if (closedReply) {
+        await this.sendMessage(session.phone, closedReply);
+        return;
+      }
+
       // Verificar si el chatbot está habilitado en los ajustes
       const chatbotEnabled = await this.getSetting('chatbot_enabled');
       if (chatbotEnabled !== 'true') {
@@ -3285,29 +3330,6 @@ The Villa Dog • Montería`;
       } else if (session.waitingForAdvisor) {
         this.logger.log(`Sesión ${session.phone} está en espera de un asesor. Chatbot permanece en silencio.`);
         return;
-      }
-
-      // ── Control de Horario de Atención y Modo Fuera de Servicio ──
-      const outOfServiceEnabled = await this.getSetting('out_of_service_enabled');
-      const outOfServiceMsg = (await this.getSetting('out_of_service_message')) || '';
-      const restaurantHours = (await this.getSetting('restaurant_hours')) || '12:00 PM - 11:00 PM';
-      const businessHoursEnabled = await this.getSetting('business_hours_enabled');
-
-      // 1. Si el restaurante está en modo "Fuera de Servicio / Cerrado" manualmente
-      if (outOfServiceEnabled === 'true') {
-        const replyText = outOfServiceMsg.trim() || `Hola, en este momento nuestro restaurante se encuentra fuera de servicio / cerrado. Horario de atencion: ${restaurantHours}. ¡Te esperamos pronto!`;
-        await this.sendMessage(session.phone, replyText);
-        return;
-      }
-
-      // 2. Si está activada la validación de Horario de Atención y estamos fuera de horario
-      if (businessHoursEnabled === 'true') {
-        const isWithinHours = this.checkIfWithinBusinessHours(restaurantHours);
-        if (!isWithinHours) {
-          const replyText = outOfServiceMsg.trim() || `Hola, actualmente nos encontramos fuera de nuestro horario de atencion (${restaurantHours}). Dejanos tu mensaje y te responderemos tan pronto abramos.`;
-          await this.sendMessage(session.phone, replyText);
-          return;
-        }
       }
 
       const rawApiKeys = await this.getSetting('gemini_api_key');
@@ -5054,6 +5076,12 @@ ${menuSummary}
 
   private async handleMultimediaChatbot(session: any, type: string, mediaId: string) {
     try {
+      const closedReply = await this.getClosedBusinessReply();
+      if (closedReply) {
+        await this.sendMessage(session.phone, closedReply);
+        return;
+      }
+
       if (session.assignedToId || session.waitingForAdvisor) {
         return;
       }

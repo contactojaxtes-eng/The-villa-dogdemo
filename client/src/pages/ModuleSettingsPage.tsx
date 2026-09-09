@@ -7,6 +7,7 @@ import {
   Bot,
   ChefHat,
   CheckCircle2,
+  Clock3,
   CreditCard,
   Download,
   Edit2,
@@ -64,6 +65,9 @@ interface ModuleDef {
 interface WhatsappSettings {
   chatbotEnabled: boolean
   orderReaderEnabled: boolean
+  businessHoursEnabled: boolean
+  outOfServiceMessage: string
+  restaurantHours: string
   digitalMenuUrl: string
   menuShareMessage: string
   menuText: string
@@ -167,6 +171,9 @@ const textAreaClass = 'min-h-24 w-full resize-y rounded-xl border border-[var(--
 const defaultWhatsappSettings = (): WhatsappSettings => ({
   chatbotEnabled: false,
   orderReaderEnabled: false,
+  businessHoursEnabled: false,
+  outOfServiceMessage: '¡Hola! En este momento estamos cerrados. Volvemos a atender desde las {abre}.',
+  restaurantHours: '12:00 - 23:00',
   digitalMenuUrl: '',
   menuShareMessage: '🍽️ *CARTA DIGITAL THE VILLA DOG*\n\nMira nuestra carta actualizada y arma tu pedido aquí:',
   menuText: '📋 *MENÚ Y PRECIOS VILLA DOG*\n\nLa carta se generará automáticamente desde Productos y Menú.',
@@ -174,6 +181,23 @@ const defaultWhatsappSettings = (): WhatsappSettings => ({
   paymentAccountText: '',
   paymentQrCaption: '',
 })
+
+const toTimeInput = (value: string, fallback: string) => {
+  const match = String(value || '').trim().match(/^(\d{1,2})(?::(\d{2}))?\s*(a\.?m\.?|p\.?m\.?)?$/i)
+  if (!match) return fallback
+  let hour = Number(match[1])
+  const minute = Number(match[2] || 0)
+  const period = (match[3] || '').replace(/\./g, '').toLowerCase()
+  if (period === 'pm' && hour < 12) hour += 12
+  if (period === 'am' && hour === 12) hour = 0
+  if (!Number.isInteger(hour) || hour < 0 || hour > 23 || !Number.isInteger(minute) || minute < 0 || minute > 59) return fallback
+  return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`
+}
+
+const parseRestaurantSchedule = (value: string) => {
+  const [opening, closing] = String(value || '').split('-').map(part => part.trim())
+  return { openingTime: toTimeInput(opening, '12:00'), closingTime: toTimeInput(closing, '23:00') }
+}
 
 const defaultKitchenSettings: KitchenSettings = {
   smartDrinkRouting: false,
@@ -196,6 +220,7 @@ export default function ModuleSettingsPage() {
   const [uploadingQr, setUploadingQr] = useState(false)
   const [testingPrinterId, setTestingPrinterId] = useState<string | null>(null)
   const [whatsapp, setWhatsapp] = useState<WhatsappSettings>(() => defaultWhatsappSettings())
+  const [restaurantSchedule, setRestaurantSchedule] = useState(() => parseRestaurantSchedule(defaultWhatsappSettings().restaurantHours))
   const [kitchen, setKitchen] = useState<KitchenSettings>(defaultKitchenSettings)
   const [stations, setStations] = useState<KitchenStation[]>([])
   const [printing, setPrinting] = useState<PrinterSettings>({ printers: [] })
@@ -256,6 +281,9 @@ export default function ModuleSettingsPage() {
         setWhatsapp({
           chatbotEnabled: wa.chatbotEnabled === true,
           orderReaderEnabled: wa.orderReaderEnabled === true,
+          businessHoursEnabled: wa.businessHoursEnabled === true,
+          outOfServiceMessage: wa.outOfServiceMessage || fallback.outOfServiceMessage,
+          restaurantHours: wa.restaurantHours || fallback.restaurantHours,
           digitalMenuUrl,
           menuShareMessage: wa.menuShareMessage || fallback.menuShareMessage,
           menuText: wa.menuText || fallback.menuText,
@@ -264,6 +292,7 @@ export default function ModuleSettingsPage() {
           paymentQrName: wa.paymentQrName || null,
           paymentQrCaption: wa.paymentQrCaption || '',
         })
+        setRestaurantSchedule(parseRestaurantSchedule(wa.restaurantHours || fallback.restaurantHours))
       }
       if (kitchenSettings) {
         const deliveryKitchenMode = kitchenSettings.deliveryKitchenMode
@@ -301,6 +330,9 @@ export default function ModuleSettingsPage() {
         ...current,
         ...(typeof updated?.chatbotEnabled === 'boolean' ? { chatbotEnabled: updated.chatbotEnabled } : {}),
         ...(typeof updated?.orderReaderEnabled === 'boolean' ? { orderReaderEnabled: updated.orderReaderEnabled } : {}),
+        ...(typeof updated?.businessHoursEnabled === 'boolean' ? { businessHoursEnabled: updated.businessHoursEnabled } : {}),
+        ...(updated?.outOfServiceMessage !== undefined ? { outOfServiceMessage: updated.outOfServiceMessage } : {}),
+        ...(updated?.restaurantHours !== undefined ? { restaurantHours: updated.restaurantHours } : {}),
         ...(updated?.digitalMenuUrl !== undefined ? { digitalMenuUrl: updated.digitalMenuUrl } : {}),
         ...(updated?.menuShareMessage ? { menuShareMessage: updated.menuShareMessage } : {}),
         ...(updated?.menuText !== undefined ? { menuText: updated.menuText } : {}),
@@ -308,6 +340,7 @@ export default function ModuleSettingsPage() {
         ...(updated?.paymentAccountText !== undefined ? { paymentAccountText: updated.paymentAccountText } : {}),
         ...(updated?.paymentQrCaption !== undefined ? { paymentQrCaption: updated.paymentQrCaption } : {}),
       }))
+      if (updated?.restaurantHours !== undefined) setRestaurantSchedule(parseRestaurantSchedule(updated.restaurantHours))
     })
     socket.on('kitchenSettingsUpdated', (updated: KitchenSettings) => setKitchen(current => ({ ...current, ...updated })))
     socket.on('printerSettingsUpdated', (updated: PrinterSettings) => setPrinting({ ...updated, printers: updated.printers || [] }))
@@ -358,6 +391,9 @@ export default function ModuleSettingsPage() {
       const updated = await api.put<WhatsappSettings>('/whatsapp/settings', {
         chatbotEnabled: whatsapp.chatbotEnabled,
         orderReaderEnabled: whatsapp.orderReaderEnabled,
+        businessHoursEnabled: whatsapp.businessHoursEnabled,
+        outOfServiceMessage: whatsapp.outOfServiceMessage.trim(),
+        restaurantHours: `${restaurantSchedule.openingTime} - ${restaurantSchedule.closingTime}`,
         digital_menu_url: menuUrl,
         menuShareMessage: whatsapp.menuShareMessage,
         paymentQrMode: whatsapp.paymentQrMode,
@@ -368,6 +404,9 @@ export default function ModuleSettingsPage() {
         ...current,
         chatbotEnabled: updated.chatbotEnabled === true,
         orderReaderEnabled: updated.orderReaderEnabled === true,
+        businessHoursEnabled: updated.businessHoursEnabled === true,
+        outOfServiceMessage: updated.outOfServiceMessage || current.outOfServiceMessage,
+        restaurantHours: updated.restaurantHours || `${restaurantSchedule.openingTime} - ${restaurantSchedule.closingTime}`,
         digitalMenuUrl: updated.digitalMenuUrl !== undefined ? updated.digitalMenuUrl : (menuUrl || current.digitalMenuUrl),
         menuShareMessage: updated.menuShareMessage || current.menuShareMessage,
         menuText: updated.menuText || current.menuText,
@@ -376,6 +415,7 @@ export default function ModuleSettingsPage() {
         paymentQrName: updated.paymentQrName || current.paymentQrName,
         paymentQrCaption: updated.paymentQrCaption || '',
       }))
+      setRestaurantSchedule(parseRestaurantSchedule(updated.restaurantHours || `${restaurantSchedule.openingTime} - ${restaurantSchedule.closingTime}`))
       alerts.success('Configuración guardada', 'WhatsApp, carta y cobros quedaron sincronizados.')
     } catch (error: unknown) {
       alerts.error('No se pudo guardar', getErrorMessage(error, 'Inténtalo nuevamente.'))
@@ -760,6 +800,17 @@ export default function ModuleSettingsPage() {
                 <span><span className="block text-sm font-bold text-[var(--text-primary)]">Lectura automática para Nuevo Pedido</span><span className="mt-0.5 block text-[10px] leading-4 text-[var(--text-muted)]">Cuando está pausada, las asesoras toman el pedido manualmente y no se consulta la IA.</span></span>
                 <button type="button" onClick={() => setWhatsapp(current => ({ ...current, orderReaderEnabled: !current.orderReaderEnabled }))} className={cn('h-9 shrink-0 rounded-xl border px-3 text-xs font-black transition', whatsapp.orderReaderEnabled ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-600' : 'border-slate-400/30 bg-slate-500/10 text-[var(--text-secondary)]')}>{whatsapp.orderReaderEnabled ? 'Activa' : 'Pausada'}</button>
               </label>
+              <section className={cn('rounded-2xl border p-4 transition', whatsapp.businessHoursEnabled ? 'border-amber-500/30 bg-amber-500/5' : 'border-[var(--border-subtle)] bg-[var(--bg-elevated)]')}>
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex min-w-0 gap-3"><span className={cn('flex h-9 w-9 shrink-0 items-center justify-center rounded-xl', whatsapp.businessHoursEnabled ? 'bg-amber-500/15 text-amber-600' : 'bg-[var(--bg-panel)] text-[var(--text-muted)]')}><Clock3 className="h-4 w-4" /></span><div><h3 className="text-sm font-black text-[var(--text-primary)]">Cierre programado</h3><p className="mt-0.5 text-[11px] leading-4 text-[var(--text-muted)]">Fuera de este horario, WhatsApp responde el aviso de cierre sin usar la IA.</p></div></div>
+                  <button type="button" role="switch" aria-checked={whatsapp.businessHoursEnabled} onClick={() => setWhatsapp(current => ({ ...current, businessHoursEnabled: !current.businessHoursEnabled }))} className={cn('h-9 shrink-0 rounded-xl border px-3 text-xs font-black transition', whatsapp.businessHoursEnabled ? 'border-amber-500/35 bg-amber-500/15 text-amber-700' : 'border-slate-400/30 bg-[var(--bg-panel)] text-[var(--text-secondary)]')}>{whatsapp.businessHoursEnabled ? 'Activo' : 'Desactivado'}</button>
+                </div>
+                {whatsapp.businessHoursEnabled && <div className="mt-4 space-y-3 border-t border-amber-500/15 pt-4">
+                  <div className="grid grid-cols-2 gap-3"><label className="block"><span className="mb-1.5 block text-[10px] font-black uppercase tracking-wide text-[var(--text-muted)]">Abre desde</span><input type="time" value={restaurantSchedule.openingTime} onChange={event => setRestaurantSchedule(current => ({ ...current, openingTime: event.target.value }))} className={fieldClass} /></label><label className="block"><span className="mb-1.5 block text-[10px] font-black uppercase tracking-wide text-[var(--text-muted)]">Cierra desde</span><input type="time" value={restaurantSchedule.closingTime} onChange={event => setRestaurantSchedule(current => ({ ...current, closingTime: event.target.value }))} className={fieldClass} /></label></div>
+                  <label className="block"><span className="mb-1.5 block text-xs font-bold text-[var(--text-secondary)]">Mensaje para clientes fuera de horario</span><textarea value={whatsapp.outOfServiceMessage} maxLength={1200} onChange={event => setWhatsapp(current => ({ ...current, outOfServiceMessage: event.target.value }))} className={cn(textAreaClass, 'min-h-24')} placeholder="Ej.: Estamos cerrados. Volvemos a atender desde las {abre}." /><span className="mt-1 block text-[10px] leading-4 text-[var(--text-muted)]">Puedes usar <strong>{'{abre}'}</strong> para mostrar la hora de apertura y <strong>{'{horario}'}</strong> para mostrar el horario completo.</span></label>
+                  <p className="rounded-xl border border-amber-500/20 bg-[var(--bg-panel)] px-3 py-2 text-[11px] leading-4 text-[var(--text-secondary)]">Activo todos los días: atiende de <strong>{restaurantSchedule.openingTime}</strong> a <strong>{restaurantSchedule.closingTime}</strong>. El aviso se envía aun con el bot de respuestas pausado.</p>
+                </div>}
+              </section>
               <label className="block"><span className="mb-1.5 flex items-center gap-1.5 text-xs font-bold text-[var(--text-secondary)]"><Link2 className="h-3.5 w-3.5" /> Enlace público de la carta</span><div className="flex gap-2"><input value={whatsapp.digitalMenuUrl} onChange={event => setWhatsapp(current => ({ ...current, digitalMenuUrl: event.target.value }))} className={fieldClass} placeholder="https://menu.tu-dominio.com/menu" /><a href={whatsapp.digitalMenuUrl || '/menu'} target="_blank" rel="noreferrer" className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-[var(--border-subtle)] text-[var(--text-secondary)] hover:text-[var(--accent)]" title="Abrir carta"><ExternalLink className="h-4 w-4" /></a></div><span className="mt-1.5 block text-[10px] leading-4 text-[var(--text-muted)]">Es el enlace que reciben los clientes. En producción usa un dominio o subdominio separado de la consola y del backend, por ejemplo <strong>menu.tu-dominio.com/menu</strong>. Si lo dejas vacío, WhatsApp enviará solo la lista de precios hasta que configures <strong>PUBLIC_MENU_URL</strong>.</span></label>
               <label className="block"><span className="mb-1.5 block text-xs font-bold text-[var(--text-secondary)]">Mensaje que acompaña la carta</span><textarea value={whatsapp.menuShareMessage} onChange={event => setWhatsapp(current => ({ ...current, menuShareMessage: event.target.value }))} className={textAreaClass} placeholder="Escribe el mensaje. Puedes usar {url}." /><span className="mt-1 block text-[10px] text-[var(--text-muted)]">Si escribes <strong>{'{url}'}</strong>, el enlace se insertará ahí. Si no, se agrega al final.</span></label>
               <label className="block"><span className="mb-1.5 flex items-center justify-between gap-2 text-xs font-bold text-[var(--text-secondary)]"><span>Texto de la carta que se enviará</span><span className="rounded-full bg-emerald-500/10 px-2 py-1 text-[10px] font-black text-emerald-600">Sincronizado</span></span><textarea value={whatsapp.menuText} readOnly className={`${textAreaClass} min-h-64 cursor-default font-mono text-xs leading-5`} aria-label="Texto de la carta sincronizado" /><span className="mt-1 block text-[10px] text-[var(--text-muted)]">Este texto se actualiza y guarda solo cuando agregas, editas, desactivas o reordenas un producto en Productos y Menú. No necesitas pegarlo ni editar código.</span></label>
