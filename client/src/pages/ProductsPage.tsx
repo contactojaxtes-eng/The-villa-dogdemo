@@ -84,6 +84,7 @@ export default function ProductsPage() {
   const [search, setSearch] = useState('')
   const [catSearch, setCatSearch] = useState('')
   const [categoryFilter, setCategoryFilter] = useState('ALL')
+  const [showFinancialDetails, setShowFinancialDetails] = useState(false)
 
   // --- Category Dialog State ---
   const [catDialogOpen, setCatDialogOpen] = useState(false)
@@ -271,6 +272,9 @@ export default function ProductsPage() {
       .map(key => ({ id: key, ...groups[key] }))
       .filter(g => g.products.length > 0)
   }, [filteredProducts, categories])
+
+  const catalogProducts = activeTab === 'ADDITIONS' ? additionProducts : mainProducts
+  const activeCatalogProducts = catalogProducts.filter(product => product.active).length
 
   // --- Category Actions ---
   const openNewCategory = () => {
@@ -615,109 +619,110 @@ export default function ProductsPage() {
   return (
     <motion.div className="space-y-7" initial="hidden" animate="visible" variants={stagger}>
       
-      {/* ── Header ── */}
-      <motion.div className="flex flex-wrap items-center justify-between gap-4" variants={fadeUp}>
-        <div className="flex items-center gap-3.5">
-          <div className="flex h-12 w-12 items-center justify-center rounded-2xl shadow-lg shadow-[var(--accent)]/20" style={{ background: 'linear-gradient(135deg, var(--accent), #FBBF24)' }}>
-            <PackagePlus className="h-6 w-6 text-[var(--accent-fg)]" />
-          </div>
-          <div>
-            <h2 className="antifont text-4xl tracking-wider text-[var(--text-primary)] leading-none">GESTIÓN DE PRODUCTOS</h2>
-            <p className="mt-1 text-sm text-[var(--text-secondary)]">Administra platos, códigos únicos, combos con utilidades y recetas de inventario.</p>
+      <motion.header className="flex flex-col gap-4 rounded-3xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-4 shadow-sm sm:p-5 xl:flex-row xl:items-center xl:justify-between" variants={fadeUp}>
+        <div className="flex min-w-0 items-center gap-3">
+          <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-[var(--accent)]/10 text-[var(--accent)] ring-1 ring-[var(--accent)]/20">
+            <PackagePlus className="h-6 w-6" />
+          </span>
+          <div className="min-w-0">
+            <p className="text-[10px] font-black uppercase tracking-[0.18em] text-[var(--accent)]">Catálogo y operación</p>
+            <h1 className="truncate text-2xl font-black text-[var(--text-primary)] sm:text-3xl">Productos y menú</h1>
+            <p className="mt-1 text-xs text-[var(--text-secondary)] sm:text-sm">Administra platos, combos, adiciones, precios, recetas y categorías.</p>
           </div>
         </div>
 
-        <div className="flex items-center gap-3">
-          <Button onClick={openNewCategory} variant="outline" className="border-[var(--border-default)] hover:bg-[var(--bg-hover)] rounded-xl font-bold h-11 px-4 text-xs gap-2">
-            <FolderPlus className="h-4 w-4 text-[var(--accent)]" /> Nueva Categoría
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] px-3 py-1.5 text-center">
+            <p className="text-[9px] font-black uppercase tracking-wide text-[var(--text-muted)]">Productos</p>
+            <p className="text-lg font-black leading-none text-[var(--text-primary)]">{mainProducts.length}</p>
+          </div>
+          <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] px-3 py-1.5 text-center">
+            <p className="text-[9px] font-black uppercase tracking-wide text-[var(--text-muted)]">Categorías</p>
+            <p className="text-lg font-black leading-none text-[var(--text-primary)]">{categories.length}</p>
+          </div>
+          <Button onClick={openNewCategory} variant="outline" className="h-10 rounded-xl border-[var(--border-default)] px-3 text-xs font-bold hover:bg-[var(--bg-hover)]">
+            <FolderPlus className="mr-1.5 h-4 w-4" /> Categoría
           </Button>
-          <Button onClick={openNewProduct} className="bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-fg)] font-bold rounded-xl h-11 px-5 text-xs gap-2 shadow-lg shadow-[var(--accent)]/20">
-            <Plus className="h-4.5 w-4.5" /> Nuevo Producto / Combo
+          <Button onClick={openNewProduct} className="h-10 rounded-xl bg-[var(--accent)] px-4 text-xs font-black text-[var(--accent-fg)] shadow-sm hover:bg-[var(--accent-hover)]">
+            <Plus className="mr-1.5 h-4 w-4" /> Nuevo producto
           </Button>
         </div>
-      </motion.div>
+      </motion.header>
 
-      {/* ── Navigation Tabs & Filters ── */}
-      <motion.div className="flex flex-wrap items-center justify-between gap-4" variants={fadeUp}>
-        <div className="flex rounded-2xl bg-[var(--bg-panel)] p-1.5 border border-[var(--border-subtle)] shadow-sm">
+      <motion.section className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-1.5 shadow-sm" variants={fadeUp}>
+        <div className="flex w-full flex-wrap gap-1">
           <button
             type="button"
             onClick={() => { setActiveTab('PRODUCTS'); setCategoryFilter('ALL'); }}
-            className={`flex items-center gap-2 px-5 py-2.5 text-xs font-bold rounded-xl transition-all cursor-pointer ${activeTab === 'PRODUCTS' ? 'bg-[var(--accent)] text-[var(--accent-fg)] shadow-md' : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}`}
+            className={`flex flex-1 items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-xs font-black transition ${activeTab === 'PRODUCTS' ? 'bg-[var(--accent)] text-[var(--accent-fg)] shadow-sm' : 'text-[var(--text-secondary)] hover:bg-[var(--bg-elevated)] hover:text-[var(--text-primary)]'}`}
           >
             <UtensilsCrossed className="h-4 w-4" /> Productos ({mainProducts.length})
           </button>
           <button
             type="button"
             onClick={() => { setActiveTab('ADDITIONS'); setCategoryFilter('ALL'); }}
-            className={`flex items-center gap-2 px-5 py-2.5 text-xs font-bold rounded-xl transition-all cursor-pointer ${activeTab === 'ADDITIONS' ? 'bg-[var(--accent)] text-[var(--accent-fg)] shadow-md' : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}`}
+            className={`flex flex-1 items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-xs font-black transition ${activeTab === 'ADDITIONS' ? 'bg-[var(--accent)] text-[var(--accent-fg)] shadow-sm' : 'text-[var(--text-secondary)] hover:bg-[var(--bg-elevated)] hover:text-[var(--text-primary)]'}`}
           >
-            <PlusCircle className="h-4 w-4 text-amber-500" /> Adiciones / Toppings ({additionProducts.length})
+            <PlusCircle className="h-4 w-4" /> Adiciones ({additionProducts.length})
           </button>
           <button
             type="button"
             onClick={() => setActiveTab('CATEGORIES')}
-            className={`flex items-center gap-2 px-5 py-2.5 text-xs font-bold rounded-xl transition-all cursor-pointer ${activeTab === 'CATEGORIES' ? 'bg-[var(--accent)] text-[var(--accent-fg)] shadow-md' : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}`}
+            className={`flex flex-1 items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-xs font-black transition ${activeTab === 'CATEGORIES' ? 'bg-[var(--accent)] text-[var(--accent-fg)] shadow-sm' : 'text-[var(--text-secondary)] hover:bg-[var(--bg-elevated)] hover:text-[var(--text-primary)]'}`}
           >
             <Layers className="h-4 w-4" /> Categorías ({categories.length})
           </button>
         </div>
-      </motion.div>
+      </motion.section>
 
       {/* ── PRODUCTS TAB CONTENT ── */}
       {(activeTab === 'PRODUCTS' || activeTab === 'ADDITIONS') && (
-        <motion.div variants={fadeUp} className="w-full flex flex-col md:flex-row gap-5 items-start h-[calc(100vh-210px)] min-h-[500px]">
-          {/* Left Sidebar (Categories) */}
-          <div className="w-full md:w-[220px] shrink-0 flex flex-col gap-3 h-full overflow-hidden">
-            <div className="relative group w-full shrink-0">
-              <Search className="absolute top-1/2 left-3.5 h-4 w-4 -translate-y-1/2 text-[var(--text-muted)] group-focus-within:text-[var(--accent)] transition-colors" />
-              <Input
-                className="w-full rounded-xl border-[var(--border-subtle)] bg-[var(--bg-panel)] py-2 pl-10 pr-4 text-xs focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent)]/15 transition-all shadow-sm h-10"
-                value={search}
-                onChange={e => setSearch(e.target.value)}
-                placeholder="Buscar plato o código..."
-              />
+        <motion.div variants={fadeUp} className="space-y-4">
+          <section className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-4 shadow-sm">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+              <label className="relative block w-full lg:max-w-xl">
+                <span className="mb-1.5 block text-[10px] font-black uppercase tracking-wide text-[var(--text-muted)]">Buscar en el catálogo</span>
+                <Search className="absolute bottom-3 left-3 h-4 w-4 text-[var(--text-muted)]" />
+                <Input
+                  className="h-10 w-full rounded-xl border-[var(--border-subtle)] bg-[var(--bg-elevated)] pl-9 pr-9 text-xs focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent)]/15"
+                  value={search}
+                  onChange={e => setSearch(e.target.value)}
+                  placeholder="Nombre, código, descripción o categoría..."
+                />
+                {search && <button type="button" onClick={() => setSearch('')} className="absolute bottom-2 right-2 rounded-md p-1 text-[var(--text-muted)] transition hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]" aria-label="Limpiar búsqueda"><X className="h-4 w-4" /></button>}
+              </label>
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] px-3 py-2 text-xs font-bold text-[var(--text-secondary)]">{activeCatalogProducts}/{catalogProducts.length} disponibles</span>
+                <button type="button" onClick={() => setShowFinancialDetails(current => !current)} className={`inline-flex h-10 items-center gap-1.5 rounded-xl border px-3 text-xs font-black transition ${showFinancialDetails ? 'border-[var(--accent)] bg-[var(--accent)]/10 text-[var(--accent)]' : 'border-[var(--border-default)] bg-[var(--bg-elevated)] text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]'}`}>
+                  <DollarSign className="h-4 w-4" /> {showFinancialDetails ? 'Ocultar costos' : 'Ver costos y utilidad'}
+                </button>
+              </div>
             </div>
-            
-            <div className="flex-1 overflow-y-auto no-scrollbar pr-2 flex flex-col gap-1.5 pb-8">
-              <button
-                type="button"
-                onClick={() => setCategoryFilter('ALL')}
-                className={`w-full text-left px-4 py-3 text-xs font-bold rounded-xl transition-all flex items-center justify-between ${
-                  categoryFilter === 'ALL'
-                    ? 'bg-[var(--accent)] text-[var(--accent-fg)] shadow-md'
-                    : 'bg-[var(--bg-panel)] text-[var(--text-secondary)] border border-[var(--border-subtle)] hover:text-[var(--text-primary)] hover:border-[var(--text-secondary)]'
-                }`}
-              >
-                <span>⭐ Todas las categorías</span>
-                <span className={`text-[9px] px-2 py-0.5 rounded-full ${categoryFilter === 'ALL' ? 'bg-white/20' : 'bg-[var(--border-default)] text-[var(--text-muted)]'}`}>
-                  {activeTab === 'ADDITIONS' ? additionProducts.length : activeTab === 'PRODUCTS' ? mainProducts.length : allProducts.length}
-                </span>
-              </button>
-              {tabCategories.map(c => {
-                const count = allProducts.filter(p => p.categoryId === c.id).length
-                const isActive = categoryFilter === c.id
-                return (
-                  <button
-                    key={c.id}
-                    type="button"
-                    onClick={() => setCategoryFilter(c.id)}
-                    className={`w-full text-left px-3.5 py-2.5 text-xs font-bold rounded-xl transition-all flex items-center justify-between gap-2 cursor-pointer ${
-                      isActive
-                        ? 'bg-[var(--accent)] text-[var(--accent-fg)] shadow-md'
-                        : 'bg-[var(--bg-panel)] text-[var(--text-secondary)] border border-[var(--border-subtle)] hover:text-[var(--text-primary)] hover:border-[var(--text-secondary)]'
-                    }`}
-                  >
-                    <span className="break-words whitespace-normal leading-snug font-bold pr-1">{c.name}</span>
-                    <span className={`text-[9px] px-2 py-0.5 rounded-full shrink-0 ${isActive ? 'bg-white/20' : 'bg-[var(--border-default)] text-[var(--text-muted)]'}`}>{count}</span>
-                  </button>
-                )
-              })}
-            </div>
-          </div>
 
-          {/* Main Content (Table) */}
-          <div className="flex-1 w-full flex flex-col min-w-0 h-full">
+            <div className="mt-4 border-t border-[var(--border-subtle)] pt-3">
+              <p className="mb-2 text-[10px] font-black uppercase tracking-wide text-[var(--text-muted)]">Filtrar categoría</p>
+              <div className="flex gap-2 overflow-x-auto pb-1 custom-horizontal-scrollbar">
+                <button
+                  type="button"
+                  onClick={() => setCategoryFilter('ALL')}
+                  className={`shrink-0 rounded-xl px-3 py-2 text-xs font-black transition ${categoryFilter === 'ALL' ? 'bg-[var(--accent)] text-[var(--accent-fg)] shadow-sm' : 'border border-[var(--border-subtle)] bg-[var(--bg-elevated)] text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]'}`}
+                >
+                  Todas <span className="ml-1 opacity-75">{catalogProducts.length}</span>
+                </button>
+                {tabCategories.map(category => {
+                  const count = catalogProducts.filter(product => product.categoryId === category.id).length
+                  const isActive = categoryFilter === category.id
+                  return (
+                    <button key={category.id} type="button" onClick={() => setCategoryFilter(category.id)} className={`shrink-0 rounded-xl px-3 py-2 text-xs font-bold transition ${isActive ? 'bg-[var(--accent)] text-[var(--accent-fg)] shadow-sm' : 'border border-[var(--border-subtle)] bg-[var(--bg-elevated)] text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]'}`}>
+                      {category.name} <span className="ml-1 opacity-75">{count}</span>
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+          </section>
+
+          <div className="w-full min-w-0">
             <style>{`
               .custom-horizontal-scrollbar::-webkit-scrollbar { height: 8px !important; }
               .custom-horizontal-scrollbar::-webkit-scrollbar-track { background: transparent !important; }
@@ -730,18 +735,17 @@ export default function ProductsPage() {
               .custom-vertical-scrollbar::-webkit-scrollbar-thumb:hover { background: var(--border-subtle) !important; }
             `}</style>
             
-            <Card className="border border-[var(--border-subtle)] bg-[var(--bg-panel)] shadow-xl rounded-3xl flex flex-col h-full overflow-hidden">
-              <div className="overflow-auto w-full h-full custom-horizontal-scrollbar custom-vertical-scrollbar">
-              <table className="w-full min-w-[700px] table-fixed text-left text-xs border-collapse">
+            <Card className="overflow-hidden rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] shadow-sm">
+              <div className="max-h-[calc(100vh-320px)] min-h-[360px] w-full overflow-auto custom-horizontal-scrollbar custom-vertical-scrollbar">
+              <table className="w-full min-w-[620px] table-fixed text-left text-xs border-collapse">
                 <thead>
                   <tr className="border-b border-[var(--border-subtle)] text-[11px] font-black uppercase tracking-wider text-[var(--text-muted)] bg-[var(--bg-subtle)]/50">
-                    <th className="px-3.5 py-3 font-black w-[30%]">Nombre</th>
-                    <th className="px-3.5 py-3 font-black text-right w-[13%]">Precio</th>
-                    <th className="px-3.5 py-3 font-black text-right w-[12%]">Costo</th>
-                    <th className="px-3.5 py-3 font-black text-center w-[12%]">Impuesto(s)</th>
-                    <th className="px-3.5 py-3 font-black text-right w-[13%]">Utilidad</th>
-                    <th className="px-3.5 py-3 font-black text-center w-[10%]">Estado</th>
-                    <th className="px-3.5 py-3 font-black text-center w-[10%]">Acciones</th>
+                    <th className={`px-4 py-3 font-black ${showFinancialDetails ? 'w-[32%]' : 'w-[62%]'}`}>Producto</th>
+                    <th className="w-[15%] px-3.5 py-3 text-right font-black">Precio</th>
+                    {showFinancialDetails && <th className="w-[15%] px-3.5 py-3 text-right font-black">Costo</th>}
+                    {showFinancialDetails && <th className="w-[15%] px-3.5 py-3 text-right font-black">Utilidad</th>}
+                    <th className="w-[13%] px-3.5 py-3 text-center font-black">Estado</th>
+                    <th className="w-[10%] px-3.5 py-3 text-center font-black">Acciones</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[var(--border-subtle)]">
@@ -750,7 +754,7 @@ export default function ProductsPage() {
                       <Fragment key={group.id}>
                         {/* Section Header Row */}
                         <tr className="bg-[var(--bg-subtle)]/50 border-y border-[var(--border-subtle)]">
-                          <td colSpan={7} className="px-3.5 py-2.5">
+                          <td colSpan={showFinancialDetails ? 6 : 4} className="px-4 py-2.5">
                             <div className="flex items-center gap-2">
                               <span className="h-2 w-2 rounded-full bg-[var(--accent)]" />
                               <span className="font-extrabold text-[11px] uppercase tracking-wider text-[var(--accent)]">
@@ -767,7 +771,6 @@ export default function ProductsPage() {
                         {group.products.map(product => {
                           const recipeCost = calculateItemRecipeCost(product)
                           const basePrice = product.price / 1.08
-                          const taxAmount = product.price - basePrice
                           const profit = basePrice - recipeCost
                           const marginPct = basePrice > 0 ? (profit / basePrice) * 100 : 0
                           const isCombo = product.type === 'COMBO'
@@ -783,7 +786,7 @@ export default function ProductsPage() {
                               className="hover:bg-[var(--bg-hover)] transition-colors group"
                             >
                               {/* Column 1: Name */}
-                              <td className="px-3.5 py-3 min-w-0">
+                              <td className="min-w-0 px-4 py-3">
                                 <div className="flex items-center gap-2.5 min-w-0">
                                   {product.image ? (
                                     <img src={product.image} alt={product.name} className="h-9 w-9 rounded-xl object-cover border border-[var(--border-subtle)] shrink-0 shadow-sm" />
@@ -832,26 +835,20 @@ export default function ProductsPage() {
                                 {formatCurrency(product.price)}
                               </td>
 
-                              {/* Column 3: Cost */}
-                              <td className="px-3.5 py-3 text-right font-black text-xs text-[var(--text-secondary)] tabular-nums">
-                                {formatCurrency(recipeCost)}
-                              </td>
+                              {showFinancialDetails && (
+                                <td className="px-3.5 py-3 text-right font-black text-xs text-[var(--text-secondary)] tabular-nums">
+                                  {formatCurrency(recipeCost)}
+                                </td>
+                              )}
 
-                              {/* Column 4: Taxes (Calculated INC 8%) */}
-                              <td className="px-3.5 py-3 text-center font-black text-xs text-[var(--text-secondary)] tabular-nums">
-                                <div>{formatCurrency(taxAmount)}</div>
-                                <div className="text-[9px] font-bold text-[var(--text-muted)]">INC (8%)</div>
-                              </td>
-
-                              {/* Column 5: Profit / Margin */}
-                              <td className="px-3.5 py-3 text-right">
-                                <div className="font-black text-xs" style={{ color: profit >= 0 ? '#10B981' : '#EF4444' }}>
-                                  {formatCurrency(profit)}
-                                </div>
-                                <div className="text-[10px] font-extrabold text-[var(--text-muted)]">
-                                  {marginPct.toFixed(2)}% margen
-                                </div>
-                              </td>
+                              {showFinancialDetails && (
+                                <td className="px-3.5 py-3 text-right">
+                                  <div className={`text-xs font-black ${profit >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}`}>
+                                    {formatCurrency(profit)}
+                                  </div>
+                                  <div className="text-[10px] font-extrabold text-[var(--text-muted)]">{marginPct.toFixed(0)}% margen</div>
+                                </td>
+                              )}
 
                               {/* Column 6: Status */}
                               <td className="px-3.5 py-3 text-center">
@@ -902,57 +899,58 @@ export default function ProductsPage() {
       {/* ── CATEGORIES TAB CONTENT ── */}
       {activeTab === 'CATEGORIES' && (
         <div className="flex flex-col gap-4">
-          <div className="flex flex-col sm:flex-row items-center justify-between gap-3 bg-[var(--bg-panel)] p-4 rounded-3xl border border-[var(--border-subtle)] shadow-sm">
-            <div className="relative group w-full sm:w-80">
-              <Search className="absolute top-1/2 left-3.5 h-4 w-4 -translate-y-1/2 text-[var(--text-muted)] group-focus-within:text-[var(--accent)] transition-colors" />
+          <section className="flex flex-col gap-3 rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-4 shadow-sm sm:flex-row sm:items-end sm:justify-between">
+            <label className="relative block w-full sm:max-w-md">
+              <span className="mb-1.5 block text-[10px] font-black uppercase tracking-wide text-[var(--text-muted)]">Buscar categoría</span>
+              <Search className="absolute bottom-3 left-3 h-4 w-4 text-[var(--text-muted)]" />
               <Input
-                className="w-full rounded-xl border-[var(--border-subtle)] bg-[var(--bg-elevated)] py-2 pl-10 pr-4 text-xs focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent)]/15 transition-all shadow-sm h-10"
+                className="h-10 w-full rounded-xl border-[var(--border-subtle)] bg-[var(--bg-elevated)] pl-9 pr-4 text-xs focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent)]/15"
                 value={catSearch}
                 onChange={e => setCatSearch(e.target.value)}
-                placeholder="🔍 Buscar categoría por nombre..."
+                placeholder="Nombre o descripción de la categoría..."
               />
-            </div>
-            <span className="text-xs font-bold text-[var(--text-secondary)]">
+            </label>
+            <span className="w-fit rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] px-3 py-2 text-xs font-bold text-[var(--text-secondary)]">
               Mostrando {filteredCategories.length} de {categories.length} categorías
             </span>
-          </div>
+          </section>
 
           <motion.div variants={fadeUp} className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {filteredCategories.map(category => {
               const { cleanDesc } = parseTargetCategories(category.description)
               const isAdd = isAdditionCategory(category.name, category.description)
               return (
-                <Card key={category.id} className="border-[var(--border-subtle)] bg-[var(--bg-panel)] rounded-3xl shadow-sm hover:shadow-md transition-all">
-                  <CardHeader className="p-5 pb-3 flex flex-row items-start justify-between gap-3 space-y-0">
-                    <div>
+                <Card key={category.id} className="overflow-hidden rounded-2xl border-[var(--border-subtle)] bg-[var(--bg-panel)] shadow-sm transition hover:border-[var(--border-default)]">
+                  <CardHeader className="flex flex-row items-start justify-between gap-3 space-y-0 p-4 pb-3">
+                    <div className="min-w-0">
                       <div className="flex items-center gap-2 flex-wrap">
                         <CardTitle className="text-base font-extrabold text-[var(--text-primary)]">{category.name}</CardTitle>
                         {isAdd && (
-                          <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-[var(--accent)]/15 text-[var(--accent)] border border-[var(--accent)]/20">
-                            🎯 Adición
+                          <span className="rounded-full border border-[var(--accent)]/20 bg-[var(--accent)]/10 px-2 py-0.5 text-[10px] font-extrabold text-[var(--accent)]">
+                            Adición
                           </span>
                         )}
                       </div>
-                      <CardDescription className="text-xs text-[var(--text-muted)] mt-1">{cleanDesc || 'Sin descripción'}</CardDescription>
+                      <CardDescription className="mt-1 line-clamp-2 text-xs text-[var(--text-muted)]">{cleanDesc || 'Sin descripción'}</CardDescription>
                     </div>
-                    <Badge className="bg-[var(--accent-muted)] text-[var(--accent)] border border-[var(--accent)]/20 text-xs font-bold px-2.5 py-0.5 rounded-full shrink-0">
+                    <Badge className="shrink-0 rounded-full border border-[var(--border-subtle)] bg-[var(--bg-elevated)] px-2.5 py-0.5 text-xs font-bold text-[var(--text-secondary)]">
                       {category.items?.length || 0} ítems
                     </Badge>
                   </CardHeader>
-              <CardContent className="p-5 pt-0 flex justify-between gap-2 border-t border-[var(--border-subtle)]/40 mt-3">
+              <CardContent className="mt-1 flex justify-between gap-2 border-t border-[var(--border-subtle)] bg-[var(--bg-elevated)]/50 p-3">
                 <div className="flex gap-1 items-center">
-                  <Button size="sm" variant="ghost" onClick={() => moveCategory(category.id, 'UP')} className="h-8 w-8 p-0 text-[var(--text-muted)] hover:text-[var(--text-primary)] rounded-xl">
+                  <Button size="sm" variant="ghost" onClick={() => moveCategory(category.id, 'UP')} className="h-8 w-8 rounded-lg p-0 text-[var(--text-muted)] hover:bg-[var(--bg-panel)] hover:text-[var(--text-primary)]">
                     <ChevronLeft className="h-4 w-4 rotate-90" />
                   </Button>
-                  <Button size="sm" variant="ghost" onClick={() => moveCategory(category.id, 'DOWN')} className="h-8 w-8 p-0 text-[var(--text-muted)] hover:text-[var(--text-primary)] rounded-xl">
+                  <Button size="sm" variant="ghost" onClick={() => moveCategory(category.id, 'DOWN')} className="h-8 w-8 rounded-lg p-0 text-[var(--text-muted)] hover:bg-[var(--bg-panel)] hover:text-[var(--text-primary)]">
                     <ChevronRight className="h-4 w-4 rotate-90" />
                   </Button>
                 </div>
                 <div className="flex gap-2">
-                  <Button size="sm" variant="ghost" onClick={() => openEditCategory(category)} className="h-8 px-3 text-xs font-bold text-[var(--accent)] hover:bg-[var(--accent-muted)] rounded-xl gap-1.5">
+                  <Button size="sm" variant="ghost" onClick={() => openEditCategory(category)} className="h-8 gap-1.5 rounded-lg px-3 text-xs font-bold text-[var(--text-primary)] hover:bg-[var(--bg-panel)]">
                     <Edit className="h-3 w-3" /> Editar
                   </Button>
-                  <Button size="sm" variant="ghost" onClick={() => deleteCategory(category.id)} className="h-8 px-3 text-xs font-bold text-[var(--destructive)] hover:bg-[var(--destructive)]/10 rounded-xl gap-1.5">
+                  <Button size="sm" variant="ghost" onClick={() => deleteCategory(category.id)} className="h-8 gap-1.5 rounded-lg px-3 text-xs font-bold text-[var(--destructive)] hover:bg-[var(--destructive)]/10">
                     <Trash2 className="h-3 w-3" /> Eliminar
                   </Button>
                 </div>
@@ -968,7 +966,7 @@ export default function ProductsPage() {
       <Dialog open={productDialogOpen} onOpenChange={setProductDialogOpen}>
         <DialogContent className="max-w-4xl bg-[var(--bg-panel)] border-[var(--border-default)] rounded-3xl p-4 sm:p-5 shadow-2xl h-[520px] max-h-[88vh] flex flex-col overflow-hidden">
           {/* Unified Header with Title and Tabs in one single row */}
-          <div className="flex-shrink-0 pb-2.5 border-b border-[var(--border-subtle)]/60 flex flex-wrap items-center justify-between gap-3">
+          <div className="flex-shrink-0 border-b border-[var(--border-subtle)]/60 pb-2.5 flex flex-wrap items-center justify-between gap-3">
             <div className="flex items-center gap-2">
               <div className="p-1.5 rounded-lg bg-[var(--accent-muted)] text-[var(--accent)] shrink-0">
                 <PackagePlus className="h-4.5 w-4.5" />
@@ -978,14 +976,13 @@ export default function ProductsPage() {
               </h3>
             </div>
 
-            {/* Inline Sleek Tabs integrated directly in header with space for X close button */}
-            <div className="flex rounded-xl bg-[var(--bg-elevated)] p-1 border border-[var(--border-subtle)] gap-1 shrink-0 mr-8">
+            <div className="mr-8 flex gap-1 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-1 shrink-0">
               <button
                 type="button"
                 onClick={() => setDialogTab('DETAILS')}
                 className={`py-1 px-3 text-xs font-extrabold rounded-lg transition-all cursor-pointer flex items-center gap-1.5 ${dialogTab === 'DETAILS' ? 'bg-[var(--accent)] text-[var(--accent-fg)] shadow-sm' : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}`}
               >
-                <Tags className="h-3.5 w-3.5" /> 📜 Datos Principales
+                <Tags className="h-3.5 w-3.5" /> Datos
               </button>
 
               {prodType === 'COMBO' ? (
@@ -994,7 +991,7 @@ export default function ProductsPage() {
                   onClick={() => setDialogTab('COMBO')}
                   className={`py-1 px-3 text-xs font-extrabold rounded-lg transition-all cursor-pointer flex items-center gap-1.5 ${dialogTab === 'COMBO' ? 'bg-[var(--accent)] text-[var(--accent-fg)] shadow-sm' : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}`}
                 >
-                  <Box className="h-3.5 w-3.5" /> 🍱 Ítems ({comboItemsList.filter(c => c.itemId).length})
+                  <Box className="h-3.5 w-3.5" /> Ítems ({comboItemsList.filter(c => c.itemId).length})
                 </button>
               ) : (
                 <button
@@ -1002,7 +999,7 @@ export default function ProductsPage() {
                   onClick={() => setDialogTab('RECIPE')}
                   className={`py-1 px-3 text-xs font-extrabold rounded-lg transition-all cursor-pointer flex items-center gap-1.5 ${dialogTab === 'RECIPE' ? 'bg-[var(--accent)] text-[var(--accent-fg)] shadow-sm' : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}`}
                 >
-                  <ChefHat className="h-3.5 w-3.5" /> 📋 Receta ({recipeItems.filter(r => r.ingredientId).length})
+                  <ChefHat className="h-3.5 w-3.5" /> Receta ({recipeItems.filter(r => r.ingredientId).length})
                 </button>
               )}
             </div>
@@ -1040,9 +1037,9 @@ export default function ProductsPage() {
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent className="bg-[var(--bg-panel)] border-[var(--border-default)]">
-                          <SelectItem value="NORMAL">🍔 Producto Normal</SelectItem>
-                          <SelectItem value="COMBO">🍱 Combo Especial</SelectItem>
-                          <SelectItem value="ADICION">➕ Adición / Topping</SelectItem>
+                          <SelectItem value="NORMAL">Producto</SelectItem>
+                          <SelectItem value="COMBO">Combo</SelectItem>
+                          <SelectItem value="ADICION">Adición</SelectItem>
                         </SelectContent>
                       </Select>
                     </div>
@@ -1369,11 +1366,11 @@ export default function ProductsPage() {
               {dialogTab === 'DETAILS' && (
                 prodType === 'COMBO' ? (
                   <Button type="button" variant="outline" onClick={() => setDialogTab('COMBO')} className="border-[var(--accent)] text-[var(--accent)] hover:bg-[var(--accent-muted)] rounded-xl text-xs font-extrabold px-3.5 h-9 gap-1 cursor-pointer">
-                    <Box className="h-3.5 w-3.5" /> Configurar Combo ➔
+                    <Box className="h-3.5 w-3.5" /> Configurar combo
                   </Button>
                 ) : (
                   <Button type="button" variant="outline" onClick={() => setDialogTab('RECIPE')} className="border-[var(--accent)] text-[var(--accent)] hover:bg-[var(--accent-muted)] rounded-xl text-xs font-extrabold px-3.5 h-9 gap-1 cursor-pointer">
-                    <ChefHat className="h-3.5 w-3.5" /> Receta / Insumos ➔
+                    <ChefHat className="h-3.5 w-3.5" /> Receta e insumos
                   </Button>
                 )
               )}
@@ -1414,7 +1411,7 @@ export default function ProductsPage() {
                   className="rounded text-[var(--accent)] accent-[var(--accent)] h-4 w-4 shrink-0"
                 />
                 <div className="flex flex-col min-w-0 flex-1">
-                  <span className="text-xs font-extrabold text-[var(--text-primary)]">🎯 ¿Es una categoría de Adiciones / Toppings?</span>
+                  <span className="text-xs font-extrabold text-[var(--text-primary)]">Categoría de adiciones</span>
                   <span className="text-[10px] text-[var(--text-muted)]">Permite asociar y mostrar esta adición a las categorías que elijas al tomar pedidos</span>
                 </div>
               </label>
@@ -1444,7 +1441,7 @@ export default function ProductsPage() {
               <div className="pt-2 border-t border-[var(--border-subtle)] space-y-2 animate-in fade-in duration-200">
                 <div className="flex items-center justify-between">
                   <Label className="text-xs font-extrabold text-[var(--accent)] flex items-center gap-1">
-                    🎯 Platos vinculados (¿A qué categorías les saldrá esta adición?)
+                    Platos vinculados
                   </Label>
                   <button
                     type="button"
