@@ -80,6 +80,30 @@ export class OrdersController {
     return this.ordersService.getCustomerHistory(phone);
   }
 
+  @Get('history')
+  @UseGuards(PermissionsGuard)
+  @Permissions('orders.view', 'dispatch.view')
+  @ApiOperation({ summary: 'Historial paginado de domicilios y pedidos para recoger' })
+  getDeliveryHistory(
+    @Query('status') status?: string,
+    @Query('startDate') startDate?: string,
+    @Query('endDate') endDate?: string,
+    @Query('search') search?: string,
+    @Query('orderType') orderType?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.ordersService.findDeliveryHistory({
+      status,
+      startDate,
+      endDate,
+      search,
+      orderType: orderType || 'DELIVERY,PICKUP',
+      page: page ? Number(page) : 1,
+      limit: limit ? Number(limit) : 20,
+    });
+  }
+
   @Get('number/:orderNumber')
   @UseGuards(PermissionsGuard)
   @Permissions('orders.view', 'dispatch.view', 'whatsapp.view')

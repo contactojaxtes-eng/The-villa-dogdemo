@@ -79,6 +79,25 @@ interface Order {
   deliveryDriver?: { id: string; name: string; phone: string } | null
 }
 
+interface DeliveryHistoryResponse {
+  orders: Order[]
+  pagination: {
+    page: number
+    pageSize: number
+    total: number
+    totalPages: number
+  }
+  summary: {
+    total: number
+    listed: number
+    active: number
+    delivered: number
+    cancelled: number
+    billed: number
+    statusCounts: Record<string, number>
+  }
+}
+
 const IMPOCONSUMO_RATE = 0.08
 const activeStatuses = ['PENDING', 'READY', 'IN_ROUTE']
 const HISTORY_PAGE_SIZE = 20
@@ -169,6 +188,16 @@ export default function OrdersPage() {
   const [registeringDriverInline, setRegisteringDriverInline] = useState(false)
   const [dispatchError, setDispatchError] = useState('')
   const [currentPage, setCurrentPage] = useState(1)
+  const [historyPagination, setHistoryPagination] = useState({ page: 1, pageSize: HISTORY_PAGE_SIZE, total: 0, totalPages: 1 })
+  const [historySummary, setHistorySummary] = useState<DeliveryHistoryResponse['summary']>({
+    total: 0,
+    listed: 0,
+    active: 0,
+    delivered: 0,
+    cancelled: 0,
+    billed: 0,
+    statusCounts: {},
+  })
   const socketRef = useRef<Socket | null>(null)
 
   const loadDrivers = useCallback(async () => {
@@ -309,6 +338,10 @@ export default function OrdersPage() {
       const first = new Date(now.getFullYear(), now.getMonth(), 1)
       setStartDate(getLocalDateString(first))
       setEndDate(getLocalDateString(new Date()))
+    } else if (preset === 'range') {
+      const today = getLocalDateString(now)
+      if (!startDate) setStartDate(today)
+      if (!endDate) setEndDate(today)
     } else if (preset === 'all') {
       setStartDate('')
       setEndDate('')
@@ -318,18 +351,25 @@ export default function OrdersPage() {
   const loadOrders = useCallback((silent = false, force = false) => {
     if (!silent) setIsRefreshing(true)
     const params = new URLSearchParams()
-    params.set('orderType', 'DELIVERY,PICKUP')
+    params.set('orderType', orderTypeFilter === 'ALL' ? 'DELIVERY,PICKUP' : orderTypeFilter)
+    if (statusFilter !== 'ALL') params.set('status', statusFilter)
     if (submittedSearch) params.set('search', submittedSearch)
     if (startDate) params.set('startDate', startDate)
     if (endDate) params.set('endDate', endDate)
-    api.get<Order[]>(`/orders?${params.toString()}`, { force })
-      .then(setOrders)
+    params.set('page', String(currentPage))
+    params.set('limit', String(HISTORY_PAGE_SIZE))
+    api.get<DeliveryHistoryResponse>(`/orders/history?${params.toString()}`, { force })
+      .then(result => {
+        setOrders(result.orders)
+        setHistoryPagination(result.pagination)
+        setHistorySummary(result.summary)
+      })
       .catch(console.error)
       .finally(() => {
         setLoading(false)
         setIsRefreshing(false)
       })
-  }, [startDate, endDate, submittedSearch])
+  }, [currentPage, endDate, orderTypeFilter, startDate, statusFilter, submittedSearch])
 
   useEffect(() => {
     const socketUrl = import.meta.env.VITE_API_URL || window.location.origin
@@ -517,71 +557,10 @@ export default function OrdersPage() {
     return encodeURIComponent(message)
   }
 
-  const ordersForType = useMemo(() => {
-    if (orderTypeFilter === 'ALL') return orders
-    return orders.filter(order => order.orderType === orderTypeFilter)
-  }, [orders, orderTypeFilter])
-
-  const summary = useMemo(() => {
-    const total = ordersForType
-      .filter(order => order.status !== 'CANCELLED')
-      .reduce((sum, order) => sum + order.total, 0)
-    return {
-      total,
-      active: ordersForType.filter(order => activeStatuses.includes(order.status)).length,
-      delivered: ordersForType.filter(order => order.status === 'DELIVERED').length,
-      cancelled: ordersForType.filter(order => order.status === 'CANCELLED').length,
-      transfer: ordersForType.filter(order => order.paymentMethod === 'TRANSFER').length,
-    }
-  }, [ordersForType])
-
-  const statusCounts = useMemo(() => {
-    return statusOrder.reduce<Record<string, number>>((acc, status) => {
-      acc[status] = ordersForType.filter(order => order.status === status).length
-      return acc
-    }, {})
-  }, [ordersForType])
-
-  const filteredOrders = useMemo(() => {
-    let result = ordersForType
-
-    if (statusFilter && statusFilter !== 'ALL') {
-      result = result.filter(order => order.status === statusFilter)
-    }
-
-    const term = search.trim().toLowerCase()
-    if (term) {
-      const digitsOnly = term.replace(/\D/g, '')
-      result = result.filter(order => {
-        const matchesName = (order.customerName || '').toLowerCase().includes(term)
-        const matchesPhone = (order.customerPhone || '').toLowerCase().includes(term)
-        const matchesAddress = (order.customerAddress || '').toLowerCase().includes(term)
-        const matchesReference = (order.addressReference || '').toLowerCase().includes(term)
-        const matchesNotes = (order.notes || '').toLowerCase().includes(term)
-        const matchesDriver = (order.deliveryDriver?.name || '').toLowerCase().includes(term)
-        const matchesWaiter = (order.waiter?.name || '').toLowerCase().includes(term)
-        const matchesItems = order.items?.some(i => (i.menuItem?.name || '').toLowerCase().includes(term))
-        const matchesOrderNum = digitsOnly ? String(order.orderNumber).includes(digitsOnly) : false
-        const matchesInvoiceNum = (digitsOnly && order.invoiceNumber) ? String(order.invoiceNumber).includes(digitsOnly) : false
-        const matchesOrderFormatted = `turno #${order.orderNumber}`.toLowerCase().includes(term) || `turno ${order.orderNumber}`.toLowerCase().includes(term)
-        const matchesInvoiceFormatted = `factura #${order.invoiceNumber}`.toLowerCase().includes(term) || `factura ${order.invoiceNumber}`.toLowerCase().includes(term)
-
-        return matchesName || matchesPhone || matchesAddress || matchesReference || matchesNotes || matchesDriver || matchesWaiter || matchesItems || matchesOrderNum || matchesInvoiceNum || matchesOrderFormatted || matchesInvoiceFormatted
-      })
-    }
-
-    return [...result].sort((a, b) => {
-      const byTime = new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-      return byTime || b.orderNumber - a.orderNumber
-    })
-  }, [ordersForType, statusFilter, search])
-
-  const totalPages = Math.max(1, Math.ceil(filteredOrders.length / HISTORY_PAGE_SIZE))
-  const safeCurrentPage = Math.min(currentPage, totalPages)
-  const displayedOrders = useMemo(() => {
-    const start = (safeCurrentPage - 1) * HISTORY_PAGE_SIZE
-    return filteredOrders.slice(start, start + HISTORY_PAGE_SIZE)
-  }, [filteredOrders, safeCurrentPage])
+  const totalPages = historyPagination.totalPages
+  const safeCurrentPage = historyPagination.page
+  const displayedOrders = orders
+  const statusCounts = historySummary.statusCounts
 
   const uniqueOperators = useMemo(() => {
     const ops = new Map<string, { userId: string; userName: string }>()
@@ -638,16 +617,16 @@ export default function OrdersPage() {
       <motion.div className="grid grid-cols-2 gap-4 md:grid-cols-4" variants={stagger}>
         {(user?.role === 'DELIVERY_MANAGER'
           ? [
-              { label: 'Pedidos Listados', value: ordersForType.length, color: '#10B981', icon: Package, sub: 'En esta consulta' },
-              { label: 'Pedidos Activos', value: summary.active, color: '#F59E0B', icon: Timer, sub: 'Pendientes de despacho' },
-              { label: 'Entregados', value: summary.delivered, color: '#F97316', icon: Bike, sub: 'En el período elegido' },
-              { label: 'Cancelados', value: summary.cancelled, color: '#EF4444', icon: XCircle, sub: 'Pedidos cancelados' },
+              { label: 'Pedidos Listados', value: historySummary.listed, color: '#10B981', icon: Package, sub: 'En esta consulta' },
+              { label: 'Pedidos Activos', value: historySummary.active, color: '#F59E0B', icon: Timer, sub: 'Pendientes de despacho' },
+              { label: 'Entregados', value: historySummary.delivered, color: '#F97316', icon: Bike, sub: 'En el período elegido' },
+              { label: 'Cancelados', value: historySummary.cancelled, color: '#EF4444', icon: XCircle, sub: 'Pedidos cancelados' },
             ]
           : [
-              { label: 'Pedidos Listados', value: ordersForType.length, color: '#10B981', icon: Package, sub: 'En esta consulta' },
-              { label: 'Pedidos Activos', value: summary.active, color: '#F59E0B', icon: Timer, sub: 'Pendientes de despacho' },
-              { label: 'Entregados', value: summary.delivered, color: '#F97316', icon: Bike, sub: 'En el período elegido' },
-              { label: 'Facturación Total', value: formatCurrency(summary.total), color: '#3B82F6', icon: DollarSign, sub: 'Monto total' },
+              { label: 'Pedidos Listados', value: historySummary.listed, color: '#10B981', icon: Package, sub: 'En esta consulta' },
+              { label: 'Pedidos Activos', value: historySummary.active, color: '#F59E0B', icon: Timer, sub: 'Pendientes de despacho' },
+              { label: 'Entregados', value: historySummary.delivered, color: '#F97316', icon: Bike, sub: 'En el período elegido' },
+              { label: 'Facturación cobrada', value: formatCurrency(historySummary.billed), color: '#3B82F6', icon: DollarSign, sub: 'Entregados y pagos confirmados' },
             ]
         ).map(stat => {
           const Icon = stat.icon
@@ -688,7 +667,7 @@ export default function OrdersPage() {
                 <p className="text-xs text-[var(--text-muted)]">Filtra por fecha, tipo de entrega, estado, cliente, barrio, producto o repartidor.</p>
               </div>
               <div className="rounded-xl bg-[var(--bg-elevated)] px-3 py-1.5 text-xs font-bold text-[var(--text-secondary)]">
-                {filteredOrders.length} resultado{filteredOrders.length === 1 ? '' : 's'}
+                {historySummary.listed} resultado{historySummary.listed === 1 ? '' : 's'}
               </div>
             </div>
             <div className="flex flex-wrap gap-3">
@@ -766,7 +745,7 @@ export default function OrdersPage() {
                 </button>
               </div>
 
-              {(datePreset === 'range' || datePreset === 'today' || datePreset === 'yesterday' || datePreset === 'week' || datePreset === 'month') && (
+              {datePreset === 'range' && (
                 <div className="flex items-center gap-2">
                   <div className="relative">
                     <span className="text-[10px] font-bold text-[var(--text-muted)] block mb-0.5">Desde</span>
@@ -812,7 +791,7 @@ export default function OrdersPage() {
                 className={`rounded-xl px-3.5 py-1.5 text-xs font-bold transition-all ${statusFilter === 'ALL' ? 'bg-[var(--accent)] text-[var(--accent-fg)] shadow-sm' : 'border border-[var(--border-default)] text-[var(--text-secondary)] hover:border-[var(--text-primary)] bg-[var(--bg-base)]'}`}
                 onClick={() => { setStatusFilter('ALL'); setCurrentPage(1) }}
               >
-                Todos · {ordersForType.length}
+                Todos · {historySummary.total}
               </button>
               {statusOrder.map(status => (
                 <button
@@ -1167,10 +1146,10 @@ export default function OrdersPage() {
             )
           })}
         </AnimatePresence>
-        {filteredOrders.length > HISTORY_PAGE_SIZE && (
+        {historyPagination.total > HISTORY_PAGE_SIZE && (
           <div className="flex flex-col gap-3 rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
             <p className="text-xs font-semibold text-[var(--text-muted)]">
-              Mostrando {(safeCurrentPage - 1) * HISTORY_PAGE_SIZE + 1}–{Math.min(safeCurrentPage * HISTORY_PAGE_SIZE, filteredOrders.length)} de {filteredOrders.length} pedidos
+              Mostrando {(safeCurrentPage - 1) * HISTORY_PAGE_SIZE + 1}–{Math.min(safeCurrentPage * HISTORY_PAGE_SIZE, historyPagination.total)} de {historyPagination.total} pedidos
             </p>
             <div className="flex items-center gap-2">
               <Button

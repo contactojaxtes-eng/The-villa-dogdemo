@@ -8,6 +8,21 @@ import { PrintService } from '../print/print.service';
 import { TablesService } from '../tables/tables.service';
 import { dashboardRange } from './dashboard-range';
 
+type OrderListParams = {
+  status?: string;
+  waiterId?: string;
+  date?: string;
+  startDate?: string;
+  endDate?: string;
+  search?: string;
+  orderNumber?: number;
+  paymentMethod?: string;
+  paymentStatus?: string;
+  orderType?: string;
+  page?: number;
+  limit?: number;
+};
+
 @Injectable()
 export class OrdersService implements OnModuleInit {
   private readonly logger = new Logger(OrdersService.name);
@@ -170,9 +185,9 @@ export class OrdersService implements OnModuleInit {
     }
   }
 
-  async findAll(params: { status?: string; waiterId?: string; date?: string; startDate?: string; endDate?: string; search?: string; orderNumber?: number; paymentMethod?: string; paymentStatus?: string; orderType?: string }) {
+  private async buildOrderWhere(params: OrderListParams) {
     const where: any = {};
-    if (params.status) where.status = params.status;
+    if (params.status && params.status !== 'ALL') where.status = params.status;
     if (params.waiterId) where.waiterId = params.waiterId;
     if (params.paymentMethod) where.paymentMethod = params.paymentMethod;
     if (params.paymentStatus) where.paymentStatus = params.paymentStatus;
@@ -266,6 +281,82 @@ export class OrdersService implements OnModuleInit {
 
       where.OR = searchConditions;
     }
+
+    return where;
+  }
+
+  async findDeliveryHistory(params: OrderListParams) {
+    const page = Math.max(1, Math.floor(Number(params.page) || 1));
+    const limit = Math.min(50, Math.max(10, Math.floor(Number(params.limit) || 20)));
+    // Los contadores no cambian cuando se elige una pestaña de estado. Así se puede
+    // pasar de Pendiente a Entregado sin perder el contexto del turno seleccionado.
+    const baseWhere = await this.buildOrderWhere({
+      ...params,
+      status: undefined,
+      orderType: params.orderType || 'DELIVERY,PICKUP',
+    });
+    const where = params.status && params.status !== 'ALL'
+      ? { ...baseWhere, status: params.status }
+      : baseWhere;
+    const include = {
+      waiter: { select: { id: true, name: true } },
+      assignee: { select: { id: true, name: true } },
+      cancelledBy: { select: { id: true, name: true } },
+      zone: true,
+      cashRegister: { select: { id: true, name: true } },
+      items: { include: { menuItem: true } },
+      payment: true,
+      deliveryDriver: true,
+    };
+    const [listed, total, groupedStatuses, billed] = await Promise.all([
+      this.prisma.order.count({ where }),
+      this.prisma.order.count({ where: baseWhere }),
+      this.prisma.order.groupBy({
+        by: ['status'],
+        where: baseWhere,
+        _count: { _all: true },
+      }),
+      this.prisma.order.aggregate({
+        where: { ...baseWhere, status: 'DELIVERED', paymentStatus: 'CONFIRMED' },
+        _sum: { total: true },
+      }),
+    ]);
+    const totalPages = Math.max(1, Math.ceil(listed / limit));
+    const safePage = Math.min(page, totalPages);
+    const orders = await this.prisma.order.findMany({
+      where,
+      include,
+      orderBy: [{ createdAt: 'desc' }, { orderNumber: 'desc' }],
+      skip: (safePage - 1) * limit,
+      take: limit,
+    });
+    const statusCounts = groupedStatuses.reduce<Record<string, number>>((counts, group) => {
+      counts[group.status] = group._count._all;
+      return counts;
+    }, {});
+
+    return {
+      orders,
+      pagination: {
+        page: safePage,
+        pageSize: limit,
+        total: listed,
+        totalPages,
+      },
+      summary: {
+        total,
+        listed,
+        active: ['PENDING', 'READY', 'IN_ROUTE'].reduce((count, status) => count + (statusCounts[status] || 0), 0),
+        delivered: statusCounts.DELIVERED || 0,
+        cancelled: statusCounts.CANCELLED || 0,
+        billed: billed._sum.total || 0,
+        statusCounts,
+      },
+    };
+  }
+
+  async findAll(params: OrderListParams) {
+    const where = await this.buildOrderWhere(params);
     const queryOptions: any = {
       where,
       include: {
