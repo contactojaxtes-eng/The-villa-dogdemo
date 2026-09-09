@@ -558,11 +558,16 @@ const ChatInputBar = React.memo(({
     const val = e.target.value
     setLocalText(val)
     if (onTyping && !disabled) {
-      onTyping(true)
-      if (typingTimerRef.current) clearTimeout(typingTimerRef.current)
-      typingTimerRef.current = setTimeout(() => {
+      if (val.trim().length > 0) {
+        onTyping(true)
+        if (typingTimerRef.current) clearTimeout(typingTimerRef.current)
+        typingTimerRef.current = setTimeout(() => {
+          onTyping(false)
+        }, 2500)
+      } else {
+        if (typingTimerRef.current) clearTimeout(typingTimerRef.current)
         onTyping(false)
-      }, 2000)
+      }
     }
   }
 
@@ -1294,11 +1299,16 @@ function ChatPage() {
       clearInterval(recordingTimerRef.current)
     }
 
-    if (user && activeSession && activeSession.assignedToId !== user.id) {
-      if (!await handleClaimSession(undefined, true)) {
-        mp3RecorderRef.current = null
-        return
-      }
+    const isAdmin = ['ADMIN', 'SUPERADMIN'].includes(user?.role || '')
+    if (!isAdmin && user && activeSession && activeSession.assignedToId !== user.id) {
+      alerts.info(
+        'Chat no asignado',
+        !activeSession.assignedToId
+          ? 'Debes pulsar "Reclamar Chat" antes de enviar notas de voz.'
+          : `Esta conversación está asignada a ${activeAssignedInfo.assignedName || 'otra asesora'}.`
+      )
+      mp3RecorderRef.current = null
+      return
     }
 
     setUploadingMedia(true)
@@ -1616,7 +1626,11 @@ function ChatPage() {
     let connectedOnce = false
     socket.on('connect', () => {
       setRealtimeStatus('connected')
+      socket.emit('joinRoom', 'whatsapp')
       socket.emit('getChatViewers')
+      if (activeSessionRef.current?.id) {
+        socket.emit('chatViewJoin', { sessionId: activeSessionRef.current.id })
+      }
       if (connectedOnce) loadSessions()
       connectedOnce = true
     })
@@ -2172,12 +2186,17 @@ function ChatPage() {
 
     setUploadingMedia(true)
 
-    if (user && activeSession.assignedToId !== user.id) {
-      if (!await handleClaimSession()) {
-        setUploadingMedia(false)
-        if (fileInputRef.current) fileInputRef.current.value = ''
-        return
-      }
+    const isAdmin = ['ADMIN', 'SUPERADMIN'].includes(user?.role || '')
+    if (!isAdmin && user && activeSession.assignedToId !== user.id) {
+      alerts.info(
+        'Chat no asignado',
+        !activeSession.assignedToId
+          ? 'Debes pulsar "Reclamar Chat" antes de enviar archivos.'
+          : `Esta conversación está asignada a ${activeAssignedInfo.assignedName || 'otra asesora'}.`
+      )
+      setUploadingMedia(false)
+      if (fileInputRef.current) fileInputRef.current.value = ''
+      return
     }
 
     const formData = new FormData()
@@ -2200,6 +2219,17 @@ function ChatPage() {
   // Send message with 0ms Optimistic UI for instant responsiveness
   const handleSendMessageText = async (textToSend: string) => {
     if (!textToSend.trim() || !activeSession) return
+
+    const isAdmin = ['ADMIN', 'SUPERADMIN'].includes(user?.role || '')
+    if (!isAdmin && user && activeSession.assignedToId !== user.id) {
+      alerts.info(
+        'Chat no asignado',
+        !activeSession.assignedToId
+          ? 'Debes pulsar "Reclamar Chat" antes de responder.'
+          : `Esta conversación está asignada a ${activeAssignedInfo.assignedName || 'otra asesora'}.`
+      )
+      return
+    }
 
     const cleanText = textToSend.trim()
 
@@ -2289,6 +2319,11 @@ function ChatPage() {
   // Send Restaurant Carta / Menu to active WhatsApp chat
   const handleSendMenuCarta = async () => {
     if (!activeSession || sendingMenu) return
+    const isAdmin = ['ADMIN', 'SUPERADMIN'].includes(user?.role || '')
+    if (!isAdmin && user && activeSession.assignedToId !== user.id) {
+      alerts.info('Chat no asignado', !activeSession.assignedToId ? 'Debes pulsar "Reclamar Chat" antes de realizar acciones.' : 'Este chat está siendo atendido por otra asesora.')
+      return
+    }
     const now = Date.now()
     if (now - lastSendMenuAtRef.current < 4000) {
       console.warn('Debounce Enviar Carta evitado')
@@ -2311,6 +2346,11 @@ function ChatPage() {
   // Send Restaurant Payment QR to active WhatsApp chat
   const handleSendPaymentQr = async () => {
     if (!activeSession || sendingPaymentQr) return
+    const isAdmin = ['ADMIN', 'SUPERADMIN'].includes(user?.role || '')
+    if (!isAdmin && user && activeSession.assignedToId !== user.id) {
+      alerts.info('Chat no asignado', !activeSession.assignedToId ? 'Debes pulsar "Reclamar Chat" antes de realizar acciones.' : 'Este chat está siendo atendido por otra asesora.')
+      return
+    }
     const now = Date.now()
     if (now - lastSendQrAtRef.current < 4000) {
       console.warn('Debounce Enviar QR evitado')
@@ -2335,6 +2375,11 @@ function ChatPage() {
   // Send GPS Location to active WhatsApp chat
   const handleSendLocation = async () => {
     if (!activeSession || sendingLocation) return
+    const isAdmin = ['ADMIN', 'SUPERADMIN'].includes(user?.role || '')
+    if (!isAdmin && user && activeSession.assignedToId !== user.id) {
+      alerts.info('Chat no asignado', !activeSession.assignedToId ? 'Debes pulsar "Reclamar Chat" antes de realizar acciones.' : 'Este chat está siendo atendido por otra asesora.')
+      return
+    }
 
     if (!navigator.geolocation) {
       alerts.error('No Disponible', 'Tu navegador no soporta geolocalización.')
@@ -2486,6 +2531,9 @@ function ChatPage() {
       const assignedTo = updated.assignedTo || { id: user.id, name: user.name }
       setActiveSession(prev => prev?.id === updated.id ? { ...prev, ...updated, assignedTo, assignedToId: user.id } : prev)
       setSessions(prev => prev.map(s => s.id === updated.id ? { ...s, ...updated, assignedTo, assignedToId: user.id } : s))
+      if (!silent) {
+        alerts.success('Chat Reclamado', 'Ahora estás atendiendo este chat en tiempo real.')
+      }
       return true
     } catch (err: any) {
       alerts.error('No se pudo tomar el chat', err?.message || 'Otra asesora tomó esta conversación primero.')
@@ -2495,23 +2543,27 @@ function ChatPage() {
   }
 
   // Release/unassign session
-  const handleReleaseSession = async () => {
-    if (!activeSession) return
+  const handleReleaseSession = async (sessionToRelease?: Session | null) => {
+    const target = sessionToRelease || activeSession
+    if (!target) return
+    const isMine = target.assignedToId === user?.id
     const confirm = await alerts.confirm(
       '¿Liberar conversación?',
-      'El chat volverá a la cola general para que cualquier asesora disponible pueda atenderlo o responderlo.',
+      isMine 
+        ? 'El chat volverá a la cola general para que cualquier asesor disponible pueda atenderlo o responderlo.'
+        : 'Como administrador, ¿deseas soltar este chat para que vuelva a la cola general?',
       'Sí, Soltar',
       'Cancelar'
     )
     if (!confirm) return
 
     try {
-      const updated = await api.put<Session>(`/whatsapp/sessions/${activeSession.id}/assign`, {
+      const updated = await api.put<Session>(`/whatsapp/sessions/${target.id}/assign`, {
         userId: null
       })
       setActiveSession(prev => prev?.id === updated.id ? { ...prev, ...updated, assignedToId: null, assignedTo: null } : prev)
       setSessions(prev => prev.map(s => s.id === updated.id ? { ...s, ...updated, assignedToId: null, assignedTo: null } : s))
-      alerts.success('Chat Liberado', 'La conversación volvió a estar disponible en la cola.')
+      alerts.success('Chat Liberado', 'La conversación volvió a estar disponible en la cola general.')
     } catch (err: any) {
       alerts.error('No se pudo liberar el chat', err?.message || 'Actualiza la bandeja e inténtalo nuevamente.')
       await loadSessions(undefined, chatSearch.trim(), false, chatFilter)
@@ -3138,7 +3190,7 @@ function ChatPage() {
                           )}>
                             {(() => {
                               const sessionTyping = typingUsers[s.id]
-                              if (sessionTyping && Date.now() - sessionTyping.timestamp < 3500) {
+                              if (sessionTyping && sessionTyping.userId !== user?.id && Date.now() - sessionTyping.timestamp < 3500) {
                                 return (
                                   <span className="text-emerald-600 dark:text-emerald-400 font-bold flex items-center gap-1 animate-pulse truncate">
                                     <span>✍️</span> {sessionTyping.userName} está escribiendo...
@@ -3841,11 +3893,50 @@ function ChatPage() {
                 if (isAdmin) {
                   if (activeAssignedInfo.isAssigned && !activeAssignedInfo.isMine) {
                     return (
-                      <div className="bg-blue-500/10 border-t border-blue-500/20 px-4 py-2 flex items-center justify-between text-blue-600 dark:text-blue-400 text-xs font-medium shrink-0">
+                      <div className="bg-blue-500/10 border-t border-blue-500/20 px-4 py-2 flex items-center justify-between text-blue-600 dark:text-blue-400 text-xs font-medium shrink-0 animate-in fade-in duration-150">
                         <span className="flex items-center gap-1.5">
                           <Shield className="w-4 h-4 text-blue-500 shrink-0" />
                           Chat atendido por <strong className="underline ml-0.5">{activeAssignedInfo.assignedName}</strong>. Como administrador puedes responder directamente.
                         </span>
+                        <div className="flex items-center gap-1.5">
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="ghost"
+                            className="text-xs h-7 px-2.5 text-amber-600 dark:text-amber-400 hover:bg-amber-500/15 rounded-lg cursor-pointer"
+                            onClick={() => handleReleaseSession()}
+                            title="Liberar a la cola general"
+                          >
+                            <UserX className="w-3.5 h-3.5 mr-1 text-amber-500" /> Soltar
+                          </Button>
+                          <Button
+                            type="button"
+                            size="sm"
+                            className="bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs h-7 px-3 rounded-lg cursor-pointer flex items-center gap-1 shadow-sm"
+                            onClick={() => handleClaimSession()}
+                            title="Reasignar este chat a mi usuario"
+                          >
+                            <UserPlus className="w-3.5 h-3.5 mr-1" /> Reasignar para mí
+                          </Button>
+                        </div>
+                      </div>
+                    )
+                  }
+                  if (!activeAssignedInfo.isAssigned) {
+                    return (
+                      <div className="bg-slate-500/10 border-t border-slate-500/20 px-4 py-2 flex items-center justify-between text-[var(--text-secondary)] text-xs font-medium shrink-0 animate-in fade-in duration-150">
+                        <span className="flex items-center gap-1.5">
+                          <Shield className="w-4 h-4 text-[var(--accent)] shrink-0" />
+                          Chat sin asignar. Como administrador puedes responder directamente o reclamarlo.
+                        </span>
+                        <Button
+                          type="button"
+                          size="sm"
+                          className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs h-7 px-3 rounded-lg cursor-pointer flex items-center gap-1 shadow-sm"
+                          onClick={() => handleClaimSession()}
+                        >
+                          <UserPlus className="w-3.5 h-3.5 mr-1" /> Reclamar para mí
+                        </Button>
                       </div>
                     )
                   }
@@ -3899,7 +3990,9 @@ function ChatPage() {
                 const isInputDisabled = !isAdmin && (!activeAssignedInfo.isAssigned || !activeAssignedInfo.isMine)
                 const inputPlaceholder = isInputDisabled
                   ? (!activeAssignedInfo.isAssigned ? "Debes reclamar este chat para responder..." : `Chat asignado a ${activeAssignedInfo.assignedName}`)
-                  : "Escribe un mensaje aquí..."
+                  : (isAdmin && activeAssignedInfo.isAssigned && !activeAssignedInfo.isMine
+                    ? `Respondiendo como Administrador (asignado a ${activeAssignedInfo.assignedName})...`
+                    : "Escribe un mensaje aquí...")
 
                 return (
                   <ChatInputBar
