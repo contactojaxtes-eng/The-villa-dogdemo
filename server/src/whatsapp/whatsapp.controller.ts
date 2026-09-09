@@ -246,8 +246,7 @@ export class WhatsappController {
   }
 
   @Put('sessions/:id/assign')
-  @UseGuards(JwtAuthGuard, PermissionsGuard)
-  @Permissions('whatsapp.view', 'whatsapp.reply', 'whatsapp.assign')
+  @UseGuards(JwtAuthGuard)
   assignSession(
     @Param('id') id: string,
     @Body('userId') userId: string | null,
@@ -257,8 +256,7 @@ export class WhatsappController {
   }
 
   @Post('sessions/unassign-all')
-  @UseGuards(JwtAuthGuard, PermissionsGuard)
-  @Permissions('whatsapp.assign')
+  @UseGuards(JwtAuthGuard)
   unassignAll(@Req() req: any) {
     const user = req.user;
     return this.whatsappService.unassignAllSessions(

@@ -20,7 +20,7 @@ export class PermissionsGuard implements CanActivate {
 
     const user = context.switchToHttp().getRequest().user;
     if (!user) throw new ForbiddenException('No autenticado');
-    if (user.role === 'SUPERADMIN') return true;
+    if (user.role === 'SUPERADMIN' || user.role === 'ADMIN') return true;
 
     let permissions = user.permissions;
     if (typeof permissions === 'string') {
@@ -30,9 +30,9 @@ export class PermissionsGuard implements CanActivate {
         permissions = null;
       }
     }
-    const effective = Array.isArray(permissions)
-      ? permissions
-      : (DEFAULT_ROLE_PERMISSIONS[user.role] || []);
+    const roleDefaults = DEFAULT_ROLE_PERMISSIONS[user.role] || [];
+    const userPerms = Array.isArray(permissions) ? permissions : [];
+    const effective = Array.from(new Set([...roleDefaults, ...userPerms]));
     if (effective.includes('*') || required.some(permission => effective.includes(permission))) {
       return true;
     }

@@ -212,7 +212,7 @@ export function getDefaultPermissionsForRole(role: string): string[] {
 
 export function hasUserPermission(user: { role?: string; permissions?: any } | null | undefined, permKey: string): boolean {
   if (!user) return false;
-  if (user.role === 'SUPERADMIN') return true;
+  if (user.role === 'SUPERADMIN' || user.role === 'ADMIN') return true;
 
   let perms = user.permissions;
   if (typeof perms === 'string') {
@@ -223,15 +223,12 @@ export function hasUserPermission(user: { role?: string; permissions?: any } | n
     }
   }
 
-  // Si tiene permisos explícitos configurados como arreglo
-  if (perms && Array.isArray(perms)) {
-    if (perms.includes('*')) return true;
-    return perms.includes(permKey);
-  }
-
-  // Fallback a los permisos por defecto del rol
   const defaults = getDefaultPermissionsForRole(user.role || 'CASHIER');
-  return defaults.includes(permKey);
+  const userPerms = Array.isArray(perms) ? perms : [];
+  const effective = Array.from(new Set([...defaults, ...userPerms]));
+
+  if (effective.includes('*')) return true;
+  return effective.includes(permKey);
 }
 
 export const SYSTEM_ROLE_LABELS: Record<string, string> = {

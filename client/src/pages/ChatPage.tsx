@@ -2465,7 +2465,7 @@ function ChatPage() {
     if (targetSession.assignedToId === user.id) return true
 
     if (targetSession.assignedToId && targetSession.assignedToId !== user.id) {
-      const isSupervisor = ['ADMIN', 'SUPERADMIN'].includes(user.role || '')
+      const isSupervisor = ['ADMIN', 'SUPERADMIN', 'DELIVERY_MANAGER'].includes(user.role || '')
       const otherName = targetSession.assignedTo?.name || 'otra asesora'
       if (!isSupervisor) {
         alerts.info('Chat ocupado', `Esta conversación está siendo atendida en tiempo real por ${otherName}.`)
@@ -2473,7 +2473,7 @@ function ChatPage() {
       }
       const confirm = await alerts.confirm(
         '¿Reasignar conversación?',
-        `Esta conversación está tomada por ${otherName}. Como administrador, ¿deseas reasignártela a ti?`,
+        `Esta conversación está tomada por ${otherName}. ¿Deseas reasignártela a ti para atender al cliente?`,
         'Sí, Reclamar',
         'Cancelar'
       )
@@ -2513,8 +2513,7 @@ function ChatPage() {
       return true
     } catch (err: any) {
       console.error('Error al reclamar chat:', err)
-      alerts.error('No se pudo tomar el chat', err?.message || 'Otra asesora tomó esta conversación primero.')
-      await loadSessions(targetSession.id, chatSearch.trim(), false, chatFilter).catch(() => {})
+      alerts.error('No se pudo tomar el chat', err?.message || 'No se pudo reclamar la conversación.')
       return false
     }
   }
@@ -2528,7 +2527,7 @@ function ChatPage() {
       '¿Liberar conversación?',
       isMine 
         ? 'El chat volverá a la cola general para que cualquier asesor disponible pueda atenderlo o responderlo.'
-        : 'Como administrador, ¿deseas soltar este chat para que vuelva a la cola general?',
+        : '¿Deseas soltar este chat para que vuelva a la cola general?',
       'Sí, Soltar',
       'Cancelar'
     )
@@ -2562,7 +2561,6 @@ function ChatPage() {
     } catch (err: any) {
       console.error('Error al liberar chat:', err)
       alerts.error('No se pudo liberar el chat', err?.message || 'Actualiza la bandeja e inténtalo nuevamente.')
-      await loadSessions(target.id, chatSearch.trim(), false, chatFilter).catch(() => {})
     }
   }
 
@@ -2683,11 +2681,24 @@ function ChatPage() {
         const claimed = await handleClaimSession(activeSession)
         if (!claimed) return
       } else if (activeSession.assignedToId !== user.id) {
-        alerts.warning(
-          'Chat de otra asesora',
-          `Este chat está siendo atendido por ${activeAssignedInfo.assignedName || 'otra asesora'}. Debes tener el chat reclamado para tomar el pedido.`
-        )
-        return
+        const canTakeover = ['DELIVERY_MANAGER', 'ADMIN', 'SUPERADMIN'].includes(user?.role || '')
+        if (canTakeover) {
+          const confirmTakeover = await alerts.confirm(
+            'Reasignar para tomar pedido',
+            `Este chat está asignado a ${activeAssignedInfo.assignedName || 'otra asesora'}.\n\n¿Deseas reclamar la conversación para ti y tomar el pedido?`,
+            'Sí, Reclamar y Tomar Pedido',
+            'Cancelar'
+          )
+          if (!confirmTakeover) return
+          const claimed = await handleClaimSession(activeSession)
+          if (!claimed) return
+        } else {
+          alerts.warning(
+            'Chat de otra asesora',
+            `Este chat está siendo atendido por ${activeAssignedInfo.assignedName || 'otra asesora'}. Debes tener el chat reclamado para tomar el pedido.`
+          )
+          return
+        }
       }
     }
 
@@ -3245,12 +3256,15 @@ function ChatPage() {
                           </span>
                           <div className="flex items-center gap-1 shrink-0">
                             {(() => {
-                              const viewers = chatViewers[s.id] || []
+                              const viewers = (chatViewers[s.id] || []).filter(v => Boolean(v?.userId))
                               if (viewers.length === 0) return null
+                              const rawViewerName = typeof viewers[0]?.userName === 'string' ? viewers[0].userName.trim() : 'Asesor'
+                              const shortName = rawViewerName.split(' ')[0] || rawViewerName
+                              const viewerTitles = viewers.map(v => typeof v?.userName === 'string' ? v.userName : 'Asesor').join(', ')
                               return (
-                                <span className="inline-flex items-center gap-0.5 text-[8px] font-bold text-sky-600 dark:text-sky-400 bg-sky-500/15 border border-sky-500/30 px-1.5 py-0.5 rounded-md" title={`Viendo: ${viewers.map(v => v.userName).join(', ')}`}>
+                                <span className="inline-flex items-center gap-0.5 text-[8px] font-bold text-sky-600 dark:text-sky-400 bg-sky-500/15 border border-sky-500/30 px-1.5 py-0.5 rounded-md" title={`Viendo: ${viewerTitles}`}>
                                   <Eye className="h-2.5 w-2.5" />
-                                  <span className="max-w-[60px] truncate">{viewers[0].userName.split(' ')[0]}</span>
+                                  <span className="max-w-[60px] truncate">{shortName}</span>
                                 </span>
                               )
                             })()}
@@ -3424,11 +3438,24 @@ function ChatPage() {
                             const claimed = await handleClaimSession(activeSession)
                             if (!claimed) return
                           } else if (activeSession.assignedToId !== user.id) {
-                            alerts.warning(
-                              'Chat de otra asesora',
-                              `Este chat está siendo atendido por ${activeAssignedInfo.assignedName || 'otra asesora'}. Debes tener el chat reclamado para editar pedidos.`
-                            )
-                            return
+                            const canTakeover = ['DELIVERY_MANAGER', 'ADMIN', 'SUPERADMIN'].includes(user?.role || '')
+                            if (canTakeover) {
+                              const confirmTakeover = await alerts.confirm(
+                                'Reasignar conversación',
+                                `Este chat está asignado a ${activeAssignedInfo.assignedName || 'otra asesora'}.\n\n¿Deseas reclamar la conversación para ti y editar el pedido?`,
+                                'Sí, Reclamar y Editar',
+                                'Cancelar'
+                              )
+                              if (!confirmTakeover) return
+                              const claimed = await handleClaimSession(activeSession)
+                              if (!claimed) return
+                            } else {
+                              alerts.warning(
+                                'Chat de otra asesora',
+                                `Este chat está siendo atendido por ${activeAssignedInfo.assignedName || 'otra asesora'}. Debes tener el chat reclamado para editar pedidos.`
+                              )
+                              return
+                            }
                           }
                         }
 
@@ -4376,11 +4403,11 @@ function ChatPage() {
   )
 }
 
-class ChatPageErrorBoundary extends React.Component<{ children: React.ReactNode }, { hasError: boolean }> {
-  state = { hasError: false }
+class ChatPageErrorBoundary extends React.Component<{ children: React.ReactNode }, { hasError: boolean; error: any }> {
+  state = { hasError: false, error: null }
 
-  static getDerivedStateFromError() {
-    return { hasError: true }
+  static getDerivedStateFromError(error: any) {
+    return { hasError: true, error }
   }
 
   componentDidCatch(error: any, errorInfo: any) {
@@ -4398,15 +4425,29 @@ class ChatPageErrorBoundary extends React.Component<{ children: React.ReactNode 
           <p className="text-xs text-[var(--text-secondary)] max-w-md">
             No te preocupes. Haz clic en el botón de abajo para restablecer la vista de WhatsApp de forma segura.
           </p>
-          <Button
-            onClick={() => {
-              try { localStorage.removeItem('niche_last_active_whatsapp_session_id') } catch(e){}
-              window.location.href = '/chat'
-            }}
-            className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs px-4 py-2 rounded-xl cursor-pointer"
-          >
-            🔄 Restablecer Chat de WhatsApp
-          </Button>
+          <div className="flex items-center gap-3">
+            <Button
+              onClick={() => {
+                this.setState({ hasError: false, error: null })
+              }}
+              variant="outline"
+              className="text-xs font-bold px-4 py-2 rounded-xl cursor-pointer"
+            >
+              Reintentar
+            </Button>
+            <Button
+              onClick={() => {
+                try {
+                  localStorage.removeItem('villa_dog_last_active_whatsapp_session_id')
+                  localStorage.removeItem('niche_last_active_whatsapp_session_id')
+                } catch(e){}
+                window.location.href = '/chat'
+              }}
+              className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs px-4 py-2 rounded-xl cursor-pointer"
+            >
+              🔄 Restablecer Chat de WhatsApp
+            </Button>
+          </div>
         </div>
       )
     }

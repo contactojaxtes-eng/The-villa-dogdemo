@@ -2570,7 +2570,8 @@ export class WhatsappService implements OnModuleInit {
       });
       if (!target?.active) throw new BadRequestException('La asesora seleccionada no está activa');
 
-      if (isSupervisor && actor && userId !== actor.id) {
+      const canTakeOver = isSupervisor || actor?.role === 'DELIVERY_MANAGER';
+      if (canTakeOver || (actor && userId === actor.id)) {
         await this.prisma.whatsAppSession.update({
           where: { id: sessionId },
           data: { assignedToId: userId, waitingForAdvisor: false },
@@ -2595,7 +2596,7 @@ export class WhatsappService implements OnModuleInit {
           );
         }
       }
-    } else if (actor && !isSupervisor) {
+    } else if (actor && !isSupervisor && actor.role !== 'DELIVERY_MANAGER') {
       const released = await this.prisma.whatsAppSession.updateMany({
         where: {
           id: sessionId,
