@@ -158,17 +158,26 @@ export default function KitchenPage() {
     if (user?.role === 'KITCHEN') {
       const assignedId = ticket.assignedToId || ticket.assignedTo?.id
       const stationUsers = ticket.station?.users || []
-      if (deliveryStationIds.has(ticket.stationId || ticket.station?.id || '') && stationUsers.some(u => u.id === user?.id)) {
+
+      // Si el ticket está asignado directamente a este cocinero: le pertenece
+      if (assignedId && assignedId === user?.id) {
         return true
       }
-      // 1. Si el ticket está asignado a un cocinero: SOLO pertenece a ese cocinero
-      if (assignedId) {
-        return assignedId === user?.id
+      // Si el cocinero pertenece a la estación del ticket: le pertenece para ver y preparar
+      if (stationUsers.length > 0 && stationUsers.some(u => u.id === user?.id)) {
+        return true
       }
-      // 2. Solo si el ticket NO tiene cocinero asignado aún, verificar si pertenece a su estación
-      return stationUsers.some(u => u.id === user?.id)
+      // Si la estación no tiene usuarios asignados o es general: visible para toda la cocina
+      if (stationUsers.length === 0) {
+        return true
+      }
+      // Si pertenece a estaciones de domicilios configuradas
+      if (deliveryStationIds.has(ticket.stationId || ticket.station?.id || '')) {
+        return true
+      }
+      return false
     }
-    return false
+    return true
   }, [deliveryStationIds, user?.id, user?.role])
 
   useEffect(() => {
@@ -258,11 +267,17 @@ export default function KitchenPage() {
       }
     })
 
+    // Sincronización en tiempo real inmediata ante nuevos pedidos o cambios de comandas
+    socket.on('tableOrderSubmitted', () => load(false))
+    socket.on('tableOrderEdited', () => load(false))
+    socket.on('newOrder', () => load(false))
+    socket.on('orderUpdated', () => load(false))
+
     // Cuando se abre o cierra la caja, recargar comandas para reiniciar contadores e historial a 0
     socket.on('cashStatusChanged', () => load(false))
 
     return () => { socket.disconnect() }
-  }, [isDeliveryCook, isTicketForThisCook, user?.id, user?.name, user?.role])
+  }, [isDeliveryCook, isTicketForThisCook, load, user?.id, user?.name, user?.role])
 
   const consolidatedTickets = useMemo(() => {
     // Mantener cada ticket por su ID único para nunca borrar tickets previos del historial
@@ -470,14 +485,22 @@ export default function KitchenPage() {
   const scopedTickets = useMemo(() => {
     return consolidatedTickets.filter(t => {
       if (stationFilter !== 'ALL' && t.stationId !== stationFilter && t.station?.id !== stationFilter) return false
-      // Si el usuario logueado es cocinero (KITCHEN), mostrar ÚNICAMENTE sus tickets asignados
+      // Si el usuario logueado es cocinero (KITCHEN):
       if (user?.role === 'KITCHEN') {
         const assignedId = t.assignedToId || t.assignedTo?.id
-        if (assignedId) {
-          return assignedId === user.id
-        }
         const stationUsers = t.station?.users || []
-        return stationUsers.some(u => u.id === user.id)
+
+        // Si el cocinero eligió filtrar por un cocinero específico (en selector superior)
+        if (cookFilter !== 'ALL') {
+          return assignedId === cookFilter
+        }
+
+        // Si el ticket está asignado a él, o él pertenece a la estación del ticket, o la estación no tiene restricción
+        if (assignedId && assignedId === user.id) return true
+        if (stationUsers.length > 0 && stationUsers.some(u => u.id === user.id)) return true
+        if (stationUsers.length === 0) return true
+        if (deliveryStationIds.has(t.stationId || t.station?.id || '')) return true
+        return false
       }
       // Para admin/cajero: filtro opcional por cocinero
       if (cookFilter !== 'ALL') {
@@ -486,7 +509,7 @@ export default function KitchenPage() {
       }
       return true
     })
-  }, [consolidatedTickets, stationFilter, cookFilter, user?.id, user?.role])
+  }, [consolidatedTickets, stationFilter, cookFilter, deliveryStationIds, user?.id, user?.role])
 
   // Contadores vivos precisos
   const countNew = useMemo(() => scopedTickets.filter(t => t.status === 'NEW').length, [scopedTickets])

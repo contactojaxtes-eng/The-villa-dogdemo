@@ -1350,9 +1350,10 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
         .map(([stationId]) => stationId);
       where.OR = [
         { assignedToId: user.id },
-        { assignedToId: null, station: { users: { some: { id: user.id } } } },
+        { station: { users: { some: { id: user.id } } } },
+        { station: { users: { none: {} } } },
         ...(deliveryStationIds.length > 0
-          ? [{ stationId: { in: deliveryStationIds }, station: { users: { some: { id: user.id } } } }]
+          ? [{ stationId: { in: deliveryStationIds } }]
           : []),
       ];
     }

@@ -55,7 +55,7 @@ export class SocketGateway implements OnGatewayConnection, OnGatewayDisconnect, 
     client.join(`user:${user.id}`);
     if (['ADMIN', 'SUPERADMIN'].includes(user.role)) client.join('admins');
     if (user.role === 'CASHIER') client.join('cashiers');
-    if (user.role !== 'KITCHEN' && (this.hasPermission(user, 'whatsapp.view') || ['ADMIN', 'SUPERADMIN', 'WA_ADVISOR', 'DELIVERY_MANAGER', 'CASHIER'].includes(user.role))) client.join('whatsapp');
+    if (!['KITCHEN', 'WAITER'].includes(user.role) && (this.hasPermission(user, 'whatsapp.view') || ['ADMIN', 'SUPERADMIN', 'WA_ADVISOR', 'DELIVERY_MANAGER'].includes(user.role))) client.join('whatsapp');
     client.data.expiryTimer = setTimeout(() => client.disconnect(true), Math.max(0, Math.min(client.data.expiresAt - Date.now(), 2_147_483_647)));
     if (sockets.size === 1) this.server.emit('userConnected', { userId: user.id, userName: user.name, connected: true });
   }
@@ -92,7 +92,7 @@ export class SocketGateway implements OnGatewayConnection, OnGatewayDisconnect, 
       room === `user:${user.id}` || 
       (room === 'admins' && ['ADMIN', 'SUPERADMIN'].includes(user.role)) || 
       (room === 'cashiers' && user.role === 'CASHIER') ||
-      (room === 'whatsapp' && user.role !== 'KITCHEN' && (this.hasPermission(user, 'whatsapp.view') || ['ADMIN', 'SUPERADMIN', 'WA_ADVISOR', 'DELIVERY_MANAGER', 'CASHIER'].includes(user.role)))
+      (room === 'whatsapp' && !['KITCHEN', 'WAITER'].includes(user.role) && (this.hasPermission(user, 'whatsapp.view') || ['ADMIN', 'SUPERADMIN', 'WA_ADVISOR', 'DELIVERY_MANAGER', 'CASHIER'].includes(user.role)))
     ) {
       client.join(room);
     }
@@ -150,7 +150,7 @@ export class SocketGateway implements OnGatewayConnection, OnGatewayDisconnect, 
   emitChatViewers(sessionId: string) {
     const viewers = this.activeChatViewers.get(sessionId);
     const list = viewers ? Array.from(viewers.entries()).map(([userId, userName]) => ({ userId, userName })) : [];
-    this.server.emit('chatViewersUpdated', { sessionId, viewers: list });
+    this.server.to('whatsapp').emit('chatViewersUpdated', { sessionId, viewers: list });
   }
 
   @SubscribeMessage('chatViewJoin')
@@ -182,7 +182,7 @@ export class SocketGateway implements OnGatewayConnection, OnGatewayDisconnect, 
   handleChatTyping(client: Socket, data: { sessionId: string; isTyping: boolean }) {
     const user = client.data.user;
     if (!user || !data?.sessionId || typeof data.sessionId !== 'string') return;
-    this.server.emit('chatTypingUpdated', {
+    this.server.to('whatsapp').emit('chatTypingUpdated', {
       sessionId: data.sessionId,
       userId: user.id,
       userName: user.name,
@@ -240,7 +240,7 @@ export class SocketGateway implements OnGatewayConnection, OnGatewayDisconnect, 
   }
 
   emitWhatsApp(event: string, payload: any) {
-    this.server.emit(event, payload);
+    this.server.to('whatsapp').emit(event, payload);
   }
 
   emitTableCreated(table: any) {

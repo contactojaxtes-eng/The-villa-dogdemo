@@ -13,6 +13,7 @@ import {
   publishDiningKitchenDelays,
   toDiningKitchenDelay,
 } from '@/lib/diningKitchenAlerts'
+import { hasUserPermission } from '@/lib/permissions'
 
 // Simple notification sound using Web Audio API
 function playNotificationSound(type: 'message' | 'urgent' = 'message') {
@@ -470,8 +471,9 @@ export function useNotifications() {
       assignedToId?: string | null
       assignedTo?: { id: string; name: string } | null
     }) => {
-      // Cocineros NO atienden WhatsApp ni deben recibir alertas sonoras ni emergentes de chat
-      if (user.role === 'KITCHEN') return
+      // Cocineros y meseros NO atienden WhatsApp ni deben recibir alertas sonoras ni emergentes de chat
+      if (['KITCHEN', 'WAITER'].includes(user.role || '')) return
+      if (!hasUserPermission(user, 'whatsapp.view')) return
 
       // Mantiene la bandeja y los mensajes calientes incluso mientras el usuario
       // trabaja en otra pantalla. Al volver a WhatsApp aparecen de inmediato.
@@ -512,8 +514,9 @@ export function useNotifications() {
       customerName: string
       sessionId: string
     }) => {
-      // Cocineros NO gestionan asesores de WhatsApp ni deben recibir alertas
-      if (user.role === 'KITCHEN') return
+      // Cocineros y meseros NO gestionan asesores de WhatsApp ni deben recibir alertas
+      if (['KITCHEN', 'WAITER'].includes(user.role || '')) return
+      if (!hasUserPermission(user, 'whatsapp.view')) return
 
       toast.warning('🙋 Cliente solicita asesor', {
         description: `${data.customerName} (${data.phone}) necesita hablar con un asesor. ¡Reclama el chat!`,

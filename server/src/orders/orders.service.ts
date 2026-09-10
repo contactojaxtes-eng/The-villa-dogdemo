@@ -812,7 +812,7 @@ export class OrdersService implements OnModuleInit {
 
   async notifyCreated(order: any) {
     this.socketGateway.emitNewOrder(order);
-    this.socketGateway.server.emit('whatsappSessionUpdated', { orderCreated: true, phone: order.customerPhone, orderNumber: order.orderNumber, status: order.status });
+    this.socketGateway.emitWhatsApp('whatsappSessionUpdated', { orderCreated: true, phone: order.customerPhone, orderNumber: order.orderNumber, status: order.status });
 
     let deliveryKitchenMode = 'PRINT';
     let deliveryAutoPrint = true;
@@ -821,10 +821,8 @@ export class OrdersService implements OnModuleInit {
         const kitchenSettings = await this.tablesService.getKitchenSettings();
         deliveryKitchenMode = String(kitchenSettings?.deliveryKitchenMode || 'PRINT').toUpperCase();
         deliveryAutoPrint = kitchenSettings?.deliveryAutoPrint !== false;
-        if (['TABLET', 'BOTH'].includes(deliveryKitchenMode)) {
-          const actorId = order.waiterId || order.assignedTo;
-          await this.tablesService.createKitchenTickets(order.id, actorId || undefined);
-        }
+        const actorId = order.waiterId || order.assignedTo;
+        await this.tablesService.createKitchenTickets(order.id, actorId || undefined);
       } catch (kitchenErr) {
         this.logger.warn(`No se pudo enviar el pedido #${order.orderNumber} a la cocina de domicilios:`, kitchenErr);
       }
@@ -1208,7 +1206,7 @@ export class OrdersService implements OnModuleInit {
         const kitchenSettings = await this.tablesService.getKitchenSettings();
         deliveryKitchenMode = String(kitchenSettings?.deliveryKitchenMode || 'PRINT').toUpperCase();
         deliveryAutoPrint = kitchenSettings?.deliveryAutoPrint !== false;
-        if (itemsActuallyChanged && ['TABLET', 'BOTH'].includes(deliveryKitchenMode)) {
+        if (itemsActuallyChanged) {
           const actorId = updated.waiterId || updated.assignedTo;
           if (actorId) await this.tablesService.syncDeliveryKitchenTickets(updated.id, actorId, existing.items || []);
         }
@@ -1367,7 +1365,7 @@ export class OrdersService implements OnModuleInit {
     }
 
     this.socketGateway.emitOrderStatusChange(id, status, updated);
-    this.socketGateway.server.emit('whatsappSessionUpdated', { orderUpdated: true, phone: updated.customerPhone, orderNumber: updated.orderNumber, status: updated.status });
+    this.socketGateway.emitWhatsApp('whatsappSessionUpdated', { orderUpdated: true, phone: updated.customerPhone, orderNumber: updated.orderNumber, status: updated.status });
 
     try {
       if (this.isSendableWhatsAppPhone(updated.customerPhone, updated.orderType, updated.customerName)) {

@@ -16,7 +16,7 @@ import { Badge } from '@/components/ui/badge'
 import { 
   MessageCircle, Send, UserCheck, UserPlus, UserX, PlusCircle, User, 
   Phone, Clock, AlertCircle, AlertTriangle, ArrowLeft, Loader2, Trash2, Paperclip, FileText,
-  Mic, MicOff, Check, CheckCheck, Pencil, Search, Lock,
+  Mic, MicOff, Check, CheckCheck, CheckCircle2, Pencil, Search, Lock,
   ChevronDown, Copy, ChevronLeft, ChevronRight, MapPin, ExternalLink, Download, Forward, QrCode, Reply, X,
   MessageSquareText, Bell, BellOff, Bot, BotOff,
   Eye, Shield, RotateCw, ZoomIn, ZoomOut
