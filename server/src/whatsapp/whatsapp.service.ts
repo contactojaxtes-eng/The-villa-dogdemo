@@ -2018,18 +2018,42 @@ export class WhatsappService implements OnModuleInit {
     if (openCashShift) {
       const shiftStartTime = openCashShift.shiftStart || openCashShift.createdAt;
       const candidatePhones: string[] = [];
+      const candidateNames: string[] = [];
       for (const s of deduplicatedSessions) {
         const clean = (s.phone || '').replace(/\D/g, '');
         const p10 = clean.length === 12 && clean.startsWith('57') ? clean.slice(2) : clean;
-        if (p10 && !this.isDummyPhoneNumber(p10)) candidatePhones.push(p10);
+        if (p10 && !this.isDummyPhoneNumber(p10)) {
+          candidatePhones.push(p10);
+          candidatePhones.push(`57${p10}`);
+          candidatePhones.push(`+57${p10}`);
+        }
         if (s.phone && !this.isDummyPhoneNumber(s.phone)) candidatePhones.push(s.phone);
-        if (s.customerPhone && !this.isDummyPhoneNumber(s.customerPhone)) candidatePhones.push(s.customerPhone);
+        if (s.customerPhone && !this.isDummyPhoneNumber(s.customerPhone)) {
+          candidatePhones.push(s.customerPhone);
+          const custClean = s.customerPhone.replace(/\D/g, '');
+          const custP10 = custClean.length === 12 && custClean.startsWith('57') ? custClean.slice(2) : custClean;
+          if (custP10) {
+            candidatePhones.push(custP10);
+            candidatePhones.push(`57${custP10}`);
+            candidatePhones.push(`+57${custP10}`);
+          }
+          if (custClean) candidatePhones.push(custClean);
+        }
+        if (s.customerName && s.customerName.trim().length >= 3 && !['cliente mostrador', 'cliente recoger', 'cliente'].includes(s.customerName.trim().toLowerCase())) {
+          candidateNames.push(s.customerName.trim());
+        }
       }
 
-      if (candidatePhones.length > 0) {
+      const uniqueCandidatePhones = Array.from(new Set(candidatePhones.filter(Boolean)));
+      const uniqueCandidateNames = Array.from(new Set(candidateNames.filter(Boolean)));
+
+      if (uniqueCandidatePhones.length > 0 || uniqueCandidateNames.length > 0) {
         activeShiftOrders = await this.prisma.order.findMany({
           where: {
-            customerPhone: { in: candidatePhones },
+            OR: [
+              ...(uniqueCandidatePhones.length > 0 ? [{ customerPhone: { in: uniqueCandidatePhones } }] : []),
+              ...(uniqueCandidateNames.length > 0 ? [{ customerName: { in: uniqueCandidateNames, mode: 'insensitive' as const } }] : []),
+            ],
             orderType: { in: ['DELIVERY', 'PICKUP'] },
             createdAt: { gte: shiftStartTime },
             status: { not: 'CANCELLED' }
@@ -2040,6 +2064,7 @@ export class WhatsappService implements OnModuleInit {
             status: true,
             total: true,
             customerPhone: true,
+            customerName: true,
             createdAt: true,
           },
           orderBy: { createdAt: 'desc' }
@@ -2054,15 +2079,21 @@ export class WhatsappService implements OnModuleInit {
       const sCustP10 = sCustClean.length === 12 && sCustClean.startsWith('57') ? sCustClean.slice(2) : sCustClean;
       
       const match = activeShiftOrders.find(o => {
-        if (this.isDummyPhoneNumber(o.customerPhone)) return false;
         const oClean = (o.customerPhone || '').replace(/\D/g, '');
         const oP10 = oClean.length === 12 && oClean.startsWith('57') ? oClean.slice(2) : oClean;
-        if (this.isDummyPhoneNumber(oP10)) return false;
 
-        return (sP10 && oP10 && !this.isDummyPhoneNumber(sP10) && oP10 === sP10) || 
-               (sCustP10 && oP10 && !this.isDummyPhoneNumber(sCustP10) && oP10 === sCustP10) || 
-               (o.customerPhone && s.phone && !this.isDummyPhoneNumber(s.phone) && o.customerPhone === s.phone) || 
-               (o.customerPhone && s.customerPhone && !this.isDummyPhoneNumber(s.customerPhone) && o.customerPhone === s.customerPhone);
+        const phoneMatch = !this.isDummyPhoneNumber(o.customerPhone) && !this.isDummyPhoneNumber(oP10) && (
+          (sP10 && oP10 === sP10) || 
+          (sCustP10 && oP10 === sCustP10) || 
+          (o.customerPhone && s.phone && !this.isDummyPhoneNumber(s.phone) && o.customerPhone === s.phone) || 
+          (o.customerPhone && s.customerPhone && !this.isDummyPhoneNumber(s.customerPhone) && o.customerPhone === s.customerPhone)
+        );
+
+        const nameMatch = Boolean(o.customerName && s.customerName &&
+          o.customerName.trim().toLowerCase() === s.customerName.trim().toLowerCase() &&
+          !['cliente mostrador', 'cliente recoger', 'cliente'].includes(o.customerName.trim().toLowerCase()));
+
+        return phoneMatch || nameMatch;
       });
 
       if (match) {

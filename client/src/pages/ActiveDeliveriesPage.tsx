@@ -9,7 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { api } from '@/lib/api'
 import { useAuth } from '@/hooks/useAuth'
 import { statusAccent, statusOrder } from '@/lib/brand'
-import { formatCurrency, formatDate, getStatusColor, getStatusLabel, cleanNotes, groupOrderItems, formatThousandsInput, parseThousandsInput } from '@/lib/utils'
+import { formatCurrency, formatDate, getStatusColor, getStatusLabel, cleanNotes, groupOrderItems, formatThousandsInput, parseThousandsInput, cn } from '@/lib/utils'
 import { 
   Search, 
   RefreshCw, 
@@ -160,10 +160,20 @@ export default function ActiveDeliveriesPage() {
   const [dispatchDialog, setDispatchDialog] = useState<{ order: any; shouldKick: boolean } | null>(null)
   const [drivers, setDrivers] = useState<any[]>([])
   const [selectedDriverId, setSelectedDriverId] = useState<string>('')
+  const [driverSearch, setDriverSearch] = useState<string>('')
   const [inlineDriverName, setInlineDriverName] = useState('')
   const [inlineDriverPhone, setInlineDriverPhone] = useState('')
   const [registeringDriverInline, setRegisteringDriverInline] = useState(false)
   const [dispatchError, setDispatchError] = useState('')
+
+  const filteredDrivers = useMemo(() => {
+    if (!driverSearch.trim()) return drivers
+    const q = driverSearch.trim().toLowerCase()
+    return drivers.filter(d => 
+      (d.name && d.name.toLowerCase().includes(q)) || 
+      (d.phone && d.phone.includes(q))
+    )
+  }, [drivers, driverSearch])
   const [detailOrder, setDetailOrder] = useState<Order | null>(null)
   const [markingPickupReadyId, setMarkingPickupReadyId] = useState<string | null>(null)
   const socketRef = useRef<Socket | null>(null)
@@ -1119,34 +1129,91 @@ export default function ActiveDeliveriesPage() {
           <div className="space-y-4">
             {!registeringDriverInline ? (
               <>
-                <div className="space-y-1.5">
-                  <Label className="text-[10px] font-bold text-[var(--text-secondary)] uppercase tracking-wider">Seleccionar repartidor</Label>
-                  <Select value={selectedDriverId} onValueChange={setSelectedDriverId}>
-                    <SelectTrigger className="bg-[var(--bg-input)] border-[var(--border-default)] rounded-xl text-xs h-10 focus:border-[var(--accent)]">
-                      <SelectValue placeholder="Elige un repartidor..." />
-                    </SelectTrigger>
-                    <SelectContent className="bg-[var(--bg-panel)] border-[var(--border-default)] rounded-2xl">
-                      {drivers.map(d => {
-                        const isOverwork = (d.activeDeliveries || 0) >= 5
-                        const isCurrent = dispatchDialog?.order?.deliveryDriverId === d.id
-                        const disableOption = isOverwork && !isCurrent
-                        return (
-                          <SelectItem key={d.id} value={d.id} disabled={disableOption}>
-                            <div className="flex items-center justify-between gap-2 w-full text-xs font-semibold">
-                              <span>{d.name}</span>
-                              {d.activeDeliveries > 0 ? (
-                                <span className={`text-[10px] font-bold ${disableOption ? 'text-red-500' : 'text-amber-500'}`}>
-                                  ({d.activeDeliveries}/5 {disableOption ? '🚫 Límite' : 'activos'})
-                                </span>
-                              ) : (
-                                <span className="text-[10px] text-emerald-500 font-bold">(Libre)</span>
-                              )}
-                            </div>
-                          </SelectItem>
-                        )
-                      })}
-                    </SelectContent>
-                  </Select>
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <Label className="text-[10px] font-bold text-[var(--text-secondary)] uppercase tracking-wider">Seleccionar repartidor</Label>
+                    <span className="text-[10px] text-[var(--text-muted)] font-bold">{filteredDrivers.length} repartidor(es)</span>
+                  </div>
+
+                  {/* Buscador en tiempo real de repartidores */}
+                  <div className="relative">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-[var(--text-muted)]" />
+                    <Input
+                      value={driverSearch}
+                      onChange={e => {
+                        const val = e.target.value
+                        setDriverSearch(val)
+                        const q = val.trim().toLowerCase()
+                        if (q) {
+                          const auto = drivers.find(d => d.name.toLowerCase().startsWith(q) && (d.activeDeliveries || 0) < 5)
+                          if (auto) setSelectedDriverId(auto.id)
+                        }
+                      }}
+                      placeholder="Escribe una letra o nombre (ej: p, juan, cristian)..."
+                      className="bg-[var(--bg-input)] border-[var(--border-default)] rounded-xl text-xs h-9 pl-9 pr-8 focus:border-[var(--accent)] font-semibold"
+                      autoFocus
+                    />
+                    {driverSearch && (
+                      <button
+                        type="button"
+                        onClick={() => setDriverSearch('')}
+                        className="absolute right-2.5 top-1/2 -translate-y-1/2 text-xs font-bold text-[var(--text-muted)] hover:text-[var(--text-primary)] cursor-pointer"
+                      >
+                        ✕
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Lista interactiva con scroll rápido */}
+                  <div className="max-h-52 overflow-y-auto space-y-1 border border-[var(--border-subtle)] rounded-xl p-1 bg-[var(--bg-input)]/50">
+                    {filteredDrivers.map(d => {
+                      const isSelected = selectedDriverId === d.id
+                      const isOverwork = (d.activeDeliveries || 0) >= 5
+                      const isCurrent = dispatchDialog?.order?.deliveryDriverId === d.id
+                      const disableOption = isOverwork && !isCurrent
+                      return (
+                        <button
+                          key={d.id}
+                          type="button"
+                          disabled={disableOption}
+                          onClick={() => setSelectedDriverId(d.id)}
+                          className={cn(
+                            "w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer text-left border",
+                            isSelected 
+                              ? "bg-[var(--accent)] text-[var(--accent-fg)] border-[var(--accent)] shadow-xs" 
+                              : disableOption
+                              ? "opacity-40 cursor-not-allowed bg-transparent border-transparent"
+                              : "hover:bg-[var(--bg-hover)] text-[var(--text-primary)] border-transparent"
+                          )}
+                        >
+                          <div className="flex items-center gap-2">
+                            <Bike className={cn("h-3.5 w-3.5 shrink-0", isSelected ? "text-[var(--accent-fg)]" : "text-[var(--accent)]")} />
+                            <span>{d.name}</span>
+                          </div>
+                          {d.activeDeliveries > 0 ? (
+                            <span className={cn(
+                              "text-[10px] font-extrabold px-2 py-0.5 rounded-full",
+                              isSelected ? "bg-black/20 text-white" : disableOption ? "text-red-500 bg-red-500/10" : "text-amber-500 bg-amber-500/10"
+                            )}>
+                              ({d.activeDeliveries}/5 {disableOption ? '🚫 Límite' : 'activos'})
+                            </span>
+                          ) : (
+                            <span className={cn(
+                              "text-[10px] font-extrabold px-2 py-0.5 rounded-full",
+                              isSelected ? "bg-black/20 text-white" : "text-emerald-500 bg-emerald-500/10"
+                            )}>
+                              ✓ Libre
+                            </span>
+                          )}
+                        </button>
+                      )
+                    })}
+                    {filteredDrivers.length === 0 && (
+                      <div className="p-3 text-center text-xs text-[var(--text-muted)] font-semibold">
+                        No se encontró ningún repartidor con "{driverSearch}"
+                      </div>
+                    )}
+                  </div>
                 </div>
                 {hasPermission('drivers.manage') && <button type="button" onClick={() => setRegisteringDriverInline(true)} className="text-xs text-[var(--accent)] hover:text-[var(--accent-hover)] font-bold cursor-pointer border-0 bg-transparent">+ Registrar nuevo repartidor</button>}
               </>

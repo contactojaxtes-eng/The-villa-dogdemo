@@ -955,6 +955,37 @@ function ChatPage() {
     }
   }, [activeSession?.id])
 
+  // Sincronizar y detectar la orden activa de este cliente en tiempo real para habilitar botón de editar
+  useEffect(() => {
+    if (!activeSession) {
+      setActiveOrder(null)
+      return
+    }
+    if (activeSession.activeOrder) {
+      setActiveOrder(activeSession.activeOrder)
+    }
+    const searchTarget = (activeSession.customerPhone && activeSession.customerPhone !== '3000000000' ? activeSession.customerPhone : activeSession.phone) || activeSession.customerName || ''
+    if (searchTarget) {
+      const cleanDigits = searchTarget.replace(/\D/g, '')
+      const p10 = cleanDigits.length === 12 && cleanDigits.startsWith('57') ? cleanDigits.slice(2) : cleanDigits
+      const query = p10.length === 10 ? p10 : (cleanDigits.length >= 7 && cleanDigits.length <= 13 ? cleanDigits : (activeSession.customerName || searchTarget))
+      api.get<any>(`/orders?search=${encodeURIComponent(query)}&limit=5&orderType=DELIVERY,PICKUP`)
+        .then(res => {
+          const orders = Array.isArray(res) ? res : (res as any)?.orders || []
+          const active = orders.find((o: any) => !['CANCELLED', 'DELIVERED'].includes(o.status))
+          if (active) {
+            setActiveOrder({
+              id: active.id,
+              orderNumber: active.orderNumber,
+              status: active.status,
+              total: active.total,
+            })
+          }
+        })
+        .catch(() => {})
+    }
+  }, [activeSession?.id, activeSession?.phone, activeSession?.customerPhone, activeSession?.customerName])
+
   const toggleMuteWa = () => {
     const next = !isMutedWa
     setIsMutedWa(next)
@@ -3565,41 +3596,7 @@ function ChatPage() {
                       <Button 
                         size="sm"
                         className="h-8 bg-amber-500 hover:bg-amber-600 text-white font-extrabold text-[10px] uppercase tracking-wider rounded-lg flex items-center gap-1.5 shadow-md shadow-amber-500/20 px-2 sm:px-3 border border-amber-600/30 shrink-0 cursor-pointer"
-                        onClick={async () => {
-                          const isAdmin = ['ADMIN', 'SUPERADMIN'].includes(user?.role || '')
-                          if (!isAdmin && user) {
-                            if (!activeSession.assignedToId) {
-                              const confirmClaim = await alerts.confirm(
-                                'Reclamar Chat requerido',
-                                'Debes pulsar "Reclamar Chat" primero para modificar pedidos.\n\n¿Deseas reclamar este chat ahora mismo?',
-                                'Sí, Reclamar y Editar',
-                                'Cancelar'
-                              )
-                              if (!confirmClaim) return
-                              const claimed = await handleClaimSession(activeSession)
-                              if (!claimed) return
-                            } else if (activeSession.assignedToId !== user.id) {
-                              const canTakeover = ['DELIVERY_MANAGER', 'ADMIN', 'SUPERADMIN'].includes(user?.role || '')
-                              if (canTakeover) {
-                                const confirmTakeover = await alerts.confirm(
-                                  'Reasignar conversación',
-                                  `Este chat está asignado a ${activeAssignedInfo.assignedName || 'otra asesora'}.\n\n¿Deseas reclamar la conversación para ti y editar el pedido?`,
-                                  'Sí, Reclamar y Editar',
-                                  'Cancelar'
-                                )
-                                if (!confirmTakeover) return
-                                const claimed = await handleClaimSession(activeSession)
-                                if (!claimed) return
-                              } else {
-                                alerts.warning(
-                                  'Chat de otra asesora',
-                                  `Este chat está siendo atendido por ${activeAssignedInfo.assignedName || 'otra asesora'}. Debes tener el chat reclamado para editar pedidos.`
-                                )
-                                return
-                              }
-                            }
-                          }
-
+                        onClick={() => {
                           const sessionRealPhone = (activeSession.customerPhone && activeSession.customerPhone !== '3000000000' ? activeSession.customerPhone : activeSession.phone) || ''
                           setEmbeddedOrder({
                             editOrderId: activeOrder.id,
@@ -3614,15 +3611,15 @@ function ChatPage() {
                         <span>Editar #{activeOrder.orderNumber}</span>
                       </Button>
                     )}
-                    {!embeddedOrder && !activeOrder && (
+                    {!embeddedOrder && (
                       <Button
                         size="sm"
-                        className="h-8 bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-fg)] font-bold text-[10px] uppercase tracking-wider rounded-lg flex items-center gap-1.5 shadow-md shadow-[var(--accent)]/10 px-2 sm:px-3 shrink-0"
+                        className="h-8 bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-fg)] font-bold text-[10px] uppercase tracking-wider rounded-lg flex items-center gap-1.5 shadow-md shadow-[var(--accent)]/10 px-2 sm:px-3 shrink-0 cursor-pointer"
                         onClick={handleCreateOrder}
                         title="Crear Nuevo Pedido"
                       >
                         <PlusCircle className="h-3.5 w-3.5" />
-                        <span>Nuevo Pedido</span>
+                        <span className={activeOrder ? "hidden sm:inline" : ""}>Nuevo Pedido</span>
                       </Button>
                     )}
 

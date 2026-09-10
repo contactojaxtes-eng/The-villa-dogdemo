@@ -1011,11 +1011,11 @@ export class OrdersService implements OnModuleInit {
     if (!existing) throw new NotFoundException('Pedido no encontrado');
     if (existing.status === 'CANCELLED') throw new BadRequestException('No se puede editar un pedido cancelado');
 
-    const isAdminOrCashier = user?.role && ['ADMIN', 'SUPERADMIN', 'CASHIER'].includes(user.role);
-    if (['CONFIRMED', 'PENDING_REVIEW'].includes(existing.paymentStatus) && !isAdminOrCashier) {
+    const canManageOrders = user?.role && ['ADMIN', 'SUPERADMIN', 'CASHIER', 'DELIVERY_MANAGER', 'DISPATCHER'].includes(user.role);
+    if (['CONFIRMED', 'PENDING_REVIEW'].includes(existing.paymentStatus) && !canManageOrders) {
       throw new BadRequestException('No se puede editar un pedido pagado o con comprobante en revisión');
     }
-    if (existing.status === 'DELIVERED' && !isAdminOrCashier) {
+    if (existing.status === 'DELIVERED' && !canManageOrders) {
       throw new BadRequestException('No se puede editar un pedido entregado');
     }
 
@@ -1372,9 +1372,6 @@ export class OrdersService implements OnModuleInit {
       if (user.role === 'DELIVERY_MANAGER') {
         if (!['IN_ROUTE', 'DELIVERED'].includes(status)) {
           throw new ForbiddenException('No tienes permiso para establecer este estado');
-        }
-        if (order.assignedTo !== user.id) {
-          throw new ForbiddenException('No estás asignado a este pedido');
         }
       }
     }
