@@ -527,6 +527,7 @@ interface ChatInputBarProps {
   onSendLocation?: () => void
   sendingLocation?: boolean
   onTyping?: (isTyping: boolean) => void
+  inputRef?: React.RefObject<HTMLInputElement | null>
 }
 
 const ChatInputBar = React.memo(({
@@ -549,7 +550,8 @@ const ChatInputBar = React.memo(({
   onCancelReply,
   onSendLocation,
   sendingLocation,
-  onTyping
+  onTyping,
+  inputRef
 }: ChatInputBarProps) => {
   const [localText, setLocalText] = useState('')
   const typingTimerRef = useRef<any>(null)
@@ -668,6 +670,7 @@ const ChatInputBar = React.memo(({
         </div>
       ) : (
         <Input
+          ref={inputRef}
           className="min-w-0 flex-1 h-10 sm:h-11 rounded-xl bg-[var(--bg-elevated)] border-[var(--border-subtle)] text-[var(--text-primary)] text-base sm:text-xs px-3 sm:px-4"
           value={localText}
           onChange={handleInputChange}
@@ -676,6 +679,7 @@ const ChatInputBar = React.memo(({
           inputMode="text"
           autoComplete="off"
           enterKeyHint="send"
+          autoFocus
         />
       )}
 
@@ -914,6 +918,23 @@ function ChatPage() {
   const statusReloadTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const readSyncTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
   const searchBlurTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const chatInputRef = useRef<HTMLInputElement>(null)
+
+  // Poner el foco y cursor automáticamente en la barra de texto al seleccionar cualquier chat
+  useEffect(() => {
+    if (activeSession?.id) {
+      const t1 = setTimeout(() => {
+        chatInputRef.current?.focus()
+      }, 50)
+      const t2 = setTimeout(() => {
+        chatInputRef.current?.focus()
+      }, 200)
+      return () => {
+        clearTimeout(t1)
+        clearTimeout(t2)
+      }
+    }
+  }, [activeSession?.id])
 
   const toggleMuteWa = () => {
     const next = !isMutedWa
@@ -3034,6 +3055,7 @@ function ChatPage() {
                       setMessage('')
                       setActiveOrder(session.activeOrder || null)
                       setActiveSession(session)
+                      setTimeout(() => chatInputRef.current?.focus(), 50)
                     }}
                     className="flex w-full items-center gap-2.5 border-b border-[var(--border-subtle)]/60 px-3 py-2.5 text-left last:border-b-0 hover:bg-[var(--bg-hover)]"
                   >
@@ -3159,6 +3181,7 @@ function ChatPage() {
                         // Abrir el chat para visualizarlo SIN reclamarlo ni marcarlo como leído automáticamente.
                         // Solo se marcará como leído cuando un asesor/admin envíe una respuesta.
                         setActiveSession(s)
+                        setTimeout(() => chatInputRef.current?.focus(), 50)
                       }}
                       className={btnClass}
                     >
@@ -4100,6 +4123,7 @@ function ChatPage() {
                     onSendLocation={handleSendLocation}
                     sendingLocation={sendingLocation}
                     onTyping={handleTyping}
+                    inputRef={chatInputRef}
                   />
                 )
               })()}

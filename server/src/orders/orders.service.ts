@@ -930,14 +930,14 @@ export class OrdersService implements OnModuleInit {
     return order;
   }
 
-  async update(id: string, data: any) {
+  async update(id: string, data: any, user?: any) {
     const result = await this.prisma.$transaction(async tx => {
       await lockOperation(tx);
       const order = await tx.order.findUnique({ where: { id } });
       if (order?.tableId) throw new BadRequestException('Edita este pedido desde su cuenta en Mesas');
       return this.updateWithinTransaction(id, data, tx);
     }, operationTransaction);
-    await this.notifyUpdated(id, result.updated, result.existing, data);
+    await this.notifyUpdated(id, result.updated, result.existing, data, user);
     return result.updated;
   }
 
@@ -1140,7 +1140,7 @@ export class OrdersService implements OnModuleInit {
     return { updated, existing };
   }
 
-  async notifyUpdated(id: string, updated: any, existing: any, data: any) {
+  async notifyUpdated(id: string, updated: any, existing: any, data: any, user?: any) {
     this.socketGateway.emitOrderStatusChange(id, updated.status, updated);
 
     try {
@@ -1188,7 +1188,7 @@ export class OrdersService implements OnModuleInit {
       this.logger.error(`Error enviando WhatsApp de edición para pedido #${updated.orderNumber}`, waErr);
     }
 
-    // Detectar si los items realmente cambiaron antes de auto-imprimir comanda editada
+    // Detectar si los items o notas cambiaron antes de auto-imprimir comanda editada o sincronizar cocina
     const oldItemsSignature = (existing.items || [])
       .map(i => `${i.menuItemId}:${i.quantity}:${(i.notes || '').trim()}`)
       .sort()
@@ -1197,18 +1197,21 @@ export class OrdersService implements OnModuleInit {
       .map(i => `${i.menuItemId}:${i.quantity}:${(i.notes || '').trim()}`)
       .sort()
       .join('|');
+    const oldNotes = (existing.notes || '').trim();
+    const newNotes = (data.notes !== undefined ? data.notes : existing.notes || '').trim();
+    const itemsOrNotesChanged = oldItemsSignature !== newItemsSignature || oldNotes !== newNotes;
     const itemsActuallyChanged = oldItemsSignature !== newItemsSignature;
 
     let deliveryKitchenMode = 'PRINT';
     let deliveryAutoPrint = true;
-    if (this.isDeliveryKitchenOrder(updated) && this.tablesService) {
+    if (this.tablesService) {
       try {
         const kitchenSettings = await this.tablesService.getKitchenSettings();
         deliveryKitchenMode = String(kitchenSettings?.deliveryKitchenMode || 'PRINT').toUpperCase();
         deliveryAutoPrint = kitchenSettings?.deliveryAutoPrint !== false;
-        if (itemsActuallyChanged) {
-          const actorId = updated.waiterId || updated.assignedTo;
-          if (actorId) await this.tablesService.syncDeliveryKitchenTickets(updated.id, actorId, existing.items || []);
+        if (itemsOrNotesChanged) {
+          const actorId = user?.id || data?.waiterId || data?.userId || updated.waiterId || updated.assignedTo || existing.waiterId || existing.assignedTo;
+          await this.tablesService.syncDeliveryKitchenTickets(updated.id, actorId || undefined, existing.items || []);
         }
       } catch (kitchenErr) {
         this.logger.warn(`No se pudo sincronizar la cocina del pedido #${updated.orderNumber}:`, kitchenErr);

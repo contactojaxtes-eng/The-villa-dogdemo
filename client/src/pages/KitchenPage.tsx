@@ -230,6 +230,7 @@ export default function KitchenPage() {
         if (!exists) return [ticket, ...prev]
         return prev.map(t => t.id === ticket.id ? ticket : t)
       })
+      load(false)
     })
 
     // CAMBIO DE ESTADO DE COCINEROS (activo/inactivo/cena)

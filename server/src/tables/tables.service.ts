@@ -1075,7 +1075,13 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
           },
           include: { station: { include: { users: { select: { id: true, name: true, role: true } } } }, assignedTo: { select: { id: true, name: true } }, items: true, order: { include: { waiter: true, diningTable: true } } },
         });
-        tickets.push({ created: true, ticket: editedTicket, isEdited: true });
+        tickets.push(editedTicket);
+        if (events) {
+          events.push({ created: true, ticket: editedTicket, isEdited: true });
+        } else {
+          this.socketGateway.emitKitchenTicketCreated(editedTicket);
+          this.socketGateway.emitKitchenTicketEdited(editedTicket);
+        }
         continue;
       }
 
@@ -1252,29 +1258,38 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
     });
 
     if (isEdited) {
-      if (!actorId) throw new BadRequestException('No se pudo identificar quién editó el pedido.');
-      await db.orderChangeLog.create({
-        data: {
-          orderId,
-          userId: actorId,
-          summary: changeSummary || 'Pedido editado',
-          changes: { summary: changeSummary || 'Pedido editado' },
-        },
-      });
+      if (actorId) {
+        try {
+          const userExists = await db.user.findUnique({ where: { id: actorId }, select: { id: true } });
+          if (userExists) {
+            await db.orderChangeLog.create({
+              data: {
+                orderId,
+                userId: actorId,
+                summary: changeSummary || 'Pedido editado',
+                changes: { summary: changeSummary || 'Pedido editado' },
+              },
+            });
+          }
+        } catch {}
+      }
       if (!events) this.socketGateway.server.emit('tableOrderEdited', { orderId, changeSummary });
     }
     return tickets;
   }
 
-  async syncDeliveryKitchenTickets(orderId: string, actorId: string, beforeItems: any[]) {
+  async syncDeliveryKitchenTickets(orderId: string, actorId?: string, beforeItems: any[] = []) {
     const events: any[] = [];
+    let orderSummary = '';
+    let updatedOrderRef: any = null;
     await this.prisma.$transaction(async tx => {
       await lockOperation(tx);
       const currentOrder = await tx.order.findUnique({
         where: { id: orderId },
-        include: { items: { include: { menuItem: { include: { category: true } } } } },
+        include: { items: { include: { menuItem: { include: { category: true } } } }, waiter: true, diningTable: true },
       });
       if (!currentOrder) throw new NotFoundException('Pedido no encontrado');
+      updatedOrderRef = currentOrder;
 
       const menuIds = [...new Set((beforeItems || []).map(item => item.menuItemId).filter(Boolean))];
       const previousMenuItems = menuIds.length
@@ -1286,6 +1301,7 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
         menuItem: item.menuItem || previousMenuMap.get(item.menuItemId),
       }));
       const { summary, changeMap } = await this.buildChangeSummary(enrichedBefore, currentOrder.items, tx);
+      orderSummary = summary;
       await this.createKitchenTickets(orderId, actorId, true, summary, changeMap, enrichedBefore, tx, events);
     }, operationTransaction);
 
@@ -1294,6 +1310,8 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
       else if (event.created) this.socketGateway.emitKitchenTicketCreated(event.ticket);
       else this.socketGateway.emitKitchenTicketUpdated(event.ticket);
     }
+    this.socketGateway.server.emit('tableOrderEdited', { orderId, changeSummary: orderSummary });
+    if (updatedOrderRef) this.socketGateway.server.emit('orderUpdated', updatedOrderRef);
   }
 
   async updateKitchenTicket(ticketId: string, status: string, user: any) {

@@ -146,8 +146,8 @@ export class OrdersController {
   @Permissions('orders.edit')
   @UseGuards(PermissionsGuard)
   @ApiOperation({ summary: 'Actualizar pedido completo' })
-  update(@Param('id') id: string, @Body() body: any) {
-    return this.ordersService.update(id, body);
+  update(@Param('id') id: string, @Body() body: any, @Request() req: any) {
+    return this.ordersService.update(id, body, req?.user);
   }
 
   @Put(':id/status')
