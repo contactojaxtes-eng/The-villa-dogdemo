@@ -39,7 +39,7 @@ import {
 } from 'lucide-react'
 import { type Socket } from 'socket.io-client'
 import { io } from '@/lib/socket'
-import { printComandaSmart, openCashDrawer } from '@/lib/printer'
+import { printComandaSmart, openCashDrawer, printReceiptText } from '@/lib/printer'
 import { alerts } from '@/lib/alerts'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Textarea } from '@/components/ui/textarea'
@@ -866,41 +866,53 @@ export default function ActiveDeliveriesPage() {
                           </td>
                           <td className="px-3 py-2.5">
                             <div className="flex items-center justify-center gap-1">
-                              {order.paymentStatus !== 'CONFIRMED' && order.status !== 'CANCELLED' && ['SUPERADMIN', 'ADMIN', 'CASHIER'].includes(user?.role || '') && (
-                                <Button size="sm" className="h-7 px-2 text-[10px] font-extrabold bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-fg)] rounded-lg gap-1 border-0 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                              {order.paymentStatus !== 'CONFIRMED' && order.status !== 'CANCELLED' && (
+                                <Button size="sm" className="h-7 px-2 text-[10px] font-extrabold bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-fg)] rounded-lg gap-1 border-0 cursor-pointer shadow-xs active:scale-95 transition-all"
                                   onClick={() => setCollectDialog(order)}
-                                  disabled={order.orderType !== 'PICKUP' && order.orderType !== 'LOCAL' && !order.deliveryDriverId}
-                                  title={order.orderType !== 'PICKUP' && order.orderType !== 'LOCAL' && !order.deliveryDriverId ? 'Debe asignar un domiciliario primero' : 'Cobrar pedido'}
+                                  title="Cobrar pedido"
                                 >
                                   <DollarSign className="h-3 w-3" /> Cobrar
                                 </Button>
                               )}
-                              {(hasPermission('orders.reprint') || hasPermission('dispatch.change_status')) && <Button
+                              <Button
                                 size="sm" 
                                 variant="ghost" 
-                                title="Imprimir Factura Domicilio"
+                                title="Imprimir Factura y Comanda"
                                 className="h-7 w-7 p-0 rounded-lg text-blue-500 hover:bg-blue-500/10 cursor-pointer"
-                                onClick={() => {
+                                onClick={async () => {
                                   const orderWithDriver = {
                                     ...order,
                                     deliveryDriver: order.deliveryDriver || (order.deliveryDriverId ? drivers.find(d => d.id === order.deliveryDriverId) : undefined)
                                   };
-                                  printComandaSmart(orderWithDriver, 'caja', user?.role, false, false);
+                                  alerts.toast(`Enviando pedido #${order.orderNumber} a impresión...`, 'info');
+                                  try {
+                                    const res = await api.post<{ ok: boolean; error?: string; text?: string; paper?: '58' | '80' }>(`/print/order/${order.id}?target=caja`);
+                                    if (res.ok) {
+                                      if (res.text) {
+                                        printReceiptText(res.text, res.paper || '80');
+                                      }
+                                      alerts.toast(`Pedido #${order.orderNumber} enviado a impresión`, 'success');
+                                    } else {
+                                      await printComandaSmart(orderWithDriver, 'caja', user?.role, false, false);
+                                    }
+                                  } catch {
+                                    await printComandaSmart(orderWithDriver, 'caja', user?.role, false, false);
+                                  }
                                 }}
                               >
                                 <Printer className="h-3.5 w-3.5" />
-                              </Button>}
-                               {hasPermission('orders.edit') && order.status !== 'CANCELLED' && order.status !== 'DELIVERED' && (
-                                 <Button 
-                                   size="sm" 
-                                   variant="ghost" 
-                                   title="Editar Pedido"
-                                   className="h-7 w-7 p-0 rounded-lg text-amber-500 hover:bg-amber-500/10 cursor-pointer"
-                                   onClick={() => navigate(`/orders/new?edit=${order.id}`)}
-                                 >
-                                   <Edit className="h-3.5 w-3.5" />
-                                 </Button>
-                               )}
+                              </Button>
+                              {order.status !== 'CANCELLED' && (
+                                <Button 
+                                  size="sm" 
+                                  variant="ghost" 
+                                  title="Editar Pedido"
+                                  className="h-7 w-7 p-0 rounded-lg text-amber-500 hover:bg-amber-500/10 cursor-pointer"
+                                  onClick={() => navigate(order.tableId ? `/tables/new?tableId=${order.tableId}&editOrderId=${order.id}` : `/orders/new?edit=${order.id}`)}
+                                >
+                                  <Edit className="h-3.5 w-3.5" />
+                                </Button>
+                              )}
                               <Button size="sm" variant="ghost" className="h-7 w-7 p-0 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-primary)] cursor-pointer"
                                 onClick={() => setDetailOrder(order)}>
                                 <Eye className="h-3.5 w-3.5" />
@@ -1286,13 +1298,35 @@ export default function ActiveDeliveriesPage() {
 
                   {/* Quick Actions */}
                   <div className="flex flex-wrap gap-2 pt-2 border-t border-[var(--border-subtle)]/50">
-                    {o.paymentStatus !== 'CONFIRMED' && o.status !== 'CANCELLED' && ['SUPERADMIN', 'ADMIN', 'CASHIER'].includes(user?.role || '') && (
-                      <Button size="sm" className="h-9 px-4 text-xs font-extrabold bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-fg)] rounded-xl gap-1.5 border-0 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                    <Button size="sm" variant="outline" className="h-9 px-4 text-xs font-bold rounded-xl gap-1.5 cursor-pointer border-blue-500/30 text-blue-600 hover:bg-blue-500/10"
+                      onClick={async () => {
+                        const orderWithDriver = {
+                          ...o,
+                          deliveryDriver: o.deliveryDriver || (o.deliveryDriverId ? drivers.find(d => d.id === o.deliveryDriverId) : undefined)
+                        };
+                        alerts.toast(`Enviando pedido #${o.orderNumber} a impresión...`, 'info');
+                        try {
+                          const res = await api.post<{ ok: boolean; error?: string; text?: string; paper?: '58' | '80' }>(`/print/order/${o.id}?target=caja`);
+                          if (res.ok && res.text) {
+                            printReceiptText(res.text, res.paper || '80');
+                            alerts.toast(`Pedido #${o.orderNumber} enviado a impresión`, 'success');
+                          } else {
+                            await printComandaSmart(orderWithDriver, 'caja', user?.role, false, false);
+                          }
+                        } catch {
+                          await printComandaSmart(orderWithDriver, 'caja', user?.role, false, false);
+                        }
+                      }}
+                      title="Imprimir Factura y Comanda"
+                    >
+                      <Printer className="h-3.5 w-3.5 text-blue-500" /> Imprimir Ticket
+                    </Button>
+                    {o.paymentStatus !== 'CONFIRMED' && o.status !== 'CANCELLED' && (
+                      <Button size="sm" className="h-9 px-4 text-xs font-extrabold bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-fg)] rounded-xl gap-1.5 border-0 cursor-pointer shadow-xs active:scale-95 transition-all"
                         onClick={() => { setDetailOrder(null); setCollectDialog(o); }}
-                        disabled={o.orderType !== 'PICKUP' && o.orderType !== 'LOCAL' && !o.deliveryDriverId}
-                        title={o.orderType !== 'PICKUP' && o.orderType !== 'LOCAL' && !o.deliveryDriverId ? 'Debe asignar un domiciliario primero' : 'Cobrar pedido'}
+                        title="Cobrar pedido"
                       >
-                        <DollarSign className="h-3.5 w-3.5" /> Cobrar
+                        <DollarSign className="h-3.5 w-3.5" /> Cobrar Pedido
                       </Button>
                     )}
                     {hasPermission('dispatch.change_status') && o.orderType !== 'PICKUP' && o.orderType !== 'LOCAL' && activeStatuses.includes(o.status) && (
@@ -1303,9 +1337,9 @@ export default function ActiveDeliveriesPage() {
                         {o.deliveryDriver ? `Repartidor: ${o.deliveryDriver.name}` : 'Asignar Repartidor'}
                       </Button>
                     )}
-                    {hasPermission('orders.edit') && o.status !== 'CANCELLED' && o.status !== 'DELIVERED' && (
+                    {o.status !== 'CANCELLED' && (
                       <Button size="sm" variant="outline" className="h-9 px-4 text-xs font-bold rounded-xl gap-1.5 cursor-pointer border-amber-500/30 text-amber-600 hover:bg-amber-500/10"
-                        onClick={() => { setDetailOrder(null); navigate(`/orders/new?edit=${o.id}`) }}
+                        onClick={() => { setDetailOrder(null); navigate(o.tableId ? `/tables/new?tableId=${o.tableId}&editOrderId=${o.id}` : `/orders/new?edit=${o.id}`) }}
                         title="Editar pedido">
                         <Edit className="h-3.5 w-3.5" /> Editar Pedido
                       </Button>

@@ -329,8 +329,10 @@ export function buildComandaText(
 
   if (target === 'cocina') {
     const waiterName = (order.assignee?.name || order.waiter?.name || '—').toUpperCase()
+    const barrio = order.zone?.name || (order as any).zoneName || (order as any).barrio
     lines.push(
-      `[CENTER][HEIGHT][BOLD]COMANDA ${stationName?.toUpperCase() || 'COCINA'}[/BOLD][/HEIGHT][/CENTER]`,
+      `[CENTER][BIG][BOLD]FACTURA Y COMANDA[/BOLD][/BIG][/CENTER]`,
+      `[CENTER][BIG][BOLD]THE VILLA DOG[/BOLD][/BIG][/CENTER]`,
       isEdited ? divider : '',
       isEdited ? '[CENTER][HEIGHT][BOLD]⚠️ PEDIDO EDITADO ⚠️[/BOLD][/HEIGHT][/CENTER]' : '',
       divider,
@@ -339,6 +341,10 @@ export function buildComandaText(
       ...(order.diningTable?.label || order.tableId || order.orderType === 'LOCAL'
         ? [`[CENTER][HEIGHT][BOLD]MESA: ${(order.diningTable?.label || (order as any).tableName || (order.tableId ? 'MESA' : 'SALÓN')).toUpperCase()}[/BOLD][/HEIGHT][/CENTER]`]
         : [`[CENTER][BOLD]TIPO: ${order.orderType === 'DELIVERY' ? 'DOMICILIO' : 'RECOGER EN LOCAL'}[/BOLD][/CENTER]`]),
+      ...(order.customerName ? [`Cliente: ${order.customerName.toUpperCase()}`] : []),
+      ...(order.customerPhone ? [`Teléfono: ${formatDisplayPhone(order.customerPhone, (order as any).customer?.phone)}`] : []),
+      ...(!(order.tableId || order.orderType === 'LOCAL') && fullAddress ? [`Dirección: ${fullAddress.toUpperCase()}`] : []),
+      ...(!(order.tableId || order.orderType === 'LOCAL') && barrio ? [`Barrio: ${barrio.toUpperCase()}`] : []),
       `Atiende: ${waiterName}`,
       divider,
       '[HEIGHT][BOLD]PRODUCTOS A PREPARAR:[/BOLD][/HEIGHT]',
@@ -346,19 +352,37 @@ export function buildComandaText(
     )
 
     for (const item of grouped) {
-      lines.push(`[HEIGHT]${item.quantity} x ${item.menuItem?.name || 'Item'}[/HEIGHT]`)
+      const uPrice = Number(item.price || item.unitPrice || item.menuItem?.price || 0)
+      const sub = uPrice * Number(item.quantity || 1)
+      const priceTag = uPrice > 0 ? ` ($ ${Math.round(uPrice).toLocaleString('es-CO')} c/u = $ ${Math.round(sub).toLocaleString('es-CO')})` : ''
+      lines.push(`[HEIGHT]${item.quantity} x ${item.menuItem?.name || 'Item'}${priceTag}[/HEIGHT]`)
       const cleaned = cleanNotesForPrint(item.notes, item.menuItem?.name)
       if (item.notes && cleaned && !item.notes.startsWith('Adición para:')) {
         lines.push(`[HEIGHT]  ↳ NOTA: ${cleaned.toUpperCase()}[/HEIGHT]`)
       }
       if (item.additions && item.additions.length > 0) {
-        lines.push(...item.additions.map(a => `[HEIGHT]  + ${a.quantity} x ${a.menuItem?.name || 'Item'}[/HEIGHT]`))
+        for (const a of item.additions) {
+          const aPrice = Number(a.price || a.unitPrice || a.menuItem?.price || 0)
+          const aSub = aPrice * Number(a.quantity || 1)
+          const aPriceTag = aPrice > 0 ? ` ($ ${Math.round(aPrice).toLocaleString('es-CO')} c/u = $ ${Math.round(aSub).toLocaleString('es-CO')})` : ''
+          lines.push(`[HEIGHT]  + ${a.quantity} x ${a.menuItem?.name || 'Item'}${aPriceTag}[/HEIGHT]`)
+        }
       }
       lines.push('') // Línea en blanco para separar productos
     }
 
     lines.push(divider)
+    lines.push(padLine('SUBTOTAL:', formatCurrency(order.subtotal || 0)))
+    if (order.deliveryFee && Number(order.deliveryFee) > 0) {
+      lines.push(padLine('DOMICILIO:', formatCurrency(order.deliveryFee)))
+    }
+    lines.push('[CENTER][BIG][BOLD]TOTAL A PAGAR:[/BOLD][/BIG][/CENTER]')
+    lines.push(`[CENTER][BIG][BOLD]${formatCurrency(order.total || 0)}[/BOLD][/BIG][/CENTER]`)
+    lines.push(divider)
+    lines.push(padLine('FORMA DE PAGO:', String(paymentLabels[order.paymentMethod] || order.paymentMethod || 'EFECTIVO').toUpperCase()))
+
     if (cleanOrderNotes) {
+      lines.push(divider)
       lines.push(`[BIG][BOLD]NOTA GENERAL:[/BOLD]\n${cleanOrderNotes.toUpperCase()}[/BIG]`, divider)
     }
     lines.push(`[CENTER]** ${stationName?.toUpperCase() || 'COCINA'} TICKET **[/CENTER]`, divider)
@@ -377,6 +401,7 @@ export function buildComandaText(
     const driverName = order.deliveryDriver?.name || (order as any).deliveryDriverName || (order as any).driverName || (order as any).driver?.name;
 
     lines.push(
+      `[CENTER][BIG][BOLD]FACTURA Y COMANDA[/BOLD][/BIG][/CENTER]`,
       `[CENTER][BIG][BOLD]${restInfo.name}[/BOLD][/BIG][/CENTER]`,
       `[CENTER]NIT: ${restInfo.nit}[/CENTER]`,
       `[CENTER]Dir: ${restInfo.address}[/CENTER]`,
@@ -521,6 +546,61 @@ function printViaIframe(html: string) {
   else iframe.onload = doPrint
 }
 
+export function printReceiptText(rawText: string, paper: '58' | '80' = '80') {
+  if (!rawText) return
+  const paperWidth = paper === '58' ? '58mm' : '80mm'
+  const cleanHtml = rawText
+    .replace(/\[CENTER\]([\s\S]*?)\[\/CENTER\]/gi, '<div style="text-align: center;">$1</div>')
+    .replace(/\[BOLD\]([\s\S]*?)\[\/BOLD\]/gi, '<b>$1</b>')
+    .replace(/\[BIG\]([\s\S]*?)\[\/BIG\]/gi, '<span style="font-size: 1.22em; font-weight: bold;">$1</span>')
+    .replace(/\[HEIGHT\]([\s\S]*?)\[\/HEIGHT\]/gi, '<span style="font-size: 1.1em; font-weight: bold;">$1</span>')
+    .replace(/\[\/?(CENTER|BOLD|BIG|HEIGHT|CUT|DRAWER)\]/gi, '')
+    .replace(/\n/g, '<br />')
+
+  const fullHtml = `<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Ticket THE VILLA DOG</title>
+    <style>
+      @page { size: ${paperWidth} auto; margin: 0; }
+      body {
+        font-family: 'Courier New', monospace, sans-serif;
+        font-size: 12px;
+        font-weight: 700;
+        line-height: 1.3;
+        width: ${paperWidth};
+        margin: 0 auto;
+        padding: 4mm;
+        color: #000;
+        background: #fff;
+      }
+      div { margin: 0; padding: 0; }
+    </style>
+  </head>
+  <body>
+    <div>${cleanHtml}</div>
+  </body>
+</html>`
+
+  const isMobile = typeof navigator !== 'undefined' && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
+  if (isMobile) {
+    const printWindow = window.open('', '_blank')
+    if (printWindow) {
+      printWindow.document.open()
+      printWindow.document.write(fullHtml)
+      printWindow.document.close()
+      printWindow.focus()
+      setTimeout(() => {
+        printWindow.print()
+      }, 300)
+      return
+    }
+  }
+
+  printViaIframe(fullHtml)
+}
+
 async function printSinglePrinter(
   order: ComandaOrder,
   printerConfig: PrinterSettings,
@@ -571,8 +651,11 @@ async function printSinglePrinter(
       return { method: printerConfig.mode, silent: true }
     }
     try {
-      const result = await api.post<{ ok: boolean; error?: string }>(`/print/order/${order.id}?target=${targetId}&kickDrawer=${kickDrawer}`)
+      const result = await api.post<{ ok: boolean; error?: string; text?: string; paper?: '58' | '80' }>(`/print/order/${order.id}?target=${targetId}&kickDrawer=${kickDrawer}`)
       if (result.ok) {
+        if (result.text && !isAutoPrint) {
+          printReceiptText(result.text, result.paper || '80')
+        }
         return { method: 'local_bridge', silent: true }
       }
       if (printerConfig.mode !== 'browser') {

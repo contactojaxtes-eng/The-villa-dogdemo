@@ -972,7 +972,7 @@ export class OrdersService implements OnModuleInit {
       await lockOperation(tx);
       const order = await tx.order.findUnique({ where: { id } });
       if (order?.tableId) throw new BadRequestException('Edita este pedido desde su cuenta en Mesas');
-      return this.updateWithinTransaction(id, data, tx);
+      return this.updateWithinTransaction(id, data, tx, user);
     }, operationTransaction);
     await this.notifyUpdated(id, result.updated, result.existing, data, user);
     return result.updated;
@@ -995,15 +995,21 @@ export class OrdersService implements OnModuleInit {
     deliveryFee?: number;
     tax?: number;
     customerId?: string;
-  }, tx: Prisma.TransactionClient) {
+  }, tx: Prisma.TransactionClient, user?: any) {
     const existing = await tx.order.findUnique({
       where: { id },
       include: { items: true },
     });
     if (!existing) throw new NotFoundException('Pedido no encontrado');
-    if (['CONFIRMED', 'PENDING_REVIEW'].includes(existing.paymentStatus)) throw new BadRequestException('No se puede editar un pedido pagado o con comprobante en revisión');
     if (existing.status === 'CANCELLED') throw new BadRequestException('No se puede editar un pedido cancelado');
-    if (existing.status === 'DELIVERED') throw new BadRequestException('No se puede editar un pedido entregado');
+
+    const isAdminOrCashier = user?.role && ['ADMIN', 'SUPERADMIN', 'CASHIER'].includes(user.role);
+    if (['CONFIRMED', 'PENDING_REVIEW'].includes(existing.paymentStatus) && !isAdminOrCashier) {
+      throw new BadRequestException('No se puede editar un pedido pagado o con comprobante en revisión');
+    }
+    if (existing.status === 'DELIVERED' && !isAdminOrCashier) {
+      throw new BadRequestException('No se puede editar un pedido entregado');
+    }
 
     if (!data.items?.length) {
       throw new BadRequestException('El pedido debe incluir al menos un producto');

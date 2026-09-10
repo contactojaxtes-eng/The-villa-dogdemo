@@ -40,7 +40,7 @@ import {
 } from 'lucide-react'
 import { type Socket } from 'socket.io-client'
 import { io } from '@/lib/socket'
-import { printComandaSmart, openCashDrawer } from '@/lib/printer'
+import { printComandaSmart, openCashDrawer, printReceiptText } from '@/lib/printer'
 import { alerts } from '@/lib/alerts'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Textarea } from '@/components/ui/textarea'
@@ -1055,45 +1055,47 @@ export default function OrdersPage() {
 
                       {/* Operations and Tools */}
                       <div className="flex flex-wrap items-center gap-2 ml-auto">
-                        {/* Botón Cobrar Pedido (Visible si no está cobrado y usuario es caja/admin) */}
-                        {order.paymentStatus !== 'CONFIRMED' && order.status !== 'CANCELLED' && ['SUPERADMIN', 'ADMIN', 'CASHIER'].includes(user?.role || '') && (
+                        {/* Botón Cobrar Pedido (Visible si no está cobrado) */}
+                        {order.paymentStatus !== 'CONFIRMED' && order.status !== 'CANCELLED' && (
                           <Button 
                             size="sm" 
-                            className="h-9 px-3 text-xs font-black bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl gap-1 border-0 cursor-pointer shadow-md active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                            className="h-9 px-3 text-xs font-black bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl gap-1 border-0 cursor-pointer shadow-md active:scale-95 transition-all"
                             onClick={() => setCollectDialog({ id: order.id, orderNumber: order.orderNumber, total: order.total, method: order.paymentMethod || 'CASH' })}
-                            disabled={order.orderType !== 'PICKUP' && order.orderType !== 'LOCAL' && !order.deliveryDriverId}
-                            title={order.orderType !== 'PICKUP' && order.orderType !== 'LOCAL' && !order.deliveryDriverId ? 'Debe asignar un domiciliario primero' : 'Registrar Cobro del Pedido'}
+                            title="Registrar Cobro del Pedido"
                           >
                             <DollarSign className="h-4 w-4" /> Cobrar
                           </Button>
                         )}
 
                         {/* Action Tools: Un solo botón de impresión para Comanda/Factura unificada */}
-                        {(hasPermission('orders.reprint') || hasPermission('dispatch.change_status')) && (
-                          <Button 
-                            size="sm" 
-                            variant="ghost" 
-                            className="h-9 w-9 p-0 rounded-xl border border-[var(--border-subtle)] hover:bg-[var(--bg-hover)] text-emerald-500 hover:text-emerald-600 active:scale-95 transition-all cursor-pointer"
-                            title="Imprimir Factura / Comanda"
-                            onClick={async () => {
-                              const shouldKick = order.paymentMethod === 'CASH';
-                              const orderWithDriver = {
-                                ...order,
-                                deliveryDriver: order.deliveryDriver || (order.deliveryDriverId ? drivers.find(d => d.id === order.deliveryDriverId) : undefined)
-                              };
-                              alerts.toast(`Enviando pedido #${order.orderNumber} a impresión...`, 'info');
-                              const res = await printComandaSmart(orderWithDriver, 'caja', user?.role, false, shouldKick);
-                              if (res?.error) {
-                                alerts.error('Error al imprimir', res.error);
-                              } else {
+                        <Button 
+                          size="sm" 
+                          variant="ghost" 
+                          className="h-9 w-9 p-0 rounded-xl border border-[var(--border-subtle)] hover:bg-[var(--bg-hover)] text-emerald-500 hover:text-emerald-600 active:scale-95 transition-all cursor-pointer"
+                          title="Imprimir Factura / Comanda"
+                          onClick={async () => {
+                            const shouldKick = order.paymentMethod === 'CASH';
+                            const orderWithDriver = {
+                              ...order,
+                              deliveryDriver: order.deliveryDriver || (order.deliveryDriverId ? drivers.find(d => d.id === order.deliveryDriverId) : undefined)
+                            };
+                            alerts.toast(`Enviando pedido #${order.orderNumber} a impresión...`, 'info');
+                            try {
+                              const res = await api.post<{ ok: boolean; error?: string; text?: string; paper?: '58' | '80' }>(`/print/order/${order.id}?target=caja&kickDrawer=${shouldKick}`);
+                              if (res.ok && res.text) {
+                                printReceiptText(res.text, res.paper || '80');
                                 alerts.toast(`Pedido #${order.orderNumber} enviado a impresión`, 'success');
+                              } else {
+                                await printComandaSmart(orderWithDriver, 'caja', user?.role, false, shouldKick);
                               }
-                            }}
-                          >
-                            <Printer className="h-4 w-4" />
-                          </Button>
-                        )}
-                        {hasPermission('orders.edit') && ['PENDING', 'PREPARING', 'READY', 'IN_ROUTE'].includes(order.status) && (
+                            } catch {
+                              await printComandaSmart(orderWithDriver, 'caja', user?.role, false, shouldKick);
+                            }
+                          }}
+                        >
+                          <Printer className="h-4 w-4" />
+                        </Button>
+                        {order.status !== 'CANCELLED' && (
                           <>
                             <Link
                               to={order.tableId ? `/tables/new?tableId=${order.tableId}&editOrderId=${order.id}` : `/orders/new?edit=${order.id}`}
@@ -1597,28 +1599,50 @@ export default function OrdersPage() {
                 </div>
 
                 {/* Actions */}
-                <div className="flex gap-2 pt-2">
+                <div className="flex flex-wrap gap-2 pt-2">
                   <Button variant="outline" className="flex-1 rounded-xl h-10 font-bold text-xs cursor-pointer" onClick={() => setDetailOrder(null)}>
                     Cerrar
                   </Button>
-                  {(hasPermission('orders.reprint') || hasPermission('dispatch.change_status')) && (
-                    <Button className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl h-10 px-4 text-xs gap-1.5 cursor-pointer shadow-md shadow-emerald-600/15"
-                      onClick={async () => {
-                        const orderWithDriver = {
-                          ...o,
-                          deliveryDriver: o.deliveryDriver || (o.deliveryDriverId ? drivers.find(d => d.id === o.deliveryDriverId) : undefined)
-                        };
-                        alerts.toast(`Enviando pedido #${o.orderNumber} a impresión...`, 'info');
-                        const res = await printComandaSmart(orderWithDriver, 'caja', user?.role, false, false);
-                        if (res?.error) {
-                          alerts.error('Error al imprimir', res.error);
-                        } else {
-                          alerts.toast(`Pedido #${o.orderNumber} enviado a impresión`, 'success');
-                        }
-                      }}>
-                      <Printer className="h-4 w-4" /> Imprimir Factura / Comanda
+                  {o.paymentStatus !== 'CONFIRMED' && o.status !== 'CANCELLED' && (
+                    <Button 
+                      className="bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 text-white font-bold rounded-xl h-10 px-4 text-xs gap-1.5 cursor-pointer shadow-md shadow-emerald-600/15"
+                      onClick={() => {
+                        const target = o;
+                        setDetailOrder(null);
+                        setCollectDialog({ id: target.id, orderNumber: target.orderNumber, total: target.total, method: target.paymentMethod || 'CASH' });
+                      }}
+                    >
+                      <DollarSign className="h-4 w-4" /> Cobrar Pedido
                     </Button>
                   )}
+                  {o.status !== 'CANCELLED' && (
+                    <Link to={o.tableId ? `/tables/new?tableId=${o.tableId}&editOrderId=${o.id}` : `/orders/new?edit=${o.id}`}>
+                      <Button variant="outline" className="border-amber-500/30 text-amber-600 hover:bg-amber-500/10 font-bold rounded-xl h-10 px-4 text-xs gap-1.5 cursor-pointer">
+                        <Edit className="h-4 w-4" /> Editar Pedido
+                      </Button>
+                    </Link>
+                  )}
+                  <Button className="bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl h-10 px-4 text-xs gap-1.5 cursor-pointer shadow-md shadow-blue-600/15"
+                    onClick={async () => {
+                      const orderWithDriver = {
+                        ...o,
+                        deliveryDriver: o.deliveryDriver || (o.deliveryDriverId ? drivers.find(d => d.id === o.deliveryDriverId) : undefined)
+                      };
+                      alerts.toast(`Enviando pedido #${o.orderNumber} a impresión...`, 'info');
+                      try {
+                        const res = await api.post<{ ok: boolean; error?: string; text?: string; paper?: '58' | '80' }>(`/print/order/${o.id}?target=caja`);
+                        if (res.ok && res.text) {
+                          printReceiptText(res.text, res.paper || '80');
+                          alerts.toast(`Pedido #${o.orderNumber} enviado a impresión`, 'success');
+                        } else {
+                          await printComandaSmart(orderWithDriver, 'caja', user?.role, false, false);
+                        }
+                      } catch {
+                        await printComandaSmart(orderWithDriver, 'caja', user?.role, false, false);
+                      }
+                    }}>
+                    <Printer className="h-4 w-4" /> Imprimir Factura y Comanda
+                  </Button>
                 </div>
               </div>
             )

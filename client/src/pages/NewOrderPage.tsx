@@ -571,6 +571,8 @@ export default function NewOrderPage({
   const [chargeTax, setChargeTax] = useState(false)
 
   const [showNotes, setShowNotes] = useState<Record<string, boolean>>({})
+  const [draftNotes, setDraftNotes] = useState<Record<string, string>>({})
+  const noteInputRefs = useRef<Record<string, HTMLInputElement | null>>({})
   const [isCartCollapsed, setIsCartCollapsed] = useState(false)
   const [isCartDrawerOpen, setIsCartDrawerOpen] = useState(false)
   const [initialLoading, setInitialLoading] = useState(
@@ -2203,65 +2205,136 @@ export default function NewOrderPage({
   })
 
 
-  const updateItemNotes = (lineId: string, itemNotes: string) => setCart(prev => consolidateCart(prev.map(i => {
-    if (i && i.lineId === lineId) {
-      const tagMatch = (i.notes || '').match(/\(#line-[\w-]+\)/)
-      const tag = tagMatch ? tagMatch[0] : `(#${lineId})`
-      const cleanedInput = itemNotes.replace(/\s?\(#[\w-]+\)/g, '')
-      const newNotes = cleanedInput ? `${cleanedInput} ${tag}` : tag
-      return { ...i, notes: newNotes }
-    }
-    return i
-  })))
+  const saveItemNote = (lineId: string, rawInput: string) => {
+    const trimmed = rawInput.trim();
+    setShowNotes(prev => ({ ...prev, [lineId]: false }));
+
+    setCart(prev => {
+      const lineIndex = prev.findIndex(i => i && i.lineId === lineId);
+      if (lineIndex === -1) return prev;
+      const target = prev[lineIndex];
+
+      if (!trimmed) {
+        // Limpiar notas si quedó vacío
+        const hasAdditions = prev.some(add => add && add.notes && add.notes.startsWith('Adición para:') && add.notes.includes(`(#${lineId})`));
+        return consolidateCart(prev.map(i => (i && i.lineId === lineId) ? { ...i, notes: hasAdditions ? `(#${lineId})` : undefined } : i));
+      }
+
+      // Si tiene varias unidades, analizar división inteligente
+      if (target.quantity > 1) {
+        let noteQty = 1;
+        let cleanNote = trimmed;
+
+        // Detectar si el usuario especificó una cantidad al inicio (ej: "2 sin cebolla", "2 sin cebolla y 8 normal", "2x sin salsa")
+        const qtyMatch = trimmed.match(/^(\d+)\s*(?:x\s*)?(.*?)(?:\s*(?:y|,|;|-)\s*(\d+)?\s*(?:normal.*)?)?$/i);
+        const isAll = /^(todas?|todos|todo)\b/i.test(trimmed);
+
+        if (isAll) {
+          noteQty = target.quantity;
+          cleanNote = trimmed.replace(/^(todas?|todos|todo)\s*(?:con|de|:)?\s*/i, '').trim();
+        } else if (qtyMatch && qtyMatch[1]) {
+          const parsedQty = parseInt(qtyMatch[1], 10);
+          if (parsedQty > 0) {
+            noteQty = Math.min(parsedQty, target.quantity);
+            cleanNote = (qtyMatch[2] || '').trim();
+            if (!cleanNote) cleanNote = trimmed;
+          }
+        }
+
+        // Si la cantidad con nota cubre todas las unidades de la línea
+        if (noteQty >= target.quantity) {
+          const tag = `(#${target.lineId})`;
+          const finalNotes = cleanNote ? `${cleanNote} ${tag}` : tag;
+          return consolidateCart(prev.map(i => (i && i.lineId === lineId) ? { ...i, notes: finalNotes } : i));
+        }
+
+        // Separar la cantidad: target.quantity - noteQty (limpio sin nota) y noteQty (con nota)
+        const remainingQty = target.quantity - noteQty;
+        const newLineId = `line-${Math.random().toString(36).substring(2, 9)}`;
+        const newTag = `(#${newLineId})`;
+        const newNotedNotes = cleanNote ? `${cleanNote} ${newTag}` : newTag;
+
+        const updatedOriginal: CartItem = {
+          ...target,
+          quantity: remainingQty,
+          notes: undefined,
+        };
+
+        const newNotedLine: CartItem = {
+          ...target,
+          lineId: newLineId,
+          quantity: noteQty,
+          notes: newNotedNotes,
+        };
+
+        const newCart = [...prev];
+        newCart[lineIndex] = updatedOriginal;
+        newCart.push(newNotedLine);
+        return consolidateCart(newCart);
+      }
+
+      // Línea de 1 unidad
+      const tagMatch = (target.notes || '').match(/\(#line-[\w-]+\)/);
+      const tag = tagMatch ? tagMatch[0] : `(#${lineId})`;
+      const cleanedInput = trimmed.replace(/\s?\(#[\w-]+\)/g, '');
+      const newNotes = cleanedInput ? `${cleanedInput} ${tag}` : tag;
+      return consolidateCart(prev.map(i => (i && i.lineId === lineId) ? { ...i, notes: newNotes } : i));
+    });
+  };
 
   const clearItemNotes = (lineId: string) => {
     setShowNotes(prev => {
-      const next = { ...prev }
-      delete next[lineId]
-      return next
-    })
+      const next = { ...prev };
+      delete next[lineId];
+      return next;
+    });
+    setDraftNotes(prev => {
+      const next = { ...prev };
+      delete next[lineId];
+      return next;
+    });
     setCart(prev => consolidateCart(prev.map(i => {
       if (i && i.lineId === lineId) {
-        const hasAdditions = prev.some(add => add && add.notes && add.notes.startsWith('Adición para:') && add.notes.includes(`(#${lineId})`))
-        return { ...i, notes: hasAdditions ? `(#${lineId})` : undefined }
+        const hasAdditions = prev.some(add => add && add.notes && add.notes.startsWith('Adición para:') && add.notes.includes(`(#${lineId})`));
+        return { ...i, notes: hasAdditions ? `(#${lineId})` : undefined };
       }
-      return i
-    })))
-  }
+      return i;
+    })));
+  };
 
   const removeAddition = (add: CartItem) => setCart(prev => consolidateCart(prev.filter(i => i && !(i.menuItemId === add.menuItemId && i.notes === add.notes))))
 
   const updateAdditionQuantity = (add: CartItem, delta: number) => setCart(prev => consolidateCart(prev.map(i => (i && i.menuItemId === add.menuItemId && i.notes === add.notes) ? { ...i, quantity: Math.max(1, i.quantity + delta) } : i)))
 
-  const handleAddNoteClick = (item: CartItem) => {
-    if (!item) return
-    const keyId = item.lineId || item.menuItemId
-    if (item.quantity > 1) {
-      const newQuantity = item.quantity - 1
-      const newLineId = `line-${Math.random().toString(36).substring(2, 9)}`
-      const newItem: CartItem = {
-        menuItemId: item.menuItemId,
-        name: item.name,
-        price: item.price,
-        quantity: 1,
-        lineId: newLineId,
-        notes: `(#${newLineId})`
+  const startEditNote = (item: CartItem) => {
+    if (!item) return;
+    const keyId = item.lineId || item.menuItemId;
+    const currentNote = keepKitchenInstruction(getItemRawNote(item.notes), item.name);
+    setDraftNotes(prev => ({ ...prev, [keyId]: currentNote }));
+    setShowNotes(prev => ({ ...prev, [keyId]: true }));
+    setTimeout(() => {
+      const input = noteInputRefs.current[keyId];
+      if (input) {
+        input.focus();
+        const len = input.value.length;
+        input.setSelectionRange(len, len);
       }
-      setCart(prev => consolidateCart(prev.map(i => (i && i.lineId === item.lineId) ? { ...i, quantity: newQuantity } : i).concat(newItem)))
-      setShowNotes(prev => ({ ...prev, [newLineId]: true }))
-    } else {
-      setCart(prev => consolidateCart(prev.map(i => {
-        if (i && i.lineId === item.lineId) {
-          const tag = `(#${item.lineId})`
-          const existingNotes = i.notes || ''
-          const newNotes = existingNotes.includes(tag) ? existingNotes : (existingNotes ? `${existingNotes} ${tag}` : tag)
-          return { ...i, notes: newNotes }
-        }
-        return i
-      })))
-      setShowNotes(prev => ({ ...prev, [keyId]: true }))
-    }
-  }
+    }, 50);
+  };
+
+  const handleAddNoteClick = (item: CartItem) => {
+    if (!item) return;
+    const keyId = item.lineId || item.menuItemId;
+    const currentNote = keepKitchenInstruction(getItemRawNote(item.notes), item.name);
+    setDraftNotes(prev => ({ ...prev, [keyId]: currentNote }));
+    setShowNotes(prev => ({ ...prev, [keyId]: true }));
+    setTimeout(() => {
+      const input = noteInputRefs.current[keyId];
+      if (input) {
+        input.focus();
+      }
+    }, 50);
+  };
 
   const handleAddAddition = (item: CartItem, additionId: string) => {
     if (!item || !additionId) return
@@ -3736,32 +3809,35 @@ export default function NewOrderPage({
                       <div className="flex items-center gap-1 flex-wrap pt-1 border-t border-[var(--border-subtle)]/40 min-w-0">
                         {showNotes[keyId] ? (
                           <div className="flex items-center gap-1 bg-[var(--bg-elevated)] border border-[var(--accent)]/40 p-1 rounded-lg w-full">
-                            <Input 
-                              value={visibleKitchenNote}
-                              onChange={e => updateItemNotes(item.lineId!, e.target.value)}
+                            <input 
+                              ref={el => { noteInputRefs.current[keyId] = el; }}
+                              value={draftNotes[keyId] ?? visibleKitchenNote ?? ''}
+                              onChange={e => {
+                                const val = e.target.value;
+                                setDraftNotes(prev => ({ ...prev, [keyId]: val }));
+                              }}
                               onKeyDown={e => {
                                 if (e.key === 'Enter') {
-                                  e.preventDefault()
-                                  setShowNotes(prev => ({ ...prev, [keyId]: false }))
+                                  e.preventDefault();
+                                  saveItemNote(item.lineId!, draftNotes[keyId] ?? visibleKitchenNote ?? '');
                                 }
                               }}
-                              onBlur={() => {
-                                setShowNotes(prev => ({ ...prev, [keyId]: false }))
-                              }}
-                              placeholder="Nota (ej: sin cebolla)..." 
-                              className="h-6 text-[11px] bg-[var(--bg-input)] border-[var(--border-subtle)] rounded px-2 focus:border-[var(--accent)] flex-1 font-medium" 
+                              placeholder={item.quantity > 1 ? "Nota (ej: 2 sin cebolla)..." : "Nota (ej: sin cebolla)..."} 
+                              className="h-6 text-[11px] bg-[var(--bg-input)] border border-[var(--border-subtle)] rounded px-2 focus:border-[var(--accent)] outline-none flex-1 font-medium text-[var(--text-primary)]" 
                               autoFocus
                             />
                             <button
                               type="button"
-                              onClick={() => setShowNotes(prev => ({ ...prev, [keyId]: false }))}
-                              className="h-6 px-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-[10px] font-bold cursor-pointer shrink-0"
+                              onMouseDown={e => e.preventDefault()}
+                              onClick={() => saveItemNote(item.lineId!, draftNotes[keyId] ?? visibleKitchenNote ?? '')}
+                              className="h-6 px-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-[10px] font-bold cursor-pointer shrink-0 transition-colors shadow-2xs"
                               title="Guardar nota (Enter)"
                             >
                               ✓
                             </button>
                             <button
                               type="button"
+                              onMouseDown={e => e.preventDefault()}
                               onClick={() => clearItemNotes(item.lineId!)}
                               className="h-6 px-1.5 text-[var(--text-muted)] hover:text-red-500 rounded text-[10px] font-bold cursor-pointer shrink-0"
                               title="Borrar nota"
@@ -3773,13 +3849,15 @@ export default function NewOrderPage({
                           <>
                             {visibleKitchenNote ? (
                               <div className="inline-flex items-center gap-1 text-[10px] bg-red-500/10 border border-red-500/25 text-red-600 dark:text-red-400 font-semibold px-1.5 py-0.5 rounded-md max-w-full min-w-0">
-                                <span 
-                                  onClick={() => setShowNotes(prev => ({ ...prev, [keyId]: true }))}
-                                  className="truncate cursor-pointer hover:underline max-w-[130px]"
-                                  title="Clic para editar nota"
+                                <button 
+                                  type="button"
+                                  onClick={() => startEditNote(item)}
+                                  className="truncate cursor-pointer hover:underline max-w-[130px] flex items-center gap-1 text-left"
+                                  title="Clic para editar nota con el cursor"
                                 >
-                                  📝 {visibleKitchenNote}
-                                </span>
+                                  <span>📝 {visibleKitchenNote}</span>
+                                  <Edit className="w-2.5 h-2.5 opacity-80 shrink-0" />
+                                </button>
                                 <button
                                   type="button"
                                   onClick={() => clearItemNotes(item.lineId!)}

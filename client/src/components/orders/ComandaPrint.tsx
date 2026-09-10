@@ -54,19 +54,20 @@ export function printComanda(order: ComandaOrder) {
 
   win.document.write(`
     <!DOCTYPE html>
-    <html><head><title>Comanda #${order.orderNumber}</title>
+    <html><head><title>FACTURA Y COMANDA #${order.orderNumber}</title>
     <style>
       * { margin: 0; padding: 0; box-sizing: border-box; }
-      body { font-family: 'Courier New', monospace; width: 80mm; padding: 8mm; font-size: 12px; color: #000; }
+      body { font-family: 'Courier New', monospace; width: 80mm; padding: 6mm; font-size: 12px; color: #000; }
       .header { text-align: center; border-bottom: 2px dashed #000; padding-bottom: 8px; margin-bottom: 8px; }
-      .header h1 { font-size: 18px; letter-spacing: 2px; }
+      .header h2 { font-size: 13px; font-weight: 900; letter-spacing: 1px; }
+      .header h1 { font-size: 18px; letter-spacing: 1px; font-weight: 900; }
       .header p { font-size: 10px; margin-top: 4px; }
       .order-num { font-size: 24px; font-weight: bold; text-align: center; margin: 8px 0; }
       .section { margin: 8px 0; padding: 6px 0; border-bottom: 1px dashed #ccc; }
       .label { font-weight: bold; font-size: 10px; text-transform: uppercase; color: #555; }
       .value { font-size: 13px; margin-top: 2px; }
       .address { font-size: 14px; font-weight: bold; line-height: 1.4; }
-      .item { display: flex; justify-content: space-between; margin: 4px 0; }
+      .item { display: flex; justify-content: space-between; align-items: baseline; margin: 4px 0; }
       .item-name { flex: 1; }
       .item-qty { font-weight: bold; margin-right: 8px; }
       .total { font-size: 16px; font-weight: bold; text-align: right; margin-top: 8px; }
@@ -75,6 +76,7 @@ export function printComanda(order: ComandaOrder) {
       @media print { body { width: 80mm; } }
     </style></head><body>
     <div class="header">
+      <h2>FACTURA Y COMANDA</h2>
       <h1>THE VILLA DOG</h1>
       <p>Sabor Auténtico · Montería, Córdoba</p>
     ${order.status === 'CANCELLED' ? `
@@ -118,25 +120,36 @@ export function printComanda(order: ComandaOrder) {
     `}
     <div class="section">
       <div class="label">Productos</div>
-      ${groupOrderItems(order.items || []).map(i => `
+      ${groupOrderItems(order.items || []).map(i => {
+        const uPrice = Number(i.unitPrice || i.price || 0)
+        const sub = uPrice * Number(i.quantity || 1)
+        const priceTag = uPrice > 0 ? ` ($ ${Math.round(uPrice).toLocaleString('es-CO')} c/u = $ ${Math.round(sub).toLocaleString('es-CO')})` : ''
+        return `
         <div class="item">
           <span class="item-qty">${i.quantity}x</span>
-          <span class="item-name" style="font-weight: bold;">${i.menuItem.code ? `[${i.menuItem.code}] ` : ''}${i.menuItem.name}${i.notes && cleanNotes(i.notes) && !i.notes.startsWith('Adición para:') ? ` (${cleanNotes(i.notes)})` : ''}</span>
+          <span class="item-name" style="font-weight: bold;">${i.menuItem.code ? `[${i.menuItem.code}] ` : ''}${i.menuItem.name}${priceTag}${i.notes && cleanNotes(i.notes) && !i.notes.startsWith('Adición para:') ? ` (${cleanNotes(i.notes)})` : ''}</span>
+          ${sub > 0 ? `<span style="font-weight: bold; margin-left: 8px;">${formatCurrency(sub)}</span>` : ''}
         </div>
-        ${i.additions && i.additions.map(a => `
+        ${i.additions && i.additions.map(a => {
+          const aPrice = Number(a.unitPrice || a.price || 0)
+          const aSub = aPrice * Number(a.quantity || 1)
+          const aPriceTag = aPrice > 0 ? ` ($ ${Math.round(aPrice).toLocaleString('es-CO')} c/u = $ ${Math.round(aSub).toLocaleString('es-CO')})` : ''
+          return `
           <div class="item" style="margin-left: 15px; font-size: 11px; color: #333;">
             <span class="item-qty">+ ${a.quantity}x</span>
-            <span class="item-name">${a.menuItem.code ? `[${a.menuItem.code}] ` : ''}${a.menuItem.name} [Adición]</span>
+            <span class="item-name">${a.menuItem.code ? `[${a.menuItem.code}] ` : ''}${a.menuItem.name} [Adición]${aPriceTag}</span>
+            ${aSub > 0 ? `<span style="margin-left: 8px;">${formatCurrency(aSub)}</span>` : ''}
           </div>
-        `).join('') || ''}
-      `).join('')}
+        `}).join('') || ''}
+      `}).join('')}
     </div>
     ${(() => { const cn = (order.notes || '').replace(/^\[MOSTRADOR\]\s*/i, '').replace(/^\[PICKUP\]\s*/i, '').trim(); return cn ? `<div class="section"><div class="label">Notas</div><div class="value">${cn}</div></div>` : '' })()}
     <div class="section">
       <div class="item"><span>Subtotal</span><span>${formatCurrency(order.subtotal)}</span></div>
       ${order.deliveryFee > 0 ? `<div class="item"><span>Domicilio</span><span>${formatCurrency(order.deliveryFee)}</span></div>` : ''}
       ${order.tax > 0 ? `<div class="item"><span>Impoconsumo 8%</span><span>${formatCurrency(order.tax)}</span></div>` : ''}
-      <div class="total">TOTAL: ${formatCurrency(order.total)}</div>
+      <div class="total">TOTAL A PAGAR: ${formatCurrency(order.total)}</div>
+      <div class="item" style="margin-top: 4px;"><span>Forma de Pago</span><span style="font-weight: bold;">${(paymentLabels[order.paymentMethod] || order.paymentMethod || 'EFECTIVO').toUpperCase()}</span></div>
     </div>
     <div class="section">
       <div class="label">Atiende</div>
@@ -144,7 +157,7 @@ export function printComanda(order: ComandaOrder) {
       ${(!((order as any).tableId || order.orderType === 'LOCAL') && (order.deliveryDriver?.name || order.deliveryDriverName)) ? `<div class="value" style="margin-top:4px;"><b>Domiciliario:</b> ${order.deliveryDriver?.name || order.deliveryDriverName}</div>` : ''}
       <div class="value" style="font-size:10px;margin-top:4px;">${formatDate(order.createdAt)}</div>
     </div>
-    <div class="footer">THE VILLA DOG · Comanda #${order.orderNumber}</div>
+    <div class="footer">THE VILLA DOG · Factura y Comanda #${order.orderNumber}</div>
     <script>window.onload=function(){window.print();}</script>
     </body></html>
   `)

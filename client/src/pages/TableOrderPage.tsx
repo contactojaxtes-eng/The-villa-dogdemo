@@ -98,6 +98,7 @@ export default function TableOrderPage() {
   const [notes, setNotes] = useState('')
   const [search, setSearch] = useState('')
   const [cart, setCart] = useState<CartItem[]>([])
+  const [draftNotes, setDraftNotes] = useState<Record<string, string>>({})
   const [pending, setPending] = useState<OfflineTableOrder[]>([])
   const [online, setOnline] = useState(navigator.onLine)
   const [saving, setSaving] = useState(false)
@@ -384,13 +385,92 @@ export default function TableOrderPage() {
     setCart(prev => prev.map(i => (i.cartKey === cartKey ? { ...i, takeaway: targetTakeaway } : i)))
   }
 
-  // Actualizar nota de una línea
+  // Actualizar nota de una línea en borrador local (sin mover el cursor)
   const updateNotes = (cartKey: string, value: string) => {
-    setCart(prev => prev.map(i => (i.cartKey === cartKey ? { ...i, notes: value } : i)))
+    setDraftNotes(prev => ({ ...prev, [cartKey]: value }))
+  }
+
+  // Confirmar y aplicar nota inteligente (separa automáticamente cantidades si se escribe ej: "2 sin cebolla")
+  const commitLineNote = (cartKey: string, rawInput?: string) => {
+    const value = rawInput !== undefined ? rawInput : (draftNotes[cartKey] ?? '')
+    const trimmed = value.trim()
+
+    setDraftNotes(prev => {
+      const copy = { ...prev }
+      delete copy[cartKey]
+      return copy
+    })
+
+    setCart(prev => {
+      const lineIndex = prev.findIndex(i => i.cartKey === cartKey)
+      if (lineIndex === -1) return prev
+      const target = prev[lineIndex]
+
+      if (!trimmed) {
+        return prev.map(i => (i.cartKey === cartKey ? { ...i, notes: '' } : i))
+      }
+
+      if (target.quantity > 1) {
+        let noteQty = 1
+        let cleanNote = trimmed
+
+        const qtyMatch = trimmed.match(/^(\d+)\s*(?:x\s*)?(.*?)(?:\s*(?:y|,|;|-)\s*(\d+)?\s*(?:normal.*)?)?$/i)
+        const isAll = /^(todas?|todos|todo)\b/i.test(trimmed)
+
+        if (isAll) {
+          noteQty = target.quantity
+          cleanNote = trimmed.replace(/^(todas?|todos|todo)\s*(?:con|de|:)?\s*/i, '').trim()
+        } else if (qtyMatch && qtyMatch[1]) {
+          const parsedQty = parseInt(qtyMatch[1], 10)
+          if (parsedQty > 0) {
+            noteQty = Math.min(parsedQty, target.quantity)
+            cleanNote = (qtyMatch[2] || '').trim()
+            if (!cleanNote) cleanNote = trimmed
+          }
+        }
+
+        if (noteQty >= target.quantity) {
+          return prev.map(i => (i.cartKey === cartKey ? { ...i, notes: cleanNote } : i))
+        }
+
+        // Separar: target.quantity - noteQty (sin nota) y noteQty (con nota)
+        const remainingQty = target.quantity - noteQty
+        const newKey = genKey(`${target.menuItemId}_noted`)
+
+        const updatedOriginal: CartItem = {
+          ...target,
+          quantity: remainingQty,
+          notes: '',
+        }
+
+        const newNotedLine: CartItem = {
+          ...target,
+          cartKey: newKey,
+          quantity: noteQty,
+          notes: cleanNote,
+          additions: target.additions ? [...target.additions] : [],
+        }
+
+        alerts.toast(`Se separaron ${noteQty} con nota "${cleanNote}" y ${remainingQty} sin nota.`)
+
+        const copy = [...prev]
+        copy[lineIndex] = updatedOriginal
+        copy.push(newNotedLine)
+        return copy
+      }
+
+      // Si tiene 1 unidad
+      return prev.map(i => (i.cartKey === cartKey ? { ...i, notes: trimmed } : i))
+    })
   }
 
   // Agregar chip rápido: SI TIENE > 1 UNIDAD, SEPARA AUTOMÁTICAMENTE 1 UNIDAD CON ESA NOTA
   const appendNote = (cartKey: string, chipText: string) => {
+    setDraftNotes(prev => {
+      const copy = { ...prev }
+      delete copy[cartKey]
+      return copy
+    })
     setCart(prev => {
       const target = prev.find(i => i.cartKey === cartKey)
       if (!target) return prev
@@ -1374,12 +1454,32 @@ export default function TableOrderPage() {
                   )}
 
                   {/* CAMPO DE NOTA INDIVIDUAL */}
-                  <Input
-                    value={item.notes || ''}
-                    onChange={e => updateNotes(item.cartKey, e.target.value)}
-                    placeholder={item.quantity > 1 ? `Nota general (o toca abajo para separar 1)...` : "Nota (sin cebolla, sin queso, bien caliente...)"}
-                    className="mt-2 h-8 text-xs bg-[var(--bg-panel)] rounded-lg"
-                  />
+                  <div className="mt-2 flex items-center gap-1">
+                    <Input
+                      value={draftNotes[item.cartKey] ?? item.notes ?? ''}
+                      onChange={e => updateNotes(item.cartKey, e.target.value)}
+                      onBlur={() => commitLineNote(item.cartKey)}
+                      onKeyDown={e => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault()
+                          commitLineNote(item.cartKey)
+                        }
+                      }}
+                      placeholder={item.quantity > 1 ? `Ej: 2 sin cebolla y ${item.quantity - 1 > 1 ? (item.quantity - 1) + ' ' : ''}normal...` : "Nota (sin cebolla, sin queso, bien caliente...)"}
+                      className="h-8 text-xs bg-[var(--bg-panel)] rounded-lg flex-1"
+                    />
+                    {((draftNotes[item.cartKey] !== undefined && draftNotes[item.cartKey] !== (item.notes || '')) || item.notes) && (
+                      <button
+                        type="button"
+                        onMouseDown={e => e.preventDefault()}
+                        onClick={() => commitLineNote(item.cartKey)}
+                        className="h-8 px-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold shrink-0 transition cursor-pointer"
+                        title="Guardar nota"
+                      >
+                        ✓
+                      </button>
+                    )}
+                  </div>
 
                   {/* Chips rápidos para notas (Separación automática si quantity > 1) */}
                   <div className="mt-1.5 flex flex-wrap gap-1">
@@ -1636,12 +1736,32 @@ export default function TableOrderPage() {
                   )}
 
                   {/* Campo de notas móvil */}
-                  <Input
-                    value={item.notes || ''}
-                    onChange={e => updateNotes(item.cartKey, e.target.value)}
-                    placeholder={item.quantity > 1 ? `Nota para todos (o toca un chip abajo)...` : "Nota: sin cebolla, sin queso, bien caliente..."}
-                    className="mt-2 h-8 text-xs bg-[var(--bg-panel)] rounded-lg"
-                  />
+                  <div className="mt-2 flex items-center gap-1">
+                    <Input
+                      value={draftNotes[item.cartKey] ?? item.notes ?? ''}
+                      onChange={e => updateNotes(item.cartKey, e.target.value)}
+                      onBlur={() => commitLineNote(item.cartKey)}
+                      onKeyDown={e => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault()
+                          commitLineNote(item.cartKey)
+                        }
+                      }}
+                      placeholder={item.quantity > 1 ? `Ej: 2 sin cebolla y ${item.quantity - 1 > 1 ? (item.quantity - 1) + ' ' : ''}normal...` : "Nota: sin cebolla, sin queso, bien caliente..."}
+                      className="mt-0 h-8 text-xs bg-[var(--bg-panel)] rounded-lg flex-1"
+                    />
+                    {((draftNotes[item.cartKey] !== undefined && draftNotes[item.cartKey] !== (item.notes || '')) || item.notes) && (
+                      <button
+                        type="button"
+                        onMouseDown={e => e.preventDefault()}
+                        onClick={() => commitLineNote(item.cartKey)}
+                        className="h-8 px-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold shrink-0 transition cursor-pointer"
+                        title="Guardar nota"
+                      >
+                        ✓
+                      </button>
+                    )}
+                  </div>
 
                   {/* Chips rápidos (Separación automática si quantity > 1) */}
                   <div className="mt-1.5 flex flex-wrap gap-1">

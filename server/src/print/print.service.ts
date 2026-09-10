@@ -528,6 +528,7 @@ export class PrintService {
     const driverName = order.deliveryDriver?.name || order.deliveryDriverName || order.driverName || order.driver?.name;
 
     const lines: string[] = [
+      `[CENTER][BIG][BOLD]FACTURA Y COMANDA[/BOLD][/BIG][/CENTER]`,
       `[CENTER][BIG][BOLD]${restInfo.name.toUpperCase()}[/BOLD][/BIG][/CENTER]`,
       `[CENTER]NIT: ${restInfo.nit}[/CENTER]`,
       `[CENTER]Dir: ${restInfo.address.toUpperCase()}[/CENTER]`,
@@ -723,16 +724,22 @@ export class PrintService {
 
     const isEdited = Boolean(order.isEdited);
     const waiterName = (order.assignee?.name || order.waiter?.name || '—').toUpperCase();
+    const barrio = order.zone?.name || order.zoneName || order.barrio;
     const lines: string[] = [
+      `[CENTER][BIG][BOLD]FACTURA Y COMANDA[/BOLD][/BIG][/CENTER]`,
       divider,
       isEdited ? '[CENTER][BIG][BOLD]⚠️ PEDIDO EDITADO ⚠️[/BOLD][/BIG][/CENTER]' : '',
-      divider,
+      isEdited ? divider : '',
       isEdited ? `[CENTER][BIG][BOLD]PEDIDO EDITADO #${order.orderNumber}[/BOLD][/BIG][/CENTER]` : `[CENTER][BIG][BOLD]PEDIDO #${order.orderNumber}[/BOLD][/BIG][/CENTER]`,
       `Fecha: ${new Date(order.createdAt).toLocaleString('es-CO', { timeZone: 'America/Bogota', hour12: true })}`,
       ...(isEdited ? [`Fecha Editado: ${new Date(order.updatedAt).toLocaleString('es-CO', { timeZone: 'America/Bogota', hour12: true })}`] : []),
       ...(order.diningTable?.label || order.tableId || order.orderType === 'LOCAL'
         ? [`[CENTER][BIG][BOLD]MESA: ${(order.diningTable?.label || order.tableName || (order.tableId ? 'MESA' : 'SALÓN')).toUpperCase()}[/BOLD][/BIG][/CENTER]`]
         : [`[CENTER][BOLD]TIPO: ${order.orderType === 'DELIVERY' ? 'DOMICILIO' : 'RECOGER EN LOCAL'}[/BOLD][/CENTER]`]),
+      ...(order.customerName ? [`Cliente: ${order.customerName.toUpperCase()}`] : []),
+      ...(order.customerPhone ? [`Teléfono: ${this.formatDisplayPhone(order.customerPhone, order.orderType, order.customer?.phone)}`] : []),
+      ...(order.orderType === 'DELIVERY' && fullAddress ? [`Dirección: ${fullAddress.toUpperCase()}`] : []),
+      ...(order.orderType === 'DELIVERY' && barrio ? [`Barrio: ${barrio.toUpperCase()}`] : []),
       `Atiende: ${waiterName}`,
       divider,
       isEdited ? '[BIG][BOLD]⚠️ PRODUCTOS EDITADOS (REVISAR):[/BOLD][/BIG]' : '[BIG][BOLD]PRODUCTOS A PREPARAR:[/BOLD][/BIG]',
@@ -740,28 +747,44 @@ export class PrintService {
     ];
     
     for (const item of grouped) {
-      lines.push(`[HEIGHT]${item.quantity} x ${item.menuItem?.name || 'Item'}[/HEIGHT]`);
+      const uPrice = Number(item.unitPrice || item.price || item.menuItem?.price || 0);
+      const sub = uPrice * Number(item.quantity || 1);
+      const priceTag = uPrice > 0 ? ` ($ ${Math.round(uPrice).toLocaleString('es-CO')} c/u = $ ${Math.round(sub).toLocaleString('es-CO')})` : '';
+      lines.push(`[HEIGHT]${item.quantity} x ${item.menuItem?.name || 'Item'}${priceTag}[/HEIGHT]`);
       const cleaned = this.cleanNotesForPrint(item.notes, item.menuItem?.name);
       if (item.notes && cleaned && !item.notes.startsWith('Adición para:')) {
         lines.push(`[HEIGHT]  ↳ NOTA: ${cleaned.toUpperCase()}[/HEIGHT]`);
       }
       if (item.additions && item.additions.length > 0) {
         for (const a of item.additions) {
-          lines.push(`[HEIGHT]  + ${a.quantity} x ${a.menuItem?.name || 'Item'}[/HEIGHT]`);
+          const aPrice = Number(a.unitPrice || a.price || a.menuItem?.price || 0);
+          const aSub = aPrice * Number(a.quantity || 1);
+          const aPriceTag = aPrice > 0 ? ` ($ ${Math.round(aPrice).toLocaleString('es-CO')} c/u = $ ${Math.round(aSub).toLocaleString('es-CO')})` : '';
+          lines.push(`[HEIGHT]  + ${a.quantity} x ${a.menuItem?.name || 'Item'}${aPriceTag}[/HEIGHT]`);
         }
       }
       lines.push(''); // Línea en blanco para separar productos
     }
     
     lines.push(divider);
+    lines.push(`SUBTOTAL: $ ${Math.round(Number(order.subtotal || 0)).toLocaleString('es-CO')}`);
+    if (Number(order.deliveryFee || 0) > 0) {
+      lines.push(`DOMICILIO: $ ${Math.round(Number(order.deliveryFee)).toLocaleString('es-CO')}`);
+    }
+    if (Number(order.discount || 0) > 0) {
+      lines.push(`DESCUENTO: -$ ${Math.round(Number(order.discount)).toLocaleString('es-CO')}`);
+    }
+    lines.push(`[BIG][BOLD]TOTAL A PAGAR: $ ${Math.round(Number(order.total || 0)).toLocaleString('es-CO')}[/BOLD][/BIG]`);
+    lines.push(`FORMA DE PAGO: ${String(order.paymentMethod || 'EFECTIVO').toUpperCase()}`);
+
     const cleanNoteText = (order.notes || '').replace(/\[\/?(PICKUP|BIG|BOLD|CENTER)\]/gi, '').trim();
     if (cleanNoteText) {
-      lines.push(`[BIG][BOLD]NOTA GENERAL:[/BOLD]\n${cleanNoteText.toUpperCase()}[/BIG]`, divider);
+      lines.push(divider, `[BIG][BOLD]NOTA GENERAL:[/BOLD]\n${cleanNoteText.toUpperCase()}[/BIG]`);
     }
     if (isEdited) {
-      lines.push(`[CENTER][BIG][BOLD]*** REVISAR CAMBIOS - EDITADO #${order.orderNumber} ***[/BOLD][/BIG][/CENTER]`, divider);
+      lines.push(divider, `[CENTER][BIG][BOLD]*** REVISAR CAMBIOS - EDITADO #${order.orderNumber} ***[/BOLD][/BIG][/CENTER]`);
     }
-    lines.push(`[CENTER]** ${stationName.toUpperCase()} TICKET ${isEdited ? '(EDITADO)' : ''} **[/CENTER]`, divider);
+    lines.push(divider, `[CENTER]** ${stationName.toUpperCase()} TICKET ${isEdited ? '(EDITADO)' : ''} **[/CENTER]`, divider);
     return lines.join('\n');
   }
 
@@ -943,7 +966,14 @@ export class PrintService {
       if (target === 'caja') {
         const text = this.formatCajaInvoiceText(order, settings);
         const shouldKick = kickDrawer || order.paymentMethod === 'CASH';
-        return this.dispatchPrintJob('caja', text, settings.caja, shouldKick);
+        const res = await this.dispatchPrintJob('caja', text, settings.caja, shouldKick);
+        return {
+          ...res,
+          text,
+          paper: settings.caja?.paper || '80',
+          orderId: order.id,
+          orderNumber: order.orderNumber,
+        };
       }
       
       let printer = settings.printers.find(p => p.id === target || p.name.toLowerCase() === target.toLowerCase());
@@ -962,12 +992,26 @@ export class PrintService {
           // Impresoras dinámicas tipo Caja: factura completa
           const text = this.formatCajaInvoiceText(order, settings);
           const shouldKick = kickDrawer || order.paymentMethod === 'CASH';
-          return this.dispatchPrintJob(printer.id || target, text, printer, shouldKick);
+          const res = await this.dispatchPrintJob(printer.id || target, text, printer, shouldKick);
+          return {
+            ...res,
+            text,
+            paper: printer.paper || '80',
+            orderId: order.id,
+            orderNumber: order.orderNumber,
+          };
         }
         // Estaciones de preparación: comanda filtrada por categorías
         const text = this.formatCocinaTicketText(order, printer.name, printer.categories, settings.printers, printer.paper);
         if (!text) return { ok: true, message: `No hay productos para la estación ${printer.name}` };
-        return this.dispatchPrintJob(printer.id || target, text, printer, false);
+        const res = await this.dispatchPrintJob(printer.id || target, text, printer, false);
+        return {
+          ...res,
+          text,
+          paper: printer.paper || '80',
+          orderId: order.id,
+          orderNumber: order.orderNumber,
+        };
       }
       return { ok: false, error: `Impresora "${target}" no encontrada` };
     }
@@ -996,7 +1040,15 @@ export class PrintService {
       }
     }
 
-    return { ok: true, message: 'Comandas transmitidas a las estaciones configuradas', results };
+    return {
+      ok: true,
+      message: 'Comandas transmitidas a las estaciones configuradas',
+      text: cajaText,
+      paper: settings.caja?.paper || '80',
+      orderId: order.id,
+      orderNumber: order.orderNumber,
+      results,
+    };
   }
 
   formatCashClosingText(closing: any, paper: string = '80', detail?: any): string {
