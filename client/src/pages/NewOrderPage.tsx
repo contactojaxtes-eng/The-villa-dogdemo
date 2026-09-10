@@ -15,6 +15,7 @@ import { api } from '@/lib/api'
 import { cn, formatCurrency, groupOrderItems, cleanNotes, getItemRawNote, fuzzyMatch, levenshteinDistance, formatThousandsInput, parseThousandsInput } from '@/lib/utils'
 import { alerts } from '@/lib/alerts'
 import type { ComandaOrder } from '@/components/orders/ComandaPrint'
+import { printReceiptText } from '@/lib/printer'
 import { AddressSearch, type AddressResult } from '@/components/orders/AddressSearch'
 import { globalSessionsCache } from '@/lib/chatCache'
 import { ArrowLeft, ShoppingCart, Trash2, Search, Save, Sparkles, Clock, Bike, Store, Loader2, Plus, Minus, MapPin, DollarSign, AlertTriangle, Route, Pizza, CupSoda, ChefHat, Flame, UtensilsCrossed, X, Users, CheckCircle2, Mic, MicOff, ChevronDown, MessageCircle, Send, FileText, Phone, ExternalLink, Download, Eye, RotateCw, ZoomIn, ZoomOut } from 'lucide-react'
@@ -838,11 +839,12 @@ export default function NewOrderPage({
             setZoneId(order.zone.id)
             setZoneSearch(order.zone.name)
             setMapSearch(order.zone.name)
-            setZoneRateEdit(String(order.deliveryFee ?? 0))
+            setZoneRateEdit(String(order.deliveryFee ?? order.zone.rate ?? 0))
           } else {
-            setZoneId('')
-            setZoneSearch('')
-            setMapSearch('')
+            const fallbackZone = order.zoneName || order.customer?.barrio || (order.addressReference ? order.addressReference.split('—')[0].trim() : '') || (order.orderType === 'DELIVERY' ? 'Domicilio' : '')
+            setZoneId(order.zoneId || '')
+            setZoneSearch(fallbackZone)
+            setMapSearch(fallbackZone)
             setZoneRateEdit(String(order.deliveryFee ?? 0))
           }
 
@@ -862,6 +864,7 @@ export default function NewOrderPage({
           })
           setCart(consolidateCart(cartItems))
           setEditOrderLoaded(true)
+          setDraftLoaded(true)
         })
         .catch(err => {
           console.error('Error cargando pedido', err)
@@ -2663,7 +2666,7 @@ export default function NewOrderPage({
     orderType === 'delivery' && !customerPhone.trim() && 'teléfono',
     orderType === 'delivery' && !zoneSearch.trim() && 'barrio',
     orderType === 'delivery' && !exactAddress.trim() && 'dirección exacta',
-    orderType === 'delivery' && (!zoneRateEdit || !Number.isFinite(parseFloat(zoneRateEdit)) || parseFloat(zoneRateEdit) <= 0) && 'tarifa confirmada',
+    orderType === 'delivery' && (!zoneRateEdit || !Number.isFinite(parseFloat(zoneRateEdit)) || parseFloat(zoneRateEdit) < 0) && 'tarifa confirmada',
   ].filter(Boolean) as string[]
   const itemCount = cart.reduce((sum, item) => sum + item.quantity, 0)
   const isCashBlocked = !canCreate?.allowed && !editOrderId
@@ -2870,7 +2873,7 @@ export default function NewOrderPage({
         return
       }
       const confirmedDeliveryFee = Number(zoneRateEdit)
-      if (!Number.isFinite(confirmedDeliveryFee) || confirmedDeliveryFee <= 0) {
+      if (!Number.isFinite(confirmedDeliveryFee) || confirmedDeliveryFee < 0) {
         setError('Selecciona una zona configurada o escribe la tarifa de domicilio confirmada por el asesor.')
         submittingRef.current = false
         return
@@ -2973,6 +2976,19 @@ export default function NewOrderPage({
         await alerts.success('Pedido Actualizado', `Pedido #${savedOrder.orderNumber || ''} modificado exitosamente.`)
       } else {
         await alerts.success('Pedido Creado', `Pedido #${savedOrder.orderNumber || ''} registrado exitosamente.`)
+      }
+
+      // Impresión directa multidispositivo de Factura y Comanda con precios
+      try {
+        const orderIdToPrint = savedOrder.id || editOrderId
+        if (orderIdToPrint) {
+          const printRes = await api.post<any>(`/print/order/${orderIdToPrint}`).catch(() => null)
+          if (printRes?.text) {
+            printReceiptText(printRes.text, printRes.paper || '80')
+          }
+        }
+      } catch (printErr) {
+        console.warn('Error en impresión directa desde formulario de pedido:', printErr)
       }
 
       localStorage.removeItem(activeDraftKey)

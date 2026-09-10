@@ -13,7 +13,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Textarea } from '@/components/ui/textarea'
 import { Label } from '@/components/ui/label'
 import { Input } from '@/components/ui/input'
-import { printComandaSmart, openCashDrawer } from '@/lib/printer'
+import { printComandaSmart, openCashDrawer, printReceiptText } from '@/lib/printer'
 
 interface OrderDetail {
   id: string; orderNumber: number; customerName: string; customerPhone: string; customerAddress: string
@@ -377,17 +377,16 @@ export default function OrderDetailPage() {
             <Button
               className="bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-fg)] font-extrabold shadow-lg shadow-[var(--accent)]/15 h-11 px-5 rounded-xl border-0 cursor-pointer transition-all flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
               onClick={() => setCollectDialogOpen(true)}
-              disabled={order.orderType !== 'PICKUP' && order.orderType !== 'LOCAL' && !order.deliveryDriver}
-              title={order.orderType !== 'PICKUP' && order.orderType !== 'LOCAL' && !order.deliveryDriver ? 'Debe asignar un domiciliario primero' : 'Registrar Cobro'}
+              title="Registrar Cobro"
             >
               <DollarSign className="h-5 w-5" /> Registrar Cobro
             </Button>
           )}
-          {['PENDING', 'PREPARING', 'READY', 'IN_ROUTE'].includes(order.status) && ['SUPERADMIN', 'ADMIN', 'CASHIER', 'DELIVERY_MANAGER', 'WAITER'].includes(user?.role || '') && (
+          {order.status !== 'CANCELLED' && ['SUPERADMIN', 'ADMIN', 'CASHIER', 'DELIVERY_MANAGER', 'DISPATCHER', 'WAITER'].includes(user?.role || '') && (
             <Button 
               variant="outline" 
               className="h-11 px-5 rounded-xl font-bold border-[var(--border-default)] hover:bg-[var(--bg-hover)] flex items-center gap-1.5 cursor-pointer"
-              onClick={() => navigate(`/orders/new?edit=${order.id}`)}
+              onClick={() => navigate(order.tableId ? `/tables/new?tableId=${order.tableId}&editOrderId=${order.id}` : `/orders/new?edit=${order.id}`)}
             >
               <Edit className="h-4 w-4 text-[var(--accent)]" /> Editar Pedido
             </Button>
@@ -425,7 +424,7 @@ export default function OrderDetailPage() {
               <span>Pedido calificado con {order.rating} estrellas</span>
             </div>
           )}
-          {['SUPERADMIN', 'ADMIN', 'CASHIER', 'DELIVERY_MANAGER'].includes(user?.role || '') && (
+          {['SUPERADMIN', 'ADMIN', 'CASHIER', 'DELIVERY_MANAGER', 'DISPATCHER', 'WAITER'].includes(user?.role || '') && (
             <div className="flex flex-wrap gap-2.5 ml-auto pt-2 sm:pt-0">
               <Button
                 variant="outline"
@@ -434,6 +433,9 @@ export default function OrderDetailPage() {
                   const shouldKick = order.paymentMethod === 'CASH';
                   alerts.toast(`Enviando pedido #${order.orderNumber} a impresión...`, 'info');
                   const res = await printComandaSmart(order as any, 'caja', user?.role, false, shouldKick);
+                  if (res?.text) {
+                    printReceiptText(res.text, res.paper || '80');
+                  }
                   if (res?.error) {
                     alerts.error('Error al imprimir', res.error);
                   } else {

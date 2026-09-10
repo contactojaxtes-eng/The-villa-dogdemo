@@ -967,6 +967,10 @@ export class OrdersService implements OnModuleInit {
     return order;
   }
 
+  async printOrder(orderId: string, target?: string) {
+    return this.printService.printOrder(orderId, target);
+  }
+
   async update(id: string, data: any, user?: any) {
     const result = await this.prisma.$transaction(async tx => {
       await lockOperation(tx);
@@ -975,6 +979,14 @@ export class OrdersService implements OnModuleInit {
       return this.updateWithinTransaction(id, data, tx, user);
     }, operationTransaction);
     await this.notifyUpdated(id, result.updated, result.existing, data, user);
+
+    // Auto-reimpresión en todas las estaciones y caja al editar pedido
+    try {
+      await this.printService.printOrder(id);
+    } catch (printErr) {
+      this.logger.warn(`Error en auto-reimpresión de pedido editado #${id}:`, printErr);
+    }
+
     return result.updated;
   }
 

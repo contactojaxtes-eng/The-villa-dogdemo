@@ -409,6 +409,14 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
     this.socketGateway.emitTableUpdated(result.table);
     this.socketGateway.server.emit('cashRegistersChanged');
     this.socketGateway.server.emit('orderUpdated', result.order);
+
+    // Auto-reimpresión en cocina y caja al editar pedido de mesa
+    try {
+      await this.ordersService.printOrder(orderId);
+    } catch (printErr) {
+      // no-op
+    }
+
     return result;
   }
 

@@ -23,6 +23,7 @@ import { api } from '@/lib/api'
 import { alerts } from '@/lib/alerts'
 import { formatCurrency } from '@/lib/utils'
 import { useAuth } from '@/hooks/useAuth'
+import { printReceiptText } from '@/lib/printer'
 import { deleteOfflineOrder, listOfflineOrders, saveOfflineOrder, type OfflineTableOrder } from '@/lib/offlineTableOrders'
 import { getErrorMessage, type DiningOrderSummary, type OfflineTableOrderPayload } from '@/lib/tableTypes'
 
@@ -892,6 +893,19 @@ export default function TableOrderPage() {
         ? await api.put<{ table?: { id?: string; label?: string } }>(`/tables/orders/${editOrderId}`, payload)
         : await api.post<{ table?: { id?: string; label?: string } }>('/tables/orders', payload)
       alerts.toast(editOrderId ? `Pedido actualizado y avisado a cocina para ${res?.table?.label || effectiveTableLabel}` : `Pedido enviado a cocina para ${res?.table?.label || effectiveTableLabel}`)
+
+      // Impresión directa multidispositivo de comanda/factura
+      try {
+        const orderIdToPrint = editOrderId || (res as any)?.orderId || (res as any)?.order?.id
+        if (orderIdToPrint) {
+          const printRes = await api.post<any>(`/print/order/${orderIdToPrint}`).catch(() => null)
+          if (printRes?.text) {
+            printReceiptText(printRes.text, printRes.paper || '80')
+          }
+        }
+      } catch (printErr) {
+        console.warn('Error imprimiendo comanda de mesa:', printErr)
+      }
       setCart([])
       setNotes('')
       if (!existingTableId) setTableLabel('')

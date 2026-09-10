@@ -182,6 +182,9 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
   ],
   DISPATCHER: [
     'orders.view',
+    'orders.create',
+    'orders.edit',
+    'orders.reprint',
     'orders.change_driver',
     'dispatch.view',
     'dispatch.change_status',
@@ -195,6 +198,8 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
     'tables.edit',
     'orders.view',
     'orders.create',
+    'orders.edit',
+    'orders.reprint',
     'products.view',
   ],
   KITCHEN: [

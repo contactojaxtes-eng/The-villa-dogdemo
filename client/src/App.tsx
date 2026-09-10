@@ -130,7 +130,7 @@ function App() {
           <ProtectedRoute requiredPermission="orders.view" allowedRoles={['SUPERADMIN', 'ADMIN', 'CASHIER', 'DELIVERY_MANAGER', 'DISPATCHER']}><OrdersPage /></ProtectedRoute>
         } />
         <Route path="orders/new" element={
-          <ProtectedRoute requiredPermission="orders.create" allowedRoles={['SUPERADMIN', 'ADMIN', 'CASHIER', 'DELIVERY_MANAGER']}><NewOrderPage /></ProtectedRoute>
+          <ProtectedRoute requiredPermission="orders.create" allowedRoles={['SUPERADMIN', 'ADMIN', 'CASHIER', 'DELIVERY_MANAGER', 'DISPATCHER', 'WAITER']}><NewOrderPage /></ProtectedRoute>
         } />
         <Route path="tables" element={
           <ProtectedRoute requiredPermission="tables.view" allowedRoles={['SUPERADMIN', 'ADMIN', 'CASHIER', 'WAITER']}><TablesPage /></ProtectedRoute>
