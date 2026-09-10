@@ -1969,7 +1969,9 @@ export default function NewOrderPage({
 
               for (const parsedItem of parsedCartItems) {
                 const item = parsedItem.menuItem
-                const lineId = `line-${Math.random().toString(36).substring(2, 9)}`
+                // Reutilizar lineId existente si coincide el menuItemId para preservar claves de React y evitar parpadeos
+                const existingMatch = (autoParsedCartRef.current || []).find(c => c.menuItemId === item.id)
+                const lineId = existingMatch?.lineId || `line-${Math.random().toString(36).substring(2, 9)}`
                 const parentTag = `(#${lineId})`
 
                 const additionsToInsert: MenuItem[] = []
@@ -2022,33 +2024,55 @@ export default function NewOrderPage({
                 })
 
                 for (const addition of additionsToInsert) {
+                  const existingAdd = (autoParsedCartRef.current || []).find(c => c.menuItemId === addition.id && c.notes?.includes(parentTag))
                   newCart.push({
                     menuItemId: addition.id,
                     name: addition.name,
                     price: addition.price,
                     quantity: parsedItem.quantity,
-                    lineId: `line-${Math.random().toString(36).substring(2, 9)}`,
+                    lineId: existingAdd?.lineId || `line-${Math.random().toString(36).substring(2, 9)}`,
                     notes: `Adición para: ${item.name} ${parentTag}`
                   })
                 }
               }
 
-               if (newCart.length > 0) {
-                 const normalizedCart = consolidateCart(newCart)
-                 const cartUnits = (items: CartItem[]) => items.reduce((sum, item) => sum + Math.max(0, Number(item.quantity) || 0), 0)
-                 if (source === 'local') {
-                   autoParsedCartRef.current = normalizedCart
-                   // Un borrador que el asesor ya empezó a editar tiene prioridad.
-                   setCart(prev => prev.length > 0 ? prev : normalizedCart)
-                 } else {
-                   const localUnits = autoParsedCartRef.current ? cartUnits(autoParsedCartRef.current) : 0
-                   const remoteUnits = cartUnits(normalizedCart)
-                   // Gemini puede responder con solo una línea mientras termina
-                   // de leer el historial. Nunca se permite que borre unidades ya
-                   // detectadas de forma local.
-                   if (localUnits > remoteUnits) return
-                   setCart(normalizedCart)
-                 }
+              if (newCart.length > 0) {
+                const normalizedCart = consolidateCart(newCart)
+                const cartUnits = (items: CartItem[]) => items.reduce((sum, item) => sum + Math.max(0, Number(item.quantity) || 0), 0)
+                const isEquivalentCart = (a: CartItem[], b: CartItem[]) => {
+                  if (a.length !== b.length) return false
+                  return a.every((itemA, idx) => {
+                    const itemB = b[idx]
+                    if (!itemB) return false
+                    const noteA = getItemRawNote(itemA.notes || '').trim()
+                    const noteB = getItemRawNote(itemB.notes || '').trim()
+                    return itemA.menuItemId === itemB.menuItemId &&
+                      itemA.quantity === itemB.quantity &&
+                      noteA === noteB
+                  })
+                }
+
+                if (source === 'local') {
+                  autoParsedCartRef.current = normalizedCart
+                  // Un borrador que el asesor ya empezó a editar tiene prioridad.
+                  setCart(prev => prev.length > 0 ? prev : normalizedCart)
+                } else {
+                  const localUnits = autoParsedCartRef.current ? cartUnits(autoParsedCartRef.current) : 0
+                  const remoteUnits = cartUnits(normalizedCart)
+                  // Gemini puede responder con solo una línea mientras termina
+                  // de leer el historial. Nunca se permite que borre unidades ya
+                  // detectadas de forma local.
+                  if (localUnits > remoteUnits) return
+
+                  // Si lo detectado por Gemini es idéntico a lo que ya reconoció el lector local,
+                  // NO re-ejecutar setCart para evitar el refresco/reinicio visual de los productos.
+                  if (autoParsedCartRef.current && isEquivalentCart(autoParsedCartRef.current, normalizedCart)) {
+                    return
+                  }
+
+                  autoParsedCartRef.current = normalizedCart
+                  setCart(normalizedCart)
+                }
                 if (embedded) setStep('delivery')
               }
             }
@@ -2064,20 +2088,15 @@ export default function NewOrderPage({
           return api.post<ParsedOrderResponse>('/whatsapp/parse-order', { text: customerText })
             .then(parsed => {
               if (parsed) {
-                 if (parsed.modelUsed) setOrderReaderModel(parsed.modelUsed)
-                 const parsedWithFallback = parsed.parsedCartItems?.length > 0
-                   ? parsed
-                   : { ...parsed, parsedCartItems: localParsed?.parsedCartItems || [] }
-                 applyData(parsedWithFallback, parsed.parsedCartItems?.length > 0 ? 'remote' : 'local')
-               } else if (localParsed) {
-                 applyData(localParsed, 'local')
-               }
-             })
+                if (parsed.modelUsed) setOrderReaderModel(parsed.modelUsed)
+                // Solo llamar applyData si Gemini encontró productos reales
+                if (parsed.parsedCartItems && parsed.parsedCartItems.length > 0) {
+                  applyData(parsed, 'remote')
+                }
+              }
+            })
             .catch(() => {
-              // Si la IA falla por desconexión de red, usar el parseo local como contingencia
-               if (localParsed && localParsed.parsedCartItems && localParsed.parsedCartItems.length > 0) {
-                 applyData(localParsed, 'local')
-               }
+              // Si la IA remota falla, ya se aplicó el parseo local instantáneo previamente
             })
         })
         .catch(err => {
