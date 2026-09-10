@@ -2583,9 +2583,30 @@ export class WhatsappService implements OnModuleInit {
     userId: string | null,
     actor?: { id: string; name?: string; role: string },
   ) {
-    const session = await this.prisma.whatsAppSession.findUnique({
+    if (!sessionId || sessionId === 'undefined' || sessionId === 'null') {
+      throw new BadRequestException('ID de sesión inválido');
+    }
+    let session = await this.prisma.whatsAppSession.findUnique({
       where: { id: sessionId },
     });
+    if (!session) {
+      const raw = sessionId.trim();
+      const cleanDigits = raw.replace(/\D/g, '');
+      const phone10 = cleanDigits.length === 12 && cleanDigits.startsWith('57') ? cleanDigits.slice(2) : cleanDigits;
+      session = await this.prisma.whatsAppSession.findFirst({
+        where: {
+          OR: [
+            { phone: raw },
+            ...(cleanDigits ? [{ phone: cleanDigits }] : []),
+            ...(phone10 ? [{ phone: phone10 }, { customerPhone: phone10 }] : []),
+          ]
+        },
+        orderBy: { lastMessageAt: 'desc' },
+      });
+      if (session) {
+        sessionId = session.id;
+      }
+    }
     if (!session) throw new NotFoundException('Conversación no encontrada');
 
     const isSupervisor = !actor || ['ADMIN', 'SUPERADMIN'].includes(actor.role);

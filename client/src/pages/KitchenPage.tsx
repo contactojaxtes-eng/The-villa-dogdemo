@@ -157,25 +157,19 @@ export default function KitchenPage() {
     // Si es cocinero (KITCHEN):
     if (user?.role === 'KITCHEN') {
       const assignedId = ticket.assignedToId || ticket.assignedTo?.id
+      // REGLA 1 Y 1: Si el ticket tiene cocinero asignado, pertenece ÚNICAMENTE a ese cocinero
+      if (assignedId) {
+        return assignedId === user?.id
+      }
+      // Si el ticket no está asignado a nadie específico, visible para los miembros de la estación
       const stationUsers = ticket.station?.users || []
-
-      // Si el ticket está asignado directamente a este cocinero: le pertenece
-      if (assignedId && assignedId === user?.id) {
-        return true
+      if (stationUsers.length > 0) {
+        return stationUsers.some(u => u.id === user?.id)
       }
-      // Si el cocinero pertenece a la estación del ticket: le pertenece para ver y preparar
-      if (stationUsers.length > 0 && stationUsers.some(u => u.id === user?.id)) {
-        return true
-      }
-      // Si la estación no tiene usuarios asignados o es general: visible para toda la cocina
-      if (stationUsers.length === 0) {
-        return true
-      }
-      // Si pertenece a estaciones de domicilios configuradas
       if (deliveryStationIds.has(ticket.stationId || ticket.station?.id || '')) {
         return true
       }
-      return false
+      return stationUsers.length === 0
     }
     return true
   }, [deliveryStationIds, user?.id, user?.role])
@@ -489,19 +483,25 @@ export default function KitchenPage() {
       // Si el usuario logueado es cocinero (KITCHEN):
       if (user?.role === 'KITCHEN') {
         const assignedId = t.assignedToId || t.assignedTo?.id
-        const stationUsers = t.station?.users || []
-
         // Si el cocinero eligió filtrar por un cocinero específico (en selector superior)
         if (cookFilter !== 'ALL') {
           return assignedId === cookFilter
         }
 
-        // Si el ticket está asignado a él, o él pertenece a la estación del ticket, o la estación no tiene restricción
-        if (assignedId && assignedId === user.id) return true
-        if (stationUsers.length > 0 && stationUsers.some(u => u.id === user.id)) return true
-        if (stationUsers.length === 0) return true
-        if (deliveryStationIds.has(t.stationId || t.station?.id || '')) return true
-        return false
+        // REGLA 1 Y 1: Cada cocinero ve ÚNICAMENTE sus comandas asignadas
+        if (assignedId) {
+          return assignedId === user.id
+        }
+
+        // Si la comanda no tiene asignado nadie en particular, visible para los miembros de la estación
+        const stationUsers = t.station?.users || []
+        if (stationUsers.length > 0) {
+          return stationUsers.some(u => u.id === user.id)
+        }
+        if (deliveryStationIds.has(t.stationId || t.station?.id || '')) {
+          return true
+        }
+        return stationUsers.length === 0
       }
       // Para admin/cajero: filtro opcional por cocinero
       if (cookFilter !== 'ALL') {

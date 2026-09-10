@@ -2540,9 +2540,11 @@ function ChatPage() {
   }
 
   // Release/unassign session
-  const handleReleaseSession = async (sessionToRelease?: Session | null) => {
-    const target = sessionToRelease || activeSession
-    if (!target) return
+  const handleReleaseSession = async (sessionToRelease?: any) => {
+    const target = (sessionToRelease && typeof sessionToRelease === 'object' && typeof sessionToRelease.id === 'string' && !('nativeEvent' in sessionToRelease))
+      ? sessionToRelease
+      : activeSession
+    if (!target || !target.id) return
     const isMine = target.assignedToId === user?.id
     const confirm = await alerts.confirm(
       '¿Liberar conversación?',
@@ -3536,7 +3538,7 @@ function ChatPage() {
                         size="sm" 
                         variant="outline" 
                         className="h-8 border-amber-500/30 hover:bg-amber-500/10 text-xs rounded-lg text-amber-600 dark:text-amber-400 px-2 sm:px-3 cursor-pointer"
-                        onClick={handleReleaseSession}
+                        onClick={() => handleReleaseSession()}
                         title="Soltar chat a la cola general"
                       >
                         <UserX className="h-3.5 w-3.5 mr-1 text-amber-500" />
@@ -3557,7 +3559,7 @@ function ChatPage() {
                           size="sm" 
                           variant="outline" 
                           className="h-8 border-red-500/20 hover:bg-red-500/10 text-red-500 rounded-lg flex items-center justify-center shrink-0 text-xs px-2 cursor-pointer"
-                          onClick={handleReleaseSession}
+                          onClick={() => handleReleaseSession()}
                           title="Forzar Soltar chat (Administrador)"
                         >
                           <UserX className="h-3.5 w-3.5 mr-1" />
@@ -3627,7 +3629,7 @@ function ChatPage() {
                   <Button
                     size="sm"
                     variant="ghost"
-                    onClick={handleReleaseSession}
+                    onClick={() => handleReleaseSession()}
                     className="h-6 px-2 text-[10px] font-bold text-amber-600 dark:text-amber-400 hover:bg-amber-500/10 rounded-md cursor-pointer"
                   >
                     Soltar Chat
@@ -3725,7 +3727,7 @@ function ChatPage() {
                             )}
                             
                             <div className={`flex ${isIncoming ? 'justify-start' : 'justify-end'} group relative`}>
-                              <div className={`max-w-[85%] sm:max-w-[75%] min-w-[110px] rounded-2xl p-3 pr-11 sm:pr-12 shadow-md flex flex-col space-y-1 relative group/msg ${
+                              <div className={`max-w-[85%] sm:max-w-[75%] min-w-[140px] rounded-2xl p-3 pr-10 sm:pr-11 shadow-md flex flex-col space-y-1 relative group/msg ${
                                 isIncoming 
                                   ? 'bg-[var(--bg-elevated)] text-[var(--text-primary)] rounded-tl-none border border-[var(--border-subtle)]/50' 
                                   : 'bg-[var(--accent)] text-[var(--accent-fg)] rounded-tr-none'
@@ -3739,7 +3741,8 @@ function ChatPage() {
                                       setActiveMsgMenuId(activeMsgMenuId === m.id ? null : m.id)
                                     }}
                                     className={cn(
-                                      "p-1 rounded-full transition-all cursor-pointer opacity-80 hover:opacity-100",
+                                      "p-1 rounded-full transition-all cursor-pointer",
+                                      activeMsgMenuId === m.id ? "opacity-100" : "opacity-0 group-hover/msg:opacity-100 focus:opacity-100",
                                       isIncoming 
                                         ? "bg-[var(--bg-panel)]/90 hover:bg-[var(--bg-panel)] text-[var(--text-secondary)] shadow-sm border border-[var(--border-subtle)]" 
                                         : "bg-black/30 hover:bg-black/50 text-white shadow-sm"
@@ -3921,7 +3924,7 @@ function ChatPage() {
                                   </div>
                                 ) : (
                                   <p className={cn(
-                                    "text-[12px] leading-relaxed whitespace-pre-wrap break-words font-medium pr-2",
+                                    "text-[12px] leading-relaxed whitespace-pre-wrap break-words font-medium pr-6 sm:pr-7",
                                     m.status === 'deleted' || m.content === '🚫 Este mensaje fue eliminado' ? "italic opacity-70 flex items-center gap-1 text-slate-400" : ""
                                   )}>
                                     {formatTemplateContent(m.content || '')}
