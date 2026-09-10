@@ -3274,21 +3274,21 @@ const renderDeliveryCard = () => {
           <ArrowLeft className="h-3.5 w-3.5" /> Volver a la Carta del Menú
         </Button>
         
-        <div className={cn("flex-1", embedded ? "space-y-4" : "space-y-5")}>
-          <div className="flex items-start justify-between gap-3 flex-wrap">
-            <div>
-              <CardTitle className="text-base font-bold text-[var(--text-primary)]">Entrega y pago</CardTitle>
+        <div className={cn("flex-1", embedded ? "space-y-3 sm:space-y-4" : "space-y-5")}>
+          <div className="flex items-start justify-between gap-2 flex-wrap min-w-0">
+            <div className="min-w-0 flex-1">
+              <CardTitle className="text-base font-bold text-[var(--text-primary)] truncate">Entrega y pago</CardTitle>
               <CardDescription className="text-xs text-[var(--text-secondary)] mt-0.5">Revisa el pedido, la entrega y el cobro antes de confirmar</CardDescription>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1.5 shrink-0">
               {cart.length > 0 && (
-                <span className="text-xs font-black text-[var(--accent)] bg-[var(--accent)]/10 px-2.5 py-1 rounded-lg border border-[var(--accent)]/20">
+                <span className="text-xs font-black text-[var(--accent)] bg-[var(--accent)]/10 px-2 py-1 rounded-lg border border-[var(--accent)]/20">
                   Total: {formatCurrency(total)}
                 </span>
               )}
               {embedded && (
-                <Button type="button" variant="outline" onClick={() => setStep('menu')} className="h-8 shrink-0 rounded-lg px-2.5 text-[10px] font-bold">
-                  <ShoppingCart className="mr-1.5 h-3.5 w-3.5" /> Editar productos
+                <Button type="button" variant="outline" onClick={() => setStep('menu')} className="h-8 shrink-0 rounded-lg px-2 text-[10px] font-bold">
+                  <ShoppingCart className="mr-1 h-3.5 w-3.5" /> Editar productos
                 </Button>
               )}
             </div>
@@ -3439,7 +3439,7 @@ const renderDeliveryCard = () => {
                       )}
                     </div>}
 
-                    <div className={cn("grid grid-cols-1 gap-3.5", embedded && "sm:grid-cols-2")}>
+                    <div className={cn("grid grid-cols-1 gap-3", !embedded && "sm:grid-cols-2")}>
                       <div className="space-y-1">
                         <Label className="text-xs font-semibold text-[var(--text-secondary)] uppercase">Teléfono o ID de Contacto {orderType === 'delivery' ? '*' : '(Opcional)'}</Label>
                         <Input 
@@ -3486,7 +3486,7 @@ const renderDeliveryCard = () => {
                       </div>
 
                       {!customerId && customerPhone.length === 10 && customerPhone.startsWith('3') && customerName.trim().length > 0 && (
-                        <div className={cn("flex items-center justify-between bg-[var(--bg-elevated)] border border-[var(--border-subtle)] rounded-xl p-3 text-xs mt-1", embedded && "sm:col-span-2")}>
+                        <div className={cn("flex items-center justify-between bg-[var(--bg-elevated)] border border-[var(--border-subtle)] rounded-xl p-3 text-xs mt-1", !embedded && "sm:col-span-2")}>
                           <div>
                             <p className="font-semibold text-[var(--text-primary)]">¿Registrar como cliente?</p>
                             <p className="text-[10px] text-[var(--text-muted)] mt-0.5">Permite habilitar ventas a crédito o cortesía.</p>
@@ -3968,11 +3968,11 @@ const renderDeliveryCard = () => {
           : 'Listo para enviar a cocina'
 
     return (
-      <div className="shrink-0 rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-2.5 shadow-lg shadow-black/5">
-        {error && <p className="mb-2 rounded-xl border border-[var(--destructive)]/20 bg-[var(--destructive)]/5 px-2.5 py-2 text-[11px] leading-relaxed text-[var(--destructive)]">{error}</p>}
-        <div className="flex items-center justify-between gap-2">
-          <div className="min-w-0 pl-1">
-            <p className="text-[10px] font-bold uppercase tracking-wide text-[var(--text-secondary)]">
+      <div className="shrink-0 rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-2 sm:p-2.5 shadow-lg shadow-black/5">
+        {error && <p className="mb-1.5 rounded-xl border border-[var(--destructive)]/20 bg-[var(--destructive)]/5 px-2.5 py-1.5 text-[11px] leading-relaxed text-[var(--destructive)]">{error}</p>}
+        <div className="flex items-center justify-between gap-2 min-w-0">
+          <div className="min-w-0 flex-1 pl-1">
+            <p className="text-[10px] font-bold uppercase tracking-wide text-[var(--text-secondary)] truncate">
               {itemCount} {itemCount === 1 ? 'producto' : 'productos'} · {orderType === 'delivery' ? 'Domicilio' : 'Recoger'}
             </p>
             <p className={cn(
@@ -3983,20 +3983,20 @@ const renderDeliveryCard = () => {
             </p>
           </div>
           <div className="flex shrink-0 items-center gap-2">
-            <span className="hidden text-sm font-black text-[var(--accent)] sm:inline">{formatCurrency(total)}</span>
+            <span className="text-xs sm:text-sm font-black text-[var(--accent)]">{formatCurrency(total)}</span>
             <Button
               type="button"
               onClick={handleSubmit}
               disabled={isBlocked}
               title={isBlocked ? statusText : 'Confirmar el pedido y enviarlo a cocina'}
-              className="h-10 rounded-xl bg-[var(--accent)] px-3 text-xs font-black text-[var(--accent-fg)] shadow-md shadow-[var(--accent)]/15 hover:bg-[var(--accent-hover)]"
+              className="h-9 sm:h-10 rounded-xl bg-[var(--accent)] px-3 text-xs font-black text-[var(--accent-fg)] shadow-md shadow-[var(--accent)]/15 hover:bg-[var(--accent-hover)]"
             >
               {loading ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="mr-1.5 h-3.5 w-3.5" />}
               {loading ? 'Guardando…' : editOrderId ? 'Guardar' : 'Confirmar'}
             </Button>
           </div>
         </div>
-        <p className="mt-1.5 px-1 text-[9px] text-[var(--text-muted)]">
+        <p className="mt-1 px-1 text-[9px] text-[var(--text-muted)] truncate">
           {isCashBlocked ? 'El borrador queda guardado mientras abres la caja.' : 'El borrador se guarda automáticamente.'}
         </p>
       </div>
@@ -4019,35 +4019,35 @@ const renderDeliveryCard = () => {
       "flex min-h-0 w-full flex-col gap-3",
       embedded ? "relative h-full overflow-hidden bg-[var(--bg-base)] p-2 sm:p-3" : "min-h-[calc(100dvh-120px)] md:h-[calc(100vh-70px)]"
     )}>
-      <div className="flex items-center justify-between gap-2 shrink-0 flex-wrap">
-        <div className="flex items-center gap-2">
+      <div className="flex items-center justify-between gap-2 shrink-0 min-w-0 flex-wrap">
+        <div className="flex items-center gap-2 min-w-0 flex-1">
           <Button 
             variant="ghost" 
             size="icon" 
             onClick={closeOrderPanel}
-            className="rounded-xl hover:bg-[var(--bg-panel)] hover:text-[var(--text-primary)] text-[var(--text-secondary)] h-9 w-9 cursor-pointer"
+            className="rounded-xl hover:bg-[var(--bg-panel)] hover:text-[var(--text-primary)] text-[var(--text-secondary)] h-8 w-8 sm:h-9 sm:w-9 shrink-0 cursor-pointer"
             title={embedded ? 'Cerrar pedido y volver al chat' : 'Volver a la lista de pedidos'}
           >
             {embedded ? <X className="h-5 w-5" /> : <ArrowLeft className="h-5 w-5" />}
           </Button>
-          <div>
-            <h2 className={cn("antifont tracking-wider text-[var(--text-primary)] leading-none", embedded ? "text-xl sm:text-2xl" : "text-2xl md:text-3xl")}>
+          <div className="min-w-0 flex-1">
+            <h2 className={cn("antifont tracking-wider text-[var(--text-primary)] leading-none truncate", embedded ? "text-lg sm:text-2xl" : "text-2xl md:text-3xl")}>
               {editOrderId ? 'EDITAR PEDIDO' : embedded ? 'PEDIDO RÁPIDO' : 'NUEVO PEDIDO'}
             </h2>
             {embedded && (
-              <div className="mt-1 flex max-w-[60vw] items-center gap-1.5 text-[10px] font-semibold text-[var(--text-muted)]">
+              <div className="mt-0.5 sm:mt-1 flex items-center gap-1.5 text-[10px] font-semibold text-[var(--text-muted)] min-w-0">
                 {parsingChatOrder && <Loader2 className="h-3 w-3 shrink-0 animate-spin text-[var(--accent)]" />}
                 <span className="truncate">
                   {parsingChatOrder
                     ? 'Leyendo productos y datos del chat…'
-                    : `${customerName || initialName ? `Para ${customerName || initialName} · ` : ''}datos del chat listos · borrador guardado`}
+                    : `${customerName || initialName ? `Para ${customerName || initialName} · ` : ''}datos listos · borrador guardado`}
                 </span>
               </div>
             )}
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1.5 shrink-0">
           {!embedded && <Button
             variant="outline" 
             size="sm"
@@ -4071,13 +4071,13 @@ const renderDeliveryCard = () => {
 
           <Button 
             variant="outline" 
-            size="sm"
+            size="sm" 
             onClick={clearDraft} 
-            className="border-[var(--border-default)] bg-[var(--bg-panel)] text-[var(--text-primary)] hover:bg-[var(--bg-hover)] transition-all rounded-xl text-xs h-9 px-3 cursor-pointer"
+            className="border-[var(--border-default)] bg-[var(--bg-panel)] text-[var(--text-primary)] hover:bg-[var(--bg-hover)] transition-all rounded-xl text-xs h-8 sm:h-9 px-2.5 sm:px-3 cursor-pointer shrink-0"
           >
             {editOrderId ? 'Cancelar Edición' : (
               <>
-                <Trash2 className="mr-1.5 h-3.5 w-3.5 text-[var(--destructive)]" /> Limpiar
+                <Trash2 className="mr-1 h-3.5 w-3.5 text-[var(--destructive)]" /> Limpiar
               </>
             )}
           </Button>
@@ -4087,7 +4087,7 @@ const renderDeliveryCard = () => {
       {isCashBlocked && step === 'menu' && (
         <div className={cn(
           "flex items-center gap-3 rounded-2xl border border-[var(--destructive)]/30 bg-[var(--destructive)]/5 text-[var(--destructive)] shrink-0",
-          embedded ? "px-3 py-2.5" : "px-4 py-3.5"
+          embedded ? "px-3 py-2" : "px-4 py-3.5"
         )}>
           <AlertTriangle className="h-5 w-5 shrink-0" />
           <div className="flex min-w-0 flex-1 items-center justify-between gap-3">
@@ -4102,23 +4102,23 @@ const renderDeliveryCard = () => {
 
       {/* Flujo de pedido: siempre visible dentro de WhatsApp y compacto en móvil. */}
       <div className={cn(
-        "rounded-xl bg-[var(--bg-panel)] p-1 border border-[var(--border-subtle)]/40 shrink-0",
+        "rounded-xl bg-[var(--bg-panel)] p-1 border border-[var(--border-subtle)]/40 shrink-0 gap-1",
         embedded ? "flex" : "flex md:hidden"
       )}>
         <button
           type="button"
-          className={`flex-1 py-2 text-xs font-bold rounded-lg transition-all cursor-pointer ${step === 'menu' ? 'bg-[var(--accent)] text-[var(--accent-fg)] shadow-sm' : 'text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]'}`}
+          className={`flex-1 py-1.5 sm:py-2 px-2 text-xs font-bold rounded-lg transition-all cursor-pointer min-w-0 ${step === 'menu' ? 'bg-[var(--accent)] text-[var(--accent-fg)] shadow-sm' : 'text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]'}`}
           onClick={() => setStep('menu')}
         >
-          <span className="inline-flex items-center justify-center gap-1.5">
-            {cart.length > 0 && step !== 'menu' ? <CheckCircle2 className="h-3.5 w-3.5" /> : <ShoppingCart className="h-3.5 w-3.5" />}
-            <span>1. Productos</span> <span className="opacity-80">({itemCount})</span>
+          <span className="inline-flex items-center justify-center gap-1.5 truncate max-w-full">
+            {cart.length > 0 && step !== 'menu' ? <CheckCircle2 className="h-3.5 w-3.5 shrink-0" /> : <ShoppingCart className="h-3.5 w-3.5 shrink-0" />}
+            <span className="truncate">1. Productos</span> <span className="opacity-80 shrink-0">({itemCount})</span>
           </span>
         </button>
         <button
           type="button"
           disabled={embedded && cart.length === 0}
-          className={`flex-1 py-2 text-xs font-bold rounded-lg transition-all ${
+          className={`flex-1 py-1.5 sm:py-2 px-2 text-xs font-bold rounded-lg transition-all min-w-0 ${
             step === 'delivery'
               ? 'bg-[var(--accent)] text-[var(--accent-fg)] shadow-sm cursor-pointer'
               : embedded && cart.length === 0
@@ -4128,9 +4128,9 @@ const renderDeliveryCard = () => {
           onClick={() => setStep('delivery')}
           title={embedded && cart.length === 0 ? 'Agrega al menos un producto para continuar' : 'Completar datos y confirmar pedido'}
         >
-          <span className="inline-flex items-center justify-center gap-1.5">
-            {isOrderReadyToConfirm ? <CheckCircle2 className="h-3.5 w-3.5" /> : <MapPin className="h-3.5 w-3.5" />}
-            <span>2. Entrega y pago</span> <span className="opacity-80">({cart.length > 0 ? formatCurrency(total) : '$0'})</span>
+          <span className="inline-flex items-center justify-center gap-1.5 truncate max-w-full">
+            {isOrderReadyToConfirm ? <CheckCircle2 className="h-3.5 w-3.5 shrink-0" /> : <MapPin className="h-3.5 w-3.5 shrink-0" />}
+            <span className="truncate">2. Entrega y pago</span> <span className="opacity-80 shrink-0">({cart.length > 0 ? formatCurrency(total) : '$0'})</span>
           </span>
         </button>
       </div>

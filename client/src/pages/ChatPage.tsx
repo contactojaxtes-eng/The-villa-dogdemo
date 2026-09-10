@@ -508,6 +508,7 @@ const MessageStatus = ({ status, direction, isList = false }: { status: string; 
 
 interface ChatInputBarProps {
   disabled: boolean
+  compact?: boolean
   onSendText: (text: string) => void
   onSendMenuCarta: () => void
   sendingMenu: boolean
@@ -532,6 +533,7 @@ interface ChatInputBarProps {
 
 const ChatInputBar = React.memo(({
   disabled,
+  compact = false,
   onSendText,
   onSendMenuCarta,
   sendingMenu,
@@ -601,7 +603,10 @@ const ChatInputBar = React.memo(({
     )}
     <form
       onSubmit={handleSubmit}
-      className="border-t border-[var(--border-subtle)] bg-[var(--bg-panel)] p-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] sm:p-3 sm:pb-3 flex min-w-0 flex-col gap-2 lg:flex-row lg:items-center"
+      className={cn(
+        "border-t border-[var(--border-subtle)] bg-[var(--bg-panel)] p-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] sm:p-2.5 flex min-w-0 flex-col gap-1.5",
+        !compact && "xl:flex-row xl:items-center"
+      )}
     >
       <input type="file" ref={fileInputRef} onChange={handleFileChange} className="hidden" />
       <div className="flex min-w-0 items-center gap-1.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden lg:shrink-0">
@@ -3331,36 +3336,40 @@ function ChatPage() {
         <Card className={cn(
           "border-[var(--border-subtle)] bg-[var(--bg-panel)] rounded-2xl flex flex-col overflow-hidden",
           embeddedOrder
-            ? "hidden lg:flex lg:w-[40%] xl:w-[38%] lg:flex-none"
+            ? "hidden md:flex md:w-[44%] lg:w-[40%] xl:w-[36%] md:flex-none min-w-[320px] max-w-[500px]"
             : `flex-1 ${!activeSession ? 'hidden md:flex' : 'flex'}`
         )}>
           {activeSession ? (
             <>
               {/* CHAT HEADER */}
-              <div className="p-2.5 sm:p-4 border-b border-[var(--border-subtle)]/40 flex items-center justify-between gap-2 shrink-0 bg-[var(--bg-elevated)]/30 flex-wrap">
-                <div className="flex min-w-0 flex-1 items-center gap-2 sm:gap-3">
-                  <Button 
-                    variant="ghost" 
-                    size="icon" 
-                    className="md:hidden h-8 w-8 text-[var(--text-secondary)]" 
-                    onClick={() => {
-                      setGlobalActiveSessionIdCache(null)
-                      try { localStorage.removeItem('niche_last_active_whatsapp_session_id') } catch (e) {}
-                      setActiveSession(null)
-                      navigate('/chat', { replace: true })
-                    }}
-                  >
-                    <ArrowLeft className="h-4 w-4" />
-                  </Button>
-                  
-                  <Avatar className="h-9 w-9 shrink-0 ring-2 ring-[var(--border-default)]">
-                    <AvatarFallback className="bg-[var(--accent)] text-xs font-bold text-[var(--accent-fg)]">
-                      {getSessionDisplayName(activeSession).substring(0, 2).toUpperCase()}
-                    </AvatarFallback>
-                  </Avatar>
-                  
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
+              <div className={cn(
+                "border-b border-[var(--border-subtle)]/40 shrink-0 bg-[var(--bg-elevated)]/30",
+                embeddedOrder ? "p-2 sm:p-2.5 space-y-1.5" : "p-2.5 sm:p-3 space-y-2"
+              )}>
+                {/* ROW 1: Contact Identity (Left) + Key Actions (Right) */}
+                <div className="flex items-center justify-between gap-2 min-w-0">
+                  <div className="flex items-center gap-2 min-w-0 flex-1">
+                    <Button 
+                      variant="ghost" 
+                      size="icon" 
+                      className="md:hidden h-8 w-8 text-[var(--text-secondary)] shrink-0" 
+                      onClick={() => {
+                        setGlobalActiveSessionIdCache(null)
+                        try { localStorage.removeItem('niche_last_active_whatsapp_session_id') } catch (e) {}
+                        setActiveSession(null)
+                        navigate('/chat', { replace: true })
+                      }}
+                    >
+                      <ArrowLeft className="h-4 w-4" />
+                    </Button>
+                    
+                    <Avatar className={cn("shrink-0 ring-2 ring-[var(--border-default)]", embeddedOrder ? "h-8 w-8" : "h-9 w-9")}>
+                      <AvatarFallback className="bg-[var(--accent)] text-xs font-bold text-[var(--accent-fg)]">
+                        {getSessionDisplayName(activeSession).substring(0, 2).toUpperCase()}
+                      </AvatarFallback>
+                    </Avatar>
+                    
+                    <div className="min-w-0 flex-1">
                       {isEditingContactName ? (
                         <div className="flex items-center gap-1.5 animate-in fade-in zoom-in-95 duration-100">
                           <input
@@ -3372,15 +3381,15 @@ function ChatPage() {
                               if (e.key === 'Escape') setIsEditingContactName(false)
                             }}
                             autoFocus
-                            placeholder="Nombre del cliente..."
-                            className="h-7 text-xs px-2.5 rounded-lg border border-[var(--accent)] bg-[var(--bg-panel)] text-[var(--text-primary)] font-bold outline-none focus:ring-1 focus:ring-[var(--accent)] max-w-[180px]"
+                            placeholder="Nombre..."
+                            className="h-7 text-xs px-2.5 rounded-lg border border-[var(--accent)] bg-[var(--bg-panel)] text-[var(--text-primary)] font-bold outline-none focus:ring-1 focus:ring-[var(--accent)] max-w-[140px]"
                           />
                           <Button
                             size="icon"
                             variant="ghost"
                             disabled={savingContactName}
                             onClick={handleSaveContactName}
-                            className="h-7 w-7 text-emerald-500 hover:bg-emerald-500/10 rounded-lg cursor-pointer"
+                            className="h-7 w-7 text-emerald-500 hover:bg-emerald-500/10 rounded-lg cursor-pointer shrink-0"
                             title="Guardar nombre"
                           >
                             {savingContactName ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
@@ -3389,15 +3398,15 @@ function ChatPage() {
                             size="icon"
                             variant="ghost"
                             onClick={() => setIsEditingContactName(false)}
-                            className="h-7 w-7 text-red-500 hover:bg-red-500/10 rounded-lg cursor-pointer"
+                            className="h-7 w-7 text-red-500 hover:bg-red-500/10 rounded-lg cursor-pointer shrink-0"
                             title="Cancelar"
                           >
                             <X className="h-3.5 w-3.5" />
                           </Button>
                         </div>
                       ) : (
-                        <>
-                          <h4 className="text-xs font-extrabold text-[var(--text-primary)] uppercase truncate max-w-[220px]">
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <h4 className="text-xs font-extrabold text-[var(--text-primary)] uppercase truncate max-w-[130px] sm:max-w-[190px]" title={getSessionDisplayName(activeSession)}>
                             {getSessionDisplayName(activeSession)}
                           </h4>
                           <Button
@@ -3412,262 +3421,263 @@ function ChatPage() {
                           >
                             <Pencil className="h-3 w-3" />
                           </Button>
-                          {activeSession.customerPhone && (activeSession.phone !== activeSession.customerPhone || activeSession.customerName?.includes('@') || activeSession.customerName?.startsWith('@')) && (
-                            <span className="text-[10px] font-mono font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-lg border border-emerald-500/30 flex items-center gap-1 shrink-0">
-                              📱 Tel: {formatSessionPhone(activeSession.customerPhone)}
-                            </span>
-                          )}
-                        </>
+                        </div>
                       )}
                     </div>
-                    <p className="text-[9px] text-[var(--text-muted)] font-semibold flex items-center gap-1.5 font-mono">
-                      <Phone className="h-2.5 w-2.5 text-[var(--accent)] shrink-0" />
-                      <span>{activeSession.phone}</span>
-                      {activeSession.customerPhone && activeSession.customerPhone !== activeSession.phone && (
-                        <span className="text-emerald-600 dark:text-emerald-400 font-semibold">
-                          · Teléfono Real: {formatSessionPhone(activeSession.customerPhone)}
-                        </span>
-                      )}
-                    </p>
-                    {/* Real-time viewers in this chat */}
-                    {(() => {
-                      const viewers = (chatViewers[activeSession.id] || []).filter(v => v.userId !== user?.id)
-                      if (viewers.length === 0) return null
-                      return (
-                        <div className="flex items-center gap-1 mt-1 text-[10px] font-bold text-sky-600 dark:text-sky-400 bg-sky-500/10 px-2 py-0.5 rounded-md border border-sky-500/25 w-fit">
-                          <Eye className="h-3 w-3 shrink-0 animate-pulse" />
-                          <span>{viewers.map(v => v.userName).join(', ')} en este chat</span>
-                        </div>
-                      )
-                    })()}
                   </div>
-                </div>
 
-                <div className="flex w-full sm:w-auto items-center justify-end gap-1.5 sm:gap-2 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-                  {/* Create or Edit Order Button */}
-                  {!embeddedOrder && activeOrder && (
-                    <Button 
-                      size="sm"
-                      className="h-8 bg-amber-500 hover:bg-amber-600 text-white font-extrabold text-[10px] uppercase tracking-wider rounded-lg flex items-center gap-1.5 shadow-md shadow-amber-500/20 px-2 sm:px-3 border border-amber-600/30 shrink-0 cursor-pointer"
-                      onClick={async () => {
-                        const isAdmin = ['ADMIN', 'SUPERADMIN'].includes(user?.role || '')
-                        if (!isAdmin && user) {
-                          if (!activeSession.assignedToId) {
-                            const confirmClaim = await alerts.confirm(
-                              'Reclamar Chat requerido',
-                              'Debes pulsar "Reclamar Chat" primero para modificar pedidos.\n\n¿Deseas reclamar este chat ahora mismo?',
-                              'Sí, Reclamar y Editar',
-                              'Cancelar'
-                            )
-                            if (!confirmClaim) return
-                            const claimed = await handleClaimSession(activeSession)
-                            if (!claimed) return
-                          } else if (activeSession.assignedToId !== user.id) {
-                            const canTakeover = ['DELIVERY_MANAGER', 'ADMIN', 'SUPERADMIN'].includes(user?.role || '')
-                            if (canTakeover) {
-                              const confirmTakeover = await alerts.confirm(
-                                'Reasignar conversación',
-                                `Este chat está asignado a ${activeAssignedInfo.assignedName || 'otra asesora'}.\n\n¿Deseas reclamar la conversación para ti y editar el pedido?`,
+                  {/* Actions Toolbar */}
+                  <div className="flex items-center gap-1 sm:gap-1.5 shrink-0">
+                    {/* Create or Edit Order Button (Solo cuando no está embebido) */}
+                    {!embeddedOrder && activeOrder && (
+                      <Button 
+                        size="sm"
+                        className="h-8 bg-amber-500 hover:bg-amber-600 text-white font-extrabold text-[10px] uppercase tracking-wider rounded-lg flex items-center gap-1.5 shadow-md shadow-amber-500/20 px-2 sm:px-3 border border-amber-600/30 shrink-0 cursor-pointer"
+                        onClick={async () => {
+                          const isAdmin = ['ADMIN', 'SUPERADMIN'].includes(user?.role || '')
+                          if (!isAdmin && user) {
+                            if (!activeSession.assignedToId) {
+                              const confirmClaim = await alerts.confirm(
+                                'Reclamar Chat requerido',
+                                'Debes pulsar "Reclamar Chat" primero para modificar pedidos.\n\n¿Deseas reclamar este chat ahora mismo?',
                                 'Sí, Reclamar y Editar',
                                 'Cancelar'
                               )
-                              if (!confirmTakeover) return
+                              if (!confirmClaim) return
                               const claimed = await handleClaimSession(activeSession)
                               if (!claimed) return
-                            } else {
-                              alerts.warning(
-                                'Chat de otra asesora',
-                                `Este chat está siendo atendido por ${activeAssignedInfo.assignedName || 'otra asesora'}. Debes tener el chat reclamado para editar pedidos.`
-                              )
-                              return
+                            } else if (activeSession.assignedToId !== user.id) {
+                              const canTakeover = ['DELIVERY_MANAGER', 'ADMIN', 'SUPERADMIN'].includes(user?.role || '')
+                              if (canTakeover) {
+                                const confirmTakeover = await alerts.confirm(
+                                  'Reasignar conversación',
+                                  `Este chat está asignado a ${activeAssignedInfo.assignedName || 'otra asesora'}.\n\n¿Deseas reclamar la conversación para ti y editar el pedido?`,
+                                  'Sí, Reclamar y Editar',
+                                  'Cancelar'
+                                )
+                                if (!confirmTakeover) return
+                                const claimed = await handleClaimSession(activeSession)
+                                if (!claimed) return
+                              } else {
+                                alerts.warning(
+                                  'Chat de otra asesora',
+                                  `Este chat está siendo atendido por ${activeAssignedInfo.assignedName || 'otra asesora'}. Debes tener el chat reclamado para editar pedidos.`
+                                )
+                                return
+                              }
                             }
                           }
-                        }
 
-                        const sessionRealPhone = (activeSession.customerPhone && activeSession.customerPhone !== '3000000000' ? activeSession.customerPhone : activeSession.phone) || ''
-                        setEmbeddedOrder({
-                          editOrderId: activeOrder.id,
-                          chatSessionId: activeSession.id,
-                          phone: sessionRealPhone,
-                          name: activeSession.customerName || '',
-                        })
-                      }}
-                      title={`Editar Pedido #${activeOrder.orderNumber} (${activeOrder.status})`}
-                    >
-                      <Pencil className="h-3.5 w-3.5" />
-                      <span>Editar #{activeOrder.orderNumber}</span>
-                    </Button>
-                  )}
-                  {!embeddedOrder && (
-                    <Button
-                      size="sm"
-                      className="h-8 bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-fg)] font-bold text-[10px] uppercase tracking-wider rounded-lg flex items-center gap-1.5 shadow-md shadow-[var(--accent)]/10 px-2 sm:px-3 shrink-0"
-                      onClick={handleCreateOrder}
-                      title="Crear Nuevo Pedido"
-                    >
-                      <PlusCircle className="h-3.5 w-3.5" />
-                      <span>Nuevo Pedido</span>
-                    </Button>
-                  )}
-
-                  {/* Delete/Archive Session (Solo Admin/Superadmin) */}
-                  {(user?.role === 'ADMIN' || user?.role === 'SUPERADMIN') && (
-                    <Button 
-                      size="sm" 
-                      variant="outline" 
-                      className="h-8 border-red-500/30 hover:bg-red-500/10 text-red-500 text-xs rounded-lg flex items-center gap-1 px-2 sm:px-3"
-                      onClick={() => handleDeleteSession()}
-                      title="Eliminar Conversación"
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                      <span className="hidden sm:inline">Eliminar</span>
-                    </Button>
-                  )}
-
-                  {/* Claim/Release Session */}
-                  {activeAssignedInfo.isMine ? (
-                    <div className="flex items-center gap-1.5 shrink-0">
-                      <div className="text-right text-[10px] text-emerald-600 dark:text-emerald-400 font-bold shrink-0 bg-emerald-500/10 px-2 py-1 rounded-lg border border-emerald-500/30 flex items-center gap-1">
-                        <span className="relative flex h-2 w-2 shrink-0">
-                          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                          <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
-                        </span>
-                        <span>Atendiendo tú</span>
-                      </div>
-                      <Button 
-                        size="sm" 
-                        variant="outline" 
-                        className="h-8 border-amber-500/30 hover:bg-amber-500/10 text-xs rounded-lg text-amber-600 dark:text-amber-400 px-2 sm:px-3 cursor-pointer"
-                        onClick={() => handleReleaseSession()}
-                        title="Soltar chat a la cola general"
+                          const sessionRealPhone = (activeSession.customerPhone && activeSession.customerPhone !== '3000000000' ? activeSession.customerPhone : activeSession.phone) || ''
+                          setEmbeddedOrder({
+                            editOrderId: activeOrder.id,
+                            chatSessionId: activeSession.id,
+                            phone: sessionRealPhone,
+                            name: activeSession.customerName || '',
+                          })
+                        }}
+                        title={`Editar Pedido #${activeOrder.orderNumber} (${activeOrder.status})`}
                       >
-                        <UserX className="h-3.5 w-3.5 mr-1 text-amber-500" />
-                        <span>Soltar</span>
+                        <Pencil className="h-3.5 w-3.5" />
+                        <span>Editar #{activeOrder.orderNumber}</span>
                       </Button>
-                    </div>
-                  ) : activeAssignedInfo.isAssigned ? (
-                    <div className="flex items-center gap-1.5 shrink-0">
-                      <div className="text-right text-[10px] text-amber-600 dark:text-amber-400 font-bold shrink-0 bg-amber-500/10 px-2 py-1 rounded-lg border border-amber-500/30 max-w-[150px] sm:max-w-none truncate flex items-center gap-1">
-                        <span className="relative flex h-2 w-2 shrink-0">
-                          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
-                          <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500"></span>
-                        </span>
-                        <span className="truncate">Tomado por: <strong>{activeAssignedInfo.assignedName}</strong></span>
-                      </div>
-                      {['SUPERADMIN', 'ADMIN'].includes(user?.role || '') && (
+                    )}
+                    {!embeddedOrder && !activeOrder && (
+                      <Button
+                        size="sm"
+                        className="h-8 bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-fg)] font-bold text-[10px] uppercase tracking-wider rounded-lg flex items-center gap-1.5 shadow-md shadow-[var(--accent)]/10 px-2 sm:px-3 shrink-0"
+                        onClick={handleCreateOrder}
+                        title="Crear Nuevo Pedido"
+                      >
+                        <PlusCircle className="h-3.5 w-3.5" />
+                        <span>Nuevo Pedido</span>
+                      </Button>
+                    )}
+
+                    {/* Claim/Release Session */}
+                    {activeAssignedInfo.isMine ? (
+                      <div className="flex items-center gap-1 shrink-0">
+                        <div className="text-[10px] text-emerald-600 dark:text-emerald-400 font-bold shrink-0 bg-emerald-500/10 px-2 py-1 rounded-lg border border-emerald-500/30 flex items-center gap-1">
+                          <span className="relative flex h-2 w-2 shrink-0">
+                            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                            <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                          </span>
+                          <span className={embeddedOrder ? "hidden xl:inline" : "hidden sm:inline"}>Atendiendo tú</span>
+                        </div>
                         <Button 
                           size="sm" 
                           variant="outline" 
-                          className="h-8 border-red-500/20 hover:bg-red-500/10 text-red-500 rounded-lg flex items-center justify-center shrink-0 text-xs px-2 cursor-pointer"
+                          className="h-8 border-amber-500/30 hover:bg-amber-500/10 text-xs rounded-lg text-amber-600 dark:text-amber-400 px-2 sm:px-2.5 cursor-pointer"
                           onClick={() => handleReleaseSession()}
-                          title="Forzar Soltar chat (Administrador)"
+                          title="Soltar chat a la cola general"
                         >
-                          <UserX className="h-3.5 w-3.5 mr-1" />
-                          <span>Soltar</span>
+                          <UserX className="h-3.5 w-3.5 text-amber-500" />
+                          <span className={embeddedOrder ? "hidden xl:inline ml-1" : "hidden sm:inline ml-1"}>Soltar</span>
                         </Button>
-                      )}
-                      <Button 
-                        size="sm" 
-                        variant="outline" 
-                        className="h-8 border-amber-500/40 hover:bg-amber-500/20 text-xs rounded-lg text-amber-600 dark:text-amber-300 px-2 sm:px-3 font-bold cursor-pointer flex items-center gap-1"
-                        onClick={() => handleClaimSession()}
-                        title="Reclamar chat"
-                      >
-                        <UserPlus className="h-3.5 w-3.5" />
-                        <span>Reclamar</span>
-                      </Button>
-                    </div>
-                  ) : (
-                    <div className="flex items-center gap-1.5 shrink-0">
-                      <div className="text-right text-[10px] text-slate-500 dark:text-slate-400 font-bold shrink-0 bg-slate-500/10 px-2 py-1 rounded-lg border border-slate-500/20 flex items-center gap-1">
-                        <span className="h-2 w-2 rounded-full bg-slate-400" />
-                        <span>Sin asignar</span>
                       </div>
-                      <Button 
-                        size="sm" 
-                        className="h-8 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-lg px-2.5 sm:px-3 flex items-center gap-1.5 shadow-sm cursor-pointer"
-                        onClick={() => handleClaimSession()}
-                        title="Reclamar chat para atenderlo tú"
-                      >
-                        <UserPlus className="h-3.5 w-3.5" />
-                        <span>Reclamar</span>
-                      </Button>
-                    </div>
-                  )}
+                    ) : activeAssignedInfo.isAssigned ? (
+                      <div className="flex items-center gap-1 shrink-0">
+                        <div className="text-[10px] text-amber-600 dark:text-amber-400 font-bold shrink-0 bg-amber-500/10 px-2 py-1 rounded-lg border border-amber-500/30 max-w-[120px] truncate flex items-center gap-1" title={`Tomado por: ${activeAssignedInfo.assignedName}`}>
+                          <span className="relative flex h-2 w-2 shrink-0">
+                            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
+                            <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500"></span>
+                          </span>
+                          <span className="truncate"><strong>{activeAssignedInfo.assignedName}</strong></span>
+                        </div>
+                        {['SUPERADMIN', 'ADMIN'].includes(user?.role || '') && (
+                          <Button 
+                            size="sm" 
+                            variant="outline" 
+                            className="h-8 border-red-500/20 hover:bg-red-500/10 text-red-500 rounded-lg flex items-center justify-center shrink-0 text-xs px-2 cursor-pointer"
+                            onClick={() => handleReleaseSession()}
+                            title="Forzar Soltar chat (Administrador)"
+                          >
+                            <UserX className="h-3.5 w-3.5" />
+                          </Button>
+                        )}
+                        <Button 
+                          size="sm" 
+                          variant="outline" 
+                          className="h-8 border-amber-500/40 hover:bg-amber-500/20 text-xs rounded-lg text-amber-600 dark:text-amber-300 px-2 sm:px-2.5 font-bold cursor-pointer flex items-center gap-1"
+                          onClick={() => handleClaimSession()}
+                          title="Reclamar chat"
+                        >
+                          <UserPlus className="h-3.5 w-3.5" />
+                          <span className={embeddedOrder ? "hidden xl:inline" : "hidden sm:inline"}>Reclamar</span>
+                        </Button>
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-1 shrink-0">
+                        <div className="text-[10px] text-slate-500 dark:text-slate-400 font-bold shrink-0 bg-slate-500/10 px-2 py-1 rounded-lg border border-slate-500/20 flex items-center gap-1">
+                          <span className="h-2 w-2 rounded-full bg-slate-400" />
+                          <span className={embeddedOrder ? "hidden xl:inline" : "hidden sm:inline"}>Sin asignar</span>
+                        </div>
+                        <Button 
+                          size="sm" 
+                          className="h-8 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-lg px-2 sm:px-2.5 flex items-center gap-1 shadow-sm cursor-pointer"
+                          onClick={() => handleClaimSession()}
+                          title="Reclamar chat para atenderlo tú"
+                        >
+                          <UserPlus className="h-3.5 w-3.5" />
+                          <span className={embeddedOrder ? "hidden xl:inline" : "hidden sm:inline"}>Reclamar</span>
+                        </Button>
+                      </div>
+                    )}
 
-                  {/* Cerrar / Deseleccionar Chat (Estilo WhatsApp Web) */}
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-8 w-8 text-[var(--text-muted)] hover:text-red-400 hover:bg-red-500/10 rounded-lg shrink-0 cursor-pointer"
-                    onClick={() => {
-                      setGlobalActiveSessionIdCache(null)
-                      try { localStorage.removeItem('niche_last_active_whatsapp_session_id') } catch (e) {}
-                      setActiveSession(null)
-                      navigate('/chat', { replace: true })
-                    }}
-                    title="Cerrar chat (Dejar sin conversación seleccionada)"
-                  >
-                    <X className="h-4 w-4" />
-                  </Button>
+                    {/* Delete/Archive Session (Solo Admin/Superadmin) */}
+                    {(user?.role === 'ADMIN' || user?.role === 'SUPERADMIN') && (
+                      <Button 
+                        size="icon" 
+                        variant="outline" 
+                        className="h-8 w-8 border-red-500/30 hover:bg-red-500/10 text-red-500 rounded-lg shrink-0 flex items-center justify-center cursor-pointer"
+                        onClick={() => handleDeleteSession()}
+                        title="Eliminar Conversación"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </Button>
+                    )}
+
+                    {/* Cerrar / Deseleccionar Chat */}
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8 text-[var(--text-muted)] hover:text-red-400 hover:bg-red-500/10 rounded-lg shrink-0 cursor-pointer"
+                      onClick={() => {
+                        setGlobalActiveSessionIdCache(null)
+                        try { localStorage.removeItem('niche_last_active_whatsapp_session_id') } catch (e) {}
+                        setActiveSession(null)
+                        navigate('/chat', { replace: true })
+                      }}
+                      title="Cerrar chat (Dejar sin conversación seleccionada)"
+                    >
+                      <X className="h-4 w-4" />
+                    </Button>
+                  </div>
+                </div>
+
+                {/* ROW 2: Contact Phones & Viewers */}
+                <div className="flex items-center justify-between gap-2 text-[10px] min-w-0 border-t border-[var(--border-subtle)]/25 pt-1.5 flex-wrap">
+                  <div className="flex items-center gap-2 min-w-0 truncate">
+                    <span className="text-[10px] text-[var(--text-muted)] font-mono font-medium flex items-center gap-1 truncate">
+                      <Phone className="h-2.5 w-2.5 text-[var(--accent)] shrink-0" />
+                      <span className="truncate">{activeSession.phone}</span>
+                    </span>
+                    {activeSession.customerPhone && activeSession.customerPhone !== activeSession.phone && (
+                      <span className="text-emerald-600 dark:text-emerald-400 font-mono font-bold truncate bg-emerald-500/10 px-1.5 py-0.5 rounded border border-emerald-500/25 shrink-0">
+                        📱 Real: {formatSessionPhone(activeSession.customerPhone)}
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Real-time viewers in this chat */}
+                  {(() => {
+                    const viewers = (chatViewers[activeSession.id] || []).filter(v => v.userId !== user?.id)
+                    if (viewers.length === 0) return null
+                    return (
+                      <div className="flex items-center gap-1 text-[9px] font-bold text-sky-600 dark:text-sky-400 bg-sky-500/10 px-1.5 py-0.5 rounded border border-sky-500/25 shrink-0 max-w-[150px] truncate" title={`${viewers.map(v => v.userName).join(', ')} en este chat`}>
+                        <Eye className="h-2.5 w-2.5 shrink-0 animate-pulse" />
+                        <span className="truncate">{viewers.map(v => v.userName).join(', ')}</span>
+                      </div>
+                    )
+                  })()}
                 </div>
               </div>
 
               {/* LIVE ATTENTION STATUS BANNER */}
               {activeAssignedInfo.isMine ? (
-                <div className="px-4 py-2 bg-emerald-500/10 border-b border-emerald-500/20 flex items-center justify-between text-xs font-bold text-emerald-600 dark:text-emerald-400 shrink-0 animate-in fade-in duration-150">
-                  <div className="flex items-center gap-2">
-                    <span className="relative flex h-2 w-2">
+                <div className="px-3 sm:px-4 py-1.5 sm:py-2 bg-emerald-500/10 border-b border-emerald-500/20 flex items-center justify-between gap-2 text-xs font-bold text-emerald-600 dark:text-emerald-400 shrink-0 animate-in fade-in duration-150">
+                  <div className="flex items-center gap-1.5 min-w-0 flex-1 truncate">
+                    <span className="relative flex h-2 w-2 shrink-0">
                       <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
                       <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
                     </span>
-                    <span>
+                    <span className="truncate">
                       Estás atendiendo este chat en tiempo real ({user?.name || 'Tú'})
-                      {chatbotEnabled === true && <span className="ml-1 font-medium text-emerald-700/80 dark:text-emerald-300/80">· IA en pausa mientras esté asignado</span>}
+                      {chatbotEnabled === true && <span className="ml-1 font-medium text-emerald-700/80 dark:text-emerald-300/80">· IA pausada</span>}
                     </span>
                   </div>
                   <Button
                     size="sm"
                     variant="ghost"
                     onClick={() => handleReleaseSession()}
-                    className="h-6 px-2 text-[10px] font-bold text-amber-600 dark:text-amber-400 hover:bg-amber-500/10 rounded-md cursor-pointer"
+                    className="h-6 px-2 text-[10px] font-bold text-amber-600 dark:text-amber-400 hover:bg-amber-500/10 rounded-md cursor-pointer shrink-0"
                   >
                     Soltar Chat
                   </Button>
                 </div>
               ) : activeAssignedInfo.isAssigned ? (
-                <div className="px-4 py-2 bg-amber-500/15 border-b border-amber-500/25 flex items-center justify-between text-xs font-bold text-amber-700 dark:text-amber-300 shrink-0 animate-in fade-in duration-150">
-                  <div className="flex items-center gap-2">
-                    <span className="relative flex h-2 w-2">
+                <div className="px-3 sm:px-4 py-1.5 sm:py-2 bg-amber-500/15 border-b border-amber-500/25 flex items-center justify-between gap-2 text-xs font-bold text-amber-700 dark:text-amber-300 shrink-0 animate-in fade-in duration-150">
+                  <div className="flex items-center gap-1.5 min-w-0 flex-1 truncate">
+                    <span className="relative flex h-2 w-2 shrink-0">
                       <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
                       <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500"></span>
                     </span>
-                    <span>⚠️ Chat tomado en tiempo real por: <strong className="underline ml-1">{activeAssignedInfo.assignedName}</strong></span>
+                    <span className="truncate">⚠️ Chat tomado en tiempo real por: <strong className="underline ml-1">{activeAssignedInfo.assignedName}</strong></span>
                   </div>
                   <Button
                     size="sm"
                     variant="outline"
                     onClick={() => handleClaimSession()}
-                    className="h-6.5 px-3 text-[11px] font-extrabold border-amber-500/40 text-amber-700 dark:text-amber-300 hover:bg-amber-500/20 rounded-md cursor-pointer flex items-center gap-1"
+                    className="h-6.5 px-2.5 text-[11px] font-extrabold border-amber-500/40 text-amber-700 dark:text-amber-300 hover:bg-amber-500/20 rounded-md cursor-pointer flex items-center gap-1 shrink-0"
                     title="Tomar este chat para responder tú"
                   >
                     <UserPlus className="h-3 w-3" />
-                    Reclamar Chat
+                    <span>Reclamar Chat</span>
                   </Button>
                 </div>
               ) : (
-                <div className="px-4 py-1.5 bg-[var(--bg-elevated)]/50 border-b border-[var(--border-subtle)]/40 flex items-center justify-between text-xs font-medium text-[var(--text-secondary)] shrink-0">
-                  <div className="flex items-center gap-2">
-                    <span className="h-2 w-2 rounded-full bg-slate-400" />
-                    <span>Chat disponible (Sin asignar) · Ningún asesor lo ha tomado</span>
+                <div className="px-3 sm:px-4 py-1.5 bg-[var(--bg-elevated)]/50 border-b border-[var(--border-subtle)]/40 flex items-center justify-between gap-2 text-xs font-medium text-[var(--text-secondary)] shrink-0">
+                  <div className="flex items-center gap-2 min-w-0 flex-1 truncate">
+                    <span className="h-2 w-2 rounded-full bg-slate-400 shrink-0" />
+                    <span className="truncate">Chat disponible (Sin asignar)</span>
                   </div>
                   <Button
                     size="sm"
                     onClick={() => handleClaimSession()}
-                    className="h-6.5 px-3 text-[11px] font-extrabold bg-emerald-600 hover:bg-emerald-700 text-white rounded-md cursor-pointer flex items-center gap-1 shadow-sm"
+                    className="h-6.5 px-2.5 text-[11px] font-extrabold bg-emerald-600 hover:bg-emerald-700 text-white rounded-md cursor-pointer flex items-center gap-1 shadow-sm shrink-0"
                   >
                     <UserPlus className="h-3 w-3" />
-                    Reclamar Chat
+                    <span>Reclamar Chat</span>
                   </Button>
                 </div>
               )}
@@ -3983,30 +3993,32 @@ function ChatPage() {
                 if (isAdmin) {
                   if (activeAssignedInfo.isAssigned && !activeAssignedInfo.isMine) {
                     return (
-                      <div className="bg-blue-500/10 border-t border-blue-500/20 px-4 py-2 flex items-center justify-between text-blue-600 dark:text-blue-400 text-xs font-medium shrink-0 animate-in fade-in duration-150">
-                        <span className="flex items-center gap-1.5">
-                          <Shield className="w-4 h-4 text-blue-500 shrink-0" />
-                          Chat atendido por <strong className="underline ml-0.5">{activeAssignedInfo.assignedName}</strong>. Como administrador puedes responder directamente.
+                      <div className="bg-blue-500/10 border-t border-blue-500/20 px-2.5 sm:px-4 py-1.5 sm:py-2 flex items-center justify-between gap-2 text-blue-600 dark:text-blue-400 text-[11px] sm:text-xs font-medium shrink-0 animate-in fade-in duration-150">
+                        <span className="flex items-center gap-1.5 min-w-0 flex-1 truncate">
+                          <Shield className="w-3.5 h-3.5 text-blue-500 shrink-0" />
+                          <span className="truncate">Atendido por <strong className="underline ml-0.5">{activeAssignedInfo.assignedName}</strong>. Puedes responder directamente.</span>
                         </span>
-                        <div className="flex items-center gap-1.5">
+                        <div className="flex items-center gap-1 shrink-0">
                           <Button
                             type="button"
                             size="sm"
                             variant="ghost"
-                            className="text-xs h-7 px-2.5 text-amber-600 dark:text-amber-400 hover:bg-amber-500/15 rounded-lg cursor-pointer"
+                            className="text-xs h-7 px-2 text-amber-600 dark:text-amber-400 hover:bg-amber-500/15 rounded-lg cursor-pointer"
                             onClick={() => handleReleaseSession()}
                             title="Liberar a la cola general"
                           >
-                            <UserX className="w-3.5 h-3.5 mr-1 text-amber-500" /> Soltar
+                            <UserX className="w-3 h-3 text-amber-500" />
+                            <span className="hidden sm:inline ml-1">Soltar</span>
                           </Button>
                           <Button
                             type="button"
                             size="sm"
-                            className="bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs h-7 px-3 rounded-lg cursor-pointer flex items-center gap-1 shadow-sm"
+                            className="bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs h-7 px-2.5 rounded-lg cursor-pointer flex items-center gap-1 shadow-sm"
                             onClick={() => handleClaimSession()}
                             title="Reasignar este chat a mi usuario"
                           >
-                            <UserPlus className="w-3.5 h-3.5 mr-1" /> Reasignar para mí
+                            <UserPlus className="w-3 h-3" />
+                            <span>Reasignar</span>
                           </Button>
                         </div>
                       </div>
@@ -4014,18 +4026,19 @@ function ChatPage() {
                   }
                   if (!activeAssignedInfo.isAssigned) {
                     return (
-                      <div className="bg-slate-500/10 border-t border-slate-500/20 px-4 py-2 flex items-center justify-between text-[var(--text-secondary)] text-xs font-medium shrink-0 animate-in fade-in duration-150">
-                        <span className="flex items-center gap-1.5">
-                          <Shield className="w-4 h-4 text-[var(--accent)] shrink-0" />
-                          Chat sin asignar. Como administrador puedes responder directamente o reclamarlo.
+                      <div className="bg-slate-500/10 border-t border-slate-500/20 px-2.5 sm:px-4 py-1.5 sm:py-2 flex items-center justify-between gap-2 text-[var(--text-secondary)] text-[11px] sm:text-xs font-medium shrink-0 animate-in fade-in duration-150">
+                        <span className="flex items-center gap-1.5 min-w-0 flex-1 truncate">
+                          <Shield className="w-3.5 h-3.5 text-[var(--accent)] shrink-0" />
+                          <span className="truncate">Chat sin asignar. Puedes responder libremente.</span>
                         </span>
                         <Button
                           type="button"
                           size="sm"
-                          className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs h-7 px-3 rounded-lg cursor-pointer flex items-center gap-1 shadow-sm"
+                          className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs h-7 px-2.5 rounded-lg cursor-pointer flex items-center gap-1 shadow-sm shrink-0"
                           onClick={() => handleClaimSession()}
                         >
-                          <UserPlus className="w-3.5 h-3.5 mr-1" /> Reclamar para mí
+                          <UserPlus className="w-3 h-3" />
+                          <span>Reclamar</span>
                         </Button>
                       </div>
                     )
@@ -4036,18 +4049,19 @@ function ChatPage() {
                 // Gestoras: manual claim required for taking orders, open for writing
                 if (!activeAssignedInfo.isAssigned) {
                   return (
-                    <div className="bg-emerald-500/10 border-t border-emerald-500/25 px-4 py-2 flex items-center justify-between text-emerald-700 dark:text-emerald-300 text-xs font-semibold shrink-0 animate-in fade-in duration-150">
-                      <span className="flex items-center gap-2">
-                        <UserPlus className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
-                        <span>Chat sin asignar. Puedes escribir libremente; para <strong>Tomar el Pedido</strong> debes reclamarlo.</span>
+                    <div className="bg-emerald-500/10 border-t border-emerald-500/25 px-2.5 sm:px-4 py-1.5 sm:py-2 flex items-center justify-between gap-2 text-emerald-700 dark:text-emerald-300 text-[11px] sm:text-xs font-semibold shrink-0 animate-in fade-in duration-150">
+                      <span className="flex items-center gap-1.5 min-w-0 flex-1 truncate">
+                        <UserPlus className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                        <span className="truncate">Chat sin asignar. Reclámalo para <strong>Tomar Pedido</strong>.</span>
                       </span>
                       <Button
                         type="button"
                         size="sm"
-                        className="bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs h-7 px-3.5 rounded-lg cursor-pointer flex items-center gap-1 shadow-sm"
+                        className="bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs h-7 px-2.5 rounded-lg cursor-pointer flex items-center gap-1 shadow-sm shrink-0"
                         onClick={() => handleClaimSession()}
                       >
-                        <UserPlus className="w-3.5 h-3.5 mr-1" /> Reclamar Chat
+                        <UserPlus className="w-3 h-3" />
+                        <span>Reclamar</span>
                       </Button>
                     </div>
                   )
@@ -4055,18 +4069,18 @@ function ChatPage() {
 
                 if (activeAssignedInfo.isAssigned && !activeAssignedInfo.isMine) {
                   return (
-                    <div className="bg-amber-500/10 border-t border-amber-500/20 px-4 py-2 flex items-center justify-between text-amber-500 text-xs font-semibold shrink-0 animate-in fade-in duration-150">
-                      <span className="flex items-center gap-1.5">
-                        <Lock className="w-4 h-4 text-amber-500 shrink-0" />
-                        <span>Chat atendido por <strong className="text-amber-400">{activeAssignedInfo.assignedName}</strong>. Puedes responder preguntas; para tomar el pedido debe estar a tu nombre.</span>
+                    <div className="bg-amber-500/10 border-t border-amber-500/20 px-2.5 sm:px-4 py-1.5 sm:py-2 flex items-center justify-between gap-2 text-amber-500 text-[11px] sm:text-xs font-semibold shrink-0 animate-in fade-in duration-150">
+                      <span className="flex items-center gap-1.5 min-w-0 flex-1 truncate">
+                        <Lock className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+                        <span className="truncate">Atendido por <strong className="text-amber-400">{activeAssignedInfo.assignedName}</strong>.</span>
                       </span>
                       <Button
                         type="button"
                         size="sm"
-                        className="bg-amber-500 hover:bg-amber-600 text-black font-extrabold text-xs h-7 px-3 rounded-lg cursor-pointer"
+                        className="bg-amber-500 hover:bg-amber-600 text-black font-extrabold text-xs h-7 px-2.5 rounded-lg cursor-pointer shrink-0"
                         onClick={() => handleClaimSession()}
                       >
-                        <UserPlus className="w-3.5 h-3.5 mr-1" /> Reclamar para mí
+                        <UserPlus className="w-3 h-3 mr-1" /> Reclamar
                       </Button>
                     </div>
                   )
@@ -4074,20 +4088,20 @@ function ChatPage() {
 
                 if (activeAssignedInfo.isAssigned && activeAssignedInfo.isMine) {
                   return (
-                    <div className="bg-emerald-500/10 border-t border-emerald-500/20 px-4 py-1.5 flex items-center justify-between text-emerald-600 dark:text-emerald-400 text-xs font-medium shrink-0 animate-in fade-in duration-150">
-                      <span className="flex items-center gap-1.5">
-                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
-                        <span>Chat asignado a ti. Tienes control para tomar pedidos y gestionar la conversación.</span>
+                    <div className="bg-emerald-500/10 border-t border-emerald-500/20 px-2.5 sm:px-4 py-1 sm:py-1.5 flex items-center justify-between gap-2 text-emerald-600 dark:text-emerald-400 text-[11px] sm:text-xs font-medium shrink-0 animate-in fade-in duration-150">
+                      <span className="flex items-center gap-1.5 min-w-0 flex-1 truncate">
+                        <CheckCircle2 className="w-3 h-3 text-emerald-500 shrink-0" />
+                        <span className="truncate">Chat asignado a ti. Control total activo.</span>
                       </span>
                       <Button
                         type="button"
                         size="sm"
                         variant="ghost"
-                        className="text-xs h-6 px-2 text-amber-600 dark:text-amber-400 hover:bg-amber-500/15 rounded-lg cursor-pointer"
+                        className="text-xs h-6 px-2 text-amber-600 dark:text-amber-400 hover:bg-amber-500/15 rounded-lg cursor-pointer shrink-0"
                         onClick={() => handleReleaseSession()}
                         title="Liberar chat para que otra asesora lo atienda"
                       >
-                        <UserX className="w-3 h-3 mr-1 text-amber-500" /> Soltar chat
+                        <UserX className="w-3 h-3 mr-1 text-amber-500" /> Soltar
                       </Button>
                     </div>
                   )
@@ -4107,6 +4121,7 @@ function ChatPage() {
                 return (
                   <ChatInputBar
                     disabled={false}
+                    compact={!!embeddedOrder}
                     onSendText={handleSendMessageText}
                     onSendMenuCarta={handleSendMenuCarta}
                     sendingMenu={sendingMenu}
