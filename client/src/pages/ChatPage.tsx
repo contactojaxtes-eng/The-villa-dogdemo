@@ -2205,6 +2205,14 @@ function ChatPage() {
     }
   }, [messages.length, activeSession?.id])
 
+  // Media Preview Dialog State (validación de captura previa como WhatsApp Web)
+  const [pendingMedia, setPendingMedia] = useState<{
+    file: File
+    previewUrl: string
+    caption: string
+  } | null>(null)
+  const lastPasteTimeRef = useRef<number>(0)
+
   const handleSendMediaFile = async (file: File, captionText?: string) => {
     const currentSession = activeSessionRef.current || activeSession
     if (!file || !currentSession) return
@@ -2223,7 +2231,7 @@ function ChatPage() {
     }
 
     setUploadingMedia(true)
-    alerts.toast('Enviando captura a WhatsApp...')
+    alerts.toast('Enviando imagen a WhatsApp...')
 
     const formData = new FormData()
     formData.append('file', uploadFile)
@@ -2238,18 +2246,51 @@ function ChatPage() {
       setActiveSession(prev => prev && prev.id === currentSession.id ? { ...prev, unreadCount: 0 } : prev)
       setSessions(prev => prev.map(s => s.id === currentSession.id ? { ...s, unreadCount: 0 } : s))
     } catch (err: any) {
-      console.error('Error enviando archivo o captura:', err)
-      alerts.error('Error', err.message || 'Error al enviar el archivo por WhatsApp.')
+      console.error('Error enviando imagen:', err)
+      alerts.error('Error', err.message || 'Error al enviar la imagen por WhatsApp.')
     } finally {
       setUploadingMedia(false)
       if (fileInputRef.current) fileInputRef.current.value = ''
     }
   }
 
+  const openMediaPreview = (file: File, initialCaption = '') => {
+    // Evitar estrictamente doble disparo simultáneo
+    const now = Date.now()
+    if (now - lastPasteTimeRef.current < 600) return
+    lastPasteTimeRef.current = now
+
+    if (file.type.startsWith('image/')) {
+      const previewUrl = URL.createObjectURL(file)
+      setPendingMedia({
+        file,
+        previewUrl,
+        caption: initialCaption || ''
+      })
+    } else {
+      void handleSendMediaFile(file, initialCaption)
+    }
+  }
+
+  const handleConfirmSendMedia = async () => {
+    if (!pendingMedia || uploadingMedia) return
+    const { file, caption, previewUrl } = pendingMedia
+    URL.revokeObjectURL(previewUrl)
+    setPendingMedia(null)
+    await handleSendMediaFile(file, caption)
+  }
+
+  const handleCancelSendMedia = () => {
+    if (pendingMedia?.previewUrl) {
+      URL.revokeObjectURL(pendingMedia.previewUrl)
+    }
+    setPendingMedia(null)
+  }
+
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
-    await handleSendMediaFile(file)
+    openMediaPreview(file)
   }
 
   useEffect(() => {
@@ -2257,7 +2298,7 @@ function ChatPage() {
       const currentSession = activeSessionRef.current
       if (!currentSession) return
 
-      // Do not intercept if a dialog modal is currently open
+      // No interceptar si hay algún modal abierto (incluyendo la vista previa)
       const isModalOpen = document.querySelector('[role="dialog"]') !== null
       if (isModalOpen) return
 
@@ -2271,7 +2312,7 @@ function ChatPage() {
           if (file) {
             e.preventDefault()
             e.stopPropagation()
-            void handleSendMediaFile(file)
+            openMediaPreview(file)
             return
           }
         }
@@ -4195,7 +4236,7 @@ function ChatPage() {
                     sendingPaymentQr={sendingPaymentQr}
                     fileInputRef={fileInputRef}
                     handleFileChange={handleFileChange}
-                    onPasteImage={handleSendMediaFile}
+                    onPasteImage={openMediaPreview}
                     uploadingMedia={uploadingMedia}
                     isRecording={isRecording}
                     recordingTime={recordingTime}
@@ -4503,6 +4544,82 @@ function ChatPage() {
                   </div>
                 )
               })()}
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Modal de Validación / Vista Previa de Imagen pegada (estilo WhatsApp Web) */}
+      <Dialog open={pendingMedia !== null} onOpenChange={(open) => !open && handleCancelSendMedia()}>
+        <DialogContent className="max-w-md p-0 overflow-hidden bg-[var(--bg-panel)] border border-[var(--border-subtle)] rounded-3xl shadow-2xl flex flex-col">
+          <div className="p-4 border-b border-[var(--border-subtle)] flex items-center justify-between bg-[var(--bg-panel)]">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <div className="h-8 w-8 rounded-full bg-emerald-500/15 text-emerald-600 flex items-center justify-center font-bold text-sm shrink-0">
+                📷
+              </div>
+              <div className="min-w-0">
+                <h3 className="text-sm font-black text-[var(--text-primary)]">Enviar imagen a WhatsApp</h3>
+                <p className="text-[11px] text-[var(--text-secondary)] truncate">
+                  Cliente: <strong className="text-[var(--text-primary)]">{activeSession?.customerName || activeSession?.phone}</strong>
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={handleCancelSendMedia}
+              className="p-1.5 rounded-xl hover:bg-[var(--bg-hover)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition cursor-pointer"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+
+          {/* Vista previa de la captura */}
+          <div className="p-4 bg-slate-950/40 flex items-center justify-center min-h-[220px] max-h-[380px] overflow-hidden">
+            {pendingMedia && (
+              <img
+                src={pendingMedia.previewUrl}
+                alt="Vista previa captura"
+                className="max-h-[350px] max-w-full object-contain rounded-xl shadow-lg border border-[var(--border-subtle)]"
+              />
+            )}
+          </div>
+
+          {/* Pie de foto / Comentario y Botón de Enviar */}
+          <div className="p-4 bg-[var(--bg-panel)] space-y-3">
+            <div className="relative flex items-center">
+              <Input
+                autoFocus
+                value={pendingMedia?.caption || ''}
+                onChange={(e) => setPendingMedia(prev => prev ? { ...prev, caption: e.target.value } : null)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault()
+                    void handleConfirmSendMedia()
+                  }
+                }}
+                placeholder="Escribe un mensaje o pie de foto (opcional)..."
+                className="h-11 rounded-xl bg-[var(--bg-elevated)] border-[var(--border-default)] text-xs text-[var(--text-primary)] pr-12"
+              />
+              <button
+                type="button"
+                onClick={handleConfirmSendMedia}
+                disabled={uploadingMedia}
+                className="absolute right-1.5 h-8 w-8 rounded-lg bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white flex items-center justify-center shadow-md cursor-pointer transition disabled:opacity-50"
+                title="Enviar por WhatsApp"
+              >
+                {uploadingMedia ? <Loader2 className="h-4 w-4 animate-spin text-white" /> : <Send className="h-4 w-4" />}
+              </button>
+            </div>
+
+            <div className="flex items-center justify-between text-[11px] text-[var(--text-muted)]">
+              <span>Presiona <b>Enter ↵</b> para enviar</span>
+              <button
+                type="button"
+                onClick={handleCancelSendMedia}
+                className="hover:underline text-[var(--text-secondary)] cursor-pointer"
+              >
+                Cancelar
+              </button>
             </div>
           </div>
         </DialogContent>
