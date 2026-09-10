@@ -3667,7 +3667,7 @@ export default function NewOrderPage({
             <span className="font-extrabold text-[var(--accent)]">{formatCurrency(subtotal)} (clic para desplegar)</span>
           </div>
         ) : (
-          <div className="px-2.5 py-2 space-y-1.5 max-h-[190px] sm:max-h-[220px] overflow-y-auto scrollbar-thin scrollbar-thumb-zinc-300 dark:scrollbar-thumb-zinc-700">
+          <div className="px-2.5 py-2 max-h-[190px] sm:max-h-[220px] overflow-y-auto scrollbar-thin scrollbar-thumb-zinc-300 dark:scrollbar-thumb-zinc-700">
             {cart.length === 0 && (
               <div className={cn("text-center space-y-2", embedded ? "py-3" : "py-8")}>
                 <Sparkles className="mx-auto h-6 w-6 text-[var(--accent)]/30 animate-pulse" />
@@ -3681,206 +3681,211 @@ export default function NewOrderPage({
                 </div>
               </div>
             )}
-            <AnimatePresence>
-              {groupedCart.map(item => {
-                const keyId = item.lineId || item.menuItemId;
-                const visibleKitchenNote = keepKitchenInstruction(getItemRawNote(item.notes), item.name)
-                return (
-                  <motion.div
-                    key={keyId}
-                    layout
-                    initial={{ opacity: 0, x: 15 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    exit={{ opacity: 0, x: -15 }}
-                    className="rounded-xl bg-[var(--bg-base)] border border-[var(--border-subtle)] p-2 shadow-xs space-y-1.5"
-                  >
-                    <div className="flex items-center justify-between gap-1.5">
-                      <div className="flex items-center gap-1.5 min-w-0 flex-1">
-                        <p className="text-xs font-bold text-[var(--text-primary)] truncate" title={item.name}>{item.name}</p>
-                        {item.isCourtesy ? (
-                          <div className="flex items-center gap-1 shrink-0">
-                            <span className="line-through text-[10px] text-[var(--text-muted)]">
-                              {formatCurrency(item.price * item.quantity)}
-                            </span>
-                            <span className="text-emerald-500 font-extrabold text-[11px]">$0</span>
-                          </div>
-                        ) : (
-                          <span className="text-xs font-extrabold text-[var(--accent)] shrink-0">
-                            {formatCurrency(item.price * item.quantity)}
-                          </span>
-                        )}
-                        {item.isCourtesy && (
-                          <Badge className="bg-emerald-500/10 text-emerald-500 border border-emerald-500/20 font-bold text-[9px] py-0 px-1 shrink-0">
-                            Cortesía
-                          </Badge>
-                        )}
-                      </div>
-                      <div className="flex items-center gap-0.5 shrink-0 bg-[var(--bg-panel)] rounded-lg p-0.5 border border-[var(--border-subtle)]">
-                        <Button 
-                          size="icon" 
-                          variant="ghost" 
-                          className="h-5 w-5 rounded-md text-[var(--text-secondary)] hover:bg-[var(--bg-elevated)] cursor-pointer" 
-                          onClick={() => item.quantity === 1 ? removeFromCart(item.lineId!, item.name) : updateQuantity(item.lineId!, -1)}
-                        >
-                          <Minus className="h-2.5 w-2.5" />
-                        </Button>
-                        <span className="w-4 text-center text-xs font-extrabold text-[var(--text-primary)]">{item.quantity}</span>
-                        <Button 
-                          size="icon" 
-                          variant="ghost" 
-                          className="h-5 w-5 rounded-md text-[var(--text-secondary)] hover:bg-[var(--bg-elevated)] cursor-pointer" 
-                          onClick={() => updateQuantity(item.lineId!, 1)}
-                        >
-                          <Plus className="h-2.5 w-2.5" />
-                        </Button>
-                        <Button 
-                          size="icon" 
-                          variant="ghost" 
-                          className="h-5 w-5 rounded-md text-[var(--destructive)] hover:bg-[var(--destructive)]/10 cursor-pointer" 
-                          onClick={() => removeFromCart(item.lineId!, item.name)}
-                        >
-                          <Trash2 className="h-2.5 w-2.5" />
-                        </Button>
-                      </div>
-                    </div>
-
-                    {/* Cart Item Actions Row (Nota chip / input, Adición, Cortesía) */}
-                    <div className="flex items-center gap-1.5 flex-wrap pt-1 border-t border-[var(--border-subtle)]/40">
-                      {showNotes[keyId] ? (
-                        <div className="flex items-center gap-1 bg-[var(--bg-elevated)] border border-[var(--accent)]/40 p-1 rounded-lg w-full">
-                          <Input 
-                            value={visibleKitchenNote}
-                            onChange={e => updateItemNotes(item.lineId!, e.target.value)}
-                            onKeyDown={e => {
-                              if (e.key === 'Enter') {
-                                e.preventDefault()
-                                setShowNotes(prev => ({ ...prev, [keyId]: false }))
-                              }
-                            }}
-                            onBlur={() => {
-                              setShowNotes(prev => ({ ...prev, [keyId]: false }))
-                            }}
-                            placeholder="Nota (ej: sin cebolla)..." 
-                            className="h-6 text-[11px] bg-[var(--bg-input)] border-[var(--border-subtle)] rounded px-2 focus:border-[var(--accent)] flex-1 font-medium" 
-                            autoFocus
-                          />
-                          <button
-                            type="button"
-                            onClick={() => setShowNotes(prev => ({ ...prev, [keyId]: false }))}
-                            className="h-6 px-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-[10px] font-bold cursor-pointer shrink-0"
-                            title="Guardar nota (Enter)"
-                          >
-                            ✓
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => clearItemNotes(item.lineId!)}
-                            className="h-6 px-1.5 text-[var(--text-muted)] hover:text-red-500 rounded text-[10px] font-bold cursor-pointer shrink-0"
-                            title="Borrar nota"
-                          >
-                            <X className="h-3 w-3" />
-                          </button>
-                        </div>
-                      ) : (
-                        <>
-                          {visibleKitchenNote ? (
-                            <div className="inline-flex items-center gap-1 text-[10px] bg-red-500/10 border border-red-500/25 text-red-600 dark:text-red-400 font-semibold px-2 py-0.5 rounded-md max-w-full">
-                              <span 
-                                onClick={() => setShowNotes(prev => ({ ...prev, [keyId]: true }))}
-                                className="truncate cursor-pointer hover:underline"
-                                title="Clic para editar nota"
-                              >
-                                📝 {visibleKitchenNote}
+            <div className={cn(
+              "grid gap-2",
+              groupedCart.length > 1 ? "grid-cols-1 min-[420px]:grid-cols-2" : "grid-cols-1"
+            )}>
+              <AnimatePresence>
+                {groupedCart.map(item => {
+                  const keyId = item.lineId || item.menuItemId;
+                  const visibleKitchenNote = keepKitchenInstruction(getItemRawNote(item.notes), item.name)
+                  return (
+                    <motion.div
+                      key={keyId}
+                      layout
+                      initial={{ opacity: 0, x: 15 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      exit={{ opacity: 0, x: -15 }}
+                      className="rounded-xl bg-[var(--bg-base)] border border-[var(--border-subtle)] p-2 shadow-xs space-y-1.5 min-w-0 flex flex-col justify-between"
+                    >
+                      <div className="flex items-center justify-between gap-1.5 min-w-0">
+                        <div className="flex items-center gap-1.5 min-w-0 flex-1">
+                          <p className="text-xs font-bold text-[var(--text-primary)] truncate" title={item.name}>{item.name}</p>
+                          {item.isCourtesy ? (
+                            <div className="flex items-center gap-1 shrink-0">
+                              <span className="line-through text-[10px] text-[var(--text-muted)]">
+                                {formatCurrency(item.price * item.quantity)}
                               </span>
-                              <button
-                                type="button"
-                                onClick={() => clearItemNotes(item.lineId!)}
-                                className="hover:text-red-700 dark:hover:text-red-300 cursor-pointer shrink-0 ml-0.5"
-                                title="Quitar nota"
-                              >
-                                <X className="h-2.5 w-2.5" />
-                              </button>
+                              <span className="text-emerald-500 font-extrabold text-[11px]">$0</span>
                             </div>
                           ) : (
+                            <span className="text-xs font-extrabold text-[var(--accent)] shrink-0">
+                              {formatCurrency(item.price * item.quantity)}
+                            </span>
+                          )}
+                          {item.isCourtesy && (
+                            <Badge className="bg-emerald-500/10 text-emerald-500 border border-emerald-500/20 font-bold text-[9px] py-0 px-1 shrink-0">
+                              Cortesía
+                            </Badge>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-0.5 shrink-0 bg-[var(--bg-panel)] rounded-lg p-0.5 border border-[var(--border-subtle)]">
+                          <Button 
+                            size="icon" 
+                            variant="ghost" 
+                            className="h-5 w-5 rounded-md text-[var(--text-secondary)] hover:bg-[var(--bg-elevated)] cursor-pointer" 
+                            onClick={() => item.quantity === 1 ? removeFromCart(item.lineId!, item.name) : updateQuantity(item.lineId!, -1)}
+                          >
+                            <Minus className="h-2.5 w-2.5" />
+                          </Button>
+                          <span className="w-4 text-center text-xs font-extrabold text-[var(--text-primary)]">{item.quantity}</span>
+                          <Button 
+                            size="icon" 
+                            variant="ghost" 
+                            className="h-5 w-5 rounded-md text-[var(--text-secondary)] hover:bg-[var(--bg-elevated)] cursor-pointer" 
+                            onClick={() => updateQuantity(item.lineId!, 1)}
+                          >
+                            <Plus className="h-2.5 w-2.5" />
+                          </Button>
+                          <Button 
+                            size="icon" 
+                            variant="ghost" 
+                            className="h-5 w-5 rounded-md text-[var(--destructive)] hover:bg-[var(--destructive)]/10 cursor-pointer" 
+                            onClick={() => removeFromCart(item.lineId!, item.name)}
+                          >
+                            <Trash2 className="h-2.5 w-2.5" />
+                          </Button>
+                        </div>
+                      </div>
+
+                      {/* Cart Item Actions Row (Nota chip / input, Adición, Cortesía) */}
+                      <div className="flex items-center gap-1 flex-wrap pt-1 border-t border-[var(--border-subtle)]/40 min-w-0">
+                        {showNotes[keyId] ? (
+                          <div className="flex items-center gap-1 bg-[var(--bg-elevated)] border border-[var(--accent)]/40 p-1 rounded-lg w-full">
+                            <Input 
+                              value={visibleKitchenNote}
+                              onChange={e => updateItemNotes(item.lineId!, e.target.value)}
+                              onKeyDown={e => {
+                                if (e.key === 'Enter') {
+                                  e.preventDefault()
+                                  setShowNotes(prev => ({ ...prev, [keyId]: false }))
+                                }
+                              }}
+                              onBlur={() => {
+                                setShowNotes(prev => ({ ...prev, [keyId]: false }))
+                              }}
+                              placeholder="Nota (ej: sin cebolla)..." 
+                              className="h-6 text-[11px] bg-[var(--bg-input)] border-[var(--border-subtle)] rounded px-2 focus:border-[var(--accent)] flex-1 font-medium" 
+                              autoFocus
+                            />
                             <button
                               type="button"
-                              onClick={() => handleAddNoteClick(item)}
-                              className="text-[10px] font-bold text-[var(--accent)] hover:bg-[var(--accent)]/15 flex items-center gap-0.5 cursor-pointer bg-[var(--accent)]/10 px-1.5 py-0.5 rounded-md transition-all shrink-0"
+                              onClick={() => setShowNotes(prev => ({ ...prev, [keyId]: false }))}
+                              className="h-6 px-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-[10px] font-bold cursor-pointer shrink-0"
+                              title="Guardar nota (Enter)"
                             >
-                              <Plus className="h-2.5 w-2.5" /> Nota
+                              ✓
                             </button>
-                          )}
-
-                          {(() => {
-                            const itemAdditions = getAdditionItemsFor(item);
-                            if (itemAdditions.length === 0) return null;
-                            return (
-                              <AdditionDropdown
-                                item={item}
-                                additions={itemAdditions}
-                                onSelect={handleAddAddition}
-                              />
-                            );
-                          })()}
-
-                          <button
-                            type="button"
-                            onClick={() => toggleItemCourtesy(item.lineId!)}
-                            className={`text-[10px] font-extrabold flex items-center gap-0.5 cursor-pointer px-1.5 py-0.5 rounded-md transition-all shrink-0 ${
-                              item.isCourtesy ? 'bg-emerald-500 text-white shadow-xs' : 'text-emerald-600 bg-emerald-500/10 hover:bg-emerald-500/20'
-                            }`}
-                          >
-                            <Sparkles className="h-2.5 w-2.5" />
-                            {item.isCourtesy ? 'Cortesía ($0)' : 'Cortesía'}
-                          </button>
-                        </>
-                      )}
-                    </div>
-
-                    {/* Additions list nested under parent */}
-                    {item.additions && item.additions.length > 0 && (
-                      <div className="mt-1 pl-2 border-l-2 border-[var(--accent)]/30 space-y-1">
-                        {item.additions.map(add => (
-                          <div key={`${add.menuItemId}-${add.notes}`} className="flex items-center justify-between text-xs bg-[var(--bg-elevated)]/60 rounded-md py-0.5 px-1.5 border border-[var(--border-subtle)]/50">
-                            <div className="min-w-0 flex-1 flex items-center gap-1.5">
-                              <p className="text-[10px] font-bold text-[var(--text-primary)] truncate">{add.name}</p>
-                              <p className="text-[10px] text-[var(--accent)] font-semibold shrink-0">+{formatCurrency(add.price * add.quantity)}</p>
-                            </div>
-                            <div className="flex items-center gap-0.5 shrink-0 bg-[var(--bg-panel)] rounded p-0.5 border border-[var(--border-subtle)]">
-                              <Button 
-                                size="icon" 
-                                variant="ghost" 
-                                className="h-4.5 w-4.5 rounded text-[var(--text-secondary)] hover:bg-[var(--bg-elevated)]" 
-                                onClick={() => add.quantity === 1 ? removeAddition(add) : updateAdditionQuantity(add, -1)}
-                              >
-                                <Minus className="h-2 w-2" />
-                              </Button>
-                              <span className="w-3 text-center text-[9px] font-bold text-[var(--text-primary)]">{add.quantity}</span>
-                              <Button 
-                                size="icon" 
-                                variant="ghost" 
-                                className="h-4.5 w-4.5 rounded text-[var(--text-secondary)] hover:bg-[var(--bg-elevated)]" 
-                                onClick={() => updateAdditionQuantity(add, 1)}
-                              >
-                                <Plus className="h-2 w-2" />
-                              </Button>
-                              <Button 
-                                size="icon" 
-                                variant="ghost" 
-                                className="h-4.5 w-4.5 rounded text-[var(--destructive)] hover:bg-[var(--destructive)]/10" 
-                                onClick={() => removeAddition(add)}
-                              >
-                                <Trash2 className="h-2.5 w-2.5" />
-                              </Button>
-                            </div>
+                            <button
+                              type="button"
+                              onClick={() => clearItemNotes(item.lineId!)}
+                              className="h-6 px-1.5 text-[var(--text-muted)] hover:text-red-500 rounded text-[10px] font-bold cursor-pointer shrink-0"
+                              title="Borrar nota"
+                            >
+                              <X className="h-3 w-3" />
+                            </button>
                           </div>
-                        ))}
+                        ) : (
+                          <>
+                            {visibleKitchenNote ? (
+                              <div className="inline-flex items-center gap-1 text-[10px] bg-red-500/10 border border-red-500/25 text-red-600 dark:text-red-400 font-semibold px-1.5 py-0.5 rounded-md max-w-full min-w-0">
+                                <span 
+                                  onClick={() => setShowNotes(prev => ({ ...prev, [keyId]: true }))}
+                                  className="truncate cursor-pointer hover:underline max-w-[130px]"
+                                  title="Clic para editar nota"
+                                >
+                                  📝 {visibleKitchenNote}
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => clearItemNotes(item.lineId!)}
+                                  className="hover:text-red-700 dark:hover:text-red-300 cursor-pointer shrink-0 ml-0.5"
+                                  title="Quitar nota"
+                                >
+                                  <X className="h-2.5 w-2.5" />
+                                </button>
+                              </div>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => handleAddNoteClick(item)}
+                                className="text-[10px] font-bold text-[var(--accent)] hover:bg-[var(--accent)]/15 flex items-center gap-0.5 cursor-pointer bg-[var(--accent)]/10 px-1.5 py-0.5 rounded-md transition-all shrink-0"
+                              >
+                                <Plus className="h-2.5 w-2.5" /> Nota
+                              </button>
+                            )}
+
+                            {(() => {
+                              const itemAdditions = getAdditionItemsFor(item);
+                              if (itemAdditions.length === 0) return null;
+                              return (
+                                <AdditionDropdown
+                                  item={item}
+                                  additions={itemAdditions}
+                                  onSelect={handleAddAddition}
+                                />
+                              );
+                            })()}
+
+                            <button
+                              type="button"
+                              onClick={() => toggleItemCourtesy(item.lineId!)}
+                              className={`text-[10px] font-extrabold flex items-center gap-0.5 cursor-pointer px-1.5 py-0.5 rounded-md transition-all shrink-0 ${
+                                item.isCourtesy ? 'bg-emerald-500 text-white shadow-xs' : 'text-emerald-600 bg-emerald-500/10 hover:bg-emerald-500/20'
+                              }`}
+                            >
+                              <Sparkles className="h-2.5 w-2.5" />
+                              {item.isCourtesy ? 'Cortesía ($0)' : 'Cortesía'}
+                            </button>
+                          </>
+                        )}
                       </div>
-                    )}
-                  </motion.div>
-                )
-              })}
-            </AnimatePresence>
+
+                      {/* Additions list nested under parent */}
+                      {item.additions && item.additions.length > 0 && (
+                        <div className="mt-1 pl-2 border-l-2 border-[var(--accent)]/30 space-y-1">
+                          {item.additions.map(add => (
+                            <div key={`${add.menuItemId}-${add.notes}`} className="flex items-center justify-between text-xs bg-[var(--bg-elevated)]/60 rounded-md py-0.5 px-1.5 border border-[var(--border-subtle)]/50">
+                              <div className="min-w-0 flex-1 flex items-center gap-1.5">
+                                <p className="text-[10px] font-bold text-[var(--text-primary)] truncate">{add.name}</p>
+                                <p className="text-[10px] text-[var(--accent)] font-semibold shrink-0">+{formatCurrency(add.price * add.quantity)}</p>
+                              </div>
+                              <div className="flex items-center gap-0.5 shrink-0 bg-[var(--bg-panel)] rounded p-0.5 border border-[var(--border-subtle)]">
+                                <Button 
+                                  size="icon" 
+                                  variant="ghost" 
+                                  className="h-4.5 w-4.5 rounded text-[var(--text-secondary)] hover:bg-[var(--bg-elevated)]" 
+                                  onClick={() => add.quantity === 1 ? removeAddition(add) : updateAdditionQuantity(add, -1)}
+                                >
+                                  <Minus className="h-2 w-2" />
+                                </Button>
+                                <span className="w-3 text-center text-[9px] font-bold text-[var(--text-primary)]">{add.quantity}</span>
+                                <Button 
+                                  size="icon" 
+                                  variant="ghost" 
+                                  className="h-4.5 w-4.5 rounded text-[var(--text-secondary)] hover:bg-[var(--bg-elevated)]" 
+                                  onClick={() => updateAdditionQuantity(add, 1)}
+                                >
+                                  <Plus className="h-2 w-2" />
+                                </Button>
+                                <Button 
+                                  size="icon" 
+                                  variant="ghost" 
+                                  className="h-4.5 w-4.5 rounded text-[var(--destructive)] hover:bg-[var(--destructive)]/10" 
+                                  onClick={() => removeAddition(add)}
+                                >
+                                  <Trash2 className="h-2.5 w-2.5" />
+                                </Button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </motion.div>
+                  )
+                })}
+              </AnimatePresence>
+            </div>
           </div>
         )}
         
