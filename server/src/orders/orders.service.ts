@@ -849,7 +849,9 @@ export class OrdersService implements OnModuleInit {
 
   async notifyCreated(order: any) {
     this.socketGateway.emitNewOrder(order);
-    this.socketGateway.emitWhatsApp('whatsappSessionUpdated', { orderCreated: true, phone: order.customerPhone, orderNumber: order.orderNumber, status: order.status });
+    if (order.source === 'WHATSAPP' || order.chatSessionId || (!order.tableId && order.orderType !== 'LOCAL')) {
+      this.socketGateway.emitWhatsApp('whatsappSessionUpdated', { orderCreated: true, phone: order.customerPhone, orderNumber: order.orderNumber, status: order.status });
+    }
 
     let deliveryKitchenMode = 'PRINT';
     let deliveryAutoPrint = true;

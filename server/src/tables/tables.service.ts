@@ -301,7 +301,6 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
       this.socketGateway.server.emit('tableOrderSubmitted', result);
       this.socketGateway.emitTableUpdated(result.table);
       this.socketGateway.server.emit('cashRegistersChanged');
-      this.socketGateway.server.emit('newOrder', result.order);
       await this.ordersService.notifyCreated(result.order);
     }
     this.socketGateway.server.to(`user:${user.id}`).emit('offlineOrderSynced', result.order);

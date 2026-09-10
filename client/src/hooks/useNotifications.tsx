@@ -2,8 +2,7 @@ import { useEffect, useRef } from 'react'
 import { io } from '@/lib/socket'
 import { api } from '@/lib/api'
 import { toast } from 'sonner'
-import { useAuth } from './useAuth'
-import { Bike, Bell, CheckCircle2, XCircle, MessageCircle, UserPlus } from 'lucide-react'
+import { Bike, Bell, CheckCircle2, XCircle, MessageCircle, UserPlus, UtensilsCrossed } from 'lucide-react'
 import { getUsbDevice, printUsb, buildEscPosBuffer } from '@/lib/useUsbPrinter'
 import { playUrgentBell } from '@/lib/sound'
 import { cacheWhatsappMessage } from '@/lib/chatCache'
@@ -246,24 +245,46 @@ export function useNotifications() {
     }
     window.addEventListener('the-villa-dog-mute-changed', handleMuteChanged)
 
-    socket.on('newOrder', (order: { orderNumber?: number; customerName?: string }) => {
+    socket.on('newOrder', (order: { orderNumber?: number; customerName?: string; orderType?: string; tableId?: string; source?: string }) => {
       if (isMuted()) return
-      // Cocineros y meseros NO deben recibir la alerta con bicicleta de domicilios
+      // Cocineros y meseros NO deben recibir la alerta general
       if (['KITCHEN', 'WAITER'].includes(user.role || '')) return
 
-      toast.success('Nuevo pedido', {
+      const isTableOrder = Boolean(order?.tableId || order?.orderType === 'LOCAL' || order?.source === 'TABLE' || order?.source === 'OFFLINE_TABLE')
+
+      // Las gestoras de WhatsApp (DELIVERY_MANAGER) NO deben recibir ninguna alerta de pedidos de mesas ni de meseras
+      if (user.role === 'DELIVERY_MANAGER' && isTableOrder) return
+
+      if (isTableOrder) {
+        // Alerta exclusiva de salón para Administrador o Cajero
+        toast.info(`Nuevo pedido en mesa`, {
+          description: `#${order?.orderNumber ?? '—'} · ${order?.customerName ?? 'Mesa'}`,
+          icon: <UtensilsCrossed className="h-4 w-4 text-[#F97316]" />,
+          duration: 4000,
+        })
+        playNotificationSound('message')
+        return
+      }
+
+      toast.success('Nuevo pedido domicilio', {
         description: `#${order?.orderNumber ?? '—'} · ${order?.customerName ?? 'Cliente'}`,
         icon: <Bike className="h-4 w-4 text-[#F97316]" />,
         duration: 6000,
       })
       playNotificationSound('urgent')
-      showBrowserNotification('🍔 Nuevo Pedido', `#${order?.orderNumber ?? '—'} · ${order?.customerName ?? 'Cliente'}`, '/orders')
+      showBrowserNotification('🛵 Nuevo Pedido Domicilio', `#${order?.orderNumber ?? '—'} · ${order?.customerName ?? 'Cliente'}`, '/dispatch')
     })
 
     socket.on('orderStatusChanged', (data: { orderId: string; status: string; order?: any }) => {
       if (isMuted()) return
       // Cocineros NO deben recibir alertas de cambio de estado de pedidos ni domicilios
       if (user.role === 'KITCHEN') return
+
+      const isTableOrder = Boolean(data.order?.tableId || data.order?.orderType === 'LOCAL' || data.order?.source === 'TABLE' || data.order?.source === 'OFFLINE_TABLE')
+
+      // Las gestoras de WhatsApp NO reciben cambios de estado de mesas ni de pedidos de meseras
+      if (user.role === 'DELIVERY_MANAGER' && isTableOrder) return
+
       const labels: Record<string, string> = {
         READY: 'Listo para despacho',
         IN_ROUTE: 'En ruta',
@@ -297,8 +318,11 @@ export function useNotifications() {
         return
       }
 
-      // No saturar al admin con cancelados o entregados si no son domicilios
-      if (['ADMIN', 'SUPERADMIN', 'CASHIER'].includes(user.role || '') && !data.order?.deliveryZone) return
+      // No saturar con cancelados o entregados de mesas a los perfiles de gestión
+      if (isTableOrder) return
+
+      // Para domicilios: solo notificar si es domicilio o recogida
+      if (['ADMIN', 'SUPERADMIN', 'CASHIER', 'DELIVERY_MANAGER'].includes(user.role || '') && !data.order?.deliveryZone && data.order?.orderType !== 'DELIVERY' && data.order?.orderType !== 'PICKUP') return
 
       toast(isCancel ? 'Pedido cancelado' : label, {
         description: `Pedido #${data.order?.orderNumber ?? ''}`,
@@ -479,13 +503,14 @@ export function useNotifications() {
     }
 
     socket.on('cookBreakFinished', (payload: { userId: string; userName: string; finishedAt: number; breakReason?: string; breakMinutes?: number }) => {
-      // Cocineros y meseros no gestionan las alertas de relevo de cocina
-      if (['WAITER', 'KITCHEN'].includes(user.role || '')) return
+      // Cocineros, meseros y gestoras de WhatsApp no gestionan las alertas de relevo de cocina
+      if (['WAITER', 'KITCHEN', 'DELIVERY_MANAGER'].includes(user.role || '')) return
       activeBreaks.delete(payload.userId)
       triggerCookBreakAlert(payload)
     })
 
     socket.on('cookBreakStarted', (payload: { userId: string; userName: string; breakUntil: number; breakMinutes: number; breakReason: string }) => {
+      if (['WAITER', 'KITCHEN', 'DELIVERY_MANAGER'].includes(user.role || '')) return
       if (payload.userId && payload.breakUntil) {
         activeBreaks.set(payload.userId, payload)
       }
@@ -496,6 +521,7 @@ export function useNotifications() {
     })
 
     socket.on('kitchenCookStatusChanged', (statuses: Record<string, any>) => {
+      if (['WAITER', 'KITCHEN', 'DELIVERY_MANAGER'].includes(user.role || '')) return
       if (!statuses) return
       const now = Date.now()
       Object.entries(statuses).forEach(([uid, st]) => {
@@ -513,7 +539,7 @@ export function useNotifications() {
     })
 
     // Sincronizar descansos activos al iniciar sesión o cargar la página
-    if (user && !['WAITER', 'KITCHEN'].includes(user.role || '')) {
+    if (user && !['WAITER', 'KITCHEN', 'DELIVERY_MANAGER'].includes(user.role || '')) {
       api.get<Record<string, any>>('/kitchen/cooks/status').then((res) => {
         const statuses = res.data || res
         if (!statuses || typeof statuses !== 'object') return
