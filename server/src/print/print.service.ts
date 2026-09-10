@@ -978,7 +978,13 @@ export class PrintService {
       
       let printer = settings.printers.find(p => p.id === target || p.name.toLowerCase() === target.toLowerCase());
       if (!printer && target === 'cocina') {
-        printer = settings.cocina || settings.printers.find(p => p.type !== 'caja');
+        const isDelivery = !order.tableId && ['DELIVERY', 'PICKUP'].includes(order.orderType);
+        const orderChannel = isDelivery ? 'DELIVERY' : 'DINING';
+        printer = settings.printers.find(p => {
+          if (p.type === 'caja' || p.enabled === false) return false;
+          const ch = String(p.channel || (isDelivery ? 'DELIVERY' : 'DINING')).toUpperCase();
+          return ch === 'BOTH' || ch === orderChannel;
+        }) || settings.cocina || settings.printers.find(p => p.type !== 'caja');
       }
       if (!printer && target === 'bar') {
         printer = settings.bar;
@@ -1023,8 +1029,17 @@ export class PrintService {
     const resCaja = await this.dispatchPrintJob('caja', cajaText, settings.caja, shouldKick);
     results.push(resCaja);
 
+    const isDeliveryOrder = !order.tableId && ['DELIVERY', 'PICKUP'].includes(order.orderType);
+    const orderChannel = isDeliveryOrder ? 'DELIVERY' : 'DINING';
+
     for (const printer of settings.printers) {
       if (printer.enabled === false) continue; // Si la estación está desactivada, no imprime nada directamente en ella
+
+      const printerChannel = String(printer.channel || (isDeliveryOrder ? 'DELIVERY' : 'DINING')).toUpperCase();
+      if (printer.channel && printerChannel !== 'BOTH' && printerChannel !== orderChannel) {
+        continue;
+      }
+
       if (printer.type === 'caja') {
         // Impresoras adicionales tipo Caja: imprimen factura completa
         const text = this.formatCajaInvoiceText(order, settings);

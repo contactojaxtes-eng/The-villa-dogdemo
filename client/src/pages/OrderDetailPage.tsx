@@ -13,7 +13,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Textarea } from '@/components/ui/textarea'
 import { Label } from '@/components/ui/label'
 import { Input } from '@/components/ui/input'
-import { printComandaSmart, openCashDrawer, printReceiptText } from '@/lib/printer'
+import { printComandaSmart, openCashDrawer } from '@/lib/printer'
 
 interface OrderDetail {
   id: string; orderNumber: number; customerName: string; customerPhone: string; customerAddress: string
@@ -432,14 +432,11 @@ export default function OrderDetailPage() {
                 onClick={async () => {
                   const shouldKick = order.paymentMethod === 'CASH';
                   alerts.toast(`Enviando pedido #${order.orderNumber} a impresión...`, 'info');
-                  const res = await printComandaSmart(order as any, 'caja', user?.role, false, shouldKick);
-                  if (res?.text) {
-                    printReceiptText(res.text, res.paper || '80');
-                  }
+                  const res = await printComandaSmart(order as any, undefined, user?.role, false, shouldKick);
                   if (res?.error) {
                     alerts.error('Error al imprimir', res.error);
                   } else {
-                    alerts.toast(`Pedido #${order.orderNumber} enviado a impresión`, 'success');
+                    alerts.toast(`Pedido #${order.orderNumber} enviado a la impresora`, 'success');
                   }
                   loadOrder();
                 }}

@@ -653,9 +653,6 @@ async function printSinglePrinter(
     try {
       const result = await api.post<{ ok: boolean; error?: string; text?: string; paper?: '58' | '80' }>(`/print/order/${order.id}?target=${targetId}&kickDrawer=${kickDrawer}`)
       if (result.ok) {
-        if (result.text && !isAutoPrint) {
-          printReceiptText(result.text, result.paper || '80')
-        }
         return { method: 'local_bridge', silent: true }
       }
       if (printerConfig.mode !== 'browser') {
@@ -717,8 +714,16 @@ export async function printComandaSmart(
   }
 
   // Print comandas on estacion-type printers with category filtering
+  const isDeliveryOrder = !order.tableId && ['DELIVERY', 'PICKUP'].includes(order.orderType)
+  const orderChannel = isDeliveryOrder ? 'DELIVERY' : 'DINING'
+
   for (const printer of prepPrinters) {
     if (printer.enabled === false) continue
+
+    const printerChannel = String((printer as any).channel || (isDeliveryOrder ? 'DELIVERY' : 'DINING')).toUpperCase()
+    if ((printer as any).channel && printerChannel !== 'BOTH' && printerChannel !== orderChannel) {
+      continue
+    }
 
     // Group items first so additions are linked to parent items!
     const grouped = groupOrderItems(order.items || [])

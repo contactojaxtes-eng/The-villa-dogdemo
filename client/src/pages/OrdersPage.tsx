@@ -40,7 +40,7 @@ import {
 } from 'lucide-react'
 import { type Socket } from 'socket.io-client'
 import { io } from '@/lib/socket'
-import { printComandaSmart, openCashDrawer, printReceiptText } from '@/lib/printer'
+import { printComandaSmart, openCashDrawer } from '@/lib/printer'
 import { alerts } from '@/lib/alerts'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Textarea } from '@/components/ui/textarea'
@@ -1080,16 +1080,11 @@ export default function OrdersPage() {
                               deliveryDriver: order.deliveryDriver || (order.deliveryDriverId ? drivers.find(d => d.id === order.deliveryDriverId) : undefined)
                             };
                             alerts.toast(`Enviando pedido #${order.orderNumber} a impresión...`, 'info');
-                            try {
-                              const res = await api.post<{ ok: boolean; error?: string; text?: string; paper?: '58' | '80' }>(`/print/order/${order.id}?target=caja&kickDrawer=${shouldKick}`);
-                              if (res.ok && res.text) {
-                                printReceiptText(res.text, res.paper || '80');
-                                alerts.toast(`Pedido #${order.orderNumber} enviado a impresión`, 'success');
-                              } else {
-                                await printComandaSmart(orderWithDriver, 'caja', user?.role, false, shouldKick);
-                              }
-                            } catch {
-                              await printComandaSmart(orderWithDriver, 'caja', user?.role, false, shouldKick);
+                            const res = await printComandaSmart(orderWithDriver, undefined, user?.role, false, shouldKick);
+                            if (res?.error) {
+                              alerts.error('Error al imprimir', res.error);
+                            } else {
+                              alerts.toast(`Pedido #${order.orderNumber} enviado a la impresora`, 'success');
                             }
                           }}
                         >
@@ -1629,16 +1624,11 @@ export default function OrdersPage() {
                         deliveryDriver: o.deliveryDriver || (o.deliveryDriverId ? drivers.find(d => d.id === o.deliveryDriverId) : undefined)
                       };
                       alerts.toast(`Enviando pedido #${o.orderNumber} a impresión...`, 'info');
-                      try {
-                        const res = await api.post<{ ok: boolean; error?: string; text?: string; paper?: '58' | '80' }>(`/print/order/${o.id}?target=caja`);
-                        if (res.ok && res.text) {
-                          printReceiptText(res.text, res.paper || '80');
-                          alerts.toast(`Pedido #${o.orderNumber} enviado a impresión`, 'success');
-                        } else {
-                          await printComandaSmart(orderWithDriver, 'caja', user?.role, false, false);
-                        }
-                      } catch {
-                        await printComandaSmart(orderWithDriver, 'caja', user?.role, false, false);
+                      const res = await printComandaSmart(orderWithDriver, undefined, user?.role, false, false);
+                      if (res?.error) {
+                        alerts.error('Error al imprimir', res.error);
+                      } else {
+                        alerts.toast(`Pedido #${o.orderNumber} enviado a la impresora`, 'success');
                       }
                     }}>
                     <Printer className="h-4 w-4" /> Imprimir Factura y Comanda

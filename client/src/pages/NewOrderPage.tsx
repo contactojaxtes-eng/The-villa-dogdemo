@@ -15,10 +15,9 @@ import { api } from '@/lib/api'
 import { cn, formatCurrency, groupOrderItems, cleanNotes, getItemRawNote, fuzzyMatch, levenshteinDistance, formatThousandsInput, parseThousandsInput } from '@/lib/utils'
 import { alerts } from '@/lib/alerts'
 import type { ComandaOrder } from '@/components/orders/ComandaPrint'
-import { printReceiptText } from '@/lib/printer'
 import { AddressSearch, type AddressResult } from '@/components/orders/AddressSearch'
 import { globalSessionsCache } from '@/lib/chatCache'
-import { ArrowLeft, ShoppingCart, Trash2, Search, Save, Sparkles, Clock, Bike, Store, Loader2, Plus, Minus, MapPin, DollarSign, AlertTriangle, Route, Pizza, CupSoda, ChefHat, Flame, UtensilsCrossed, X, Users, CheckCircle2, Mic, MicOff, ChevronDown, MessageCircle, Send, FileText, Phone, ExternalLink, Download, Eye, RotateCw, ZoomIn, ZoomOut } from 'lucide-react'
+import { ArrowLeft, ShoppingCart, Trash2, Search, Save, Sparkles, Clock, Bike, Store, Loader2, Plus, Minus, MapPin, DollarSign, AlertTriangle, Route, Pizza, CupSoda, ChefHat, Flame, UtensilsCrossed, X, Users, CheckCircle2, Mic, MicOff, ChevronDown, MessageCircle, Send, FileText, Phone, ExternalLink, Download, Eye, RotateCw, ZoomIn, ZoomOut, Edit } from 'lucide-react'
 
 function ChatDrawerMedia({ mediaId, type }: { mediaId: string; type: string }) {
   const [src, setSrc] = useState<string | null>(null)
@@ -2978,17 +2977,14 @@ export default function NewOrderPage({
         await alerts.success('Pedido Creado', `Pedido #${savedOrder.orderNumber || ''} registrado exitosamente.`)
       }
 
-      // Impresión directa multidispositivo de Factura y Comanda con precios
+      // Enviar orden de impresión al servidor para la impresora física configurada (sin abrir ventana de PDF)
       try {
         const orderIdToPrint = savedOrder.id || editOrderId
         if (orderIdToPrint) {
-          const printRes = await api.post<any>(`/print/order/${orderIdToPrint}`).catch(() => null)
-          if (printRes?.text) {
-            printReceiptText(printRes.text, printRes.paper || '80')
-          }
+          await api.post(`/print/order/${orderIdToPrint}`).catch(() => null)
         }
       } catch (printErr) {
-        console.warn('Error en impresión directa desde formulario de pedido:', printErr)
+        console.warn('Error en auto-impresión:', printErr)
       }
 
       localStorage.removeItem(activeDraftKey)
