@@ -1068,49 +1068,30 @@ export default function OrdersPage() {
                           </Button>
                         )}
 
-                        {/* Action Tools */}
+                        {/* Action Tools: Un solo botón de impresión para Comanda/Factura unificada */}
                         {(hasPermission('orders.reprint') || hasPermission('dispatch.change_status')) && (
-                          <>
-                            {/* Botón Impresora (Factura de Caja) - Visible para ADMIN, SUPERADMIN y CASHIER */}
-                            {hasPermission('orders.reprint') && (
-                              <Button 
-                                size="sm" 
-                                variant="ghost" 
-                                className="h-9 w-9 p-0 rounded-xl border border-[var(--border-subtle)] hover:bg-[var(--bg-hover)] text-emerald-500 hover:text-emerald-600 active:scale-95 transition-all"
-                                title="Imprimir Factura (Caja)"
-                                onClick={async () => {
-                                  const shouldKick = order.paymentMethod === 'CASH';
-                                  const isDelivery = order.orderType === 'DELIVERY';
-                                  if (isDelivery && order.status === 'PENDING') {
-                                    setSelectedDriverId(order.deliveryDriverId || '');
-                                    setInlineDriverName('');
-                                    setInlineDriverPhone('');
-                                    setDispatchError('');
-                                    const orderWithDriver = {
-                                      ...order,
-                                      deliveryDriver: order.deliveryDriver || (order.deliveryDriverId ? drivers.find(d => d.id === order.deliveryDriverId) : undefined)
-                                    };
-                                    await printComandaSmart(orderWithDriver, 'caja', user?.role, false, shouldKick);
-                                    loadOrders();
-                                  }
-                                }}
-                              >
-                                <Printer className="h-4 w-4" />
-                              </Button>
-                            )}
-                            {/* Botón Trinche (Comanda de Cocina) - Visible para ADMIN, SUPERADMIN, CASHIER y DELIVERY_MANAGER */}
-                            {(hasPermission('orders.reprint') || hasPermission('dispatch.change_status')) && (
-                              <Button 
-                                size="sm" 
-                                variant="ghost" 
-                                className="h-9 w-9 p-0 rounded-xl border border-[var(--border-subtle)] hover:bg-[var(--bg-hover)] text-amber-500 hover:text-amber-600 active:scale-95 transition-all"
-                                title="Imprimir Comanda (Cocina)"
-                                onClick={() => printComandaSmart(order, 'cocina', user?.role)}
-                              >
-                                <UtensilsCrossed className="h-4 w-4" />
-                              </Button>
-                            )}
-                          </>
+                          <Button 
+                            size="sm" 
+                            variant="ghost" 
+                            className="h-9 w-9 p-0 rounded-xl border border-[var(--border-subtle)] hover:bg-[var(--bg-hover)] text-emerald-500 hover:text-emerald-600 active:scale-95 transition-all cursor-pointer"
+                            title="Imprimir Factura / Comanda"
+                            onClick={async () => {
+                              const shouldKick = order.paymentMethod === 'CASH';
+                              const orderWithDriver = {
+                                ...order,
+                                deliveryDriver: order.deliveryDriver || (order.deliveryDriverId ? drivers.find(d => d.id === order.deliveryDriverId) : undefined)
+                              };
+                              alerts.toast(`Enviando pedido #${order.orderNumber} a impresión...`, 'info');
+                              const res = await printComandaSmart(orderWithDriver, 'caja', user?.role, false, shouldKick);
+                              if (res?.error) {
+                                alerts.error('Error al imprimir', res.error);
+                              } else {
+                                alerts.toast(`Pedido #${order.orderNumber} enviado a impresión`, 'success');
+                              }
+                            }}
+                          >
+                            <Printer className="h-4 w-4" />
+                          </Button>
                         )}
                         {hasPermission('orders.edit') && ['PENDING', 'PREPARING', 'READY', 'IN_ROUTE'].includes(order.status) && (
                           <>
@@ -1620,16 +1601,24 @@ export default function OrdersPage() {
                   <Button variant="outline" className="flex-1 rounded-xl h-10 font-bold text-xs cursor-pointer" onClick={() => setDetailOrder(null)}>
                     Cerrar
                   </Button>
-                  {(hasPermission('orders.reprint') || hasPermission('dispatch.change_status')) && <Button className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl h-10 px-4 text-xs gap-1 cursor-pointer"
-                    onClick={() => {
-                      const orderWithDriver = {
-                        ...o,
-                        deliveryDriver: o.deliveryDriver || (o.deliveryDriverId ? drivers.find(d => d.id === o.deliveryDriverId) : undefined)
-                      };
-                      printComandaSmart(orderWithDriver, 'caja', user?.role, false, false);
-                    }}>
-                    <Printer className="h-4 w-4" /> Imprimir Factura
-                  </Button>}
+                  {(hasPermission('orders.reprint') || hasPermission('dispatch.change_status')) && (
+                    <Button className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl h-10 px-4 text-xs gap-1.5 cursor-pointer shadow-md shadow-emerald-600/15"
+                      onClick={async () => {
+                        const orderWithDriver = {
+                          ...o,
+                          deliveryDriver: o.deliveryDriver || (o.deliveryDriverId ? drivers.find(d => d.id === o.deliveryDriverId) : undefined)
+                        };
+                        alerts.toast(`Enviando pedido #${o.orderNumber} a impresión...`, 'info');
+                        const res = await printComandaSmart(orderWithDriver, 'caja', user?.role, false, false);
+                        if (res?.error) {
+                          alerts.error('Error al imprimir', res.error);
+                        } else {
+                          alerts.toast(`Pedido #${o.orderNumber} enviado a impresión`, 'success');
+                        }
+                      }}>
+                      <Printer className="h-4 w-4" /> Imprimir Factura / Comanda
+                    </Button>
+                  )}
                 </div>
               </div>
             )

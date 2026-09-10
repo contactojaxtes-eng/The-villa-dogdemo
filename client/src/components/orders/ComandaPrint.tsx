@@ -104,11 +104,18 @@ export function printComanda(order: ComandaOrder) {
         return raw || 'N/A';
       })()}</div>
     </div>
+    ${((order as any).tableId || order.orderType === 'LOCAL' || (order as any).diningTable) ? `
+    <div class="section">
+      <div class="label">Mesa / Salón</div>
+      <div class="address">${(((order as any).diningTable?.label || (order as any).tableName || 'Mesa / Salón')).toUpperCase()}</div>
+    </div>
+    ` : `
     <div class="section">
       <div class="label">Dirección de entrega</div>
-      <div class="address">${fullAddress}</div>
+      <div class="address">${fullAddress || 'N/A'}</div>
       ${order.zone ? `<div class="value" style="margin-top:4px;">Barrio: ${order.zone.name}${order.zone.zoneGroup ? ` (${order.zone.zoneGroup})` : ''}</div>` : ''}
     </div>
+    `}
     <div class="section">
       <div class="label">Productos</div>
       ${groupOrderItems(order.items || []).map(i => `
@@ -127,14 +134,14 @@ export function printComanda(order: ComandaOrder) {
     ${(() => { const cn = (order.notes || '').replace(/^\[MOSTRADOR\]\s*/i, '').replace(/^\[PICKUP\]\s*/i, '').trim(); return cn ? `<div class="section"><div class="label">Notas</div><div class="value">${cn}</div></div>` : '' })()}
     <div class="section">
       <div class="item"><span>Subtotal</span><span>${formatCurrency(order.subtotal)}</span></div>
-      <div class="item"><span>Domicilio</span><span>${formatCurrency(order.deliveryFee)}</span></div>
+      ${order.deliveryFee > 0 ? `<div class="item"><span>Domicilio</span><span>${formatCurrency(order.deliveryFee)}</span></div>` : ''}
       ${order.tax > 0 ? `<div class="item"><span>Impoconsumo 8%</span><span>${formatCurrency(order.tax)}</span></div>` : ''}
       <div class="total">TOTAL: ${formatCurrency(order.total)}</div>
     </div>
     <div class="section">
       <div class="label">Atiende</div>
       <div class="value">${order.assignee?.name || order.waiter?.name || '—'}</div>
-      ${(order.deliveryDriver?.name || order.deliveryDriverName) ? `<div class="value" style="margin-top:4px;"><b>Domiciliario:</b> ${order.deliveryDriver?.name || order.deliveryDriverName}</div>` : ''}
+      ${(!((order as any).tableId || order.orderType === 'LOCAL') && (order.deliveryDriver?.name || order.deliveryDriverName)) ? `<div class="value" style="margin-top:4px;"><b>Domiciliario:</b> ${order.deliveryDriver?.name || order.deliveryDriverName}</div>` : ''}
       <div class="value" style="font-size:10px;margin-top:4px;">${formatDate(order.createdAt)}</div>
     </div>
     <div class="footer">THE VILLA DOG · Comanda #${order.orderNumber}</div>

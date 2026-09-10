@@ -90,6 +90,62 @@ export const alerts = {
       },
     })
     return result.isConfirmed ? (result.value as string)?.trim() : null
+  },
+  async rejectedPaymentAlert(data: {
+    title?: string
+    tableLabel: string
+    orderNumber: number | string
+    reason: string
+    waiterName?: string
+    amount?: string | number
+    onAction?: () => void
+  }) {
+    const isDarkTheme = isDark()
+    const result = await Swal.fire({
+      ...getSwalOptions(),
+      icon: 'warning',
+      title: data.title || '⚠️ Pedido / Cobro Rechazado',
+      html: `
+        <div style="text-align: left; font-size: 14px; line-height: 1.6; margin-top: 8px;">
+          <div style="font-size: 16px; margin-bottom: 8px;">
+            <strong>Mesa:</strong> <span style="color: #ef4444; font-weight: 800;">${data.tableLabel}</span> &nbsp;•&nbsp; 
+            <strong>Pedido:</strong> <span style="font-weight: 800;">#${data.orderNumber}</span>
+          </div>
+          ${data.waiterName ? `
+            <div style="margin-bottom: 8px; color: ${isDarkTheme ? '#cbd5e1' : '#475569'};">
+              <strong>Mesera / Responsable:</strong> <span style="font-weight: 700;">${data.waiterName}</span>
+            </div>
+          ` : ''}
+          <div style="background: rgba(239, 68, 68, 0.12); border-left: 4px solid #ef4444; padding: 12px 14px; border-radius: 8px; margin: 12px 0;">
+            <div style="color: #ef4444; font-size: 11px; text-transform: uppercase; font-weight: 800; letter-spacing: 0.5px; margin-bottom: 4px;">
+              Motivo:
+            </div>
+            <div style="font-size: 14px; font-weight: 700; color: ${isDarkTheme ? '#fca5a5' : '#b91c1c'}; font-style: italic;">
+              "${data.reason || 'Sin motivo especificado'}"
+            </div>
+          </div>
+          <p style="font-size: 12px; opacity: 0.8; margin-top: 6px;">
+            Este pedido se encuentra en el filtro de <strong>Rechazados</strong> de Validación de Pagos con opción de Validar / Aceptar.
+          </p>
+        </div>
+      `,
+      showCancelButton: true,
+      confirmButtonText: 'Ir a Validar / Aceptar',
+      cancelButtonText: 'Cerrar',
+      customClass: {
+        ...getSwalOptions().customClass,
+        confirmButton: 'bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-6 py-2.5 rounded-xl shadow-md transition-all cursor-pointer mx-2 border-0 outline-none',
+      },
+    })
+
+    if (result.isConfirmed) {
+      if (data.onAction) {
+        data.onAction()
+      } else {
+        window.location.href = '/payment-validation'
+      }
+    }
+    return result.isConfirmed
   }
 }
 

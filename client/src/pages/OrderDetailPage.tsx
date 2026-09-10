@@ -427,28 +427,23 @@ export default function OrderDetailPage() {
           )}
           {['SUPERADMIN', 'ADMIN', 'CASHIER', 'DELIVERY_MANAGER'].includes(user?.role || '') && (
             <div className="flex flex-wrap gap-2.5 ml-auto pt-2 sm:pt-0">
-              {['SUPERADMIN', 'ADMIN', 'CASHIER'].includes(user?.role || '') && (
-                <Button
-                  variant="outline"
-                  className="h-11 px-4 rounded-xl font-bold border-[var(--border-default)] hover:bg-[var(--bg-hover)] flex items-center gap-2 text-emerald-600 hover:text-emerald-500"
-                  onClick={async () => {
-                    const shouldKick = order.paymentMethod === 'CASH';
-                    await printComandaSmart(order as any, 'caja', user?.role, false, shouldKick);
-                    loadOrder();
-                  }}
-                >
-                  <Printer className="h-4 w-4" /> Imprimir Factura (Caja)
-                </Button>
-              )}
-              {['SUPERADMIN', 'ADMIN', 'CASHIER', 'DELIVERY_MANAGER'].includes(user?.role || '') && (
-                <Button
-                  variant="outline"
-                  className="h-11 px-4 rounded-xl font-bold border-[var(--border-default)] hover:bg-[var(--bg-hover)] flex items-center gap-2 text-amber-600 hover:text-amber-500"
-                  onClick={() => printComandaSmart(order as any, 'cocina', user?.role)}
-                >
-                  <UtensilsCrossed className="h-4 w-4" /> Imprimir Comanda (Cocina)
-                </Button>
-              )}
+              <Button
+                variant="outline"
+                className="h-11 px-4 rounded-xl font-bold border-[var(--border-default)] hover:bg-[var(--bg-hover)] flex items-center gap-2 text-emerald-600 hover:text-emerald-500 cursor-pointer"
+                onClick={async () => {
+                  const shouldKick = order.paymentMethod === 'CASH';
+                  alerts.toast(`Enviando pedido #${order.orderNumber} a impresión...`, 'info');
+                  const res = await printComandaSmart(order as any, 'caja', user?.role, false, shouldKick);
+                  if (res?.error) {
+                    alerts.error('Error al imprimir', res.error);
+                  } else {
+                    alerts.toast(`Pedido #${order.orderNumber} enviado a impresión`, 'success');
+                  }
+                  loadOrder();
+                }}
+              >
+                <Printer className="h-4 w-4" /> Imprimir Factura / Comanda
+              </Button>
             </div>
           )}
         </CardContent>

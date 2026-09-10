@@ -158,7 +158,9 @@ ${order.status === 'CANCELLED' ? `
 <div class="line"></div>
 <div class="lbl">Cliente</div>
 <div class="info">${order.customerName} · ${displayPhone}</div>
-<div class="lbl">${order.orderType === 'PICKUP' ? '📍 RECOGER EN LOCAL' : '🛵 DOMICILIO'}</div>
+<div class="lbl">${(order.tableId || order.orderType === 'LOCAL' || order.diningTable)
+  ? `🍽️ MESA: ${(order.diningTable?.label || order.tableName || (order.tableId ? 'MESA' : 'SALÓN')).toUpperCase()}`
+  : (order.orderType === 'PICKUP' ? '📍 RECOGER EN LOCAL' : '🛵 DOMICILIO')}</div>
 ${order.orderType === 'DELIVERY' ? `<div class="info">${fullAddress}</div>${order.zone ? `<div class="info">Barrio: ${order.zone.name}</div>` : ''}` : ''}
 <div class="line"></div>
 <div class="lbl" style="font-size:16px; margin-bottom:4px;">${order.status === 'CANCELLED' ? '❌ NO PREPARAR / PEDIDO CANCELADO:' : (isEdited ? '⚠️ PRODUCTOS EDITADOS (REVISAR CAMBIOS):' : '🍽 PREPARAR:')}</div>
@@ -230,7 +232,11 @@ ${isEdited ? `<div class="edit-badge">⚠️ FACTURA MODIFICADA ⚠️</div>` : 
 <div class="lbl">Cliente</div>
 <div style="font-weight: bold;">${order.customerName}</div>
 <div>Tel: ${displayPhone}</div>
-${order.orderType === 'DELIVERY' ? `
+${(order.tableId || order.orderType === 'LOCAL' || order.diningTable) ? `
+<div class="line"></div>
+<div class="lbl">Mesa / Salón</div>
+<div class="addr" style="font-size:14px; font-weight:bold;">${(order.diningTable?.label || (order as any).tableName || (order.tableId ? 'Mesa' : 'Salón')).toUpperCase()}</div>
+` : (order.orderType === 'DELIVERY' ? `
 <div class="line"></div>
 <div class="lbl">Dirección de Entrega</div>
 <div class="addr">${fullAddress}</div>
@@ -239,20 +245,20 @@ ${(order.zone?.name || (order as any).zoneName || (order as any).barrio) ? `<div
 <div class="line"></div>
 <div class="lbl">Entrega</div>
 <div class="addr">Recoger en restaurante</div>
-`}
+`)}
 <div class="line"></div>
 <div class="lbl">Productos</div>
 ${items}
 <div class="line"></div>
 <div class="summary-row"><span>Subtotal:</span><span>${formatCurrency(order.subtotal)}</span></div>
-<div class="summary-row"><span>Domicilio:</span><span>${formatCurrency(order.deliveryFee)}</span></div>
+${order.deliveryFee > 0 ? `<div class="summary-row"><span>Domicilio:</span><span>${formatCurrency(order.deliveryFee)}</span></div>` : ''}
 ${order.tax > 0 ? `<div class="summary-row"><span>Impoconsumo (8%):</span><span>${formatCurrency(order.tax)}</span></div>` : ''}
 <div class="line"></div>
 <div class="total"><span>TOTAL:</span><span>${formatCurrency(order.total)}</span></div>
 <div class="line"></div>
 <div class="summary-row"><span>Método de Pago:</span><span>${paymentLabels[order.paymentMethod] || order.paymentMethod}</span></div>
 <div class="summary-row"><span>Atiende:</span><span>${order.assignee?.name || order.waiter?.name || '—'}</span></div>
-${(order.orderType === 'DELIVERY' || order.deliveryDriver?.name || (order as any).deliveryDriverName || (order as any).driverName || (order as any).driver?.name) ? `<div class="summary-row"><span>Domiciliario:</span><span>${order.deliveryDriver?.name || (order as any).deliveryDriverName || (order as any).driverName || (order as any).driver?.name || 'Sin Asignar'}</span></div>` : ''}
+${(!(order.tableId || order.orderType === 'LOCAL') && (order.orderType === 'DELIVERY' || order.deliveryDriver?.name || (order as any).deliveryDriverName || (order as any).driverName || (order as any).driver?.name)) ? `<div class="summary-row"><span>Domiciliario:</span><span>${order.deliveryDriver?.name || (order as any).deliveryDriverName || (order as any).driverName || (order as any).driver?.name || 'Sin Asignar'}</span></div>` : ''}
 <div class="summary-row"><span>Fecha:</span><span>${formatDate(order.createdAt)}</span></div>
 <div class="footer">¡Muchas gracias por su compra!<br/>Vuelve pronto</div>
 </body></html>`
@@ -330,6 +336,9 @@ export function buildComandaText(
       divider,
       `[CENTER][HEIGHT][BOLD]PEDIDO #${order.orderNumber}[/BOLD][/HEIGHT][/CENTER]`,
       `Fecha: ${new Date(order.createdAt).toLocaleString('es-CO', { timeZone: 'America/Bogota', hour12: true })}`,
+      ...(order.diningTable?.label || order.tableId || order.orderType === 'LOCAL'
+        ? [`[CENTER][HEIGHT][BOLD]MESA: ${(order.diningTable?.label || (order as any).tableName || (order.tableId ? 'MESA' : 'SALÓN')).toUpperCase()}[/BOLD][/HEIGHT][/CENTER]`]
+        : [`[CENTER][BOLD]TIPO: ${order.orderType === 'DELIVERY' ? 'DOMICILIO' : 'RECOGER EN LOCAL'}[/BOLD][/CENTER]`]),
       `Atiende: ${waiterName}`,
       divider,
       '[HEIGHT][BOLD]PRODUCTOS A PREPARAR:[/BOLD][/HEIGHT]',
@@ -373,20 +382,25 @@ export function buildComandaText(
       `[CENTER]Dir: ${restInfo.address}[/CENTER]`,
       `[CENTER]Tel: ${restInfo.phone}[/CENTER]`,
       divider,
+      `[CENTER][BIG][BOLD]PEDIDO #${order.orderNumber}[/BOLD][/BIG][/CENTER]`,
       `Factura: No. ${order.invoiceNumber || order.orderNumber}`,
       `Fecha: ${new Date(order.createdAt).toLocaleString('es-CO', { timeZone: 'America/Bogota', hour12: true })}`,
+      divider,
+      (order.tableId || order.orderType === 'LOCAL' || order.diningTable)
+        ? `MESA: ${(order.diningTable?.label || (order as any).tableName || (order.tableId ? 'MESA' : 'SALÓN')).toUpperCase()}`
+        : `TIPO: ${order.orderType === 'DELIVERY' ? 'DOMICILIO 🛵' : 'PASAR A RECOGER 🏠'}`,
       `Cliente: ${order.customerName.toUpperCase()}`,
-      `Número de Documento: Consumidor Final`,
-      `Dirección: ${fullAddress ? fullAddress.toUpperCase() : 'N/A'}`,
-      ...(barrio ? [`Barrio: ${barrio.toUpperCase()}`] : []),
       `Teléfono: ${formatDisplayPhone(order.customerPhone, (order as any).customer?.phone)}`,
-      `Medio de pago: ${order.paymentMethod === 'CASH' ? 'Efectivo' : order.paymentMethod === 'TRANSFER' ? 'Transferencia' : order.paymentMethod}`,
-      `Forma de pago: Contado`,
+      ...(!(order.tableId || order.orderType === 'LOCAL') ? [
+        `Dirección: ${fullAddress ? fullAddress.toUpperCase() : 'N/A'}`,
+        ...(barrio ? [`Barrio: ${barrio.toUpperCase()}`] : []),
+        ...(order.orderType === 'DELIVERY' ? [`Repartidor: ${(driverName || 'SIN ASIGNAR').toUpperCase()}`] : []),
+      ] : []),
+      `Medio de pago: ${order.paymentMethod === 'MIXED' ? `MIXTO (Ef: $${((order as any).cashAmount || 0).toLocaleString('es-CO')} / Tr: $${((order as any).transferAmount || 0).toLocaleString('es-CO')})` : (order.paymentMethod === 'CASH' ? 'Efectivo' : order.paymentMethod === 'TRANSFER' ? 'Transferencia' : order.paymentMethod)}`,
+      `Estado: ${order.paymentStatus === 'CONFIRMED' ? 'PAGADO' : 'PENDIENTE DE PAGO'}`,
       `Atendido Por: ${(order.assignee?.name || order.waiter?.name || 'CAJERO').toUpperCase()}`,
-      ...(order.orderType === 'DELIVERY'
-        ? [`Domiciliario: ${(driverName || 'SIN ASIGNAR').toUpperCase()}`]
-        : (driverName ? [`Domiciliario: ${driverName.toUpperCase()}`] : [])),
-      `Mesa: ${order.orderType === 'DELIVERY' ? 'DOMICILIOS' : 'RECOGER LOCAL'}`,
+      lineDivider,
+      '[BOLD]DETALLE DE PRODUCTOS:[/BOLD]',
       lineDivider
     )
 
@@ -550,27 +564,32 @@ async function printSinglePrinter(
     }
   }
 
-  // 2) Modo Red (IP) o Puente Local (Cola)
-  if ((printerConfig.mode === 'network' || printerConfig.mode === 'local_bridge') && order.id) {
-    if (isAutoPrint) {
+  // 2) Modo Red (IP), Puente Local (Cola) o Backend Central
+  if (order.id) {
+    if (isAutoPrint && (printerConfig.mode === 'network' || printerConfig.mode === 'local_bridge')) {
       // El backend ya encola automáticamente el trabajo de comanda al crear o editar el pedido.
-      // No llamamos a /print/order para no duplicar la comanda en cola_impresion.
       return { method: printerConfig.mode, silent: true }
     }
     try {
       const result = await api.post<{ ok: boolean; error?: string }>(`/print/order/${order.id}?target=${targetId}&kickDrawer=${kickDrawer}`)
-      return { method: printerConfig.mode, silent: true, error: result.ok ? undefined : (result.error || 'Error en servidor') }
+      if (result.ok) {
+        return { method: 'local_bridge', silent: true }
+      }
+      if (printerConfig.mode !== 'browser') {
+        return { method: (printerConfig.mode as any) || 'local_bridge', silent: true, error: result.error }
+      }
     } catch (err: any) {
-      return { method: printerConfig.mode, silent: true, error: err.message || 'Error de conexión' }
+      if (printerConfig.mode !== 'browser') {
+        return { method: (printerConfig.mode as any) || 'local_bridge', silent: true, error: err.message || 'Error de conexión' }
+      }
     }
   }
 
-  // 3) Modo Navegador (PDF / Diálogo nativo de impresión)
-  if (printerConfig.mode === 'browser') {
-    if (!isWaiter) {
-      printViaIframe(buildPrintHtml(order, printerConfig.paper, targetId === 'caja' ? 'caja' : 'cocina', categories, printerConfig.name, allPrinters, restaurantInfo))
-      return { method: 'browser', silent: false }
-    }
+  // 3) Modo Navegador: Solo si no hay ID de pedido y no es mesera.
+  // En pedidos existentes, no abrir el diálogo de PDF emergente para evitar bloquear la operación.
+  if (printerConfig.mode === 'browser' && !order.id && !isWaiter) {
+    printViaIframe(buildPrintHtml(order, printerConfig.paper, targetId === 'caja' ? 'caja' : 'cocina', categories, printerConfig.name, allPrinters, restaurantInfo))
+    return { method: 'browser', silent: false }
   }
 
   return { method: printerConfig.mode, silent: true }

@@ -522,6 +522,8 @@ export class PrintService {
     const divider = '='.repeat(width);
     const lineDivider = '-'.repeat(width);
 
+    const isTableOrder = Boolean(order.diningTable || order.tableId || order.orderType === 'LOCAL');
+    const tableLabel = order.diningTable?.label || order.tableName || order.table?.label || (order.tableId ? 'Mesa' : 'Salón');
     const barrio = order.zone?.name || order.zoneName || order.barrio;
     const driverName = order.deliveryDriver?.name || order.deliveryDriverName || order.driverName || order.driver?.name;
 
@@ -531,20 +533,25 @@ export class PrintService {
       `[CENTER]Dir: ${restInfo.address.toUpperCase()}[/CENTER]`,
       `[CENTER]Tel: ${restInfo.phone}[/CENTER]`,
       divider,
+      `[CENTER][BIG][BOLD]PEDIDO #${order.orderNumber}[/BOLD][/BIG][/CENTER]`,
       `Factura: No. ${order.invoiceNumber || order.orderNumber}`,
       `Fecha: ${new Date(order.createdAt).toLocaleString('es-CO', { timeZone: 'America/Bogota', hour12: true })}`,
+      divider,
+      isTableOrder
+        ? `MESA: ${tableLabel.toUpperCase()}`
+        : `TIPO: ${order.orderType === 'DELIVERY' ? 'DOMICILIO 🛵' : 'PASAR A RECOGER 🏠'}`,
       `Cliente: ${order.customerName.toUpperCase()}`,
-      `Número de Documento: Consumidor Final`,
-      `Dirección: ${fullAddress ? fullAddress.toUpperCase() : 'N/A'}`,
-      ...(barrio ? [`Barrio: ${barrio.toUpperCase()}`] : []),
       `Teléfono: ${this.formatDisplayPhone(order.customerPhone, order.orderType, order.customer?.phone)}`,
+      ...(!isTableOrder ? [
+        `Dirección: ${fullAddress ? fullAddress.toUpperCase() : 'N/A'}`,
+        ...(barrio ? [`Barrio: ${barrio.toUpperCase()}`] : []),
+        ...(order.orderType === 'DELIVERY' ? [`Repartidor: ${(driverName || 'SIN ASIGNAR').toUpperCase()}`] : []),
+      ] : []),
       `Medio de pago: ${order.paymentMethod === 'MIXED' ? `MIXTO (Ef: $${(order.cashAmount || 0).toLocaleString('es-CO')} / Tr: $${(order.transferAmount || 0).toLocaleString('es-CO')})` : (order.paymentMethod === 'CASH' ? 'Efectivo' : order.paymentMethod === 'TRANSFER' ? 'Transferencia' : order.paymentMethod)}`,
-      `Forma de pago: Contado`,
+      `Estado: ${order.paymentStatus === 'CONFIRMED' ? 'PAGADO' : 'PENDIENTE DE PAGO'}`,
       `Atendido Por: ${(order.assignee?.name || order.waiter?.name || 'CAJERO').toUpperCase()}`,
-      ...(order.orderType === 'DELIVERY'
-        ? [`Domiciliario: ${(driverName || 'SIN ASIGNAR').toUpperCase()}`]
-        : (driverName ? [`Domiciliario: ${driverName.toUpperCase()}`] : [])),
-      `Mesa: ${order.orderType === 'DELIVERY' ? 'DOMICILIOS' : 'RECOGER LOCAL'}`,
+      lineDivider,
+      '[BOLD]DETALLE DE PRODUCTOS:[/BOLD]',
       lineDivider,
     ];
 
@@ -723,6 +730,9 @@ export class PrintService {
       isEdited ? `[CENTER][BIG][BOLD]PEDIDO EDITADO #${order.orderNumber}[/BOLD][/BIG][/CENTER]` : `[CENTER][BIG][BOLD]PEDIDO #${order.orderNumber}[/BOLD][/BIG][/CENTER]`,
       `Fecha: ${new Date(order.createdAt).toLocaleString('es-CO', { timeZone: 'America/Bogota', hour12: true })}`,
       ...(isEdited ? [`Fecha Editado: ${new Date(order.updatedAt).toLocaleString('es-CO', { timeZone: 'America/Bogota', hour12: true })}`] : []),
+      ...(order.diningTable?.label || order.tableId || order.orderType === 'LOCAL'
+        ? [`[CENTER][BIG][BOLD]MESA: ${(order.diningTable?.label || order.tableName || (order.tableId ? 'MESA' : 'SALÓN')).toUpperCase()}[/BOLD][/BIG][/CENTER]`]
+        : [`[CENTER][BOLD]TIPO: ${order.orderType === 'DELIVERY' ? 'DOMICILIO' : 'RECOGER EN LOCAL'}[/BOLD][/CENTER]`]),
       `Atiende: ${waiterName}`,
       divider,
       isEdited ? '[BIG][BOLD]⚠️ PRODUCTOS EDITADOS (REVISAR):[/BOLD][/BIG]' : '[BIG][BOLD]PRODUCTOS A PREPARAR:[/BOLD][/BIG]',
@@ -764,9 +774,17 @@ export class PrintService {
     const results: any[] = [];
     const processedPrinters = new Set<string>();
 
+    const isDeliveryOrder = !order.tableId && ['DELIVERY', 'PICKUP'].includes(order.orderType);
+    const orderChannel = isDeliveryOrder ? 'DELIVERY' : 'DINING';
+
     for (const printer of settings.printers) {
       if (printer.enabled === false) continue;
       if (printer.type === 'caja') continue; // Only prep stations need cancellation notice
+
+      const printerChannel = String(printer.channel || 'DINING').toUpperCase();
+      if (printerChannel !== 'BOTH' && printerChannel !== orderChannel) {
+        continue;
+      }
 
       const printerKey = `${printer.mode}_${printer.ip || ''}_${printer.port || 9100}`;
       if (processedPrinters.has(printerKey) && (!printer.categories || printer.categories.length === 0)) {
@@ -835,6 +853,9 @@ export class PrintService {
       `[CENTER][BIG][BOLD]⛔ CANCELADO - NO PREPARAR ⛔[/BOLD][/BIG][/CENTER]`,
       divider,
       `[CENTER][BIG][BOLD]PEDIDO CANCELADO #${order.orderNumber}[/BOLD][/BIG][/CENTER]`,
+      ...(order.diningTable?.label || order.tableId || order.orderType === 'LOCAL'
+        ? [`[CENTER][BIG][BOLD]MESA: ${(order.diningTable?.label || order.tableName || (order.tableId ? 'MESA' : 'SALÓN')).toUpperCase()}[/BOLD][/BIG][/CENTER]`]
+        : [`[CENTER][BOLD]TIPO: ${order.orderType === 'DELIVERY' ? 'DOMICILIO' : 'RECOGER EN LOCAL'}[/BOLD][/CENTER]`]),
       `Motivo: ${(order.cancellationReason || 'No especificado').toUpperCase()}`,
       `Fecha Canc: ${new Date().toLocaleString('es-CO', { timeZone: 'America/Bogota', hour12: true })}`,
       divider,

@@ -2924,7 +2924,10 @@ export default function NewOrderPage({
 
    const renderMenuCard = () => {
     return (
-      <Card className="flex min-h-0 flex-1 flex-col border border-[var(--border-subtle)] bg-[var(--bg-panel)] shadow-xl rounded-2xl overflow-hidden md:h-full h-auto">
+      <Card className={cn(
+        "flex min-h-0 flex-1 flex-col border border-[var(--border-subtle)] bg-[var(--bg-panel)] shadow-xl rounded-2xl overflow-hidden",
+        embedded ? "h-full" : "md:h-full h-auto"
+      )}>
         <CardHeader className={cn("shrink-0 border-b border-[var(--border-subtle)]", embedded ? "p-2.5 sm:p-3" : "p-5 pb-3")}>
           <div className={cn(
             "flex flex-col gap-2",
@@ -3020,9 +3023,9 @@ export default function NewOrderPage({
             })}
           </div>
 
-          <div className="flex-1 flex flex-col min-w-0 bg-[var(--bg-base)]/30">
+          <div className="flex-1 min-h-0 flex flex-col min-w-0 bg-[var(--bg-base)]/30">
             <CardContent className={cn(
-              "min-h-0 flex-1 overflow-y-auto overscroll-contain touch-pan-y",
+              "min-h-0 flex-1 overflow-y-auto scrollbar-thin scrollbar-thumb-zinc-300 dark:scrollbar-thumb-zinc-700",
               embedded ? "p-3 pb-4 sm:p-4" : "p-4 md:p-6 md:pb-6"
             )}>
           <div className={cn(embedded ? "space-y-3" : "space-y-6")}>
@@ -3065,56 +3068,52 @@ export default function NewOrderPage({
 
             {/* Intelligent Suggestions & History Integration */}
             {(suggestedProducts.length > 0 || lastOrderItems.length > 0) && (
-              <div className={cn("grid grid-cols-1 md:grid-cols-2 gap-4 rounded-2xl bg-[var(--accent-muted)]/30 border border-[var(--accent-border)]/40 mb-2", embedded ? "p-3" : "p-4")}>
-                
+              <div className={cn(
+                "grid gap-2 rounded-2xl bg-[var(--accent-muted)]/20 border border-[var(--accent-border)]/30 mb-2",
+                (suggestedProducts.length > 0 && lastOrderItems.length > 0) ? "grid-cols-1 md:grid-cols-2" : "grid-cols-1",
+                embedded ? "p-2.5" : "p-3"
+              )}>
                 {/* WHATSAPP CHAT SUGGESTIONS */}
-                {suggestedProducts.length > 0 ? (
-                  <div className="space-y-2">
+                {suggestedProducts.length > 0 && (
+                  <div className="space-y-1.5">
                     <div className="flex items-center gap-1.5 text-xs font-extrabold text-[var(--accent)] uppercase tracking-wider">
-                      <Sparkles className="h-4 w-4 animate-pulse" />
+                      <Sparkles className="h-3.5 w-3.5 animate-pulse" />
                       <span>Sugerido por WhatsApp</span>
                     </div>
-                    <p className="text-[10px] text-[var(--text-secondary)]">Según los mensajes del cliente, podría desear:</p>
-                    <div className="flex flex-wrap gap-2 pt-1">
+                    <div className="flex flex-wrap gap-1.5 pt-0.5">
                       {suggestedProducts.map(item => (
                         <Button
                           key={item.id}
                           size="sm"
                           variant="outline"
                           onClick={() => addToCart(item)}
-                          className="h-8 rounded-xl text-[10px] font-bold border-[var(--accent-border)] hover:bg-[var(--accent)] hover:text-[var(--accent-fg)] flex items-center gap-1 bg-[var(--bg-panel)] text-[var(--text-primary)]"
+                          className="h-7 rounded-lg text-[10px] font-bold border-[var(--accent-border)] hover:bg-[var(--accent)] hover:text-[var(--accent-fg)] flex items-center gap-1 bg-[var(--bg-panel)] text-[var(--text-primary)] cursor-pointer"
                         >
                           <Plus className="h-3 w-3" /> {item.name}
                         </Button>
                       ))}
                     </div>
                   </div>
-                ) : (
-                  <div className="text-[10px] text-[var(--text-muted)] flex items-center justify-center p-4 border border-dashed border-[var(--border-subtle)] rounded-xl">
-                    No hay sugerencias de chat
-                  </div>
                 )}
 
                 {/* LAST ORDER REPLICATION */}
-                {lastOrderItems.length > 0 ? (
-                  <div className="space-y-2">
-                    <div className="flex items-center gap-1.5 text-xs font-extrabold text-[var(--purple)] uppercase tracking-wider">
-                      <Clock className="h-4 w-4 text-purple-500" />
-                      <span>Último Pedido del Cliente</span>
-                    </div>
-                    <p className="text-[10px] text-[var(--text-secondary)] font-medium">
-                      Compró {lastOrderDate ? `(${new Date(lastOrderDate).toLocaleDateString([], { month: 'short', day: 'numeric' })})` : ''}:
-                    </p>
-                    <div className="flex flex-wrap gap-2 pt-1">
+                {lastOrderItems.length > 0 && (
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between gap-2 flex-wrap">
+                      <div className="flex items-center gap-1.5 text-xs font-extrabold text-[var(--purple)] uppercase tracking-wider">
+                        <Clock className="h-3.5 w-3.5 text-purple-500" />
+                        <span>Último Pedido ({lastOrderDate ? new Date(lastOrderDate).toLocaleDateString([], { month: 'short', day: 'numeric' }) : ''})</span>
+                      </div>
                       <Button
                         size="sm"
                         variant="outline"
                         onClick={handleReplicateLastOrder}
-                        className="h-8 rounded-xl text-[10px] font-bold border-purple-500/30 text-purple-500 hover:bg-purple-500 hover:text-white flex items-center gap-1 bg-[var(--bg-panel)]"
+                        className="h-6.5 rounded-lg text-[10px] font-bold border-purple-500/30 text-purple-500 hover:bg-purple-500 hover:text-white flex items-center gap-1 bg-[var(--bg-panel)] px-2 cursor-pointer"
                       >
                         <Plus className="h-3 w-3" /> Replicar Todo ({(lastOrderItems || []).reduce((acc, i) => acc + (i?.quantity || 0), 0)} uds)
                       </Button>
-                      
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
                       {(lastOrderItems || []).map(item => {
                         if (!item) return null
                         const flatItems = (categories || []).flatMap(c => c?.items || [])
@@ -3131,10 +3130,6 @@ export default function NewOrderPage({
                         )
                       })}
                     </div>
-                  </div>
-                ) : (
-                  <div className="text-[10px] text-[var(--text-muted)] flex items-center justify-center p-4 border border-dashed border-[var(--border-subtle)] rounded-xl">
-                    Sin historial de pedidos
                   </div>
                 )}
               </div>
@@ -3260,307 +3255,219 @@ export default function NewOrderPage({
   )
 }
 
-const renderDeliveryCard = () => {
-  const deliveryFieldsMissing = missingFields.filter(field => field !== 'productos')
-
-  return (
-      <Card className={cn("flex flex-col border border-[var(--border-subtle)] bg-[var(--bg-panel)] rounded-2xl h-auto", embedded ? "p-3.5 shadow-sm" : "p-5 shadow-xl")}>
-        <Button
-          type="button"
-          variant="ghost"
-          onClick={() => setStep('menu')}
-          className="w-fit text-xs font-semibold text-[var(--text-secondary)] hover:text-[var(--text-primary)] rounded-xl h-9 px-3 border border-[var(--border-subtle)] flex items-center gap-1.5 mb-4 shrink-0 md:hidden cursor-pointer"
-        >
-          <ArrowLeft className="h-3.5 w-3.5" /> Volver a la Carta del Menú
-        </Button>
-        
-        <div className={cn("flex-1", embedded ? "space-y-3 sm:space-y-4" : "space-y-5")}>
-          <div className="flex items-start justify-between gap-2 flex-wrap min-w-0">
-            <div className="min-w-0 flex-1">
-              <CardTitle className="text-base font-bold text-[var(--text-primary)] truncate">Entrega y pago</CardTitle>
-              <CardDescription className="text-xs text-[var(--text-secondary)] mt-0.5">Revisa el pedido, la entrega y el cobro antes de confirmar</CardDescription>
-            </div>
+  const renderDeliveryCard = () => {
+    return (
+      <Card className={cn("flex flex-col border border-[var(--border-subtle)] bg-[var(--bg-panel)] rounded-2xl h-auto", embedded ? "p-3 shadow-sm" : "p-4 sm:p-5 shadow-xl")}>
+        <div className={cn("flex-1", embedded ? "space-y-2.5" : "space-y-3.5")}>
+          <div className="flex items-center justify-between gap-2 min-w-0 pb-2 border-b border-[var(--border-subtle)]">
+            <CardTitle className="text-xs sm:text-sm font-bold text-[var(--text-primary)] flex items-center gap-1.5 truncate">
+              <Bike className="h-4 w-4 text-[var(--accent)] shrink-0" />
+              <span className="tracking-wide">2. DATOS DE ENTREGA Y PAGO</span>
+            </CardTitle>
             <div className="flex items-center gap-1.5 shrink-0">
-              {cart.length > 0 && (
-                <span className="text-xs font-black text-[var(--accent)] bg-[var(--accent)]/10 px-2 py-1 rounded-lg border border-[var(--accent)]/20">
-                  Total: {formatCurrency(total)}
-                </span>
-              )}
-              {embedded && (
-                <Button type="button" variant="outline" onClick={() => setStep('menu')} className="h-8 shrink-0 rounded-lg px-2 text-[10px] font-bold">
-                  <ShoppingCart className="mr-1 h-3.5 w-3.5" /> Editar productos
-                </Button>
-              )}
+              <div className="flex items-center gap-1 text-[10px] sm:text-xs font-bold text-[var(--text-secondary)] bg-[var(--bg-elevated)] border border-[var(--border-subtle)] px-2 py-0.5 rounded-lg">
+                <Clock className="h-3 w-3 text-[var(--accent)] shrink-0" />
+                <span>{estimatedTime}</span>
+              </div>
             </div>
           </div>
 
-          {chatSessionId && !parsingChatOrder && (
-            <div className={cn('flex items-start gap-2 rounded-xl border px-3 py-2.5 text-[11px]', orderReaderEnabled ? 'border-blue-500/20 bg-blue-500/5 text-blue-700 dark:text-blue-300' : 'border-slate-400/20 bg-[var(--bg-elevated)] text-[var(--text-secondary)]')}>
-              <MessageCircle className="mt-0.5 h-4 w-4 shrink-0" />
-              <div>
-                <p className="font-black">{orderReaderEnabled ? 'Lectura automática: últimas 2 horas del chat' : 'Toma manual: IA pausada'}</p>
-                <p className="mt-0.5 leading-4">{orderReaderEnabled ? `Se usan ${chatContextMessageCount ?? 0} mensaje(s) recientes; los pedidos antiguos no se incluyen.` : 'Revisa el chat y agrega los productos manualmente. La configuración se puede activar desde WhatsApp y chatbot.'}</p>
+          {/* Bloqueo crítico de caja si está cerrada */}
+          {isCashBlocked && (
+            <div className="flex items-center gap-2 rounded-xl border border-[var(--destructive)]/30 bg-[var(--destructive)]/5 px-3 py-2 text-xs text-[var(--destructive)]">
+              <AlertTriangle className="h-4 w-4 shrink-0" />
+              <div className="min-w-0 flex-1">
+                <span className="font-bold">Caja Domicilios cerrada: </span>
+                <span>{canCreate?.reason || 'Ábrela antes de confirmar pedidos.'} </span>
+                <Link to="/payments" className="font-bold underline ml-1">Abrir Caja</Link>
               </div>
             </div>
           )}
 
-          <div className={cn(
-            "flex items-start gap-2 rounded-xl border px-3 py-2.5 text-[11px]",
-            isCashBlocked
-              ? "border-[var(--destructive)]/30 bg-[var(--destructive)]/5 text-[var(--destructive)]"
-              : parsingChatOrder
-              ? "border-blue-500/25 bg-blue-500/5 text-blue-600"
-              : isOrderReadyToConfirm
-                ? "border-emerald-500/25 bg-emerald-500/5 text-emerald-600"
-                : "border-amber-500/25 bg-amber-500/5 text-amber-700"
-          )}>
-            {isCashBlocked
-              ? <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-              : parsingChatOrder
-              ? <Loader2 className="mt-0.5 h-4 w-4 shrink-0 animate-spin" />
-              : isOrderReadyToConfirm
-                ? <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
-                : <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />}
-            <div className="min-w-0">
-              <p className="font-black">
-                {isCashBlocked
-                  ? 'Caja Domicilios pendiente de apertura'
-                  : parsingChatOrder
-                    ? 'Completando datos desde el chat…'
-                    : isOrderReadyToConfirm
-                      ? 'Pedido listo para confirmar'
-                      : 'Completa los datos pendientes'}
-              </p>
-              {isCashBlocked ? (
-                <p className="mt-0.5 leading-4">
-                  {canCreate?.reason || 'Ábrela antes de confirmar pedidos de domicilio.'}{' '}
-                  <Link to="/payments" className="font-bold underline hover:opacity-80">Abrir Caja Domicilios</Link>
-                </p>
-              ) : !parsingChatOrder && missingFields.length > 0 ? (
-                <p className="mt-0.5 leading-4">
-                  {missingFields.includes('productos') && deliveryFieldsMissing.length === 0
-                    ? 'Vuelve a Productos para agregar al menos un plato.'
-                    : `Falta: ${missingFields.join(', ')}.`}
-                </p>
-              ) : !parsingChatOrder ? (
-                <p className="mt-0.5 leading-4">Productos, entrega y cobro están completos.</p>
-              ) : null}
-              {!parsingChatOrder && !isCashBlocked && orderReaderModel && <p className="mt-1 truncate text-[9px] opacity-80">Datos leídos con {orderReaderModel}</p>}
+          {/* Spinner si la IA está leyendo el chat */}
+          {parsingChatOrder && (
+            <div className="flex items-center gap-2 rounded-xl border border-blue-500/25 bg-blue-500/5 px-3 py-2 text-xs text-blue-600">
+              <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
+              <span className="font-semibold">Completando datos desde el chat…</span>
+            </div>
+          )}
+
+          {/* Toggle Domicilio / Pasar a recoger */}
+          <div className="flex rounded-xl bg-[var(--bg-base)] p-1 border border-[var(--border-default)] gap-1">
+            <button
+              type="button"
+              className={`flex-1 flex items-center justify-center gap-1.5 rounded-lg py-1.5 text-xs font-bold transition-all cursor-pointer ${
+                orderType === 'delivery' 
+                  ? 'bg-[var(--accent)] text-[var(--accent-fg)] shadow-sm' 
+                  : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+              }`}
+              onClick={() => {
+                setOrderType('delivery')
+                if (customerName === 'Cliente Mostrador' || customerPhone === '3000000000') {
+                  if (customerName === 'Cliente Mostrador') setCustomerName('')
+                  if (customerPhone === '3000000000') setCustomerPhone('')
+                }
+              }}
+            >
+              <Bike className="h-3.5 w-3.5" /> Domicilio
+            </button>
+            <button
+              type="button"
+              className={`flex-1 flex items-center justify-center gap-1.5 rounded-lg py-1.5 text-xs font-bold transition-all cursor-pointer ${
+                orderType === 'pickup'
+                  ? 'bg-[var(--purple)] text-white shadow-sm' 
+                  : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+              }`}
+              onClick={() => {
+                setOrderType('pickup')
+                if (customerName === 'Cliente Mostrador' || customerPhone === '3000000000') {
+                  if (customerName === 'Cliente Mostrador') setCustomerName('')
+                  if (customerPhone === '3000000000') setCustomerPhone('')
+                }
+              }}
+            >
+              <Store className="h-3.5 w-3.5" /> Pasar a Recoger
+            </button>
+          </div>
+
+          {/* Datos del cliente */}
+          <div className="space-y-2">
+            {!embedded && (
+              <div className="space-y-1 relative">
+                <Label className="text-[11px] font-bold text-[var(--text-secondary)] uppercase flex items-center gap-1">
+                  <Users className="h-3 w-3 text-[var(--accent)]" /> Buscar Cliente Registrado
+                </Label>
+                <div className="relative">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-[var(--text-muted)]" />
+                  <Input
+                    value={customerSearchQuery}
+                    onChange={e => handleCustomerSearch(e.target.value)}
+                    placeholder="Buscar por nombre o celular..."
+                    className="bg-[var(--bg-input)] border-[var(--border-default)] rounded-xl h-8 pl-9 text-xs focus:border-[var(--accent)]"
+                  />
+                </div>
+                {customerSearchOpen && dbCustomers.length > 0 && (
+                  <div className="absolute left-0 right-0 z-50 bg-[var(--bg-panel)] border border-[var(--border-default)] rounded-xl shadow-2xl mt-1 max-h-48 overflow-y-auto no-scrollbar">
+                    {dbCustomers.map(cust => (
+                      <div
+                        key={cust.id}
+                        onClick={() => handleSelectCustomer(cust)}
+                        className="p-2 hover:bg-[var(--bg-elevated)] cursor-pointer text-xs flex justify-between items-center border-b border-[var(--border-subtle)]/40 last:border-0"
+                      >
+                        <div>
+                          <p className="font-bold text-[var(--text-primary)]">{cust.name}</p>
+                          <p className="text-[10px] text-[var(--text-muted)]">{cust.phone}</p>
+                        </div>
+                        {cust.totalDebt > 0 && (
+                          <span className="text-[9px] font-extrabold text-red-500 bg-red-500/10 px-1.5 py-0.5 rounded-md">
+                            Debe: {formatCurrency(cust.totalDebt)}
+                          </span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {customerId && (
+                  <div className="flex items-center justify-between bg-[var(--accent-muted)]/40 border border-[var(--accent-border)]/40 rounded-xl px-2.5 py-1.5 mt-1 text-xs text-[var(--accent)]">
+                    <span className="font-semibold truncate text-[11px]">📎 Vinculado: {customerName}</span>
+                    <button
+                      type="button"
+                      onClick={handleDeselectCustomer}
+                      className="text-red-500 hover:text-red-700 font-extrabold text-[10px] uppercase ml-2 cursor-pointer"
+                    >
+                      Desvincular
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <div className="space-y-1">
+                <Label className="text-[10px] font-bold text-[var(--text-secondary)] uppercase">
+                  Teléfono / ID {orderType === 'delivery' ? '*' : ''}
+                </Label>
+                <Input 
+                  value={customerPhone} 
+                  onChange={e => {
+                    const cleaned = e.target.value.replace(/[^\d\w.@_\-]/g, '').slice(0, 35)
+                    setCustomerPhone(cleaned)
+                  }} 
+                  onBlur={handlePhoneBlur} 
+                  placeholder="3001234567 o @usuario" 
+                  maxLength={35}
+                  className="bg-[var(--bg-input)] border-[var(--border-default)] rounded-xl h-8 text-xs focus:border-[var(--accent)] font-semibold tracking-wide" 
+                />
+              </div>
+
+              <div className="space-y-1">
+                <Label className="text-[10px] font-bold text-[var(--text-secondary)] uppercase">Nombre del Cliente</Label>
+                <Input 
+                  value={customerName} 
+                  onChange={e => setCustomerName(e.target.value)} 
+                  placeholder="Nombre del cliente" 
+                  className="bg-[var(--bg-input)] border-[var(--border-default)] rounded-xl h-8 text-xs focus:border-[var(--accent)]" 
+                />
+              </div>
+
+              {!customerId && customerPhone.length === 10 && customerPhone.startsWith('3') && customerName.trim().length > 0 && (
+                <div className="col-span-1 sm:col-span-2 flex items-center justify-between bg-[var(--bg-elevated)] border border-[var(--border-subtle)] rounded-xl p-2 text-xs">
+                  <div>
+                    <p className="font-semibold text-[var(--text-primary)] text-[11px]">¿Registrar como cliente?</p>
+                    <p className="text-[9px] text-[var(--text-muted)]">Habilita ventas a crédito o historial.</p>
+                  </div>
+                  <Button
+                    type="button"
+                    size="sm"
+                    disabled={creatingCustomerInline}
+                    onClick={handleRegisterCustomerInline}
+                    className="bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-fg)] font-bold rounded-lg h-7 px-3 text-[10px] cursor-pointer"
+                  >
+                    {creatingCustomerInline ? 'Guardando...' : 'Registrar'}
+                  </Button>
+                </div>
+              )}
             </div>
           </div>
 
-          <>
-                <div className="flex rounded-xl bg-[var(--bg-base)] p-1 border border-[var(--border-default)] gap-1">
-                  <button
-                    type="button"
-                    className={`flex-1 flex items-center justify-center gap-1.5 rounded-lg py-2 text-xs font-bold transition-all cursor-pointer ${
-                      orderType === 'delivery' 
-                        ? 'bg-[var(--accent)] text-[var(--accent-fg)] shadow-md' 
-                        : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
-                    }`}
-                    onClick={() => {
-                      setOrderType('delivery')
-                      if (customerName === 'Cliente Mostrador' || customerPhone === '3000000000') {
-                        if (customerName === 'Cliente Mostrador') setCustomerName('')
-                        if (customerPhone === '3000000000') setCustomerPhone('')
-                      }
-                    }}
-                  >
-                    <Bike className="h-3.5 w-3.5" /> Domicilio
-                  </button>
-                  <button
-                    type="button"
-                    className={`flex-1 flex items-center justify-center gap-1.5 rounded-lg py-2 text-xs font-bold transition-all cursor-pointer ${
-                      orderType === 'pickup'
-                        ? 'bg-[var(--purple)] text-white shadow-md' 
-                        : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
-                    }`}
-                    onClick={() => {
-                      setOrderType('pickup')
-                      if (customerName === 'Cliente Mostrador' || customerPhone === '3000000000') {
-                        if (customerName === 'Cliente Mostrador') setCustomerName('')
-                        if (customerPhone === '3000000000') setCustomerPhone('')
-                      }
-                    }}
-                  >
-                    <Store className="h-3.5 w-3.5" /> Pasar a Recoger
-                  </button>
-                </div>
-
-                <div className="space-y-4 animate-fade-in">
-                    {/* BUSCADOR DE CLIENTES */}
-                    {!embedded && <div className="space-y-1.5 relative">
-                      <Label className="text-xs font-semibold text-[var(--text-secondary)] uppercase flex items-center gap-1">
-                        <Users className="h-3.5 w-3.5 text-[var(--accent)]" /> Buscar Cliente Registrado
-                      </Label>
-                      <div className="relative">
-                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-[var(--text-muted)]" />
-                        <Input
-                          value={customerSearchQuery}
-                          onChange={e => handleCustomerSearch(e.target.value)}
-                          placeholder="Escribe el nombre o celular para buscar..."
-                          className="bg-[var(--bg-input)] border-[var(--border-default)] rounded-xl h-10 pl-9 text-xs focus:border-[var(--accent)]"
-                        />
-                      </div>
-                      
-                      {customerSearchOpen && dbCustomers.length > 0 && (
-                        <div className="absolute left-0 right-0 z-50 bg-[var(--bg-panel)] border border-[var(--border-default)] rounded-xl shadow-2xl mt-1 max-h-48 overflow-y-auto no-scrollbar">
-                          {dbCustomers.map(cust => (
-                            <div
-                              key={cust.id}
-                              onClick={() => handleSelectCustomer(cust)}
-                              className="p-2.5 hover:bg-[var(--bg-elevated)] cursor-pointer text-xs flex justify-between items-center border-b border-[var(--border-subtle)]/40 last:border-0"
-                            >
-                              <div>
-                                <p className="font-bold text-[var(--text-primary)]">{cust.name}</p>
-                                <p className="text-[10px] text-[var(--text-muted)] mt-0.5">{cust.phone}</p>
-                              </div>
-                              {cust.totalDebt > 0 && (
-                                <span className="text-[9px] font-extrabold text-red-500 bg-red-500/10 px-1.5 py-0.5 rounded-md">
-                                  Debe: {formatCurrency(cust.totalDebt)}
-                                </span>
-                              )}
-                            </div>
-                          ))}
-                        </div>
-                      )}
-
-                      {customerId && (
-                        <div className="flex items-center justify-between bg-[var(--accent-muted)]/40 border border-[var(--accent-border)]/40 rounded-xl p-2 mt-1 text-xs text-[var(--accent)]">
-                          <span className="font-semibold truncate">📎 Vinculado: {customerName}</span>
-                          <button
-                            type="button"
-                            onClick={handleDeselectCustomer}
-                            className="text-red-500 hover:text-red-700 font-extrabold text-[10px] uppercase ml-2 cursor-pointer"
-                          >
-                            Desvincular
-                          </button>
-                        </div>
-                      )}
-                    </div>}
-
-                    <div className={cn("grid grid-cols-1 gap-3", !embedded && "sm:grid-cols-2")}>
-                      <div className="space-y-1">
-                        <Label className="text-xs font-semibold text-[var(--text-secondary)] uppercase">Teléfono o ID de Contacto {orderType === 'delivery' ? '*' : '(Opcional)'}</Label>
-                        <Input 
-                          value={customerPhone} 
-                          onChange={e => {
-                            const cleaned = e.target.value.replace(/[^\d\w.@_\-]/g, '').slice(0, 35)
-                            setCustomerPhone(cleaned)
-                          }} 
-                          onBlur={handlePhoneBlur} 
-                          placeholder="3001234567 o @usuario / ID" 
-                          maxLength={35}
-                          className="bg-[var(--bg-input)] border-[var(--border-default)] rounded-xl h-10 text-sm focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent)]/10 font-bold tracking-wider" 
-                        />
-                        {(() => {
-                          if (!customerPhone.trim()) return null
-                          const trimmed = customerPhone.trim()
-                          const cleanDigits = trimmed.replace(/\D/g, '')
-                          const isId = trimmed.startsWith('@') || trimmed.startsWith('CO.') || /[a-zA-Z_]/.test(trimmed) || cleanDigits.length >= 13
-                          const isColMobile = cleanDigits.length === 10 && cleanDigits.startsWith('3')
-                          const isColWithCode = cleanDigits.length === 12 && cleanDigits.startsWith('573')
-                          const isMetaOrBsuid = cleanDigits.length >= 13 || trimmed.startsWith('CO.')
-                          const isValidOther = cleanDigits.length >= 7 && cleanDigits.length <= 15
-
-                          if (isColMobile || isColWithCode) {
-                            return <p className="text-[10px] text-emerald-500 font-bold mt-1">✓ Celular válido</p>
-                          }
-                          if (isId || isMetaOrBsuid) {
-                            return <p className="text-[10px] text-blue-500 font-bold mt-1">✓ Identificador de Contacto / Meta / Instagram ({trimmed})</p>
-                          }
-                          if (isValidOther) {
-                            return <p className="text-[10px] text-amber-500 font-bold mt-1">✓ Número de contacto ({cleanDigits.length} dígitos)</p>
-                          }
-                          return <p className="text-[10px] text-[var(--destructive)] font-bold mt-1">Ingresa un teléfono válido o un identificador</p>
-                        })()}
-                      </div>
-                      <div className="space-y-1">
-                        <Label className="text-xs font-semibold text-[var(--text-secondary)] uppercase">Nombre del Cliente (opcional)</Label>
-                        <Input 
-                          value={customerName} 
-                          onChange={e => setCustomerName(e.target.value)} 
-                          placeholder="Nombre del cliente (ej: Juan Pérez)" 
-                          className="bg-[var(--bg-input)] border-[var(--border-default)] rounded-xl h-10 text-sm focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent)]/10" 
-                        />
-                      </div>
-
-                      {!customerId && customerPhone.length === 10 && customerPhone.startsWith('3') && customerName.trim().length > 0 && (
-                        <div className={cn("flex items-center justify-between bg-[var(--bg-elevated)] border border-[var(--border-subtle)] rounded-xl p-3 text-xs mt-1", !embedded && "sm:col-span-2")}>
-                          <div>
-                            <p className="font-semibold text-[var(--text-primary)]">¿Registrar como cliente?</p>
-                            <p className="text-[10px] text-[var(--text-muted)] mt-0.5">Permite habilitar ventas a crédito o cortesía.</p>
-                          </div>
-                          <Button
-                            type="button"
-                            disabled={creatingCustomerInline}
-                            onClick={handleRegisterCustomerInline}
-                            className="bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-fg)] font-bold rounded-xl h-8 px-4 text-xs cursor-pointer"
-                          >
-                            {creatingCustomerInline ? 'Registrando...' : 'Registrar'}
-                          </Button>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
-                {orderType === 'pickup' && (
-                  <div className="flex items-center gap-3 rounded-2xl border border-[var(--purple)]/20 bg-[var(--purple)]/5 p-4">
-                    <Store className="h-5 w-5 text-[var(--purple)]" />
-                    <span className="text-xs font-semibold text-[var(--purple)]">El cliente recogerá en el local (The Villa Dog)</span>
-                  </div>
-                )}
-          </>
+          {orderType === 'pickup' && (
+            <div className="flex items-center gap-2 rounded-xl border border-[var(--purple)]/20 bg-[var(--purple)]/5 p-2 text-xs text-[var(--purple)] font-semibold">
+              <Store className="h-4 w-4 shrink-0" />
+              <span>El cliente recogerá en el local (The Villa Dog)</span>
+            </div>
+          )}
 
           {orderType === 'delivery' && (
-            <div className="space-y-4">
-              <div className="space-y-1">
-                <Label className="flex items-center gap-1 text-xs font-semibold text-[var(--text-secondary)] uppercase">
-                  <MapPin className="h-3.5 w-3.5 text-[var(--accent)]" /> Barrio o Dirección *
-                </Label>
-                <AddressSearch
-                  value={mapSearch}
-                  onChange={(val) => {
-                    setMapSearch(val)
-                    setZoneSearch(val)
-                    setZoneId('')
-                  }}
-                  onSelect={handleAddressSelect}
-                  placeholder="Busca o escribe el barrio o dirección (Ej: La Granja)..."
-                  zones={uniqueZones}
-                />
-                <p className="text-[10px] text-[var(--text-muted)] leading-relaxed mt-0.5">
-                  El barrio configurado propone su tarifa. Puedes cambiar el valor después de confirmarlo con el cliente.
-                </p>
-              </div>
-
-              <div className="space-y-2">
-                <Label className="text-xs font-semibold text-[var(--text-secondary)] uppercase">Dirección Detallada</Label>
-                <Input
-                  value={exactAddress}
-                  onChange={e => setExactAddress(e.target.value)}
-                  placeholder="Calle 12 # 34 - 56, Edificio/Apto..."
-                  className="bg-[var(--bg-input)] border-[var(--border-default)] rounded-xl h-10 text-sm focus:border-[var(--accent)]"
-                />
-                <Input
-                  value={addressReference}
-                  onChange={e => setAddressReference(e.target.value)}
-                  placeholder="Puntos de referencia (Ej: Portón verde)"
-                  className="bg-[var(--bg-input)] border-[var(--border-default)] rounded-xl h-9 text-xs focus:border-[var(--accent)]"
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                {estimatedKm != null && (
-                  <div className="flex items-center gap-1.5 text-xs font-semibold bg-[var(--accent-muted)] border border-[var(--accent-border)] rounded-xl px-3 py-2 col-span-1">
-                    <Route className="h-3.5 w-3.5 text-[var(--accent)]" />
-                    <span className="text-[var(--accent)]">~{estimatedKm} km</span>
-                  </div>
-                )}
-                <div className={`space-y-1 ${estimatedKm != null ? 'col-span-1' : 'col-span-2'}`}>
-                  <Label className="text-xs font-semibold text-[var(--text-secondary)] uppercase flex items-center gap-1">
-                    <DollarSign className="h-3.5 w-3.5 text-[var(--accent)]" /> Tarifa confirmada *
+            <div className="space-y-2">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <div className="space-y-1">
+                  <Label className="flex items-center gap-1 text-[10px] font-bold text-[var(--text-secondary)] uppercase">
+                    <MapPin className="h-3 w-3 text-[var(--accent)]" /> Barrio o Zona *
                   </Label>
+                  <AddressSearch
+                    value={mapSearch}
+                    onChange={(val) => {
+                      setMapSearch(val)
+                      setZoneSearch(val)
+                      setZoneId('')
+                    }}
+                    onSelect={handleAddressSelect}
+                    placeholder="Busca barrio (Ej: La Granja)..."
+                    zones={uniqueZones}
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <div className="flex items-center justify-between">
+                    <Label className="text-[10px] font-bold text-[var(--text-secondary)] uppercase flex items-center gap-1">
+                      <DollarSign className="h-3 w-3 text-[var(--accent)]" /> Tarifa Domicilio *
+                    </Label>
+                    {estimatedKm != null && (
+                      <span className="text-[9px] font-bold text-[var(--accent)] bg-[var(--accent-muted)] px-1 rounded">
+                        ~{estimatedKm} km
+                      </span>
+                    )}
+                  </div>
                   <Input
                     type="number"
                     min={500}
@@ -3568,40 +3475,98 @@ const renderDeliveryCard = () => {
                     value={zoneRateEdit}
                     onChange={e => setZoneRateEdit(e.target.value)}
                     placeholder="Ej: 4000"
-                    className="bg-[var(--bg-input)] border-[var(--border-default)] rounded-xl h-10 text-sm focus:border-[var(--accent)] font-bold"
+                    className="bg-[var(--bg-input)] border-[var(--border-default)] rounded-xl h-8 text-xs focus:border-[var(--accent)] font-bold"
                   />
-                  <p className="text-[10px] text-[var(--text-muted)]">Editable por el asesor. La distancia solo aparece si está guardada en la zona.</p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <div className="space-y-1">
+                  <Label className="text-[10px] font-bold text-[var(--text-secondary)] uppercase">Dirección Detallada</Label>
+                  <Input
+                    value={exactAddress}
+                    onChange={e => setExactAddress(e.target.value)}
+                    placeholder="Ej: Calle 12 # 34 - 56, Apto 201"
+                    className="bg-[var(--bg-input)] border-[var(--border-default)] rounded-xl h-8 text-xs focus:border-[var(--accent)]"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-[10px] font-bold text-[var(--text-secondary)] uppercase">Punto de Referencia</Label>
+                  <Input
+                    value={addressReference}
+                    onChange={e => setAddressReference(e.target.value)}
+                    placeholder="Ej: Portón verde, frente al parque"
+                    className="bg-[var(--bg-input)] border-[var(--border-default)] rounded-xl h-8 text-xs focus:border-[var(--accent)]"
+                  />
                 </div>
               </div>
             </div>
           )}
 
-          <div className="space-y-1.5">
-            <Label className="text-xs font-semibold text-[var(--text-secondary)] uppercase">Método de Pago</Label>
-            <Select value={paymentMethod} onValueChange={val => {
-              setPaymentMethod(val)
-              if (val === 'MIXED') {
-                const half = Math.round(total / 2)
-                setCashAmountInput(String(half))
-                setTransferAmountInput(String(total - half))
-              }
-            }}>
-              <SelectTrigger className="bg-[var(--bg-input)] border-[var(--border-default)] rounded-xl h-10 text-sm focus:border-[var(--accent)] font-semibold">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent className="bg-[var(--bg-panel)] border-[var(--border-default)]">
-                <SelectItem value="CASH">Efectivo</SelectItem>
-                <SelectItem value="TRANSFER">Transferencia</SelectItem>
-                <SelectItem value="MIXED">🔀 Mixto (Efectivo + Transferencia)</SelectItem>
-                {customerId && <SelectItem value="CREDIT">Crédito (Fiado)</SelectItem>}
-                <SelectItem value="CORTESIA">Cortesía (Regalo)</SelectItem>
-              </SelectContent>
-            </Select>
+          <div className="space-y-2">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <div className="space-y-1">
+                <Label className="text-[10px] font-bold text-[var(--text-secondary)] uppercase">Método de Pago</Label>
+                <Select value={paymentMethod} onValueChange={val => {
+                  setPaymentMethod(val)
+                  if (val === 'MIXED') {
+                    const half = Math.round(total / 2)
+                    setCashAmountInput(String(half))
+                    setTransferAmountInput(String(total - half))
+                  }
+                }}>
+                  <SelectTrigger className="bg-[var(--bg-input)] border-[var(--border-default)] rounded-xl h-8 text-xs focus:border-[var(--accent)] font-semibold">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent className="bg-[var(--bg-panel)] border-[var(--border-default)]">
+                    <SelectItem value="CASH">Efectivo</SelectItem>
+                    <SelectItem value="TRANSFER">Transferencia</SelectItem>
+                    <SelectItem value="MIXED">🔀 Mixto (Efectivo + Transfer)</SelectItem>
+                    {customerId && <SelectItem value="CREDIT">Crédito (Fiado)</SelectItem>}
+                    <SelectItem value="CORTESIA">Cortesía (Regalo)</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {paymentMethod !== 'CASH' && paymentMethod !== 'CREDIT' && paymentMethod !== 'CORTESIA' && paymentMethod !== 'MIXED' ? (
+                <div className="space-y-1">
+                  <Label className="text-[10px] font-bold text-[var(--text-secondary)] uppercase">N° Comprobante / Ref</Label>
+                  <Input 
+                    className="bg-[var(--bg-input)] border-[var(--border-default)] rounded-xl h-8 text-xs focus:border-[var(--accent)]" 
+                    placeholder="Número o Ref" 
+                    value={paymentReference} 
+                    onChange={e => setPaymentReference(e.target.value)} 
+                  />
+                </div>
+              ) : (
+                <div className="space-y-1">
+                  <Label className="text-[10px] font-bold text-[var(--text-secondary)] uppercase">Notas del Pedido</Label>
+                  <Input 
+                    value={notes} 
+                    onChange={e => setNotes(e.target.value)} 
+                    placeholder="Ej: Salsas por aparte" 
+                    className="bg-[var(--bg-input)] border-[var(--border-default)] rounded-xl h-8 text-xs focus:border-[var(--accent)]" 
+                  />
+                </div>
+              )}
+            </div>
+
+            {paymentMethod !== 'CASH' && paymentMethod !== 'CREDIT' && paymentMethod !== 'CORTESIA' && paymentMethod !== 'MIXED' && (
+              <div className="space-y-1">
+                <Label className="text-[10px] font-bold text-[var(--text-secondary)] uppercase">Notas del Pedido</Label>
+                <Input 
+                  value={notes} 
+                  onChange={e => setNotes(e.target.value)} 
+                  placeholder="Ej: Salsas por aparte" 
+                  className="bg-[var(--bg-input)] border-[var(--border-default)] rounded-xl h-8 text-xs focus:border-[var(--accent)]" 
+                />
+              </div>
+            )}
 
             {paymentMethod === 'MIXED' && (
-              <div className="grid grid-cols-2 gap-2 mt-2 p-2.5 bg-[var(--bg-input)] rounded-xl border border-[var(--border-default)] shadow-inner">
+              <div className="grid grid-cols-2 gap-2 p-2 bg-[var(--bg-input)] rounded-xl border border-[var(--border-default)]">
                 <div>
-                  <Label className="text-[10px] font-extrabold text-[var(--text-secondary)] uppercase">💵 Efectivo ($)</Label>
+                  <Label className="text-[9px] font-extrabold text-[var(--text-secondary)] uppercase">💵 Efectivo ($)</Label>
                   <Input
                     type="text"
                     inputMode="numeric"
@@ -3613,11 +3578,11 @@ const renderDeliveryCard = () => {
                       const rest = Math.max(0, total - num)
                       setTransferAmountInput(rest > 0 ? String(rest) : '0')
                     }}
-                    className="bg-[var(--bg-panel)] border-[var(--border-default)] rounded-lg h-8 text-xs font-bold text-emerald-500 mt-1"
+                    className="bg-[var(--bg-panel)] border-[var(--border-default)] rounded-lg h-7 text-xs font-bold text-emerald-500 mt-0.5"
                   />
                 </div>
                 <div>
-                  <Label className="text-[10px] font-extrabold text-[var(--text-secondary)] uppercase">📱 Transferencia ($)</Label>
+                  <Label className="text-[9px] font-extrabold text-[var(--text-secondary)] uppercase">📱 Transferencia ($)</Label>
                   <Input
                     type="text"
                     inputMode="numeric"
@@ -3629,47 +3594,21 @@ const renderDeliveryCard = () => {
                       const rest = Math.max(0, total - num)
                       setCashAmountInput(rest > 0 ? String(rest) : '0')
                     }}
-                    className="bg-[var(--bg-panel)] border-[var(--border-default)] rounded-lg h-8 text-xs font-bold text-blue-500 mt-1"
+                    className="bg-[var(--bg-panel)] border-[var(--border-default)] rounded-lg h-7 text-xs font-bold text-blue-500 mt-0.5"
                   />
                 </div>
               </div>
             )}
-            {paymentMethod !== 'CASH' && paymentMethod !== 'CREDIT' && paymentMethod !== 'CORTESIA' && (
-              <Input 
-                className="bg-[var(--bg-input)] border-[var(--border-default)] rounded-xl h-9 text-xs focus:border-[var(--accent)] mt-1.5" 
-                placeholder="Número de comprobante / Referencia" 
-                value={paymentReference} 
-                onChange={e => setPaymentReference(e.target.value)} 
-              />
-            )}
+
             {paymentMethod === 'CORTESIA' && (
-              <div className="flex items-start gap-2 rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-2.5 text-[10px] text-emerald-500 mt-2 leading-relaxed">
-                <CheckCircle2 className="h-4 w-4 shrink-0 mt-0.5" />
+              <div className="flex items-start gap-2 rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-2 text-[10px] text-emerald-500 leading-relaxed">
+                <CheckCircle2 className="h-3.5 w-3.5 shrink-0 mt-0.5" />
                 <div>
-                  <p className="font-bold uppercase tracking-wider text-[9px]">Venta de Cortesía</p>
-                  <p className="mt-0.5">El valor total del pedido será $0 y no sumará a las ventas monetarias del día. Se descontarán automáticamente los ingredientes en cocina.</p>
+                  <p className="font-bold uppercase tracking-wider text-[9px]">Venta de Cortesía ($0)</p>
+                  <p>No sumará a caja, se descuentan ingredientes en cocina.</p>
                 </div>
               </div>
             )}
-          </div>
-
-          <div className="flex items-center justify-between rounded-xl border border-[var(--accent-border)] bg-[var(--accent-muted)] px-3 py-2.5">
-            <div className="flex items-center gap-2 text-xs text-[var(--text-secondary)]">
-              <Clock className="h-4 w-4 text-[var(--accent)]" />
-              <span>Entrega Estimada:</span>
-            </div>
-            <span className="text-sm font-bold text-[var(--accent)]">{estimatedTime}</span>
-          </div>
-          
-          <div className="space-y-1">
-            <Label className="text-xs font-semibold text-[var(--text-secondary)] uppercase">Notas del Pedido</Label>
-            <Textarea 
-              value={notes} 
-              onChange={e => setNotes(e.target.value)} 
-              placeholder="Ej: Salsas por aparte, entregar sin timbre..." 
-              rows={2} 
-              className="bg-[var(--bg-input)] border-[var(--border-default)] rounded-xl text-sm focus:border-[var(--accent)] min-h-[60px]" 
-            />
           </div>
         </div>
       </Card>
@@ -3683,23 +3622,42 @@ const renderDeliveryCard = () => {
         embedded ? "border border-[var(--border-subtle)] shadow-sm" : "border-2 border-[var(--accent-border)] shadow-2xl"
       )}>
         <div className="absolute top-0 right-0 w-24 h-24 bg-gradient-to-br from-[var(--accent)]/5 to-transparent blur-xl pointer-events-none" />
-        <CardHeader className="shrink-0 py-3.5 px-4 border-b border-[var(--border-subtle)]">
+        <CardHeader className="shrink-0 py-2.5 px-3 border-b border-[var(--border-subtle)]">
           <div className="flex items-center justify-between">
-            <CardTitle className="flex items-center gap-1.5 text-sm font-bold text-[var(--text-primary)]">
-              <ShoppingCart className="h-4.5 w-4.5 text-[var(--accent)]" />
-              <span className="antifont tracking-wider">MI PEDIDO</span>
+            <CardTitle className="flex items-center gap-1.5 text-xs font-bold text-[var(--text-primary)]">
+              <ShoppingCart className="h-4 w-4 text-[var(--accent)]" />
+              <span className="antifont tracking-wider">{step === 'delivery' ? '1. PRODUCTOS DEL PEDIDO' : 'MI PEDIDO'}</span>
             </CardTitle>
-            <Badge className="bg-[var(--accent)] text-[var(--accent-fg)] font-extrabold rounded-lg px-2 py-0.5 text-[10px]">{cart.reduce((s, i) => s + i.quantity, 0)} items</Badge>
+            <div className="flex items-center gap-1.5">
+              <Badge className="bg-[var(--accent)] text-[var(--accent-fg)] font-extrabold rounded-lg px-2 py-0.5 text-[10px]">
+                {cart.reduce((s, i) => s + i.quantity, 0)} items
+              </Badge>
+              {step === 'delivery' && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setStep('menu')}
+                  className="h-7 px-2 text-[10px] font-bold border-[var(--border-default)] hover:bg-[var(--bg-hover)] text-[var(--accent)] rounded-lg cursor-pointer"
+                >
+                  <Plus className="mr-1 h-3 w-3" /> Agregar más
+                </Button>
+              )}
+            </div>
           </div>
         </CardHeader>
         
-        <div className="px-3 py-3 pb-4 space-y-2.5">
+        <div className="px-3 py-2.5 space-y-2">
           {cart.length === 0 && (
-            <div className={cn("text-center space-y-3", embedded ? "py-10" : "py-16")}>
-              <Sparkles className="mx-auto h-10 w-10 text-[var(--accent)]/30 animate-pulse" />
+            <div className={cn("text-center space-y-2", embedded ? "py-4" : "py-12")}>
+              <Sparkles className="mx-auto h-7 w-7 text-[var(--accent)]/30 animate-pulse" />
               <div>
                 <p className="text-xs font-semibold text-[var(--text-secondary)]">El pedido está vacío</p>
-                <p className="text-[10px] text-[var(--text-muted)] mt-1 leading-relaxed">Selecciona los productos de la carta para agregarlos al carrito.</p>
+                {step === 'delivery' && (
+                  <Button size="sm" variant="outline" onClick={() => setStep('menu')} className="mt-2 text-xs h-8 rounded-lg font-bold">
+                    <Plus className="mr-1 h-3.5 w-3.5" /> Ir a la carta para agregar
+                  </Button>
+                )}
               </div>
             </div>
           )}
@@ -3915,7 +3873,7 @@ const renderDeliveryCard = () => {
           </AnimatePresence>
         </div>
         
-        {cart.length > 0 && (
+        {cart.length > 0 && !hideSubmitButton && (
           <div className="shrink-0 space-y-2.5 border-t border-[var(--border-subtle)] p-4 bg-[var(--bg-panel)]">
             <div className="space-y-1 text-xs">
               <div className="flex justify-between text-[var(--text-secondary)]"><span>Subtotal</span><span>{formatCurrency(subtotal)}</span></div>
@@ -3923,34 +3881,37 @@ const renderDeliveryCard = () => {
               <Separator className="bg-[var(--border-subtle)] my-1" />
               <div className="flex justify-between text-sm font-bold text-[var(--text-primary)]"><span>TOTAL</span><span className="text-[var(--accent)] font-extrabold text-base">{formatCurrency(total)}</span></div>
             </div>
-            {!hideSubmitButton && (
-              <>
-                {error && <p className="rounded-xl border border-[var(--destructive)]/20 bg-[var(--destructive)]/5 p-2 text-xs text-[var(--destructive)] leading-relaxed">{error}</p>}
+            {error && <p className="rounded-xl border border-[var(--destructive)]/20 bg-[var(--destructive)]/5 p-2 text-xs text-[var(--destructive)] leading-relaxed">{error}</p>}
 
-                {(step === 'menu' && !showSubmitButtonDirectly) ? (
-                  <Button
-                    className="w-full bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-fg)] font-bold h-10 rounded-xl shadow-lg shadow-[var(--accent)]/15 transition-all text-xs uppercase tracking-wider cursor-pointer"
-                    onClick={() => setStep('delivery')}
-                  >
-                    Continuar a Datos de Entrega
-                  </Button>
-                ) : (
-                  <Button
-                    className="w-full bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-fg)] font-bold h-10 rounded-xl shadow-lg shadow-[var(--accent)]/15 transition-all text-xs uppercase tracking-wider cursor-pointer"
-                    onClick={handleSubmit}
-                    disabled={loading || isCashBlocked}
-                  >
-                    {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-                    {loading ? 'Guardando Pedido...' : editOrderId ? 'GUARDAR CAMBIOS' : 'CONFIRMAR Y CREAR PEDIDO'}
-                  </Button>
-                )}
-
-                <p className="flex items-center justify-center gap-1 text-[9px] text-[var(--text-muted)]">
-                  <Save className="h-3 w-3" />
-                  {editOrderId ? 'Guardando modificaciones · Re-imprime Comanda' : 'Borrador guardado automáticamente · Imprime Comanda'}
-                </p>
-              </>
+            {(step === 'menu' && !showSubmitButtonDirectly) ? (
+              <Button
+                className="w-full bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-fg)] font-bold h-10 rounded-xl shadow-lg shadow-[var(--accent)]/15 transition-all text-xs uppercase tracking-wider cursor-pointer"
+                onClick={() => setStep('delivery')}
+              >
+                Continuar a Datos de Entrega
+              </Button>
+            ) : (
+              <Button
+                className="w-full bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-fg)] font-bold h-10 rounded-xl shadow-lg shadow-[var(--accent)]/15 transition-all text-xs uppercase tracking-wider cursor-pointer"
+                onClick={handleSubmit}
+                disabled={loading || isCashBlocked}
+              >
+                {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                {loading ? 'Guardando Pedido...' : editOrderId ? 'GUARDAR CAMBIOS' : 'CONFIRMAR Y CREAR PEDIDO'}
+              </Button>
             )}
+
+            <p className="flex items-center justify-center gap-1 text-[9px] text-[var(--text-muted)]">
+              <Save className="h-3 w-3" />
+              {editOrderId ? 'Guardando modificaciones · Re-imprime Comanda' : 'Borrador guardado automáticamente · Imprime Comanda'}
+            </p>
+          </div>
+        )}
+
+        {cart.length > 0 && hideSubmitButton && (
+          <div className="shrink-0 flex items-center justify-between border-t border-[var(--border-subtle)] px-3 py-2 bg-[var(--bg-panel)]/40 text-xs font-bold text-[var(--text-secondary)]">
+            <span>Subtotal platos ({cart.reduce((s, i) => s + i.quantity, 0)} items)</span>
+            <span className="text-sm font-extrabold text-[var(--text-primary)]">{formatCurrency(subtotal)}</span>
           </div>
         )}
       </Card>
@@ -4143,9 +4104,9 @@ const renderDeliveryCard = () => {
             </div>
           ) : (
             <>
-              <div className="flex-1 min-h-0 overflow-y-auto space-y-4 pr-1 pb-3 no-scrollbar">
-                {renderDeliveryCard()}
+              <div className="flex-1 min-h-0 overflow-y-auto space-y-3 pr-1 pb-3 scrollbar-thin scrollbar-thumb-zinc-300 dark:scrollbar-thumb-zinc-700">
                 {renderCartCard(true, true)}
+                {renderDeliveryCard()}
               </div>
               {renderEmbeddedConfirmationBar()}
             </>
@@ -4161,7 +4122,7 @@ const renderDeliveryCard = () => {
             </div>
 
             {/* Columna 2: Sidebar (Carrito + Datos) */}
-            <div className="min-h-0 h-full overflow-y-auto flex flex-col gap-4 pr-1 pb-4 no-scrollbar">
+            <div className="min-h-0 h-full overflow-y-auto flex flex-col gap-3 pr-1 pb-4 scrollbar-thin scrollbar-thumb-zinc-300 dark:scrollbar-thumb-zinc-700">
               <div className="flex-none">
                 {renderCartCard(true)}
               </div>
@@ -4178,11 +4139,12 @@ const renderDeliveryCard = () => {
                 {renderMenuCard()}
               </div>
             ) : (
-              <div className="flex-1 min-h-0 overflow-y-auto no-scrollbar space-y-4 pb-24">
-                {renderDeliveryCard()}
-                <div>
-                  {renderCartCard(true)}
+              <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+                <div className="flex-1 min-h-0 overflow-y-auto space-y-3 pb-3 scrollbar-thin scrollbar-thumb-zinc-300 dark:scrollbar-thumb-zinc-700">
+                  {renderCartCard(true, true)}
+                  {renderDeliveryCard()}
                 </div>
+                {renderEmbeddedConfirmationBar()}
               </div>
             )}
           </div>

@@ -75,7 +75,11 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
   private async getActiveClosing(userId: string, cashRegisterId?: string, db: Prisma.TransactionClient = this.prisma) {
     if (cashRegisterId) {
       const specific = await db.cashClosing.findFirst({
-        where: { cashRegisterId, isOpen: true },
+        where: {
+          cashRegisterId,
+          isOpen: true,
+          cashRegister: { purpose: { not: 'DELIVERY' } },
+        },
         orderBy: { shiftStart: 'desc' },
       });
       if (specific) return specific;
@@ -98,9 +102,7 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
       },
       orderBy: { shiftStart: 'desc' },
     });
-    if (salonClosing) return salonClosing;
-
-    return db.cashClosing.findFirst({ where: { isOpen: true }, orderBy: { shiftStart: 'desc' } });
+    return salonClosing || null;
   }
 
   private buildOrderInclude() {

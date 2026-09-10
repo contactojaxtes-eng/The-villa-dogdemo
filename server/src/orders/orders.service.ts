@@ -109,8 +109,9 @@ export class OrdersService implements OnModuleInit {
     }
   }
 
-  private isSendableWhatsAppPhone(phone?: string | null, orderType?: string, customerName?: string): boolean {
+  private isSendableWhatsAppPhone(phone?: string | null, orderType?: string, customerName?: string, tableId?: string | null): boolean {
     if (!phone) return false;
+    if (tableId) return false; // NUNCA enviar WhatsApp para pedidos de mesa
     const trimmed = phone.trim();
     if (!trimmed) return false;
 
@@ -139,6 +140,8 @@ export class OrdersService implements OnModuleInit {
 
   private async sendOrderWhatsAppNotification(order: any, text: string) {
     if (!text || !order) return;
+    // NUNCA enviar mensajes de WhatsApp para pedidos de mesa o consumo local
+    if (order.tableId || order.orderType === 'LOCAL') return;
     try {
       // 1. Si la orden tiene chatSessionId directo, enviar DIRECTAMENTE a esa sesión sin crear nada nuevo
       if (order.chatSessionId) {
@@ -177,7 +180,7 @@ export class OrdersService implements OnModuleInit {
       }
 
       // 3. Fallback: Si no existe sesión previa en la BD, enviar al número de teléfono
-      if (this.isSendableWhatsAppPhone(order.customerPhone, order.orderType, order.customerName)) {
+      if (this.isSendableWhatsAppPhone(order.customerPhone, order.orderType, order.customerName, order.tableId)) {
         await this.whatsappService.sendMessage(order.customerPhone, text);
       }
     } catch (err) {
@@ -622,28 +625,62 @@ export class OrdersService implements OnModuleInit {
     }
 
     // Calcular el consecutivo de número de pedido (#1, #2, #3...)
-    // Cada vez que se abre caja se reinicia el contador de pedidos (#1, #2, #3...) para el turno activo
+    // Consecutivos COMPLETAMENTE INDEPENDIENTES:
+    // - Domicilios / Pickup: cuenta solo pedidos de domicilio bajo el turno de Caja Domicilios (#1, #2, #3...)
+    // - Mesas / Salón: cuenta solo pedidos de mesas bajo el turno de Caja Salón (#1, #2, #3...)
     const bogotaDateStr = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Bogota' });
     const startOfDay = new Date(`${bogotaDateStr}T00:00:00.000-05:00`);
 
-    let searchStart = startOfDay;
-    const activeClosingForNum = await tx.cashClosing.findFirst({
-      where: { isOpen: true },
-      orderBy: { shiftStart: 'desc' },
-    });
-    if (activeClosingForNum && activeClosingForNum.shiftStart) {
-      searchStart = activeClosingForNum.shiftStart;
-    }
+    const isTableOrder = Boolean(data.tableId || data.orderType === 'LOCAL');
+    let orderNumber = 1;
 
-    const lastOrderToday = await tx.order.findFirst({
-      where: {
-        createdAt: {
-          gte: searchStart,
+    if (isTableOrder) {
+      let searchStart = startOfDay;
+      const activeClosingForNum = await tx.cashClosing.findFirst({
+        where: {
+          isOpen: true,
+          cashRegister: { purpose: { not: 'DELIVERY' } },
         },
-      },
-      orderBy: { orderNumber: 'desc' },
-    });
-    const orderNumber = lastOrderToday ? lastOrderToday.orderNumber + 1 : 1;
+        orderBy: { shiftStart: 'desc' },
+      });
+      if (activeClosingForNum && activeClosingForNum.shiftStart) {
+        searchStart = activeClosingForNum.shiftStart;
+      }
+
+      const lastOrderToday = await tx.order.findFirst({
+        where: {
+          createdAt: { gte: searchStart },
+          OR: [
+            { tableId: { not: null } },
+            { orderType: 'LOCAL' },
+          ],
+        },
+        orderBy: { orderNumber: 'desc' },
+      });
+      orderNumber = lastOrderToday ? lastOrderToday.orderNumber + 1 : 1;
+    } else {
+      let searchStart = startOfDay;
+      const activeClosingForNum = await tx.cashClosing.findFirst({
+        where: {
+          isOpen: true,
+          cashRegister: { purpose: 'DELIVERY' },
+        },
+        orderBy: { shiftStart: 'desc' },
+      });
+      if (activeClosingForNum && activeClosingForNum.shiftStart) {
+        searchStart = activeClosingForNum.shiftStart;
+      }
+
+      const lastOrderToday = await tx.order.findFirst({
+        where: {
+          createdAt: { gte: searchStart },
+          tableId: null,
+          orderType: { in: ['DELIVERY', 'PICKUP'] },
+        },
+        orderBy: { orderNumber: 'desc' },
+      });
+      orderNumber = lastOrderToday ? lastOrderToday.orderNumber + 1 : 1;
+    }
 
     const totalOrderCount = await tx.order.count();
     const lastInvoiceOrder = await tx.order.findFirst({
@@ -829,7 +866,7 @@ export class OrdersService implements OnModuleInit {
     }
 
     try {
-      if (this.isSendableWhatsAppPhone(order.customerPhone, order.orderType, order.customerName)) {
+      if (this.isSendableWhatsAppPhone(order.customerPhone, order.orderType, order.customerName, order.tableId)) {
         const rawPhone = order.customerPhone.trim();
         const formatCOP = (val: number) => new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', minimumFractionDigits: 0 }).format(val);
 
@@ -1144,7 +1181,7 @@ export class OrdersService implements OnModuleInit {
     this.socketGateway.emitOrderStatusChange(id, updated.status, updated);
 
     try {
-      if (this.isSendableWhatsAppPhone(updated.customerPhone, updated.orderType, updated.customerName)) {
+      if (this.isSendableWhatsAppPhone(updated.customerPhone, updated.orderType, updated.customerName, updated.tableId)) {
         const rawPhone = updated.customerPhone.trim();
         const formatCOP = (val: number) => new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', minimumFractionDigits: 0 }).format(val);
 
@@ -1371,7 +1408,7 @@ export class OrdersService implements OnModuleInit {
     this.socketGateway.emitWhatsApp('whatsappSessionUpdated', { orderUpdated: true, phone: updated.customerPhone, orderNumber: updated.orderNumber, status: updated.status });
 
     try {
-      if (this.isSendableWhatsAppPhone(updated.customerPhone, updated.orderType, updated.customerName)) {
+      if (this.isSendableWhatsAppPhone(updated.customerPhone, updated.orderType, updated.customerName, updated.tableId)) {
         const rawPhone = updated.customerPhone.trim();
         let text = '';
         if (status === 'READY' && updated.orderType === 'PICKUP') {
@@ -1499,7 +1536,7 @@ export class OrdersService implements OnModuleInit {
     this.socketGateway.emitOrderStatusChange(id, 'CANCELLED', updated);
 
     try {
-      if (this.isSendableWhatsAppPhone(updated.customerPhone, updated.orderType, updated.customerName)) {
+      if (this.isSendableWhatsAppPhone(updated.customerPhone, updated.orderType, updated.customerName, updated.tableId)) {
         const text = `Hola ${updated.customerName}. Te informamos que tu pedido #${updated.orderNumber} ha sido cancelado.\nMotivo: ${reason || 'No especificado'}.`;
         await this.sendOrderWhatsAppNotification(updated, text);
       }

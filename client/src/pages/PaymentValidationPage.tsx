@@ -108,9 +108,9 @@ export default function PaymentValidationPage() {
     socket.on('paymentSubmitted', load)
     socket.on('paymentValidated', load)
     socket.on('paymentRejected', load)
-    socket.on('cancellationRequested', (payload: any) => {
+    socket.on('cancellationRequested', () => {
       loadCancellations()
-      alerts.toast(`⚠️ Solicitud de cancelación recibida: Pedido #${payload?.order?.orderNumber || ''}`)
+      load()
     })
     socket.on('cancellationResolved', () => {
       loadCancellations()
@@ -118,8 +118,6 @@ export default function PaymentValidationPage() {
     })
     return () => { socket.disconnect() }
   }, [user?.id, user?.name, user?.role, load, loadCancellations])
-
-
 
   // Filtrado instantáneo en cliente (0ms)
   const safePayments = useMemo(() => Array.isArray(payments) ? payments : [], [payments])

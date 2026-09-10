@@ -14,6 +14,7 @@ import {
   toDiningKitchenDelay,
 } from '@/lib/diningKitchenAlerts'
 import { hasUserPermission } from '@/lib/permissions'
+import { alerts } from '@/lib/alerts'
 
 // Simple notification sound using Web Audio API
 function playNotificationSound(type: 'message' | 'urgent' = 'message') {
@@ -348,12 +349,101 @@ export function useNotifications() {
     })
 
     socket.on('paymentRejected', (payload: any) => {
-      if (isMuted()) return
-      if (!['ADMIN', 'SUPERADMIN', 'CASHIER'].includes(user.role || '')) return
-      toast.error('Pago rechazado', {
-        description: payload?.reason || payload?.table?.label || 'Revisar mesa',
-        icon: <XCircle className="h-4 w-4 text-[#EF4444]" />,
-        duration: 6000,
+      // Exclusivo ÚNICAMENTE para Admin y SuperAdmin (ningún otro perfil debe recibir esta alerta)
+      if (!['ADMIN', 'SUPERADMIN'].includes(user.role || '')) return
+
+      const tableLabel = payload?.table?.label || payload?.order?.diningTable?.label || payload?.order?.customerName || 'Mesa'
+      const orderNum = payload?.order?.orderNumber || payload?.payment?.order?.orderNumber || payload?.table?.orders?.[0]?.orderNumber || '—'
+      const reason = payload?.reason || payload?.rejectionReason || payload?.payment?.rejectionReason || 'Rechazado por caja'
+      const waiterName = payload?.order?.waiter?.name || payload?.table?.openedBy?.name || ''
+      const targetUrl = '/payment-validation'
+
+      // 1. Campana sonora urgente (audible incluso con notificaciones desactivadas)
+      playUrgentBell()
+
+      // 2. Notificación del sistema en navegador / escritorio
+      showBrowserNotification(
+        `⚠️ Cobro Rechazado: ${tableLabel} (Pedido #${orderNum})`,
+        `Motivo: "${reason}"${waiterName ? ` · Mesera: ${waiterName}` : ''}`,
+        targetUrl,
+        { persistent: true, tag: `rejected-payment-${payload?.payment?.id || orderNum}` }
+      )
+
+      // 3. Toast flotante persistente que no se quita solo (duration: Infinity)
+      toast.error(`⚠️ Cobro Rechazado: ${tableLabel} (Pedido #${orderNum})`, {
+        id: `reject-toast-${payload?.payment?.id || orderNum}`,
+        description: `Motivo: "${reason}"${waiterName ? ` · Mesera: ${waiterName}` : ''}`,
+        icon: <XCircle className="h-5 w-5 text-rose-500 animate-pulse shrink-0" />,
+        duration: Infinity,
+        closeButton: true,
+        action: {
+          label: 'Ver en Caja',
+          onClick: () => {
+            window.location.href = targetUrl
+          },
+        },
+      })
+
+      // 4. Modal emergente destacado con el motivo y acción directa
+      alerts.rejectedPaymentAlert({
+        title: `⚠️ Cobro Rechazado (${tableLabel})`,
+        tableLabel,
+        orderNumber: orderNum,
+        reason,
+        waiterName,
+        onAction: () => {
+          window.location.href = targetUrl
+        },
+      })
+    })
+
+    socket.on('cancellationRequested', (payload: any) => {
+      // Exclusivo ÚNICAMENTE para Admin y SuperAdmin (ningún otro perfil debe recibir esta alerta)
+      if (!['ADMIN', 'SUPERADMIN'].includes(user.role || '')) return
+
+      const order = payload?.order || {}
+      const orderNum = order.orderNumber || payload?.orderNumber || '—'
+      const tableLabel = order.diningTable?.label || order.customerName || 'Mesa'
+      const waiterName = order.waiter?.name || payload?.requestedBy?.name || 'Mesera'
+      const reason = payload?.reason || order.cancellationReason || 'Cancelación solicitada por mesera'
+      const targetUrl = '/payment-validation'
+
+      // 1. Campana sonora urgente (audible incluso con notificaciones desactivadas)
+      playUrgentBell()
+
+      // 2. Notificación del sistema en navegador / escritorio
+      showBrowserNotification(
+        `⚠️ Cancelación solicitada: Pedido #${orderNum}`,
+        `${tableLabel} · Mesera: ${waiterName}\nMotivo: "${reason}"`,
+        targetUrl,
+        { persistent: true, tag: `cancel-order-${order.id || orderNum}` }
+      )
+
+      // 3. Toast flotante persistente que no se quita solo (duration: Infinity)
+      toast.error(`⚠️ Solicitud de cancelación: ${tableLabel} (Pedido #${orderNum})`, {
+        id: `cancel-toast-${order.id || orderNum}`,
+        description: `Mesera: ${waiterName} · Motivo: "${reason}"`,
+        icon: <XCircle className="h-5 w-5 text-rose-500 animate-pulse shrink-0" />,
+        duration: Infinity,
+        closeButton: true,
+        action: {
+          label: 'Ir a Validar Pagos',
+          onClick: () => {
+            window.location.href = targetUrl
+          },
+        },
+      })
+
+      // 4. Modal emergente destacado con el motivo y acción directa
+      alerts.rejectedPaymentAlert({
+        title: `⚠️ Solicitud de Cancelación: Pedido #${orderNum}`,
+        tableLabel,
+        orderNumber: orderNum,
+        reason,
+        waiterName,
+        onAction: () => {
+          window.location.href = targetUrl
+        },
       })
     })
 
