@@ -1663,12 +1663,8 @@ export default function NewOrderPage({
       })
     }
 
-  const toggleItemCourtesy = (lineId: string) => {
-    setCart(prev => prev.map(item => item.lineId === lineId ? { ...item, isCourtesy: !item.isCourtesy } : item))
+    setQuickText('')
   }
-
-  setQuickText('')
-}
 
   useEffect(() => {
     if (editOrderId || initialLoading || !draftLoaded || loadedDraftKey !== activeDraftKey) return
@@ -2206,12 +2202,6 @@ export default function NewOrderPage({
     }))
   })
 
-  const toggleItemCourtesy = (lineId: string) => setCart(prev => prev.map(item => {
-    if (item && item.lineId === lineId) {
-      return { ...item, isCourtesy: !item.isCourtesy }
-    }
-    return item
-  }))
 
   const updateItemNotes = (lineId: string, itemNotes: string) => setCart(prev => consolidateCart(prev.map(i => {
     if (i && i.lineId === lineId) {
@@ -3543,12 +3533,11 @@ export default function NewOrderPage({
                     <SelectItem value="TRANSFER">Transferencia</SelectItem>
                     <SelectItem value="MIXED">🔀 Mixto (Efectivo + Transfer)</SelectItem>
                     {customerId && <SelectItem value="CREDIT">Crédito (Fiado)</SelectItem>}
-                    <SelectItem value="CORTESIA">Cortesía (Regalo)</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
 
-              {paymentMethod !== 'CASH' && paymentMethod !== 'CREDIT' && paymentMethod !== 'CORTESIA' && paymentMethod !== 'MIXED' ? (
+              {paymentMethod !== 'CASH' && paymentMethod !== 'CREDIT' && paymentMethod !== 'MIXED' ? (
                 <div className="space-y-1">
                   <Label className="text-[10px] font-bold text-[var(--text-secondary)] uppercase">N° Comprobante / Ref</Label>
                   <Input 
@@ -3571,7 +3560,7 @@ export default function NewOrderPage({
               )}
             </div>
 
-            {paymentMethod !== 'CASH' && paymentMethod !== 'CREDIT' && paymentMethod !== 'CORTESIA' && paymentMethod !== 'MIXED' && (
+            {paymentMethod !== 'CASH' && paymentMethod !== 'CREDIT' && paymentMethod !== 'MIXED' && (
               <div className="space-y-1">
                 <Label className="text-[10px] font-bold text-[var(--text-secondary)] uppercase">Notas del Pedido</Label>
                 <Input 
@@ -3616,16 +3605,6 @@ export default function NewOrderPage({
                     }}
                     className="bg-[var(--bg-panel)] border-[var(--border-default)] rounded-lg h-7 text-xs font-bold text-blue-500 mt-0.5"
                   />
-                </div>
-              </div>
-            )}
-
-            {paymentMethod === 'CORTESIA' && (
-              <div className="flex items-start gap-2 rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-2 text-[10px] text-emerald-500 leading-relaxed">
-                <CheckCircle2 className="h-3.5 w-3.5 shrink-0 mt-0.5" />
-                <div>
-                  <p className="font-bold uppercase tracking-wider text-[9px]">Venta de Cortesía ($0)</p>
-                  <p>No sumará a caja, se descuentan ingredientes en cocina.</p>
                 </div>
               </div>
             )}
@@ -3720,23 +3699,9 @@ export default function NewOrderPage({
                       <div className="flex items-center justify-between gap-1.5 min-w-0">
                         <div className="flex items-center gap-1.5 min-w-0 flex-1">
                           <p className="text-xs font-bold text-[var(--text-primary)] truncate" title={item.name}>{item.name}</p>
-                          {item.isCourtesy ? (
-                            <div className="flex items-center gap-1 shrink-0">
-                              <span className="line-through text-[10px] text-[var(--text-muted)]">
-                                {formatCurrency(item.price * item.quantity)}
-                              </span>
-                              <span className="text-emerald-500 font-extrabold text-[11px]">$0</span>
-                            </div>
-                          ) : (
-                            <span className="text-xs font-extrabold text-[var(--accent)] shrink-0">
-                              {formatCurrency(item.price * item.quantity)}
-                            </span>
-                          )}
-                          {item.isCourtesy && (
-                            <Badge className="bg-emerald-500/10 text-emerald-500 border border-emerald-500/20 font-bold text-[9px] py-0 px-1 shrink-0">
-                              Cortesía
-                            </Badge>
-                          )}
+                          <span className="text-xs font-extrabold text-[var(--accent)] shrink-0">
+                            {formatCurrency(item.price * item.quantity)}
+                          </span>
                         </div>
                         <div className="flex items-center gap-0.5 shrink-0 bg-[var(--bg-panel)] rounded-lg p-0.5 border border-[var(--border-subtle)]">
                           <Button 
@@ -3767,7 +3732,7 @@ export default function NewOrderPage({
                         </div>
                       </div>
 
-                      {/* Cart Item Actions Row (Nota chip / input, Adición, Cortesía) */}
+                      {/* Cart Item Actions Row (Nota chip / input, Adición) */}
                       <div className="flex items-center gap-1 flex-wrap pt-1 border-t border-[var(--border-subtle)]/40 min-w-0">
                         {showNotes[keyId] ? (
                           <div className="flex items-center gap-1 bg-[var(--bg-elevated)] border border-[var(--accent)]/40 p-1 rounded-lg w-full">
@@ -3845,17 +3810,6 @@ export default function NewOrderPage({
                                 />
                               );
                             })()}
-
-                            <button
-                              type="button"
-                              onClick={() => toggleItemCourtesy(item.lineId!)}
-                              className={`text-[10px] font-extrabold flex items-center gap-0.5 cursor-pointer px-1.5 py-0.5 rounded-md transition-all shrink-0 ${
-                                item.isCourtesy ? 'bg-emerald-500 text-white shadow-xs' : 'text-emerald-600 bg-emerald-500/10 hover:bg-emerald-500/20'
-                              }`}
-                            >
-                              <Sparkles className="h-2.5 w-2.5" />
-                              {item.isCourtesy ? 'Cortesía ($0)' : 'Cortesía'}
-                            </button>
                           </>
                         )}
                       </div>
