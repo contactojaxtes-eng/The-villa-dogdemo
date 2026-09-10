@@ -397,9 +397,9 @@ function AdditionDropdown({
           setOpen(!open)
           setSearch('')
         }}
-        className="h-6 w-auto border border-amber-500/30 bg-amber-500/10 hover:bg-amber-500/20 text-[10px] font-extrabold text-amber-600 rounded-lg px-2 flex items-center gap-1 cursor-pointer shrink-0 transition-colors"
+        className="h-5 w-auto border border-amber-500/30 bg-amber-500/10 hover:bg-amber-500/20 text-[10px] font-extrabold text-amber-600 rounded-md px-1.5 flex items-center gap-0.5 cursor-pointer shrink-0 transition-colors"
       >
-        <Plus className="h-3 w-3 text-amber-600" /> + Adición <ChevronDown className={`h-2.5 w-2.5 transition-transform duration-200 ${open ? 'rotate-180' : ''}`} />
+        <Plus className="h-2.5 w-2.5 text-amber-600" /> Adición <ChevronDown className={`h-2.5 w-2.5 transition-transform duration-200 ${open ? 'rotate-180' : ''}`} />
       </button>
 
       {open && (
@@ -571,6 +571,7 @@ export default function NewOrderPage({
   const [chargeTax, setChargeTax] = useState(false)
 
   const [showNotes, setShowNotes] = useState<Record<string, boolean>>({})
+  const [isCartCollapsed, setIsCartCollapsed] = useState(false)
   const [isCartDrawerOpen, setIsCartDrawerOpen] = useState(false)
   const [initialLoading, setInitialLoading] = useState(
     globalCategoriesCache.length === 0 || globalZonesCache.length === 0
@@ -2918,7 +2919,7 @@ export default function NewOrderPage({
     setClientMutationId(createClientMutationId())
     setCustomerName(''); setCustomerPhone(''); setExactAddress(''); setZoneId('')
     setZoneSearch(''); setZoneRateEdit('')
-    setPaymentMethod('CASH'); setNotes(''); setCart([]); setError(''); setOrderType('delivery')
+    setPaymentMethod('CASH'); setNotes(''); setCart([]); setError(''); setOrderType('delivery'); setIsCartCollapsed(false)
   }
 
 
@@ -3622,14 +3623,14 @@ export default function NewOrderPage({
         embedded ? "border border-[var(--border-subtle)] shadow-sm" : "border-2 border-[var(--accent-border)] shadow-2xl"
       )}>
         <div className="absolute top-0 right-0 w-24 h-24 bg-gradient-to-br from-[var(--accent)]/5 to-transparent blur-xl pointer-events-none" />
-        <CardHeader className="shrink-0 py-2.5 px-3 border-b border-[var(--border-subtle)]">
+        <CardHeader className="shrink-0 py-2 px-3 border-b border-[var(--border-subtle)]">
           <div className="flex items-center justify-between">
             <CardTitle className="flex items-center gap-1.5 text-xs font-bold text-[var(--text-primary)]">
-              <ShoppingCart className="h-4 w-4 text-[var(--accent)]" />
+              <ShoppingCart className="h-3.5 w-3.5 text-[var(--accent)]" />
               <span className="antifont tracking-wider">{step === 'delivery' ? '1. PRODUCTOS DEL PEDIDO' : 'MI PEDIDO'}</span>
             </CardTitle>
             <div className="flex items-center gap-1.5">
-              <Badge className="bg-[var(--accent)] text-[var(--accent-fg)] font-extrabold rounded-lg px-2 py-0.5 text-[10px]">
+              <Badge className="bg-[var(--accent)] text-[var(--accent-fg)] font-extrabold rounded-md px-1.5 py-0.5 text-[10px]">
                 {cart.reduce((s, i) => s + i.quantity, 0)} items
               </Badge>
               {step === 'delivery' && (
@@ -3638,240 +3639,250 @@ export default function NewOrderPage({
                   variant="outline"
                   size="sm"
                   onClick={() => setStep('menu')}
-                  className="h-7 px-2 text-[10px] font-bold border-[var(--border-default)] hover:bg-[var(--bg-hover)] text-[var(--accent)] rounded-lg cursor-pointer"
+                  className="h-6 px-2 text-[10px] font-bold border-[var(--border-default)] hover:bg-[var(--bg-hover)] text-[var(--accent)] rounded-md cursor-pointer"
                 >
-                  <Plus className="mr-1 h-3 w-3" /> Agregar más
+                  <Plus className="mr-0.5 h-3 w-3" /> Agregar más
                 </Button>
+              )}
+              {step === 'delivery' && cart.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setIsCartCollapsed(!isCartCollapsed)}
+                  className="h-6 w-6 rounded-md flex items-center justify-center text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] cursor-pointer"
+                  title={isCartCollapsed ? 'Mostrar lista de productos' : 'Plegar productos'}
+                >
+                  <ChevronDown className={`h-3.5 w-3.5 transition-transform duration-200 ${isCartCollapsed ? '' : 'rotate-180'}`} />
+                </button>
               )}
             </div>
           </div>
         </CardHeader>
-        
-        <div className="px-3 py-2.5 space-y-2">
-          {cart.length === 0 && (
-            <div className={cn("text-center space-y-2", embedded ? "py-4" : "py-12")}>
-              <Sparkles className="mx-auto h-7 w-7 text-[var(--accent)]/30 animate-pulse" />
-              <div>
-                <p className="text-xs font-semibold text-[var(--text-secondary)]">El pedido está vacío</p>
-                {step === 'delivery' && (
-                  <Button size="sm" variant="outline" onClick={() => setStep('menu')} className="mt-2 text-xs h-8 rounded-lg font-bold">
-                    <Plus className="mr-1 h-3.5 w-3.5" /> Ir a la carta para agregar
-                  </Button>
-                )}
+
+        {isCartCollapsed && step === 'delivery' ? (
+          <div 
+            onClick={() => setIsCartCollapsed(false)}
+            className="px-3 py-2 text-[11px] font-semibold text-[var(--text-secondary)] flex items-center justify-between cursor-pointer hover:bg-[var(--bg-hover)]/40 transition-colors"
+          >
+            <span>{groupedCart.length} producto(s) · {cart.reduce((s, i) => s + i.quantity, 0)} items</span>
+            <span className="font-extrabold text-[var(--accent)]">{formatCurrency(subtotal)} (clic para desplegar)</span>
+          </div>
+        ) : (
+          <div className="px-2.5 py-2 space-y-1.5 max-h-[190px] sm:max-h-[220px] overflow-y-auto scrollbar-thin scrollbar-thumb-zinc-300 dark:scrollbar-thumb-zinc-700">
+            {cart.length === 0 && (
+              <div className={cn("text-center space-y-2", embedded ? "py-3" : "py-8")}>
+                <Sparkles className="mx-auto h-6 w-6 text-[var(--accent)]/30 animate-pulse" />
+                <div>
+                  <p className="text-xs font-semibold text-[var(--text-secondary)]">El pedido está vacío</p>
+                  {step === 'delivery' && (
+                    <Button size="sm" variant="outline" onClick={() => setStep('menu')} className="mt-2 text-xs h-7 rounded-lg font-bold">
+                      <Plus className="mr-1 h-3 w-3" /> Ir a la carta para agregar
+                    </Button>
+                  )}
+                </div>
               </div>
-            </div>
-          )}
-          <AnimatePresence>
-            {groupedCart.map(item => {
-              const keyId = item.lineId || item.menuItemId;
-              const visibleKitchenNote = keepKitchenInstruction(getItemRawNote(item.notes), item.name)
-              return (
-                <motion.div
-                  key={keyId}
-                  layout
-                  initial={{ opacity: 0, x: 20 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  exit={{ opacity: 0, x: -20 }}
-                  className="rounded-2xl bg-[var(--bg-base)] border border-[var(--border-subtle)] p-2.5 shadow-inner space-y-2"
-                >
-                  <div className="flex items-start justify-between gap-1.5">
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-1.5">
+            )}
+            <AnimatePresence>
+              {groupedCart.map(item => {
+                const keyId = item.lineId || item.menuItemId;
+                const visibleKitchenNote = keepKitchenInstruction(getItemRawNote(item.notes), item.name)
+                return (
+                  <motion.div
+                    key={keyId}
+                    layout
+                    initial={{ opacity: 0, x: 15 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    exit={{ opacity: 0, x: -15 }}
+                    className="rounded-xl bg-[var(--bg-base)] border border-[var(--border-subtle)] p-2 shadow-xs space-y-1.5"
+                  >
+                    <div className="flex items-center justify-between gap-1.5">
+                      <div className="flex items-center gap-1.5 min-w-0 flex-1">
                         <p className="text-xs font-bold text-[var(--text-primary)] truncate" title={item.name}>{item.name}</p>
+                        {item.isCourtesy ? (
+                          <div className="flex items-center gap-1 shrink-0">
+                            <span className="line-through text-[10px] text-[var(--text-muted)]">
+                              {formatCurrency(item.price * item.quantity)}
+                            </span>
+                            <span className="text-emerald-500 font-extrabold text-[11px]">$0</span>
+                          </div>
+                        ) : (
+                          <span className="text-xs font-extrabold text-[var(--accent)] shrink-0">
+                            {formatCurrency(item.price * item.quantity)}
+                          </span>
+                        )}
                         {item.isCourtesy && (
                           <Badge className="bg-emerald-500/10 text-emerald-500 border border-emerald-500/20 font-bold text-[9px] py-0 px-1 shrink-0">
                             Cortesía
                           </Badge>
                         )}
                       </div>
-                      <p className="text-xs font-semibold mt-0.5">
-                        {item.isCourtesy ? (
-                          <>
-                            <span className="line-through text-[var(--text-muted)] mr-1.5">
-                              {formatCurrency(item.price * item.quantity)}
-                            </span>
-                            <span className="text-emerald-500 font-extrabold">$0</span>
-                          </>
-                        ) : (
-                          <span className="text-[var(--accent)] font-semibold">
-                            {formatCurrency(item.price * item.quantity)}
-                          </span>
-                        )}
-                      </p>
-                    </div>
-                    <div className="flex items-center gap-1 shrink-0 bg-[var(--bg-panel)] rounded-xl p-0.5 border border-[var(--border-subtle)]">
-                      <Button 
-                        size="icon" 
-                        variant="ghost" 
-                        className="h-5.5 w-5.5 rounded-lg text-[var(--text-secondary)] hover:bg-[var(--bg-elevated)]" 
-                        onClick={() => item.quantity === 1 ? removeFromCart(item.lineId!, item.name) : updateQuantity(item.lineId!, -1)}
-                      >
-                        <Minus className="h-2.5 w-2.5" />
-                      </Button>
-                      <span className="w-4.5 text-center text-xs font-bold text-[var(--text-primary)]">{item.quantity}</span>
-                      <Button 
-                        size="icon" 
-                        variant="ghost" 
-                        className="h-5.5 w-5.5 rounded-lg text-[var(--text-secondary)] hover:bg-[var(--bg-elevated)]" 
-                        onClick={() => updateQuantity(item.lineId!, 1)}
-                      >
-                        <Plus className="h-2.5 w-2.5" />
-                      </Button>
-                      <Button 
-                        size="icon" 
-                        variant="ghost" 
-                        className="h-5.5 w-5.5 rounded-lg text-[var(--destructive)] hover:bg-[var(--destructive)]/10" 
-                        onClick={() => removeFromCart(item.lineId!, item.name)}
-                      >
-                        <Trash2 className="h-3 w-3" />
-                      </Button>
-                    </div>
-                  </div>
-                  {/* Cart Item Actions Row (Nota, + Adición, Cortesía) */}
-                  <div className="space-y-2 mt-2 pt-1 border-t border-[var(--border-subtle)]/40">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      {!showNotes[keyId] && (
-                        <button
-                          type="button"
-                          onClick={() => handleAddNoteClick(item)}
-                          className="text-[10px] font-bold text-[var(--accent)] hover:underline flex items-center gap-1 cursor-pointer bg-[var(--accent)]/10 hover:bg-[var(--accent)]/20 px-2 py-0.5 rounded-lg transition-all"
+                      <div className="flex items-center gap-0.5 shrink-0 bg-[var(--bg-panel)] rounded-lg p-0.5 border border-[var(--border-subtle)]">
+                        <Button 
+                          size="icon" 
+                          variant="ghost" 
+                          className="h-5 w-5 rounded-md text-[var(--text-secondary)] hover:bg-[var(--bg-elevated)] cursor-pointer" 
+                          onClick={() => item.quantity === 1 ? removeFromCart(item.lineId!, item.name) : updateQuantity(item.lineId!, -1)}
                         >
-                          <Plus className="h-3 w-3" /> {visibleKitchenNote ? 'Editar nota' : '+ Nota'}
-                        </button>
-                      )}
-
-                      {(() => {
-                        const itemAdditions = getAdditionItemsFor(item);
-                        if (itemAdditions.length === 0) return null;
-                        return (
-                          <AdditionDropdown
-                            item={item}
-                            additions={itemAdditions}
-                            onSelect={handleAddAddition}
-                          />
-                        );
-                      })()}
-
-                      <button
-                        type="button"
-                        onClick={() => toggleItemCourtesy(item.lineId!)}
-                        className={`text-[10px] font-extrabold flex items-center gap-1 cursor-pointer w-fit px-2 py-0.5 rounded-lg transition-all ${
-                          item.isCourtesy ? 'bg-emerald-500 text-white shadow-sm' : 'text-emerald-600 bg-emerald-500/10 hover:bg-emerald-500/20'
-                        }`}
-                      >
-                        <Sparkles className="h-3 w-3" />
-                        {item.isCourtesy ? '✓ Cortesía ($0)' : 'Cortesía'}
-                      </button>
-                    </div>
-
-                    {/* Inline Note Editing Input (Commits on Enter or Checkmark) */}
-                    {showNotes[keyId] && (
-                      <div className="flex items-center gap-1.5 bg-[var(--bg-elevated)] border border-[var(--accent)]/40 p-1.5 rounded-xl">
-                        <Input 
-                          value={visibleKitchenNote}
-                          onChange={e => updateItemNotes(item.lineId!, e.target.value)}
-                          onKeyDown={e => {
-                            if (e.key === 'Enter') {
-                              e.preventDefault()
-                              setShowNotes(prev => ({ ...prev, [keyId]: false }))
-                            }
-                          }}
-                          onBlur={() => {
-                            setShowNotes(prev => ({ ...prev, [keyId]: false }))
-                          }}
-                          placeholder="Escribe la nota y presiona Enter..." 
-                          className="h-7 text-xs bg-[var(--bg-input)] border-[var(--border-subtle)] rounded-lg focus:border-[var(--accent)] flex-1 font-medium" 
-                          autoFocus
-                        />
-                        <button
-                          type="button"
-                          onClick={() => setShowNotes(prev => ({ ...prev, [keyId]: false }))}
-                          className="h-7 px-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-[10px] font-bold flex items-center gap-1 cursor-pointer shrink-0"
-                          title="Guardar nota (Enter)"
+                          <Minus className="h-2.5 w-2.5" />
+                        </Button>
+                        <span className="w-4 text-center text-xs font-extrabold text-[var(--text-primary)]">{item.quantity}</span>
+                        <Button 
+                          size="icon" 
+                          variant="ghost" 
+                          className="h-5 w-5 rounded-md text-[var(--text-secondary)] hover:bg-[var(--bg-elevated)] cursor-pointer" 
+                          onClick={() => updateQuantity(item.lineId!, 1)}
                         >
-                          ✓ Guardar
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => clearItemNotes(item.lineId!)}
-                          className="h-7 px-1.5 text-[var(--text-muted)] hover:text-red-500 hover:bg-red-500/10 rounded-lg text-[10px] font-bold cursor-pointer shrink-0"
-                          title="Borrar nota"
+                          <Plus className="h-2.5 w-2.5" />
+                        </Button>
+                        <Button 
+                          size="icon" 
+                          variant="ghost" 
+                          className="h-5 w-5 rounded-md text-[var(--destructive)] hover:bg-[var(--destructive)]/10 cursor-pointer" 
+                          onClick={() => removeFromCart(item.lineId!, item.name)}
                         >
-                          <X className="h-3.5 w-3.5" />
-                        </button>
+                          <Trash2 className="h-2.5 w-2.5" />
+                        </Button>
                       </div>
-                    )}
+                    </div>
 
-                    {/* Saved Note Badge Display */}
-                    {!showNotes[keyId] && visibleKitchenNote && (
-                      <div className="flex items-center justify-between gap-1 text-[11px] bg-[var(--accent)]/10 border border-[var(--accent)]/20 text-[var(--accent)] font-semibold px-2.5 py-1 rounded-xl">
-                        <span className="truncate">📝 {visibleKitchenNote}</span>
-                        <div className="flex items-center gap-1 shrink-0">
+                    {/* Cart Item Actions Row (Nota chip / input, Adición, Cortesía) */}
+                    <div className="flex items-center gap-1.5 flex-wrap pt-1 border-t border-[var(--border-subtle)]/40">
+                      {showNotes[keyId] ? (
+                        <div className="flex items-center gap-1 bg-[var(--bg-elevated)] border border-[var(--accent)]/40 p-1 rounded-lg w-full">
+                          <Input 
+                            value={visibleKitchenNote}
+                            onChange={e => updateItemNotes(item.lineId!, e.target.value)}
+                            onKeyDown={e => {
+                              if (e.key === 'Enter') {
+                                e.preventDefault()
+                                setShowNotes(prev => ({ ...prev, [keyId]: false }))
+                              }
+                            }}
+                            onBlur={() => {
+                              setShowNotes(prev => ({ ...prev, [keyId]: false }))
+                            }}
+                            placeholder="Nota (ej: sin cebolla)..." 
+                            className="h-6 text-[11px] bg-[var(--bg-input)] border-[var(--border-subtle)] rounded px-2 focus:border-[var(--accent)] flex-1 font-medium" 
+                            autoFocus
+                          />
                           <button
                             type="button"
-                            onClick={() => setShowNotes(prev => ({ ...prev, [keyId]: true }))}
-                            className="hover:underline text-[9px] uppercase font-extrabold cursor-pointer"
+                            onClick={() => setShowNotes(prev => ({ ...prev, [keyId]: false }))}
+                            className="h-6 px-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-[10px] font-bold cursor-pointer shrink-0"
+                            title="Guardar nota (Enter)"
                           >
-                            Editar
+                            ✓
                           </button>
                           <button
                             type="button"
                             onClick={() => clearItemNotes(item.lineId!)}
-                            className="hover:text-red-500 cursor-pointer ml-1"
+                            className="h-6 px-1.5 text-[var(--text-muted)] hover:text-red-500 rounded text-[10px] font-bold cursor-pointer shrink-0"
                             title="Borrar nota"
                           >
                             <X className="h-3 w-3" />
                           </button>
                         </div>
+                      ) : (
+                        <>
+                          {visibleKitchenNote ? (
+                            <div className="inline-flex items-center gap-1 text-[10px] bg-red-500/10 border border-red-500/25 text-red-600 dark:text-red-400 font-semibold px-2 py-0.5 rounded-md max-w-full">
+                              <span 
+                                onClick={() => setShowNotes(prev => ({ ...prev, [keyId]: true }))}
+                                className="truncate cursor-pointer hover:underline"
+                                title="Clic para editar nota"
+                              >
+                                📝 {visibleKitchenNote}
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => clearItemNotes(item.lineId!)}
+                                className="hover:text-red-700 dark:hover:text-red-300 cursor-pointer shrink-0 ml-0.5"
+                                title="Quitar nota"
+                              >
+                                <X className="h-2.5 w-2.5" />
+                              </button>
+                            </div>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => handleAddNoteClick(item)}
+                              className="text-[10px] font-bold text-[var(--accent)] hover:bg-[var(--accent)]/15 flex items-center gap-0.5 cursor-pointer bg-[var(--accent)]/10 px-1.5 py-0.5 rounded-md transition-all shrink-0"
+                            >
+                              <Plus className="h-2.5 w-2.5" /> Nota
+                            </button>
+                          )}
+
+                          {(() => {
+                            const itemAdditions = getAdditionItemsFor(item);
+                            if (itemAdditions.length === 0) return null;
+                            return (
+                              <AdditionDropdown
+                                item={item}
+                                additions={itemAdditions}
+                                onSelect={handleAddAddition}
+                              />
+                            );
+                          })()}
+
+                          <button
+                            type="button"
+                            onClick={() => toggleItemCourtesy(item.lineId!)}
+                            className={`text-[10px] font-extrabold flex items-center gap-0.5 cursor-pointer px-1.5 py-0.5 rounded-md transition-all shrink-0 ${
+                              item.isCourtesy ? 'bg-emerald-500 text-white shadow-xs' : 'text-emerald-600 bg-emerald-500/10 hover:bg-emerald-500/20'
+                            }`}
+                          >
+                            <Sparkles className="h-2.5 w-2.5" />
+                            {item.isCourtesy ? 'Cortesía ($0)' : 'Cortesía'}
+                          </button>
+                        </>
+                      )}
+                    </div>
+
+                    {/* Additions list nested under parent */}
+                    {item.additions && item.additions.length > 0 && (
+                      <div className="mt-1 pl-2 border-l-2 border-[var(--accent)]/30 space-y-1">
+                        {item.additions.map(add => (
+                          <div key={`${add.menuItemId}-${add.notes}`} className="flex items-center justify-between text-xs bg-[var(--bg-elevated)]/60 rounded-md py-0.5 px-1.5 border border-[var(--border-subtle)]/50">
+                            <div className="min-w-0 flex-1 flex items-center gap-1.5">
+                              <p className="text-[10px] font-bold text-[var(--text-primary)] truncate">{add.name}</p>
+                              <p className="text-[10px] text-[var(--accent)] font-semibold shrink-0">+{formatCurrency(add.price * add.quantity)}</p>
+                            </div>
+                            <div className="flex items-center gap-0.5 shrink-0 bg-[var(--bg-panel)] rounded p-0.5 border border-[var(--border-subtle)]">
+                              <Button 
+                                size="icon" 
+                                variant="ghost" 
+                                className="h-4.5 w-4.5 rounded text-[var(--text-secondary)] hover:bg-[var(--bg-elevated)]" 
+                                onClick={() => add.quantity === 1 ? removeAddition(add) : updateAdditionQuantity(add, -1)}
+                              >
+                                <Minus className="h-2 w-2" />
+                              </Button>
+                              <span className="w-3 text-center text-[9px] font-bold text-[var(--text-primary)]">{add.quantity}</span>
+                              <Button 
+                                size="icon" 
+                                variant="ghost" 
+                                className="h-4.5 w-4.5 rounded text-[var(--text-secondary)] hover:bg-[var(--bg-elevated)]" 
+                                onClick={() => updateAdditionQuantity(add, 1)}
+                              >
+                                <Plus className="h-2 w-2" />
+                              </Button>
+                              <Button 
+                                size="icon" 
+                                variant="ghost" 
+                                className="h-4.5 w-4.5 rounded text-[var(--destructive)] hover:bg-[var(--destructive)]/10" 
+                                onClick={() => removeAddition(add)}
+                              >
+                                <Trash2 className="h-2.5 w-2.5" />
+                              </Button>
+                            </div>
+                          </div>
+                        ))}
                       </div>
                     )}
-                  </div>
-
-                  {/* Additions list nested under parent */}
-                  {item.additions && item.additions.length > 0 && (
-                    <div className="mt-2 pl-3 border-l-2 border-[var(--accent)]/30 space-y-1.5 pt-1">
-                      {item.additions.map(add => (
-                        <div key={`${add.menuItemId}-${add.notes}`} className="flex items-center justify-between text-xs bg-[var(--bg-elevated)]/60 rounded-xl p-1.5 border border-[var(--border-subtle)]/50">
-                          <div className="min-w-0 flex-1">
-                            <p className="text-[11px] font-bold text-[var(--text-primary)] truncate">{add.name}</p>
-                            <p className="text-[10px] text-[var(--accent)] font-semibold">{formatCurrency(add.price * add.quantity)}</p>
-                          </div>
-                          <div className="flex items-center gap-1 shrink-0 bg-[var(--bg-panel)] rounded-lg p-0.5 border border-[var(--border-subtle)]">
-                            <Button 
-                              size="icon" 
-                              variant="ghost" 
-                              className="h-5 w-5 rounded-md text-[var(--text-secondary)] hover:bg-[var(--bg-elevated)]" 
-                              onClick={() => add.quantity === 1 ? removeAddition(add) : updateAdditionQuantity(add, -1)}
-                            >
-                              <Minus className="h-2.5 w-2.5" />
-                            </Button>
-                            <span className="w-3 text-center text-[10px] font-bold text-[var(--text-primary)]">{add.quantity}</span>
-                            <Button 
-                              size="icon" 
-                              variant="ghost" 
-                              className="h-5 w-5 rounded-md text-[var(--text-secondary)] hover:bg-[var(--bg-elevated)]" 
-                              onClick={() => updateAdditionQuantity(add, 1)}
-                            >
-                              <Plus className="h-2.5 w-2.5" />
-                            </Button>
-                            <Button 
-                              size="icon" 
-                              variant="ghost" 
-                              className="h-5 w-5 rounded-md text-[var(--destructive)] hover:bg-[var(--destructive)]/10" 
-                              onClick={() => removeAddition(add)}
-                            >
-                              <Trash2 className="h-2.5 w-2.5" />
-                            </Button>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </motion.div>
-              )
-            })}
-          </AnimatePresence>
-        </div>
+                  </motion.div>
+                )
+              })}
+            </AnimatePresence>
+          </div>
+        )}
         
         {cart.length > 0 && !hideSubmitButton && (
           <div className="shrink-0 space-y-2.5 border-t border-[var(--border-subtle)] p-4 bg-[var(--bg-panel)]">
@@ -3908,10 +3919,10 @@ export default function NewOrderPage({
           </div>
         )}
 
-        {cart.length > 0 && hideSubmitButton && (
-          <div className="shrink-0 flex items-center justify-between border-t border-[var(--border-subtle)] px-3 py-2 bg-[var(--bg-panel)]/40 text-xs font-bold text-[var(--text-secondary)]">
+        {cart.length > 0 && hideSubmitButton && !isCartCollapsed && (
+          <div className="shrink-0 flex items-center justify-between border-t border-[var(--border-subtle)] px-3 py-1.5 bg-[var(--bg-panel)]/40 text-[11px] font-bold text-[var(--text-secondary)]">
             <span>Subtotal platos ({cart.reduce((s, i) => s + i.quantity, 0)} items)</span>
-            <span className="text-sm font-extrabold text-[var(--text-primary)]">{formatCurrency(subtotal)}</span>
+            <span className="text-xs font-black text-[var(--text-primary)]">{formatCurrency(subtotal)}</span>
           </div>
         )}
       </Card>
