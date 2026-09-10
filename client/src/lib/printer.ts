@@ -16,12 +16,30 @@ export interface PrinterSettings {
   enabled?: boolean
 }
 
-const paymentLabels: Record<string, string> = {
+export const paymentLabels: Record<string, string> = {
   CASH: 'Efectivo',
+  EFECTIVO: 'Efectivo',
   TRANSFER: 'Transferencia',
+  TRANSFERENCIA: 'Transferencia',
   NEQUI: 'Nequi',
   BANCOLOMBIA: 'Bancolombia',
   DAVIPLATA: 'Daviplata',
+  CARD: 'Tarjeta / Datáfono',
+  DATAFONO: 'Datáfono',
+  CREDIT_CARD: 'Tarjeta de Crédito',
+  DEBIT_CARD: 'Tarjeta de Débito',
+  TARJETA: 'Tarjeta',
+  MIXED: 'Mixto',
+}
+
+export function formatPaymentMethodLabel(order: any): string {
+  const raw = String(order?.paymentMethod || 'EFECTIVO').trim().toUpperCase()
+  if (raw === 'MIXED') {
+    const cash = order?.cashAmount ? `$${Math.round(order.cashAmount).toLocaleString('es-CO')}` : '$0'
+    const transfer = order?.transferAmount ? `$${Math.round(order.transferAmount).toLocaleString('es-CO')}` : '$0'
+    return `Mixto (Ef: ${cash} / Tr: ${transfer})`
+  }
+  return paymentLabels[raw] || raw || 'Efectivo'
 }
 
 export interface DualPrinterSettings {
@@ -331,12 +349,13 @@ export function buildComandaText(
     const waiterName = (order.assignee?.name || order.waiter?.name || '—').toUpperCase()
     const barrio = order.zone?.name || (order as any).zoneName || (order as any).barrio
     lines.push(
-      `[CENTER][BIG][BOLD]FACTURA Y COMANDA[/BOLD][/BIG][/CENTER]`,
-      `[CENTER][BIG][BOLD]THE VILLA DOG[/BOLD][/BIG][/CENTER]`,
-      isEdited ? divider : '',
-      isEdited ? '[CENTER][HEIGHT][BOLD]⚠️ PEDIDO EDITADO ⚠️[/BOLD][/HEIGHT][/CENTER]' : '',
-      divider,
-      `[CENTER][HEIGHT][BOLD]PEDIDO #${order.orderNumber}[/BOLD][/HEIGHT][/CENTER]`,
+      ...(isEdited ? [
+        '[CENTER][HEIGHT][BOLD]⚠️ PEDIDO EDITADO ⚠️[/BOLD][/HEIGHT][/CENTER]',
+        divider,
+        `[CENTER][HEIGHT][BOLD]PEDIDO EDITADO #${order.orderNumber}[/BOLD][/HEIGHT][/CENTER]`,
+      ] : [
+        `[CENTER][HEIGHT][BOLD]PEDIDO #${order.orderNumber}[/BOLD][/HEIGHT][/CENTER]`,
+      ]),
       `Fecha: ${new Date(order.createdAt).toLocaleString('es-CO', { timeZone: 'America/Bogota', hour12: true })}`,
       ...(order.diningTable?.label || order.tableId || order.orderType === 'LOCAL'
         ? [`[CENTER][HEIGHT][BOLD]MESA: ${(order.diningTable?.label || (order as any).tableName || (order.tableId ? 'MESA' : 'SALÓN')).toUpperCase()}[/BOLD][/HEIGHT][/CENTER]`]
@@ -379,7 +398,7 @@ export function buildComandaText(
     lines.push('[CENTER][BIG][BOLD]TOTAL A PAGAR:[/BOLD][/BIG][/CENTER]')
     lines.push(`[CENTER][BIG][BOLD]${formatCurrency(order.total || 0)}[/BOLD][/BIG][/CENTER]`)
     lines.push(divider)
-    lines.push(padLine('FORMA DE PAGO:', String(paymentLabels[order.paymentMethod] || order.paymentMethod || 'EFECTIVO').toUpperCase()))
+    lines.push(padLine('FORMA DE PAGO:', formatPaymentMethodLabel(order).toUpperCase()))
 
     if (cleanOrderNotes) {
       lines.push(divider)
@@ -401,7 +420,6 @@ export function buildComandaText(
     const driverName = order.deliveryDriver?.name || (order as any).deliveryDriverName || (order as any).driverName || (order as any).driver?.name;
 
     lines.push(
-      `[CENTER][BIG][BOLD]FACTURA Y COMANDA[/BOLD][/BIG][/CENTER]`,
       `[CENTER][BIG][BOLD]${restInfo.name}[/BOLD][/BIG][/CENTER]`,
       `[CENTER]NIT: ${restInfo.nit}[/CENTER]`,
       `[CENTER]Dir: ${restInfo.address}[/CENTER]`,
@@ -421,7 +439,7 @@ export function buildComandaText(
         ...(barrio ? [`Barrio: ${barrio.toUpperCase()}`] : []),
         ...(order.orderType === 'DELIVERY' ? [`Repartidor: ${(driverName || 'SIN ASIGNAR').toUpperCase()}`] : []),
       ] : []),
-      `Medio de pago: ${order.paymentMethod === 'MIXED' ? `MIXTO (Ef: $${((order as any).cashAmount || 0).toLocaleString('es-CO')} / Tr: $${((order as any).transferAmount || 0).toLocaleString('es-CO')})` : (order.paymentMethod === 'CASH' ? 'Efectivo' : order.paymentMethod === 'TRANSFER' ? 'Transferencia' : order.paymentMethod)}`,
+      `Medio de pago: ${formatPaymentMethodLabel(order)}`,
       `Estado: ${order.paymentStatus === 'CONFIRMED' ? 'PAGADO' : 'PENDIENTE DE PAGO'}`,
       `Atendido Por: ${(order.assignee?.name || order.waiter?.name || 'CAJERO').toUpperCase()}`,
       lineDivider,

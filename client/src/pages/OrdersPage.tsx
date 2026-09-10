@@ -1631,7 +1631,7 @@ export default function OrdersPage() {
                         alerts.toast(`Pedido #${o.orderNumber} enviado a la impresora`, 'success');
                       }
                     }}>
-                    <Printer className="h-4 w-4" /> Imprimir Factura y Comanda
+                    <Printer className="h-4 w-4" /> Imprimir Factura
                   </Button>
                 </div>
               </div>

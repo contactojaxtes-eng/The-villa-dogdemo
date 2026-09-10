@@ -877,7 +877,7 @@ export default function ActiveDeliveriesPage() {
                               <Button
                                 size="sm" 
                                 variant="ghost" 
-                                title="Imprimir Factura y Comanda"
+                                title="Imprimir Factura"
                                 className="h-7 w-7 p-0 rounded-lg text-blue-500 hover:bg-blue-500/10 cursor-pointer"
                                 onClick={async () => {
                                   const orderWithDriver = {
@@ -1305,7 +1305,7 @@ export default function ActiveDeliveriesPage() {
                           alerts.toast(`Pedido #${o.orderNumber} enviado a la impresora`, 'success');
                         }
                       }}
-                      title="Imprimir Factura y Comanda"
+                      title="Imprimir Factura"
                     >
                       <Printer className="h-3.5 w-3.5 text-blue-500" /> Imprimir Ticket
                     </Button>

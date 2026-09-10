@@ -39,11 +39,18 @@ export interface ComandaOrder {
 
 const paymentLabels: Record<string, string> = {
   CASH: 'Efectivo',
+  EFECTIVO: 'Efectivo',
   TRANSFER: 'Transferencia',
-  MIXED: 'Mixto',
+  TRANSFERENCIA: 'Transferencia',
   NEQUI: 'Nequi',
   BANCOLOMBIA: 'Bancolombia',
   DAVIPLATA: 'Daviplata',
+  CARD: 'Tarjeta / Datáfono',
+  DATAFONO: 'Datáfono',
+  CREDIT_CARD: 'Tarjeta de Crédito',
+  DEBIT_CARD: 'Tarjeta de Débito',
+  TARJETA: 'Tarjeta',
+  MIXED: 'Mixto',
 }
 
 export function printComanda(order: ComandaOrder) {
@@ -54,7 +61,7 @@ export function printComanda(order: ComandaOrder) {
 
   win.document.write(`
     <!DOCTYPE html>
-    <html><head><title>FACTURA Y COMANDA #${order.orderNumber}</title>
+    <html><head><title>PEDIDO #${order.orderNumber}</title>
     <style>
       * { margin: 0; padding: 0; box-sizing: border-box; }
       body { font-family: 'Courier New', monospace; width: 80mm; padding: 6mm; font-size: 12px; color: #000; }
@@ -76,7 +83,6 @@ export function printComanda(order: ComandaOrder) {
       @media print { body { width: 80mm; } }
     </style></head><body>
     <div class="header">
-      <h2>FACTURA Y COMANDA</h2>
       <h1>THE VILLA DOG</h1>
       <p>Sabor Auténtico · Montería, Córdoba</p>
     ${order.status === 'CANCELLED' ? `
@@ -157,7 +163,7 @@ export function printComanda(order: ComandaOrder) {
       ${(!((order as any).tableId || order.orderType === 'LOCAL') && (order.deliveryDriver?.name || order.deliveryDriverName)) ? `<div class="value" style="margin-top:4px;"><b>Domiciliario:</b> ${order.deliveryDriver?.name || order.deliveryDriverName}</div>` : ''}
       <div class="value" style="font-size:10px;margin-top:4px;">${formatDate(order.createdAt)}</div>
     </div>
-    <div class="footer">THE VILLA DOG · Factura y Comanda #${order.orderNumber}</div>
+    <div class="footer">THE VILLA DOG · Pedido #${order.orderNumber}</div>
     <script>window.onload=function(){window.print();}</script>
     </body></html>
   `)

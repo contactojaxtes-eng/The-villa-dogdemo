@@ -487,6 +487,30 @@ export class PrintService {
     return clean || 'N/A';
   }
 
+  formatPaymentMethodLabel(order: any): string {
+    const raw = String(order?.paymentMethod || 'EFECTIVO').trim().toUpperCase();
+    if (raw === 'MIXED') {
+      const cash = order?.cashAmount ? `$${Math.round(order.cashAmount).toLocaleString('es-CO')}` : '$0';
+      const transfer = order?.transferAmount ? `$${Math.round(order.transferAmount).toLocaleString('es-CO')}` : '$0';
+      return `MIXTO (EFECTIVO: ${cash} / TRANSF: ${transfer})`;
+    }
+    const map: Record<string, string> = {
+      CASH: 'EFECTIVO',
+      EFECTIVO: 'EFECTIVO',
+      TRANSFER: 'TRANSFERENCIA',
+      TRANSFERENCIA: 'TRANSFERENCIA',
+      NEQUI: 'NEQUI',
+      BANCOLOMBIA: 'BANCOLOMBIA',
+      DAVIPLATA: 'DAVIPLATA',
+      CARD: 'TARJETA / DATÁFONO',
+      CREDIT_CARD: 'TARJETA DE CRÉDITO',
+      DEBIT_CARD: 'TARJETA DE DÉBITO',
+      DATAFONO: 'DATÁFONO',
+      TARJETA: 'TARJETA',
+    };
+    return map[raw] || raw;
+  }
+
   formatCajaInvoiceText(order: any, settings?: any): string {
     const fullAddress = [order.customerAddress, order.addressReference].filter(Boolean).join(' — ');
     const grouped = this.groupOrderItems(order.items || []);
@@ -528,7 +552,6 @@ export class PrintService {
     const driverName = order.deliveryDriver?.name || order.deliveryDriverName || order.driverName || order.driver?.name;
 
     const lines: string[] = [
-      `[CENTER][BIG][BOLD]FACTURA Y COMANDA[/BOLD][/BIG][/CENTER]`,
       `[CENTER][BIG][BOLD]${restInfo.name.toUpperCase()}[/BOLD][/BIG][/CENTER]`,
       `[CENTER]NIT: ${restInfo.nit}[/CENTER]`,
       `[CENTER]Dir: ${restInfo.address.toUpperCase()}[/CENTER]`,
@@ -548,7 +571,7 @@ export class PrintService {
         ...(barrio ? [`Barrio: ${barrio.toUpperCase()}`] : []),
         ...(order.orderType === 'DELIVERY' ? [`Repartidor: ${(driverName || 'SIN ASIGNAR').toUpperCase()}`] : []),
       ] : []),
-      `Medio de pago: ${order.paymentMethod === 'MIXED' ? `MIXTO (Ef: $${(order.cashAmount || 0).toLocaleString('es-CO')} / Tr: $${(order.transferAmount || 0).toLocaleString('es-CO')})` : (order.paymentMethod === 'CASH' ? 'Efectivo' : order.paymentMethod === 'TRANSFER' ? 'Transferencia' : order.paymentMethod)}`,
+      `Medio de pago: ${this.formatPaymentMethodLabel(order)}`,
       `Estado: ${order.paymentStatus === 'CONFIRMED' ? 'PAGADO' : 'PENDIENTE DE PAGO'}`,
       `Atendido Por: ${(order.assignee?.name || order.waiter?.name || 'CAJERO').toUpperCase()}`,
       lineDivider,
@@ -726,11 +749,13 @@ export class PrintService {
     const waiterName = (order.assignee?.name || order.waiter?.name || '—').toUpperCase();
     const barrio = order.zone?.name || order.zoneName || order.barrio;
     const lines: string[] = [
-      `[CENTER][BIG][BOLD]FACTURA Y COMANDA[/BOLD][/BIG][/CENTER]`,
-      divider,
-      isEdited ? '[CENTER][BIG][BOLD]⚠️ PEDIDO EDITADO ⚠️[/BOLD][/BIG][/CENTER]' : '',
-      isEdited ? divider : '',
-      isEdited ? `[CENTER][BIG][BOLD]PEDIDO EDITADO #${order.orderNumber}[/BOLD][/BIG][/CENTER]` : `[CENTER][BIG][BOLD]PEDIDO #${order.orderNumber}[/BOLD][/BIG][/CENTER]`,
+      ...(isEdited ? [
+        '[CENTER][BIG][BOLD]⚠️ PEDIDO EDITADO ⚠️[/BOLD][/BIG][/CENTER]',
+        divider,
+        `[CENTER][BIG][BOLD]PEDIDO EDITADO #${order.orderNumber}[/BOLD][/BIG][/CENTER]`,
+      ] : [
+        `[CENTER][BIG][BOLD]PEDIDO #${order.orderNumber}[/BOLD][/BIG][/CENTER]`,
+      ]),
       `Fecha: ${new Date(order.createdAt).toLocaleString('es-CO', { timeZone: 'America/Bogota', hour12: true })}`,
       ...(isEdited ? [`Fecha Editado: ${new Date(order.updatedAt).toLocaleString('es-CO', { timeZone: 'America/Bogota', hour12: true })}`] : []),
       ...(order.diningTable?.label || order.tableId || order.orderType === 'LOCAL'
@@ -775,7 +800,7 @@ export class PrintService {
       lines.push(`DESCUENTO: -$ ${Math.round(Number(order.discount)).toLocaleString('es-CO')}`);
     }
     lines.push(`[BIG][BOLD]TOTAL A PAGAR: $ ${Math.round(Number(order.total || 0)).toLocaleString('es-CO')}[/BOLD][/BIG]`);
-    lines.push(`FORMA DE PAGO: ${String(order.paymentMethod || 'EFECTIVO').toUpperCase()}`);
+    lines.push(`FORMA DE PAGO: ${this.formatPaymentMethodLabel(order)}`);
 
     const cleanNoteText = (order.notes || '').replace(/\[\/?(PICKUP|BIG|BOLD|CENTER)\]/gi, '').trim();
     if (cleanNoteText) {
