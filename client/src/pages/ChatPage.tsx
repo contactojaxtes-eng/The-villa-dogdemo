@@ -15,7 +15,7 @@ import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
 import { 
   MessageCircle, Send, UserCheck, UserPlus, UserX, PlusCircle, User, 
-  Phone, Clock, AlertCircle, AlertTriangle, ArrowLeft, Loader2, Trash2, Paperclip, FileText,
+  Phone, Clock, AlertCircle, AlertTriangle, ArrowLeft, Loader2, Trash2, Paperclip, FileText, Camera,
   Mic, MicOff, Check, CheckCheck, CheckCircle2, Pencil, Search, Lock,
   ChevronDown, Copy, ChevronLeft, ChevronRight, MapPin, ExternalLink, Download, Forward, QrCode, Reply, X,
   MessageSquareText, Bell, BellOff, Bot, BotOff,
@@ -516,7 +516,7 @@ interface ChatInputBarProps {
   sendingPaymentQr: boolean
   fileInputRef: React.RefObject<HTMLInputElement | null>
   handleFileChange: (e: React.ChangeEvent<HTMLInputElement>) => void
-  onPasteImage?: (file: File, caption?: string) => void
+  onPasteScreenshot?: () => void
   uploadingMedia: boolean
   isRecording: boolean
   recordingTime: number
@@ -555,29 +555,10 @@ const ChatInputBar = React.memo(({
   sendingLocation,
   onTyping,
   inputRef,
-  onPasteImage
+  onPasteScreenshot
 }: ChatInputBarProps) => {
   const [localText, setLocalText] = useState('')
   const typingTimerRef = useRef<any>(null)
-
-  const handleInputPaste = (e: React.ClipboardEvent<HTMLInputElement>) => {
-    const items = e.clipboardData?.items
-    if (!items || !onPasteImage) return
-
-    for (let i = 0; i < items.length; i++) {
-      const item = items[i]
-      if (item.type.startsWith('image/')) {
-        const file = item.getAsFile()
-        if (file) {
-          e.preventDefault()
-          const currentCaption = localText.trim()
-          setLocalText('')
-          onPasteImage(file, currentCaption)
-          return
-        }
-      }
-    }
-  }
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = e.target.value
@@ -647,6 +628,18 @@ const ChatInputBar = React.memo(({
           type="button"
           variant="outline"
           size="icon"
+          className="h-9 w-9 rounded-xl border-[var(--border-subtle)] hover:bg-[var(--bg-hover)] text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 shrink-0 flex items-center justify-center cursor-pointer"
+          onClick={onPasteScreenshot}
+          disabled={disabled || uploadingMedia || isRecording || sendingMenu || sendingPaymentQr}
+          title="Pegar captura de pantalla (Ctrl + X)"
+        >
+          <Camera className="h-4 w-4" />
+        </Button>
+
+        <Button
+          type="button"
+          variant="outline"
+          size="icon"
           className="h-9 w-9 rounded-xl border-[var(--border-subtle)] hover:bg-[var(--bg-hover)] text-[var(--text-secondary)] shrink-0 flex items-center justify-center cursor-pointer"
           onClick={onSendLocation}
           disabled={disabled || uploadingMedia || isRecording || sendingMenu || sendingPaymentQr || sendingLocation}
@@ -700,7 +693,6 @@ const ChatInputBar = React.memo(({
           className="min-w-0 flex-1 h-10 sm:h-11 rounded-xl bg-[var(--bg-elevated)] border-[var(--border-subtle)] text-[var(--text-primary)] text-base sm:text-xs px-3 sm:px-4"
           value={localText}
           onChange={handleInputChange}
-          onPaste={handleInputPaste}
           placeholder={placeholder}
           disabled={disabled || uploadingMedia}
           inputMode="text"
@@ -2255,11 +2247,6 @@ function ChatPage() {
   }
 
   const openMediaPreview = (file: File, initialCaption = '') => {
-    // Evitar estrictamente doble disparo simultáneo
-    const now = Date.now()
-    if (now - lastPasteTimeRef.current < 600) return
-    lastPasteTimeRef.current = now
-
     if (file.type.startsWith('image/')) {
       const previewUrl = URL.createObjectURL(file)
       setPendingMedia({
@@ -2293,34 +2280,72 @@ function ChatPage() {
     openMediaPreview(file)
   }
 
+  const handlePasteScreenshotFromClipboard = async () => {
+    const now = Date.now()
+    if (now - lastPasteTimeRef.current < 600) return
+    lastPasteTimeRef.current = now
+
+    if (!navigator.clipboard || !navigator.clipboard.read) {
+      alerts.toast('Lectura directa de portapapeles no soportada en este navegador.')
+      return
+    }
+
+    try {
+      const items = await navigator.clipboard.read()
+      let foundImage = false
+
+      for (const item of items) {
+        const imageType = item.types.find(t => t.startsWith('image/'))
+        if (imageType) {
+          foundImage = true
+          const blob = await item.getType(imageType)
+          const ext = imageType === 'image/jpeg' ? 'jpg' : imageType === 'image/webp' ? 'webp' : 'png'
+          const file = new File([blob], `captura_${Date.now()}.${ext}`, { type: imageType })
+          openMediaPreview(file)
+          return
+        }
+      }
+
+      if (!foundImage) {
+        alerts.toast('No hay ninguna captura de pantalla en el portapapeles.')
+      }
+    } catch (err: any) {
+      console.warn('Error leyendo portapapeles:', err)
+      alerts.toast('No se pudo acceder a la captura. Asegúrate de haber copiado una imagen.')
+    }
+  }
+
   useEffect(() => {
-    const handleGlobalPaste = (e: ClipboardEvent) => {
-      const currentSession = activeSessionRef.current
-      if (!currentSession) return
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Atajo exclusivo: Ctrl + X (o Cmd + X) para pegar captura de pantalla en el sistema
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'x' || e.key === 'X')) {
+        const currentSession = activeSessionRef.current
+        if (!currentSession) return
 
-      // No interceptar si hay algún modal abierto (incluyendo la vista previa)
-      const isModalOpen = document.querySelector('[role="dialog"]') !== null
-      if (isModalOpen) return
+        // Si hay algún diálogo abierto, no interferir
+        const isModalOpen = document.querySelector('[role="dialog"]') !== null
+        if (isModalOpen) return
 
-      const items = e.clipboardData?.items
-      if (!items) return
-
-      for (let i = 0; i < items.length; i++) {
-        const item = items[i]
-        if (item.type.startsWith('image/')) {
-          const file = item.getAsFile()
-          if (file) {
-            e.preventDefault()
-            e.stopPropagation()
-            openMediaPreview(file)
+        // Si el usuario tiene texto seleccionado dentro de un input/textarea, permitir el CORTAR texto normal
+        const target = e.target as HTMLElement | null
+        if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) {
+          const inputEl = target as HTMLInputElement | HTMLTextAreaElement
+          if (typeof inputEl.selectionStart === 'number' && 
+              typeof inputEl.selectionEnd === 'number' && 
+              inputEl.selectionStart !== inputEl.selectionEnd) {
             return
           }
         }
+
+        // Interceptar Ctrl + X para pegar la captura de pantalla
+        e.preventDefault()
+        e.stopPropagation()
+        void handlePasteScreenshotFromClipboard()
       }
     }
 
-    window.addEventListener('paste', handleGlobalPaste)
-    return () => window.removeEventListener('paste', handleGlobalPaste)
+    window.addEventListener('keydown', handleKeyDown, true)
+    return () => window.removeEventListener('keydown', handleKeyDown, true)
   }, [])
 
   // Send message with 0ms Optimistic UI for instant responsiveness
@@ -4236,7 +4261,7 @@ function ChatPage() {
                     sendingPaymentQr={sendingPaymentQr}
                     fileInputRef={fileInputRef}
                     handleFileChange={handleFileChange}
-                    onPasteImage={openMediaPreview}
+                    onPasteScreenshot={handlePasteScreenshotFromClipboard}
                     uploadingMedia={uploadingMedia}
                     isRecording={isRecording}
                     recordingTime={recordingTime}
