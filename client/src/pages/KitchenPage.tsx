@@ -35,6 +35,68 @@ import { cn } from '@/lib/utils'
 
 type KitchenTab = 'ALL_ACTIVE' | 'NEW' | 'PREPARING' | 'READY' | 'HISTORY'
 
+
+type GroupedKitchenItem = KitchenTicketItemSummary & {
+  additions?: KitchenTicketItemSummary[]
+}
+
+function groupKitchenItems(items: KitchenTicketItemSummary[]): GroupedKitchenItem[] {
+  if (!items || items.length === 0) return []
+  const baseItems: GroupedKitchenItem[] = []
+  const additions: KitchenTicketItemSummary[] = []
+
+  for (const item of items) {
+    const notesStr = (item.notes || '').trim().toLowerCase()
+    const nameLower = (item.nameSnapshot || '').trim().toLowerCase()
+    const isAddition = notesStr.startsWith('adición para:') ||
+                       notesStr.startsWith('adicion para:') ||
+                       notesStr.startsWith('para:') ||
+                       nameLower.startsWith('adición') ||
+                       nameLower.startsWith('adicion')
+
+    if (isAddition) {
+      additions.push(item)
+    } else {
+      baseItems.push({ ...item, additions: [] })
+    }
+  }
+
+  for (const add of additions) {
+    const notesStr = (add.notes || '').trim()
+    const parentName = notesStr
+      .replace(/^(adici[oó]ns+)?para:s*/i, '')
+      .replace(/\[(para llevar|mesa)\]/gi, '')
+      .replace(/\(#[-_\w]+\)/g, '')
+      .trim()
+      .toLowerCase()
+
+    const isTakeaway = notesStr.toLowerCase().includes('llevar')
+
+    let parent = baseItems.find(b => {
+      const bName = (b.nameSnapshot || '').trim().toLowerCase()
+      const bTakeaway = (b.notes || '').toLowerCase().includes('llevar')
+      return bName === parentName && bTakeaway === isTakeaway
+    })
+
+    if (!parent && parentName) {
+      parent = baseItems.find(b => (b.nameSnapshot || '').trim().toLowerCase() === parentName)
+    }
+
+    if (!parent && baseItems.length === 1) {
+      parent = baseItems[0]
+    }
+
+    if (parent) {
+      if (!parent.additions) parent.additions = []
+      parent.additions.push(add)
+    } else {
+      baseItems.push({ ...add, additions: [] })
+    }
+  }
+
+  return baseItems
+}
+
 export default function KitchenPage() {
   const { user } = useAuth()
   const [tickets, setTickets] = useState<KitchenTicketSummary[]>([])
@@ -575,21 +637,27 @@ export default function KitchenPage() {
     }
   }
 
+  // Reloj dinámico que actualiza los tiempos en vivo sin recargar
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 15000)
+    return () => clearInterval(timer)
+  }, [])
+
   // Cálculo de minutos transcurridos
   const getMinutesAgo = (dateStr?: string) => {
     if (!dateStr) return null
-    const diff = Math.floor((Date.now() - new Date(dateStr).getTime()) / 60000)
+    const diff = Math.floor((now - new Date(dateStr).getTime()) / 60000)
     return diff < 0 ? 0 : diff
   }
 
   const delayedActiveCount = useMemo(() => {
-    const now = Date.now()
     return scopedTickets.filter(ticket => {
       if (!['NEW', 'PREPARING'].includes(ticket.status)) return false
       const createdAt = new Date(ticket.order?.createdAt || ticket.createdAt || '').getTime()
       return Number.isFinite(createdAt) && now - createdAt >= 15 * 60 * 1000
     }).length
-  }, [scopedTickets])
+  }, [scopedTickets, now])
 
   const activeFilterCount = Number(stationFilter !== 'ALL') + Number(cookFilter !== 'ALL')
   const activeTabLabel: Record<KitchenTab, string> = {
@@ -947,7 +1015,7 @@ export default function KitchenPage() {
             const hasActiveItems = ticket.items?.some(i => i.changeType !== 'REMOVED')
             const isEditedDelta = Boolean(ticket.isEdited)
             const isFullyCancelled = ticket.status === 'CANCELLED' || (!hasActiveItems && !isEditedDelta)
-            const minutesAgo = getMinutesAgo(ticket.order?.createdAt)
+            const minutesAgo = getMinutesAgo(ticket.order?.createdAt || ticket.createdAt)
             const isDelayed = minutesAgo !== null && minutesAgo >= 15
             const isWarning = minutesAgo !== null && minutesAgo >= 10 && !isDelayed
 
@@ -1028,13 +1096,13 @@ export default function KitchenPage() {
                         <CheckCircle2 className="h-3 w-3" /> Despachado
                       </span>
                     ) : (
-                      <div className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-black flex items-center gap-1 ${
-                        isDelayed ? 'bg-rose-500/15 text-rose-700 dark:text-rose-400 animate-pulse' :
-                        isWarning ? 'bg-amber-500/15 text-amber-700 dark:text-amber-400' :
-                        'bg-[var(--bg-elevated)] text-[var(--text-secondary)]'
+                      <div className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-black flex items-center gap-1 border ${
+                        isDelayed ? 'bg-rose-500/20 border-rose-500/50 text-rose-700 dark:text-rose-400 animate-pulse ring-2 ring-rose-500/25' :
+                        isWarning ? 'bg-amber-500/20 border-amber-500/50 text-amber-800 dark:text-amber-300' :
+                        'bg-emerald-500/15 border-emerald-500/30 text-emerald-800 dark:text-emerald-300'
                       }`}>
-                        <Clock className="h-3 w-3" />
-                        {minutesAgo !== null ? `${minutesAgo} min` : 'Reciente'}
+                        <Clock className="h-3.5 w-3.5" />
+                        <span>{minutesAgo !== null ? (isDelayed ? `🚨 ${minutesAgo} min · DEMORADO` : `${minutesAgo} min`) : 'Reciente'}</span>
                       </div>
                     )}
                   </div>
@@ -1057,7 +1125,7 @@ export default function KitchenPage() {
                       : []
 
                     if (isEditedTicket && !isFullyCancelled && activeTab !== 'HISTORY') {
-                      const deltaItems = actionItems.length > 0 ? actionItems : (ticket.items || [])
+                      const deltaItems = groupKitchenItems(actionItems.length > 0 ? actionItems : (ticket.items || []))
                       const hasAdded = deltaItems.some(item => item.changeType === 'ADDED' || (item.changeType === 'MODIFIED' && item.quantity > (item.previousQty ?? 0)))
                       const hasReduced = deltaItems.some(item => item.changeType === 'REMOVED' || (item.changeType === 'MODIFIED' && item.previousQty !== null && item.previousQty !== undefined && item.quantity < item.previousQty))
                       const hasNoteChange = deltaItems.some(item => item.changeType === 'MODIFIED' && item.notes !== item.previousNotes)
@@ -1090,7 +1158,10 @@ export default function KitchenPage() {
                               const isAdded = !isRemoved && (item.changeType === 'ADDED' || quantityDiff > 0)
                               const noteChanged = item.changeType === 'MODIFIED' && item.notes !== item.previousNotes
                               const displayQuantity = item.changeType === 'MODIFIED' && quantityDiff !== 0 ? Math.abs(quantityDiff) : item.quantity
-                              const cleanNotes = (item.notes || '').replace(/\[PARA LLEVAR\]/gi, '').replace(/\[MESA\]/gi, '').trim()
+                              let cleanNotes = (item.notes || '').replace(/\[PARA LLEVAR\]/gi, '').replace(/\[MESA\]/gi, '').trim()
+if (item.additions && item.additions.length > 0) {
+  cleanNotes = cleanNotes.replace(/\(\+\s*Con\s+[^)]+\)/gi, '').replace(/\+\s*Con\s+[^\n]+/gi, '').trim()
+}
                               const isTakeaway = (item.notes || '').toLowerCase().includes('llevar')
 
                               return (
@@ -1104,6 +1175,18 @@ export default function KitchenPage() {
                                         {noteChanged && !isAdded && !isRemoved && <span className="rounded-md bg-amber-600 px-1.5 py-0.5 text-[9px] font-black text-white">NOTA ACTUALIZADA</span>}
                                       </div>
                                       {cleanNotes && <p className="mt-1 border-l-2 border-amber-500 bg-amber-500/10 py-0.5 pl-1.5 text-xs font-bold text-amber-700 dark:text-amber-300">👉 {cleanNotes}</p>}
+                                      {item.additions && item.additions.length > 0 && (
+                                        <div className="mt-1.5 space-y-1 pl-2 border-l-2 border-amber-500/50">
+                                          {item.additions.map(add => (
+                                            <div key={add.id} className="flex items-center gap-1.5 text-xs font-black text-amber-900 dark:text-amber-300 bg-amber-500/15 border border-amber-500/30 px-2 py-0.5 rounded-lg w-fit">
+                                              <span className="bg-amber-500 text-slate-950 px-1.5 py-0.2 rounded text-[9px] font-black uppercase tracking-wider">
+                                                + ADICIÓN ({add.quantity}x)
+                                              </span>
+                                              <span className="capitalize">{add.nameSnapshot.replace(/^adici[oó]n\s+de\s+/i, '').replace(/^adicion\s+de\s+/i, '')}</span>
+                                            </div>
+                                          ))}
+                                        </div>
+                                      )}
                                     </div>
                                     <span className={cn('shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-black tracking-wider', isTakeaway ? 'bg-amber-500 text-slate-950' : 'bg-blue-500/10 text-blue-700 dark:text-blue-300')}>{isTakeaway ? '🥡 LLEVAR' : '🍽️ MESA'}</span>
                                   </div>
@@ -1117,9 +1200,10 @@ export default function KitchenPage() {
 
                     // En historial los tickets editados muestran solo su diferencia.
                     // Los tickets normales siguen mostrando el pedido completo.
-                    const visibleItems = isEditedTicket
+                    const rawItems = isEditedTicket
                       ? (actionItems.length > 0 ? actionItems : (ticket.items || []))
                       : (ticket.items || []).filter((i: KitchenTicketItemSummary) => i.changeType !== 'REMOVED')
+                    const visibleItems = groupKitchenItems(rawItems)
 
                     return (
                       <div className="mt-2.5 space-y-1.5">
@@ -1169,6 +1253,18 @@ export default function KitchenPage() {
                                     <p className="text-xs font-bold text-amber-700 dark:text-amber-400 mt-1 pl-1.5 border-l-2 border-amber-500 bg-amber-500/10 py-0.5 rounded-r">
                                       👉 {cleanNotes}
                                     </p>
+                                  )}
+                                  {item.additions && item.additions.length > 0 && (
+                                    <div className="mt-1.5 space-y-1 pl-2 border-l-2 border-amber-500/50">
+                                      {item.additions.map(add => (
+                                        <div key={add.id} className="flex items-center gap-1.5 text-xs font-black text-amber-900 dark:text-amber-300 bg-amber-500/15 border border-amber-500/30 px-2 py-0.5 rounded-lg w-fit">
+                                          <span className="bg-amber-500 text-slate-950 px-1.5 py-0.2 rounded text-[9px] font-black uppercase tracking-wider">
+                                            + ADICIÓN ({add.quantity}x)
+                                          </span>
+                                          <span className="capitalize">{add.nameSnapshot.replace(/^adici[oó]n\s+de\s+/i, '').replace(/^adicion\s+de\s+/i, '')}</span>
+                                        </div>
+                                      ))}
+                                    </div>
                                   )}
                                 </div>
                                 <span className={`shrink-0 rounded-full px-1.5 py-0.2 text-[10px] font-black tracking-wider ${isTakeaway ? 'bg-amber-500 text-slate-950' : 'bg-blue-500/10 text-blue-700 dark:text-blue-300'}`}>

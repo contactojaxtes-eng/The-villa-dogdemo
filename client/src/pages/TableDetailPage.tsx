@@ -9,7 +9,7 @@ import { Input } from '@/components/ui/input'
 import { Dialog, DialogContent } from '@/components/ui/dialog'
 import { api } from '@/lib/api'
 import { alerts } from '@/lib/alerts'
-import { formatCurrency } from '@/lib/utils'
+import { formatCurrency, cn } from '@/lib/utils'
 import { useAuth } from '@/hooks/useAuth'
 
 interface ProofPhoto {
@@ -38,6 +38,12 @@ export default function TableDetailPage() {
   const cameraInputRef = useRef<HTMLInputElement>(null)
   const galleryInputRef = useRef<HTMLInputElement>(null)
   const [actionLoading, setActionLoading] = useState<string | null>(null)
+  const [now, setNow] = useState(() => Date.now())
+
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 15000)
+    return () => clearInterval(timer)
+  }, [])
 
   const load = () => api.get<any>(`/tables/${id}`).then(t => {
     setTable(t)
@@ -371,6 +377,26 @@ export default function TableDetailPage() {
                   ? (table.kitchenStatus === 'READY' ? '✅ COBRADA · ¡LISTA PARA ENTREGAR! 🏃' : '✅ COBRADA · EN PREPARACIÓN 👨‍🍳')
                   : 'MESA ABIERTA'}
               </span>
+              {(() => {
+                const activeOrders = (table.orders || []).filter((o: any) => o.status !== 'CANCELLED')
+                const pendingOrders = activeOrders.filter((o: any) => o.kitchenStatus !== 'READY' && o.kitchenStatus !== 'SERVED')
+                const targetOrder = pendingOrders[0] || activeOrders[activeOrders.length - 1]
+                const tableElapsed = targetOrder?.createdAt
+                  ? Math.max(0, Math.floor((now - new Date(targetOrder.createdAt).getTime()) / 60000))
+                  : null
+                if (table.status === 'CLOSED' || tableElapsed === null) return null
+                return (
+                  <span className={cn(
+                    'rounded-full px-2.5 py-0.5 text-[10px] font-black tracking-wider flex items-center gap-1 border',
+                    tableElapsed >= 20 ? 'bg-rose-500/15 text-rose-700 dark:text-rose-400 border-rose-500/30 animate-pulse ring-1 ring-rose-500/20' :
+                    tableElapsed >= 12 ? 'bg-amber-500/15 text-amber-800 dark:text-amber-300 border-amber-500/30' :
+                    'bg-blue-500/10 text-blue-700 dark:text-blue-300 border-blue-500/20'
+                  )}>
+                    <Clock className="h-3 w-3" />
+                    <span>{tableElapsed >= 20 ? `🚨 ${tableElapsed} min en atención` : `${tableElapsed} min en atención`}</span>
+                  </span>
+                )
+              })()}
             </div>
             <div className="flex flex-wrap items-center gap-2 mt-1 text-xs text-[var(--text-secondary)]">
               <span className="flex items-center gap-1 font-medium text-[var(--text-secondary)] bg-[var(--bg-elevated)] border border-[var(--border-subtle)] px-2 py-0.5 rounded-md">
@@ -460,7 +486,23 @@ export default function TableDetailPage() {
                       👤 {order.waiter?.name || table.openedBy?.name || 'Mesero'}
                     </span>
                   </div>
-                  <p className="text-[11px] text-[var(--text-secondary)] mt-0.5">{new Date(order.createdAt).toLocaleTimeString()} - Cocina: <b className="text-[var(--accent)]">{order.kitchenStatus}</b></p>
+                  <p className="text-[11px] text-[var(--text-secondary)] mt-0.5 flex items-center gap-1.5 flex-wrap">
+                    <span>{new Date(order.createdAt).toLocaleTimeString()} - Cocina: <b className="text-[var(--accent)]">{order.kitchenStatus}</b></span>
+                    {(() => {
+                      const orderMin = Math.max(0, Math.floor((now - new Date(order.createdAt).getTime()) / 60000))
+                      return (
+                        <span className={cn(
+                          'rounded-full px-2 py-0.2 text-[10px] font-black border flex items-center gap-1',
+                          orderMin >= 20 ? 'bg-rose-500/15 text-rose-700 dark:text-rose-400 border-rose-500/30 animate-pulse' :
+                          orderMin >= 12 ? 'bg-amber-500/15 text-amber-800 dark:text-amber-300 border-amber-500/30' :
+                          'bg-blue-500/10 text-blue-700 dark:text-blue-300 border-blue-500/20'
+                        )}>
+                          <Clock className="h-2.5 w-2.5" />
+                          <span>{orderMin >= 20 ? `🚨 Hace ${orderMin} min` : `Hace ${orderMin} min`}</span>
+                        </span>
+                      )
+                    })()}
+                  </p>
                 </div>
                 <span className={`rounded-full px-2 py-0.5 text-[10px] font-black ${
                   order.status === 'CANCELLED'

@@ -46,7 +46,7 @@ type CartItem = {
   additions?: CartAddition[]
 }
 
-const QUICK_CHIPS = ['Sin cebolla', 'Sin ripio', 'Sin piña', 'Sin salsas', 'Salsas aparte', 'Bien dorado']
+const QUICK_CHIPS = ['Sin cebolla', 'Sin ripio', 'Sin piña', 'Sin salsas', 'Sin queso', 'Bien caliente']
 
 function genKey(prefix = 'item'): string {
   if (typeof crypto !== 'undefined' && crypto.randomUUID) {
@@ -789,7 +789,7 @@ export default function TableOrderPage() {
           itemsPayload.push({
             menuItemId: add.id,
             quantity: item.quantity,
-            notes: `Para: ${item.name} ${item.takeaway ? '[PARA LLEVAR]' : '[MESA]'}`,
+            notes: `Adición para: ${item.name} ${item.takeaway ? '[PARA LLEVAR]' : '[MESA]'}`,
           })
         }
       }
@@ -1377,7 +1377,7 @@ export default function TableOrderPage() {
                   <Input
                     value={item.notes || ''}
                     onChange={e => updateNotes(item.cartKey, e.target.value)}
-                    placeholder={item.quantity > 1 ? `Nota general (o toca abajo para separar 1)...` : "Nota (sin cebolla, salsas aparte...)"}
+                    placeholder={item.quantity > 1 ? `Nota general (o toca abajo para separar 1)...` : "Nota (sin cebolla, sin queso, bien caliente...)"}
                     className="mt-2 h-8 text-xs bg-[var(--bg-panel)] rounded-lg"
                   />
 
@@ -1639,7 +1639,7 @@ export default function TableOrderPage() {
                   <Input
                     value={item.notes || ''}
                     onChange={e => updateNotes(item.cartKey, e.target.value)}
-                    placeholder={item.quantity > 1 ? `Nota para todos (o toca un chip abajo)...` : "Nota: sin cebolla, salsas aparte..."}
+                    placeholder={item.quantity > 1 ? `Nota para todos (o toca un chip abajo)...` : "Nota: sin cebolla, sin queso, bien caliente..."}
                     className="mt-2 h-8 text-xs bg-[var(--bg-panel)] rounded-lg"
                   />
 
