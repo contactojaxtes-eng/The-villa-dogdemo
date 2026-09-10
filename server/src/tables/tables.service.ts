@@ -26,6 +26,17 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
   ) {}
 
   onModuleInit() {
+    // Purgar inmediatamente cualquier ticket de domicilio residual para que las tablets de cocina queden 100% limpias para mesas
+    this.prisma.kitchenTicket.deleteMany({
+      where: {
+        OR: [
+          { tableId: null },
+          { order: { tableId: null } },
+          { order: { orderType: { in: ['DELIVERY', 'PICKUP'] } } },
+        ],
+      },
+    }).catch(() => {});
+
     this.cookTimerInterval = setInterval(() => {
       this.checkExpiredCookBreaks().catch(() => {});
       this.checkExpiredDeliveryCookBreaks().catch(() => {});
@@ -915,6 +926,12 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
     });
     if (!order) throw new NotFoundException('Pedido no encontrado');
 
+    // Domicilios es 100% independiente y opera por impresora física térmica.
+    // Las tablets de cocina son EXCLUSIVAMENTE para pedidos de mesas de salón/meseras.
+    if (!order.tableId || ['DELIVERY', 'PICKUP'].includes(order.orderType) || order.source !== 'TABLE') {
+      return [];
+    }
+
     const isSalon = !!(order.tableId || order.orderType === 'DINE_IN');
     const allActiveStations = await this.getStations(db);
     const settings = await this.getKitchenSettings(db);
@@ -1312,40 +1329,9 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
     return tickets;
   }
 
-  async syncDeliveryKitchenTickets(orderId: string, actorId?: string, beforeItems: any[] = []) {
-    const events: any[] = [];
-    let orderSummary = '';
-    let updatedOrderRef: any = null;
-    await this.prisma.$transaction(async tx => {
-      await lockOperation(tx);
-      const currentOrder = await tx.order.findUnique({
-        where: { id: orderId },
-        include: { items: { include: { menuItem: { include: { category: true } } } }, waiter: true, diningTable: true },
-      });
-      if (!currentOrder) throw new NotFoundException('Pedido no encontrado');
-      updatedOrderRef = currentOrder;
-
-      const menuIds = [...new Set((beforeItems || []).map(item => item.menuItemId).filter(Boolean))];
-      const previousMenuItems = menuIds.length
-        ? await tx.menuItem.findMany({ where: { id: { in: menuIds } }, include: { category: true } })
-        : [];
-      const previousMenuMap = new Map(previousMenuItems.map(item => [item.id, item]));
-      const enrichedBefore = (beforeItems || []).map(item => ({
-        ...item,
-        menuItem: item.menuItem || previousMenuMap.get(item.menuItemId),
-      }));
-      const { summary, changeMap } = await this.buildChangeSummary(enrichedBefore, currentOrder.items, tx);
-      orderSummary = summary;
-      await this.createKitchenTickets(orderId, actorId, true, summary, changeMap, enrichedBefore, tx, events);
-    }, operationTransaction);
-
-    for (const event of events) {
-      if (event.isEdited) this.socketGateway.emitKitchenTicketEdited(event.ticket);
-      else if (event.created) this.socketGateway.emitKitchenTicketCreated(event.ticket);
-      else this.socketGateway.emitKitchenTicketUpdated(event.ticket);
-    }
-    this.socketGateway.server.emit('tableOrderEdited', { orderId, changeSummary: orderSummary });
-    if (updatedOrderRef) this.socketGateway.server.emit('orderUpdated', updatedOrderRef);
+  async syncDeliveryKitchenTickets(_orderId: string, _actorId?: string, _beforeItems: any[] = []) {
+    // Domicilios opera 100% independiente de las tablets de cocina de mesas
+    return;
   }
 
   async updateKitchenTicket(ticketId: string, status: string, user: any) {
@@ -1387,6 +1373,14 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
 
   async listKitchenTickets(user: any, params: { status?: string; stationId?: string; currentShift?: string | boolean }) {
     const where: any = {};
+
+    // Las tablets de cocina de salón/meseras muestran EXCLUSIVAMENTE pedidos de mesas.
+    // Domicilios es 100% independiente y nunca debe salir en las tablets de cocina.
+    where.tableId = { not: null };
+    where.order = {
+      tableId: { not: null },
+    };
+
     if (params.status && params.status !== 'ALL') {
       where.status = params.status;
     } else if (params.status === 'ALL') {

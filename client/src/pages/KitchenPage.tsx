@@ -199,7 +199,11 @@ export default function KitchenPage() {
   const load = useCallback((showSpinner = false) => {
     if (showSpinner) setLoading(true)
     api.get<KitchenTicketSummary[]>('/kitchen/tickets?currentShift=true', { force: true })
-      .then(setTickets)
+      .then(items => {
+        // Domicilios opera 100% por impresora física y nunca debe salir en las tablets de cocina de salón/meseras
+        const onlyTableTickets = (items || []).filter(t => Boolean(t.tableId || t.order?.tableId || t.table?.id || (t.order as any)?.diningTable || t.order?.orderType === 'LOCAL'))
+        setTickets(onlyTableTickets)
+      })
       .catch(console.error)
       .finally(() => {
         if (showSpinner) setLoading(false)
@@ -212,6 +216,10 @@ export default function KitchenPage() {
 
   // Determinar si un ticket pertenece específicamente a este cocinero / estación
   const isTicketForThisCook = useCallback((ticket: KitchenTicketSummary) => {
+    // Domicilios opera 100% independiente de las tablets de cocina de salón/meseras
+    const isTable = Boolean(ticket.tableId || ticket.order?.tableId || ticket.table?.id || (ticket.order as any)?.diningTable || ticket.order?.orderType === 'LOCAL')
+    if (!isTable) return false
+
     // Si es Admin, Superadmin o Cajero en la pantalla de cocina, ve todo
     if (['ADMIN', 'SUPERADMIN', 'CASHIER'].includes(user?.role || '')) {
       return true

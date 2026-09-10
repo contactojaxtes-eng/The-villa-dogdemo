@@ -853,19 +853,8 @@ export class OrdersService implements OnModuleInit {
       this.socketGateway.emitWhatsApp('whatsappSessionUpdated', { orderCreated: true, phone: order.customerPhone, orderNumber: order.orderNumber, status: order.status });
     }
 
-    let deliveryKitchenMode = 'PRINT';
-    let deliveryAutoPrint = true;
-    if (this.isDeliveryKitchenOrder(order) && this.tablesService) {
-      try {
-        const kitchenSettings = await this.tablesService.getKitchenSettings();
-        deliveryKitchenMode = String(kitchenSettings?.deliveryKitchenMode || 'PRINT').toUpperCase();
-        deliveryAutoPrint = kitchenSettings?.deliveryAutoPrint !== false;
-        const actorId = order.waiterId || order.assignedTo;
-        await this.tablesService.createKitchenTickets(order.id, actorId || undefined);
-      } catch (kitchenErr) {
-        this.logger.warn(`No se pudo enviar el pedido #${order.orderNumber} a la cocina de domicilios:`, kitchenErr);
-      }
-    }
+    // Los pedidos de domicilios se gestionan 100% por impresión térmica física independiente.
+    // NO se envían a las tablets de cocina de meseras/salón.
 
     try {
       if (this.isSendableWhatsAppPhone(order.customerPhone, order.orderType, order.customerName, order.tableId)) {
@@ -920,8 +909,13 @@ export class OrdersService implements OnModuleInit {
 
     try {
       const printerSettings = await this.printService.getPrinterSettings();
+      let deliveryAutoPrint = true;
+      if (this.tablesService) {
+        const kSettings = await this.tablesService.getKitchenSettings().catch(() => null);
+        if (kSettings && kSettings.deliveryAutoPrint === false) deliveryAutoPrint = false;
+      }
       const shouldPrint = this.isDeliveryKitchenOrder(order)
-        ? deliveryAutoPrint && ['PRINT', 'BOTH'].includes(deliveryKitchenMode)
+        ? deliveryAutoPrint
         : printerSettings?.autoPrint === true;
       if (shouldPrint) {
         const fullOrder = await this.prisma.order.findUnique({
@@ -1259,19 +1253,14 @@ export class OrdersService implements OnModuleInit {
     const itemsOrNotesChanged = oldItemsSignature !== newItemsSignature || oldNotes !== newNotes;
     const itemsActuallyChanged = oldItemsSignature !== newItemsSignature;
 
-    let deliveryKitchenMode = 'PRINT';
+    const deliveryKitchenMode = 'PRINT';
     let deliveryAutoPrint = true;
     if (this.tablesService) {
       try {
         const kitchenSettings = await this.tablesService.getKitchenSettings();
-        deliveryKitchenMode = String(kitchenSettings?.deliveryKitchenMode || 'PRINT').toUpperCase();
         deliveryAutoPrint = kitchenSettings?.deliveryAutoPrint !== false;
-        if (itemsOrNotesChanged) {
-          const actorId = user?.id || data?.waiterId || data?.userId || updated.waiterId || updated.assignedTo || existing.waiterId || existing.assignedTo;
-          await this.tablesService.syncDeliveryKitchenTickets(updated.id, actorId || undefined, existing.items || []);
-        }
       } catch (kitchenErr) {
-        this.logger.warn(`No se pudo sincronizar la cocina del pedido #${updated.orderNumber}:`, kitchenErr);
+        this.logger.warn(`No se pudo leer la configuración de cocina para el pedido #${updated.orderNumber}:`, kitchenErr);
       }
     }
 
@@ -1279,7 +1268,7 @@ export class OrdersService implements OnModuleInit {
       if (itemsActuallyChanged) {
         const printerSettings = await this.printService.getPrinterSettings();
         const shouldPrint = this.isDeliveryKitchenOrder(updated)
-          ? deliveryAutoPrint && ['PRINT', 'BOTH'].includes(deliveryKitchenMode)
+          ? deliveryAutoPrint
           : printerSettings?.autoPrint === true;
         if (shouldPrint) {
           const fullOrder = await this.prisma.order.findUnique({
