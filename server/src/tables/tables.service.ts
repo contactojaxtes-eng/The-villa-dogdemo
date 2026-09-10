@@ -418,7 +418,14 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
       where: { id: stationId },
       include: { users: true },
     });
-    const stationUsers = (station?.users || []).filter(u => u.active);
+    let stationUsers = (station?.users || []).filter(u => u.active);
+    if (stationUsers.length === 0) {
+      // Fallback: Si la estación no tiene cocineros vinculados explícitamente,
+      // buscar todos los usuarios activos con rol KITCHEN para garantizar la alternancia 1 a 1
+      stationUsers = await db.user.findMany({
+        where: { role: 'KITCHEN', active: true },
+      });
+    }
     if (stationUsers.length === 0) return null;
 
     // Domicilios y salón mantienen disponibilidades separadas. Así, una pausa
@@ -1368,11 +1375,16 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
         .map(([stationId]) => stationId);
       where.OR = [
         { assignedToId: user.id },
-        { station: { users: { some: { id: user.id } } } },
-        { station: { users: { none: {} } } },
-        ...(deliveryStationIds.length > 0
-          ? [{ stationId: { in: deliveryStationIds } }]
-          : []),
+        {
+          assignedToId: null,
+          OR: [
+            { station: { users: { some: { id: user.id } } } },
+            { station: { users: { none: {} } } },
+            ...(deliveryStationIds.length > 0
+              ? [{ stationId: { in: deliveryStationIds } }]
+              : []),
+          ],
+        },
       ];
     }
 

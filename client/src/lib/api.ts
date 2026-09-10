@@ -165,6 +165,7 @@ class ApiClient {
 
   private getTtl(endpoint: string) {
     const path = endpoint.split('?')[0]
+    if (path.startsWith('/kitchen/tickets')) return 0
     if (/^\/(menu\/categories|zones|users|roles|cash-registers|kitchen\/stations|kitchen\/settings)(\/|$)/.test(path)) return 2 * 60_000
     if (path === '/auth/profile') return 60_000
     if (/(history|audit|dashboard-stats|closing)/.test(path)) return 15_000
@@ -219,7 +220,7 @@ class ApiClient {
       return
     }
     if (event.includes('Payment') || event.startsWith('payment') || event.startsWith('cash')) {
-      this.invalidateCache(['/payments', '/payment-validation', '/orders', '/tables', '/cash-registers', '/orders/dashboard-stats'])
+      this.invalidateCache(['/payments', '/payment-validation', '/orders', '/tables', '/cash-registers', '/orders/dashboard-stats', '/kitchen/'])
       return
     }
     if (event.includes('Kitchen') || event.startsWith('kitchen')) {
@@ -227,11 +228,11 @@ class ApiClient {
       return
     }
     if (event.includes('Order') || event.startsWith('order')) {
-      this.invalidateCache(['/orders', '/tables', '/payments', '/payment-validation', '/cash-registers', '/orders/dashboard-stats', '/whatsapp/sessions'])
+      this.invalidateCache(['/orders', '/tables', '/kitchen/', '/payments', '/payment-validation', '/cash-registers', '/orders/dashboard-stats', '/whatsapp/sessions'])
       return
     }
     if (event.includes('Table') || event.startsWith('table')) {
-      this.invalidateCache(['/tables', '/orders', '/payments', '/cash-registers'])
+      this.invalidateCache(['/tables', '/orders', '/kitchen/', '/payments', '/cash-registers'])
     }
   }
 
@@ -240,11 +241,11 @@ class ApiClient {
     if (path.startsWith('/whatsapp/')) {
       this.invalidateCache('/whatsapp/')
     } else if (path.startsWith('/orders')) {
-      this.invalidateCache(['/orders', '/tables', '/payments', '/payment-validation', '/cash-registers', '/orders/dashboard-stats', '/whatsapp/sessions'])
+      this.invalidateCache(['/orders', '/tables', '/kitchen/', '/payments', '/payment-validation', '/cash-registers', '/orders/dashboard-stats', '/whatsapp/sessions'])
     } else if (path.startsWith('/tables')) {
-      this.invalidateCache(['/tables', '/orders', '/payments', '/payment-validation', '/cash-registers'])
+      this.invalidateCache(['/tables', '/orders', '/kitchen/', '/payments', '/payment-validation', '/cash-registers'])
     } else if (path.startsWith('/payments') || path.startsWith('/payment-validation')) {
-      this.invalidateCache(['/payments', '/payment-validation', '/orders', '/tables', '/cash-registers', '/orders/dashboard-stats'])
+      this.invalidateCache(['/payments', '/payment-validation', '/orders', '/tables', '/cash-registers', '/orders/dashboard-stats', '/kitchen/'])
     } else if (path.startsWith('/menu')) {
       this.invalidateCache(['/menu/', '/public/menu/'])
     } else if (path.startsWith('/zones')) {
@@ -254,7 +255,7 @@ class ApiClient {
     } else if (path.startsWith('/kitchen')) {
       this.invalidateCache(['/kitchen/', '/orders', '/tables'])
     } else if (path.startsWith('/cash-registers')) {
-      this.invalidateCache(['/cash-registers', '/payments', '/orders', '/tables'])
+      this.invalidateCache(['/cash-registers', '/payments', '/orders', '/tables', '/kitchen/'])
     } else {
       this.invalidateCache(path.split('/').slice(0, 2).join('/'))
     }

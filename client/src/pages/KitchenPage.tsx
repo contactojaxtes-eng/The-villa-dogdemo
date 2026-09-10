@@ -136,7 +136,7 @@ export default function KitchenPage() {
   // Carga inicial (silenciosa en segundo plano para no hacer parpadear la pantalla)
   const load = useCallback((showSpinner = false) => {
     if (showSpinner) setLoading(true)
-    api.get<KitchenTicketSummary[]>('/kitchen/tickets?currentShift=true')
+    api.get<KitchenTicketSummary[]>('/kitchen/tickets?currentShift=true', { force: true })
       .then(setTickets)
       .catch(console.error)
       .finally(() => {
@@ -174,6 +174,11 @@ export default function KitchenPage() {
     return true
   }, [deliveryStationIds, user?.id, user?.role])
 
+  const isTicketForThisCookRef = useRef(isTicketForThisCook)
+  useEffect(() => {
+    isTicketForThisCookRef.current = isTicketForThisCook
+  }, [isTicketForThisCook])
+
   useEffect(() => {
     const socketUrl = import.meta.env.VITE_API_URL || window.location.origin
     const socket = io(`${socketUrl}/the-villa-dog`, {
@@ -181,21 +186,26 @@ export default function KitchenPage() {
       transports: ['websocket', 'polling'],
     })
 
+    socket.on('connect', () => {
+      load(false)
+    })
+
     // TICKET CREADO
     socket.on('kitchenTicketCreated', (ticket: KitchenTicketSummary) => {
-      if (!isTicketForThisCook(ticket)) return
+      if (!isTicketForThisCookRef.current(ticket)) return
       playUrgentBell()
 
       setTickets(prev => {
         const without = prev.filter(t => t.id !== ticket.id)
         return [ticket, ...without]
       })
+      load(false)
     })
 
     // TICKET ACTUALIZADO
     socket.on('kitchenTicketUpdated', (ticket: KitchenTicketSummary) => {
+      const belongsToMe = isTicketForThisCookRef.current(ticket)
       setTickets(prev => {
-        const belongsToMe = isTicketForThisCook(ticket)
         const exists = prev.some(t => t.id === ticket.id)
         if (!exists) {
           return belongsToMe ? [ticket, ...prev] : prev
@@ -206,11 +216,14 @@ export default function KitchenPage() {
         }
         return prev.map(t => t.id === ticket.id ? ticket : t)
       })
+      if (belongsToMe) {
+        load(false)
+      }
     })
 
     // TICKET EDITADO (modificaciones de mesera)
     socket.on('kitchenTicketEdited', (ticket: KitchenTicketSummary) => {
-      if (!isTicketForThisCook(ticket)) {
+      if (!isTicketForThisCookRef.current(ticket)) {
         // Asegurar que si este cocinero tenía este ticket por error en memoria, lo retire
         setTickets(prev => prev.filter(t => t.id !== ticket.id))
         return
@@ -272,7 +285,7 @@ export default function KitchenPage() {
     socket.on('cashStatusChanged', () => load(false))
 
     return () => { socket.disconnect() }
-  }, [isDeliveryCook, isTicketForThisCook, load, user?.id, user?.name, user?.role])
+  }, [isDeliveryCook, load, user?.id, user?.name, user?.role])
 
   const consolidatedTickets = useMemo(() => {
     // Mantener cada ticket por su ID único para nunca borrar tickets previos del historial
