@@ -111,13 +111,13 @@ export default function CashControlPage() {
   const [closingDetail, setClosingDetail] = useState<ClosingDetailData | null>(null)
   const [loadingDetail, setLoadingDetail] = useState(false)
 
-  const loadData = async () => {
-    setLoading(true)
+  const loadData = async (silent = false) => {
+    if (!silent) setLoading(true)
     try {
       const [regs, history, usrList] = await Promise.all([
-        api.get<CashRegister[]>('/cash-registers'),
-        api.get<CashClosingHistory[]>('/payments/closing/history'),
-        api.get<any[]>('/users').catch(() => [])
+        api.get<CashRegister[]>('/cash-registers', { force: true }),
+        api.get<CashClosingHistory[]>('/payments/closing/history', { force: true }),
+        api.get<any[]>('/users', { force: true }).catch(() => [])
       ])
       setRegisters(regs)
       setClosings(history)
@@ -126,7 +126,7 @@ export default function CashControlPage() {
       const sums: Record<string, Summary> = {}
       for (const r of regs) {
         try {
-          const s = await api.get<Summary>(`/cash-registers/${r.id}/summary`)
+          const s = await api.get<Summary>(`/cash-registers/${r.id}/summary`, { force: true })
           if (s) sums[r.id] = s
         } catch (err) {
           console.error(`Error cargando sumario de caja ${r.id}:`, err)
@@ -134,7 +134,7 @@ export default function CashControlPage() {
       }
       
       try {
-        const nullSum = await api.get<Summary>('/cash-registers/null/summary')
+        const nullSum = await api.get<Summary>('/cash-registers/null/summary', { force: true })
         if (nullSum && nullSum.orderCount > 0) {
           sums['null'] = nullSum
         }
@@ -146,7 +146,7 @@ export default function CashControlPage() {
     } catch (e) {
       console.error('Error cargando control de caja', e)
     } finally {
-      setLoading(false)
+      if (!silent) setLoading(false)
     }
   }
 
@@ -159,7 +159,7 @@ export default function CashControlPage() {
     })
 
     const handleRefresh = () => {
-      loadData()
+      loadData(true)
     }
 
     socket.on('cashRegistersChanged', handleRefresh)
@@ -167,12 +167,16 @@ export default function CashControlPage() {
     socket.on('paymentSubmitted', handleRefresh)
     socket.on('paymentValidated', handleRefresh)
     socket.on('paymentUpdated', handleRefresh)
+    socket.on('newOrder', handleRefresh)
     socket.on('orderCreated', handleRefresh)
     socket.on('orderUpdated', handleRefresh)
     socket.on('orderStatusChanged', handleRefresh)
+    socket.on('tableCreated', handleRefresh)
+    socket.on('tableUpdated', handleRefresh)
     socket.on('tableOrderSubmitted', handleRefresh)
     socket.on('tableClosed', handleRefresh)
     socket.on('expenseCreated', handleRefresh)
+    socket.on('deliveryDriverPaid', handleRefresh)
 
     return () => {
       socket.disconnect()

@@ -81,10 +81,24 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
       if (specific) return specific;
     }
     const own = await db.cashClosing.findFirst({
-      where: { userId, isOpen: true },
+      where: {
+        userId,
+        isOpen: true,
+        cashRegister: { purpose: { not: 'DELIVERY' } },
+      },
       orderBy: { shiftStart: 'desc' },
     });
     if (own) return own;
+
+    // Priorizar un turno abierto de salón / caja principal (NUNCA caja de domicilios)
+    const salonClosing = await db.cashClosing.findFirst({
+      where: {
+        isOpen: true,
+        cashRegister: { purpose: { not: 'DELIVERY' } },
+      },
+      orderBy: { shiftStart: 'desc' },
+    });
+    if (salonClosing) return salonClosing;
 
     return db.cashClosing.findFirst({ where: { isOpen: true }, orderBy: { shiftStart: 'desc' } });
   }
@@ -217,7 +231,7 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
   async createTable(data: { label: string; notes?: string; cashRegisterId?: string }, user: any) {
     if (!data.label?.trim()) throw new BadRequestException('El nombre de la mesa es obligatorio');
     const closing = await this.getActiveClosing(user.id, data.cashRegisterId);
-    const defaultRegister = await this.prisma.cashRegister.findFirst({ where: { active: true } });
+    const defaultRegister = await this.prisma.cashRegister.findFirst({ where: { active: true, purpose: { not: 'DELIVERY' } } });
     const effectiveRegisterId = closing?.cashRegisterId || data.cashRegisterId || defaultRegister?.id || null;
     const table = await this.prisma.diningTable.create({
       data: {
@@ -254,7 +268,7 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
       if (table && table.status !== 'OPEN') throw new BadRequestException('La cuenta ya está cerrada');
       const closing = await this.getActiveClosing(user.id, table?.cashRegisterId || data.cashRegisterId, tx);
       if (!closing) throw new BadRequestException('Abre una caja antes de enviar pedidos');
-      const defaultRegister = await tx.cashRegister.findFirst({ where: { active: true } });
+      const defaultRegister = await tx.cashRegister.findFirst({ where: { active: true, purpose: { not: 'DELIVERY' } } });
       const effectiveRegisterId = table?.cashRegisterId || closing.cashRegisterId || data.cashRegisterId || defaultRegister?.id || null;
       if (!table) {
         table = await tx.diningTable.create({ data: {
@@ -284,6 +298,8 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
       tickets.forEach(event => event.created ? this.socketGateway.emitKitchenTicketCreated(event.ticket) : this.socketGateway.emitKitchenTicketUpdated(event.ticket));
       this.socketGateway.server.emit('tableOrderSubmitted', result);
       this.socketGateway.emitTableUpdated(result.table);
+      this.socketGateway.server.emit('cashRegistersChanged');
+      this.socketGateway.server.emit('newOrder', result.order);
       await this.ordersService.notifyCreated(result.order);
     }
     this.socketGateway.server.to(`user:${user.id}`).emit('offlineOrderSynced', result.order);
@@ -389,6 +405,8 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
     });
     this.socketGateway.server.emit('tableOrderEdited', { orderId, changeSummary: result.changeSummary });
     this.socketGateway.emitTableUpdated(result.table);
+    this.socketGateway.server.emit('cashRegistersChanged');
+    this.socketGateway.server.emit('orderUpdated', result.order);
     return result;
   }
 
@@ -1630,6 +1648,7 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
     }, operationTransaction);
     if (!result.replay) {
       this.socketGateway.emitPaymentSubmitted(result);
+      this.socketGateway.server.emit('cashRegistersChanged');
       this.emitAccount(result.table);
     }
     return result;
@@ -1784,12 +1803,43 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
     if (!result.replay) {
       if (action === 'CONFIRMED') this.socketGateway.emitPaymentValidated(result);
       else this.socketGateway.emitPaymentRejected(result.table.openedById, { ...result, reason });
+      this.socketGateway.server.emit('cashRegistersChanged');
       this.emitAccount(result.table);
     }
     return result;
   }
 
-  async closeTable(tableId: string, user: any) {
+  async updateTable(id: string, data: { label?: string; notes?: string }, user: any) {
+    const table = await this.prisma.diningTable.findUnique({ where: { id } });
+    if (!table) throw new NotFoundException('Mesa no encontrada');
+    const updateData: any = {};
+    const newLabel = typeof data.label === 'string' ? data.label.trim().slice(0, 80) : '';
+    if (newLabel) {
+      updateData.label = newLabel;
+    }
+    if (data.notes !== undefined) {
+      updateData.notes = data.notes;
+    }
+    const updated = await this.prisma.diningTable.update({
+      where: { id },
+      data: updateData,
+      include: this.buildTableInclude(),
+    });
+
+    if (newLabel) {
+      await this.prisma.order.updateMany({
+        where: { tableId: id, status: { not: 'CANCELLED' } },
+        data: { customerName: newLabel, customerAddress: newLabel },
+      });
+    }
+
+    const summarized = this.summarizeTable(updated);
+    this.socketGateway.emitTableUpdated(summarized);
+    this.socketGateway.server.emit('cashRegistersChanged');
+    return summarized;
+  }
+
+    async closeTable(tableId: string, user: any) {
     const table = await this.prisma.$transaction(async tx => {
       await lockOperation(tx);
       const table = await this.findTable(tableId, tx);
@@ -1797,6 +1847,8 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
       if (table.balance > 0 || !table.orders.length) throw new BadRequestException('La cuenta tiene pago pendiente');
       return this.finishPaidTable(tableId, tx);
     }, operationTransaction);
+    this.socketGateway.emitTableClosed(table);
+    this.socketGateway.server.emit('cashRegistersChanged');
     this.emitAccount(table);
     return table;
   }

@@ -201,11 +201,13 @@ export class SocketGateway implements OnGatewayConnection, OnGatewayDisconnect, 
 
   emitNewOrder(order: any) {
     this.server.emit('newOrder', order);
+    this.server.emit('cashRegistersChanged');
   }
 
   emitOrderStatusChange(orderId: string, status: string, order: any) {
     this.server.emit('orderStatusChanged', { orderId, status, order });
     this.server.emit('orderUpdated', order);
+    this.server.emit('cashRegistersChanged');
     
     if (status === 'DELIVERED' || status === 'CANCELLED') {
       this.activeOperators.delete(orderId);
@@ -246,15 +248,18 @@ export class SocketGateway implements OnGatewayConnection, OnGatewayDisconnect, 
   emitTableCreated(table: any) {
     this.server.emit('tableCreated', table);
     this.server.emit('tableUpdated', table);
+    this.server.emit('cashRegistersChanged');
   }
 
   emitTableUpdated(table: any) {
     this.server.emit('tableUpdated', table);
+    this.server.emit('cashRegistersChanged');
   }
 
   emitTableClosed(table: any) {
     this.server.emit('tableClosed', table);
     this.server.emit('tableUpdated', table);
+    this.server.emit('cashRegistersChanged');
   }
 
   emitKitchenTicketCreated(ticket: any) {
@@ -308,11 +313,12 @@ export class SocketGateway implements OnGatewayConnection, OnGatewayDisconnect, 
 
   emitPaymentSubmitted(payload: any) {
     this.server.to('admins').to('cashiers').emit('paymentSubmitted', payload);
+    this.server.emit('cashRegistersChanged');
   }
 
   emitPaymentValidated(payload: any) {
     this.server.emit('paymentValidated', payload);
-
+    this.server.emit('cashRegistersChanged');
   }
 
   emitPaymentRejected(waiterId: string, payload: any) {

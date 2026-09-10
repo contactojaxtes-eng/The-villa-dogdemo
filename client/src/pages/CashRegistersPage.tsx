@@ -116,12 +116,12 @@ export default function CashRegistersPage() {
   const openingRegister = registers.find(register => register.id === openCashRegisterId)
   const closingRegister = registers.find(register => register.id === closeCashRegisterId)
 
-  const load = async () => {
-    setLoading(true)
+  const load = async (silent = false) => {
+    if (!silent) setLoading(true)
     try {
       const [regs, usrs] = await Promise.all([
-        api.get<CashRegister[]>('/cash-registers'),
-        isAdmin ? api.get<UserOption[]>('/users?active=true') : Promise.resolve([]),
+        api.get<CashRegister[]>('/cash-registers', { force: true }),
+        isAdmin ? api.get<UserOption[]>('/users?active=true', { force: true }) : Promise.resolve([]),
       ])
       setRegisters(regs)
       setUsers(usrs.filter(u => u.active !== false && ['CASHIER', 'ADMIN', 'SUPERADMIN', 'DELIVERY_MANAGER', 'DISPATCHER'].includes(u.role)))
@@ -129,7 +129,7 @@ export default function CashRegistersPage() {
       const sums: Record<string, Summary> = {}
       for (const r of regs) {
         try {
-          const s = await api.get<Summary>(`/cash-registers/${r.id}/summary`)
+          const s = await api.get<Summary>(`/cash-registers/${r.id}/summary`, { force: true })
           if (s) sums[r.id] = s
         } catch (err) {
           console.error(`Error cargando sumario de caja ${r.id}:`, err)
@@ -139,7 +139,7 @@ export default function CashRegistersPage() {
     } catch (e) {
       console.error(e)
     } finally {
-      setLoading(false)
+      if (!silent) setLoading(false)
     }
   }
 
@@ -152,20 +152,24 @@ export default function CashRegistersPage() {
     })
 
     const handleRefresh = () => {
-      load().catch(console.error)
+      load(true).catch(console.error)
     }
 
     socket.on('cashRegistersChanged', handleRefresh)
     socket.on('cashStatusChanged', handleRefresh)
+    socket.on('newOrder', handleRefresh)
     socket.on('orderCreated', handleRefresh)
     socket.on('orderUpdated', handleRefresh)
     socket.on('orderStatusChanged', handleRefresh)
-    socket.on('tableOrderSubmitted', handleRefresh)
+    socket.on('tableCreated', handleRefresh)
+    socket.on('tableUpdated', handleRefresh)
     socket.on('tableClosed', handleRefresh)
+    socket.on('tableOrderSubmitted', handleRefresh)
     socket.on('paymentSubmitted', handleRefresh)
     socket.on('paymentValidated', handleRefresh)
     socket.on('paymentUpdated', handleRefresh)
     socket.on('expenseCreated', handleRefresh)
+    socket.on('deliveryDriverPaid', handleRefresh)
 
     return () => {
       socket.disconnect()

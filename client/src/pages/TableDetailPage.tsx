@@ -317,6 +317,25 @@ export default function TableDetailPage() {
     }
   }
 
+  const handleEditTableName = async () => {
+    if (!table) return
+    const newLabel = await alerts.prompt(
+      'Editar nombre de la mesa',
+      'Ingresa el nuevo nombre o identificador para esta mesa:',
+      table.label,
+      'Ej. Mesa 1, Mesa VIP, Barra 2...'
+    )
+    if (!newLabel || newLabel === table.label) return
+
+    try {
+      const updated = await api.put<any>(`/tables/${table.id}`, { label: newLabel })
+      setTable((prev: any) => prev ? { ...prev, label: updated.label || newLabel } : prev)
+      alerts.toast('Nombre de mesa actualizado')
+    } catch (err: any) {
+      alerts.error('Error', err.message || 'No se pudo actualizar el nombre de la mesa')
+    }
+  }
+
   if (!table) return <div className="p-8 text-center text-sm text-[var(--text-secondary)]">Cargando mesa...</div>
 
   const pendingReview = table.orders?.some((order: any) => order.paymentStatus === 'PENDING_REVIEW')
@@ -331,6 +350,14 @@ export default function TableDetailPage() {
           <div>
             <div className="flex items-center gap-2">
               <h1 className="text-2xl font-black text-[var(--text-primary)]">{table.label}</h1>
+              <button
+                type="button"
+                onClick={handleEditTableName}
+                title="Editar nombre de la mesa"
+                className="p-1 rounded-lg hover:bg-[var(--bg-elevated)] text-[var(--text-muted)] hover:text-[var(--text-primary)] transition cursor-pointer"
+              >
+                <Pencil className="h-4 w-4" />
+              </button>
               <span className={`rounded-full px-2.5 py-0.5 text-[10px] font-black tracking-wider border ${
                 table.status === 'CLOSED'
                   ? 'bg-[var(--bg-elevated)] text-[var(--text-muted)] border-[var(--border-subtle)]'

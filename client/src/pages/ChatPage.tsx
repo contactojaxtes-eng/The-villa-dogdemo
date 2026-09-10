@@ -516,6 +516,7 @@ interface ChatInputBarProps {
   sendingPaymentQr: boolean
   fileInputRef: React.RefObject<HTMLInputElement | null>
   handleFileChange: (e: React.ChangeEvent<HTMLInputElement>) => void
+  onPasteImage?: (file: File, caption?: string) => void
   uploadingMedia: boolean
   isRecording: boolean
   recordingTime: number
@@ -553,10 +554,30 @@ const ChatInputBar = React.memo(({
   onSendLocation,
   sendingLocation,
   onTyping,
-  inputRef
+  inputRef,
+  onPasteImage
 }: ChatInputBarProps) => {
   const [localText, setLocalText] = useState('')
   const typingTimerRef = useRef<any>(null)
+
+  const handleInputPaste = (e: React.ClipboardEvent<HTMLInputElement>) => {
+    const items = e.clipboardData?.items
+    if (!items || !onPasteImage) return
+
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i]
+      if (item.type.startsWith('image/')) {
+        const file = item.getAsFile()
+        if (file) {
+          e.preventDefault()
+          const currentCaption = localText.trim()
+          setLocalText('')
+          onPasteImage(file, currentCaption)
+          return
+        }
+      }
+    }
+  }
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = e.target.value
@@ -679,6 +700,7 @@ const ChatInputBar = React.memo(({
           className="min-w-0 flex-1 h-10 sm:h-11 rounded-xl bg-[var(--bg-elevated)] border-[var(--border-subtle)] text-[var(--text-primary)] text-base sm:text-xs px-3 sm:px-4"
           value={localText}
           onChange={handleInputChange}
+          onPaste={handleInputPaste}
           placeholder={placeholder}
           disabled={disabled || uploadingMedia}
           inputMode="text"
@@ -2183,9 +2205,9 @@ function ChatPage() {
     }
   }, [messages.length, activeSession?.id])
 
-  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (!file || !activeSession) return
+  const handleSendMediaFile = async (file: File, captionText?: string) => {
+    const currentSession = activeSessionRef.current || activeSession
+    if (!file || !currentSession) return
 
     let type: 'image' | 'audio' | 'document' = 'document'
     if (file.type.startsWith('image/')) {
@@ -2194,27 +2216,71 @@ function ChatPage() {
       type = 'audio'
     }
 
+    let uploadFile = file
+    if (!uploadFile.name || uploadFile.name === 'blob' || uploadFile.name === 'image.png') {
+      const ext = file.type === 'image/jpeg' ? 'jpg' : file.type === 'image/webp' ? 'webp' : 'png'
+      uploadFile = new File([file], `captura_${Date.now()}.${ext}`, { type: file.type || 'image/png' })
+    }
+
     setUploadingMedia(true)
-
-
+    alerts.toast('Enviando captura a WhatsApp...')
 
     const formData = new FormData()
-    formData.append('file', file)
-    formData.append('phone', activeSession.phone)
+    formData.append('file', uploadFile)
+    formData.append('phone', currentSession.phone)
     formData.append('type', type)
+    if (captionText?.trim()) {
+      formData.append('caption', captionText.trim())
+    }
 
     try {
       await api.post('/whatsapp/send-media', formData)
-      setActiveSession(prev => prev && prev.id === activeSession.id ? { ...prev, unreadCount: 0 } : prev)
-      setSessions(prev => prev.map(s => s.id === activeSession.id ? { ...s, unreadCount: 0 } : s))
+      setActiveSession(prev => prev && prev.id === currentSession.id ? { ...prev, unreadCount: 0 } : prev)
+      setSessions(prev => prev.map(s => s.id === currentSession.id ? { ...s, unreadCount: 0 } : s))
     } catch (err: any) {
-      console.error('Error enviando archivo:', err)
-      alert(err.message || 'Error al enviar el archivo de WhatsApp.')
+      console.error('Error enviando archivo o captura:', err)
+      alerts.error('Error', err.message || 'Error al enviar el archivo por WhatsApp.')
     } finally {
       setUploadingMedia(false)
       if (fileInputRef.current) fileInputRef.current.value = ''
     }
   }
+
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    await handleSendMediaFile(file)
+  }
+
+  useEffect(() => {
+    const handleGlobalPaste = (e: ClipboardEvent) => {
+      const currentSession = activeSessionRef.current
+      if (!currentSession) return
+
+      // Do not intercept if a dialog modal is currently open
+      const isModalOpen = document.querySelector('[role="dialog"]') !== null
+      if (isModalOpen) return
+
+      const items = e.clipboardData?.items
+      if (!items) return
+
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i]
+        if (item.type.startsWith('image/')) {
+          const file = item.getAsFile()
+          if (file) {
+            e.preventDefault()
+            e.stopPropagation()
+            void handleSendMediaFile(file)
+            return
+          }
+        }
+      }
+    }
+
+    window.addEventListener('paste', handleGlobalPaste)
+    return () => window.removeEventListener('paste', handleGlobalPaste)
+  }, [])
 
   // Send message with 0ms Optimistic UI for instant responsiveness
   const handleSendMessageText = async (textToSend: string) => {
@@ -4129,6 +4195,7 @@ function ChatPage() {
                     sendingPaymentQr={sendingPaymentQr}
                     fileInputRef={fileInputRef}
                     handleFileChange={handleFileChange}
+                    onPasteImage={handleSendMediaFile}
                     uploadingMedia={uploadingMedia}
                     isRecording={isRecording}
                     recordingTime={recordingTime}

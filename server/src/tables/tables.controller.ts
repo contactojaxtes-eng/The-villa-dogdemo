@@ -72,6 +72,13 @@ export class TablesController {
     return this.tablesService.submitPayment(id, body, req.user, files);
   }
 
+  @Put(':id')
+  @Roles('ADMIN', 'SUPERADMIN', 'CASHIER', 'WAITER')
+  @ApiOperation({ summary: 'Actualizar nombre de mesa y notas' })
+  updateTable(@Param('id') id: string, @Body() body: { label?: string; notes?: string }, @Request() req: any) {
+    return this.tablesService.updateTable(id, body, req.user);
+  }
+
   @Put(':id/close')
   @Roles('ADMIN', 'SUPERADMIN', 'CASHIER', 'WAITER')
   @ApiOperation({ summary: 'Cerrar mesa pagada y lista' })

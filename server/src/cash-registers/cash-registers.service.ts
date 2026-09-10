@@ -267,6 +267,12 @@ export class CashRegistersService {
 
     // El resumen no modifica pedidos ni mesas. Así una consulta nunca puede
     // apropiarse de movimientos de otra caja abierta.
+    const otherDiningRegisters = await this.prisma.cashRegister.findMany({
+      where: { id: { not: registerId }, purpose: { not: 'DELIVERY' }, active: true },
+      select: { id: true },
+    });
+    const otherDiningIds = otherDiningRegisters.map(r => r.id);
+
     const orders = await this.prisma.order.findMany({
       where: {
         status: { not: 'CANCELLED' },
@@ -279,6 +285,9 @@ export class CashRegistersService {
               { cashRegisterId: registerId },
               { diningTable: { cashRegisterId: registerId } },
               { diningTable: { cashClosingId: openClosing.id } },
+              { cashRegisterId: null },
+              { cashRegister: { purpose: 'DELIVERY' } },
+              { diningTable: { cashRegister: { purpose: 'DELIVERY' } } },
             ],
           },
           // 2. Mesas de este turno activo
@@ -295,6 +304,9 @@ export class CashRegistersService {
               { cashRegisterId: registerId },
               { diningTable: { cashRegisterId: registerId } },
               { diningTable: { cashClosingId: openClosing.id } },
+              { cashRegisterId: null },
+              { cashRegister: { purpose: 'DELIVERY' } },
+              { diningTable: { cashRegister: { purpose: 'DELIVERY' } } },
             ],
           },
         ],
@@ -305,9 +317,9 @@ export class CashRegistersService {
       },
     });
 
-    // Si hay varias cajas, filtrar pedidos explícitamente asignados a otra caja
+    // Atribuir a esta caja de salón todos los pedidos locales excepto los asignados explícitamente a otra caja de salón
     const shiftOrders = orders.filter(
-      o => o.cashRegisterId === registerId || o.diningTable?.cashRegisterId === registerId || o.diningTable?.cashClosingId === openClosing.id,
+      o => !otherDiningIds.includes(o.cashRegisterId || '') && !otherDiningIds.includes(o.diningTable?.cashRegisterId || ''),
     );
 
     let totalExpenses = 0;

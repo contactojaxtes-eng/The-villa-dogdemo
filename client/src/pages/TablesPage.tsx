@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { io } from '@/lib/socket'
-import { PlusCircle, Search, UtensilsCrossed, Wallet, ChefHat, CheckCircle2, Clock, History, AlertCircle } from 'lucide-react'
+import { PlusCircle, Search, UtensilsCrossed, Wallet, ChefHat, CheckCircle2, Clock, History, AlertCircle, Pencil } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { api } from '@/lib/api'
+import { alerts } from '@/lib/alerts'
 import { formatCurrency } from '@/lib/utils'
 import { useAuth } from '@/hooks/useAuth'
 import type { DiningTableSummary } from '@/lib/tableTypes'
@@ -19,10 +20,10 @@ export default function TablesPage() {
   const [loading, setLoading] = useState(true)
   const [filterMode, setFilterMode] = useState<'OPEN_ALL' | 'OPEN_MINE' | 'HISTORY_MINE'>(() => isWaiter ? 'OPEN_MINE' : 'OPEN_ALL')
 
-  const load = useCallback(() => {
-    setLoading(true)
-    const pOpen = api.get<DiningTableSummary[]>('/tables')
-    const pHistory = user?.id ? api.get<DiningTableSummary[]>(`/tables?status=ALL&waiterId=${user.id}&currentShift=true`) : Promise.resolve([])
+  const load = useCallback((silent = false) => {
+    if (!silent) setLoading(true)
+    const pOpen = api.get<DiningTableSummary[]>('/tables', { force: true })
+    const pHistory = user?.id ? api.get<DiningTableSummary[]>(`/tables?status=ALL&waiterId=${user.id}&currentShift=true`, { force: true }) : Promise.resolve([])
 
     Promise.all([pOpen, pHistory])
       .then(([openList, historyList]) => {
@@ -36,16 +37,37 @@ export default function TablesPage() {
         setMyHistoryTables(hist)
       })
       .catch(console.error)
-      .finally(() => setLoading(false))
+      .finally(() => { if (!silent) setLoading(false) })
   }, [user?.id])
 
+  const handleEditTableName = async (e: React.MouseEvent, targetTable: DiningTableSummary) => {
+    e.preventDefault()
+    e.stopPropagation()
+    const newLabel = await alerts.prompt(
+      'Editar nombre de la mesa',
+      'Ingresa el nuevo nombre o identificador para esta mesa:',
+      targetTable.label,
+      'Ej. Mesa 1, Mesa VIP, Barra 2...'
+    )
+    if (!newLabel || newLabel === targetTable.label) return
+
+    try {
+      await api.put(`/tables/${targetTable.id}`, { label: newLabel })
+      setOpenTables(prev => prev.map(t => t.id === targetTable.id ? { ...t, label: newLabel } : t))
+      setMyHistoryTables(prev => prev.map(t => t.id === targetTable.id ? { ...t, label: newLabel } : t))
+      alerts.toast('Nombre de mesa actualizado')
+    } catch (err: any) {
+      alerts.error('Error', err.message || 'No se pudo actualizar el nombre de la mesa')
+    }
+  }
+
   useEffect(() => {
-    void Promise.resolve().then(load)
+    void Promise.resolve().then(() => load())
 
     // Sincronizar automáticamente pedidos tomados fuera de la señal
     const triggerSync = () => {
       syncOfflineOrders().then(res => {
-        if (res.synced > 0) load()
+        if (res.synced > 0) load(true)
       }).catch(console.error)
     }
 
@@ -60,13 +82,13 @@ export default function TablesPage() {
       query: { userId: user?.id, userName: user?.name, userRole: user?.role },
       transports: ['websocket', 'polling'],
     })
-    socket.on('tableCreated', load)
-    socket.on('tableUpdated', load)
-    socket.on('tableClosed', load)
-    socket.on('paymentValidated', load)
-    socket.on('paymentRejected', load)
-    socket.on('cashStatusChanged', load)
-    socket.on('cashRegistersChanged', load)
+    socket.on('tableCreated', () => load(true))
+    socket.on('tableUpdated', () => load(true))
+    socket.on('tableClosed', () => load(true))
+    socket.on('paymentValidated', () => load(true))
+    socket.on('paymentRejected', () => load(true))
+    socket.on('cashStatusChanged', () => load(true))
+    socket.on('cashRegistersChanged', () => load(true))
     return () => { socket.disconnect() }
   }, [load, user?.id, user?.name, user?.role])
 
@@ -182,7 +204,17 @@ export default function TablesPage() {
                 <div>
                   <div className="flex items-start justify-between gap-3">
                     <div>
-                      <p className="text-lg font-black text-[var(--text-primary)] group-hover:text-[var(--accent)] transition-colors">{table.label}</p>
+                      <div className="flex items-center gap-2">
+                        <p className="text-lg font-black text-[var(--text-primary)] group-hover:text-[var(--accent)] transition-colors">{table.label}</p>
+                        <button
+                          type="button"
+                          title="Editar nombre de la mesa"
+                          onClick={(e) => handleEditTableName(e, table)}
+                          className="p-1 rounded-lg hover:bg-[var(--bg-elevated)] text-[var(--text-muted)] hover:text-[var(--text-primary)] transition cursor-pointer"
+                        >
+                          <Pencil className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
                       <div className="mt-1 flex items-center gap-1.5 flex-wrap">
                         <span className="text-[11px] font-medium text-[var(--text-secondary)] bg-[var(--bg-elevated)] border border-[var(--border-subtle)] px-2 py-0.5 rounded-md flex items-center gap-1">
                           👤 Mesera: <strong className="text-[var(--text-primary)]">{table.openedBy?.name || 'Mesero'}</strong>

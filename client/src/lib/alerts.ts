@@ -69,5 +69,27 @@ export const alerts = {
       reverseButtons: true,
     })
     return result.isConfirmed
+  },
+  async prompt(title: string, text?: string, inputValue = '', placeholder = '') {
+    const result = await Swal.fire({
+      ...getSwalOptions(),
+      title,
+      text,
+      input: 'text',
+      inputValue,
+      inputPlaceholder: placeholder,
+      showCancelButton: true,
+      confirmButtonText: 'Guardar',
+      cancelButtonText: 'Cancelar',
+      reverseButtons: true,
+      inputValidator: (val) => {
+        if (!val || !val.trim()) {
+          return 'Debes ingresar un texto válido'
+        }
+        return null
+      },
+    })
+    return result.isConfirmed ? (result.value as string)?.trim() : null
   }
 }
+

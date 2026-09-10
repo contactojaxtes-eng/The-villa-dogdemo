@@ -165,8 +165,8 @@ class ApiClient {
 
   private getTtl(endpoint: string) {
     const path = endpoint.split('?')[0]
-    if (path.startsWith('/kitchen/tickets')) return 0
-    if (/^\/(menu\/categories|zones|users|roles|cash-registers|kitchen\/stations|kitchen\/settings)(\/|$)/.test(path)) return 2 * 60_000
+    if (path.startsWith('/kitchen/tickets') || path.startsWith('/cash-registers')) return 0
+    if (/^\/(menu\/categories|zones|users|roles|kitchen\/stations|kitchen\/settings)(\/|$)/.test(path)) return 2 * 60_000
     if (path === '/auth/profile') return 60_000
     if (/(history|audit|dashboard-stats|closing)/.test(path)) return 15_000
     if (path.startsWith('/whatsapp/')) return 1_500

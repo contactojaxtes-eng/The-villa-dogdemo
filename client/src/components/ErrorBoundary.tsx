@@ -19,8 +19,6 @@ function checkIsChunkError(error: Error | null): boolean {
     msg.includes('loading chunk') ||
     msg.includes('loading css chunk') ||
     msg.includes('dynamically imported module') ||
-    msg.includes('failed to fetch') ||
-    msg.includes('unexpected token') ||
     name.includes('chunkloaderror')
   )
 }

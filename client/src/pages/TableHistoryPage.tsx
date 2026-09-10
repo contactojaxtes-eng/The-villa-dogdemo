@@ -36,13 +36,13 @@ function parseTablePayment(t: any): {
   hasRealImageProof: boolean
   proofId: string | null
 } {
-  const total = Number(t.total) || 0
-  const orders = (t.orders || []).filter((o: any) => o.status !== 'CANCELLED')
-  const proofs = t.transferProofs || []
+  const total = Number(t?.total) || 0
+  const orders = (t?.orders || []).filter((o: any) => o && o.status !== 'CANCELLED')
+  const proofs = t?.transferProofs || []
 
   // Buscar comprobante con foto real subida (evitar filas de auditoría en efectivo)
   const realProof = proofs.find((p: any) =>
-    Boolean(p.fileBase64 || p.filePath || (p.method !== 'CASH' && (p.fileSize > 0 || p.filePath)))
+    Boolean(p && (p.fileBase64 || p.filePath || (p.method !== 'CASH' && (p.fileSize > 0 || p.filePath))))
   )
   const proofId = realProof?.id || null
   const hasRealImageProof = Boolean(realProof)
@@ -52,6 +52,7 @@ function parseTablePayment(t: any): {
   let ordersWithMethodCount = 0
 
   for (const o of orders) {
+    if (!o) continue
     const rawMethod = String(o.payment?.method || o.paymentMethod || '').toUpperCase().trim()
     const oTotal = Number(o.total || 0)
     const oCash = Number(o.cashAmount || o.payment?.cashAmount || 0)
@@ -85,14 +86,15 @@ function parseTablePayment(t: any): {
     }
   } else if (proofs.length > 0) {
     // 2. Si no hay en pedidos, revisar proofs
-    const methods = proofs.map((p: any) => String(p.payment?.method || p.method || '').toUpperCase().trim())
+    const validProofs = proofs.filter((p: any) => Boolean(p))
+    const methods = validProofs.map((p: any) => String(p?.payment?.method || p?.method || '').toUpperCase().trim())
     const isMixed = methods.includes('MIXED')
     const hasTransfer = methods.some((m: string) => ['TRANSFER', 'NEQUI', 'BANCOLOMBIA', 'DAVIPLATA'].includes(m))
     const isOnlyCash = methods.every((m: string) => m === 'CASH')
 
     if (isMixed) {
-      const pCash = proofs.reduce((sum: number, p: any) => sum + Number(p.payment?.cashAmount || 0), 0)
-      const pTransfer = proofs.reduce((sum: number, p: any) => sum + Number(p.payment?.transferAmount || 0), 0)
+      const pCash = validProofs.reduce((sum: number, p: any) => sum + Number(p?.payment?.cashAmount || 0), 0)
+      const pTransfer = validProofs.reduce((sum: number, p: any) => sum + Number(p?.payment?.transferAmount || 0), 0)
       if (pCash > 0 || pTransfer > 0) {
         cash = pCash
         transfer = pTransfer
@@ -147,19 +149,19 @@ export default function TableHistoryPage() {
   const [zoomUrl, setZoomUrl] = useState<string | null>(null)
   const [selectedTable, setSelectedTable] = useState<any | null>(null)
 
-  const load = useCallback(async () => {
-    setLoading(true)
+  const load = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true)
     try {
       const q = new URLSearchParams()
       if (filterStatus) q.set('status', filterStatus)
       if (shiftFilter === 'CURRENT') q.set('currentShift', 'true')
-      const res = await api.get<any[]>(`/tables?${q.toString()}`)
+      const res = await api.get<any[]>(`/tables?${q.toString()}`, { force: true })
       setTables(Array.isArray(res) ? res : [])
     } catch (err) {
       console.error(err)
       setTables([])
     } finally {
-      setLoading(false)
+      if (!silent) setLoading(false)
     }
   }, [filterStatus, shiftFilter])
 
@@ -172,11 +174,14 @@ export default function TableHistoryPage() {
     const socket = io(`${socketUrl}/the-villa-dog`, {
       transports: ['websocket', 'polling'],
     })
-    socket.on('tableUpdated', () => load())
-    socket.on('tableClosed', () => load())
-    socket.on('paymentValidated', () => load())
-    socket.on('cashStatusChanged', () => load())
-    socket.on('cashRegistersChanged', () => load())
+    socket.on('tableCreated', () => load(true))
+    socket.on('tableUpdated', () => load(true))
+    socket.on('tableClosed', () => load(true))
+    socket.on('paymentValidated', () => load(true))
+    socket.on('cashStatusChanged', () => load(true))
+    socket.on('cashRegistersChanged', () => load(true))
+    socket.on('newOrder', () => load(true))
+    socket.on('orderUpdated', () => load(true))
     return () => { socket.disconnect() }
   }, [load])
 
