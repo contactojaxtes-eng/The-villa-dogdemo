@@ -135,7 +135,7 @@ export function printComanda(order: ComandaOrder) {
         // Chequear cantidad parcial en notas (ej: "1 sin cebolla" en 2 perros)
         const rawNotesStr = String(i.notes || '')
         const wordToNum: Record<string, number> = { 'un': 1, 'una': 1, 'uno': 1, 'dos': 2, 'tres': 3, 'cuatro': 4, 'cinco': 5 }
-        const partialMatch = rawNotesStr.match(/(?:^|\s)(\d+|un|una|uno|dos|tres|cuatro|cinco)\s+(?:sin|con|solo\s+con)\s+([a-záéíóúñ\s]+)/i)
+        const partialMatch = rawNotesStr.match(/(?:^|\s)(\d+|un|una|uno|dos|tres|cuatro|cinco)\s+(?:sin|con|solo\s+con)\s+([a-záéíóúüñA-ZÁÉÍÓÚÜÑ\s,/.\-–—]+)/i)
         let partialQty = 0
         if (partialMatch) {
           const rawPart = partialMatch[1].toLowerCase()
@@ -148,7 +148,7 @@ export function printComanda(order: ComandaOrder) {
           return `
           <div class="item">
             <span class="item-qty">${qty}x</span>
-            <span class="item-name" style="font-weight: bold;">${i.menuItem.code ? `[${i.menuItem.code}] ` : ''}${i.menuItem.name}${priceTag}${noteText ? ` (${noteText})` : ''}</span>
+            <span class="item-name" style="font-weight: bold;">${i.menuItem.code ? `[${i.menuItem.code}] ` : ''}${i.menuItem.name}${priceTag}${noteText ? ` <span style="font-weight:900; text-transform:uppercase;">(${noteText})</span>` : ''}</span>
             ${rowSub > 0 ? `<span style="font-weight: bold; margin-left: 8px;">${formatCurrency(rowSub)}</span>` : ''}
           </div>`
         }

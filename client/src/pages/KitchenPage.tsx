@@ -31,7 +31,7 @@ import { alerts } from '@/lib/alerts'
 import { useAuth } from '@/hooks/useAuth'
 import { getErrorMessage, type KitchenTicketItemSummary, type KitchenTicketSummary } from '@/lib/tableTypes'
 import { playUrgentBell } from '@/lib/sound'
-import { cn } from '@/lib/utils'
+import { cn, cleanNotes as sanitizeKitchenNote } from '@/lib/utils'
 
 type KitchenTab = 'ALL_ACTIVE' | 'NEW' | 'PREPARING' | 'READY' | 'HISTORY'
 
@@ -1166,10 +1166,10 @@ export default function KitchenPage() {
                               const isAdded = !isRemoved && (item.changeType === 'ADDED' || quantityDiff > 0)
                               const noteChanged = item.changeType === 'MODIFIED' && item.notes !== item.previousNotes
                               const displayQuantity = item.changeType === 'MODIFIED' && quantityDiff !== 0 ? Math.abs(quantityDiff) : item.quantity
-                              let cleanNotes = (item.notes || '').replace(/\[PARA LLEVAR\]/gi, '').replace(/\[MESA\]/gi, '').trim()
-if (item.additions && item.additions.length > 0) {
-  cleanNotes = cleanNotes.replace(/\(\+\s*Con\s+[^)]+\)/gi, '').replace(/\+\s*Con\s+[^\n]+/gi, '').trim()
-}
+                              let cleanNotes = sanitizeKitchenNote(item.notes, item.nameSnapshot).replace(/\[PARA LLEVAR\]/gi, '').replace(/\[MESA\]/gi, '').trim()
+                              if (item.additions && item.additions.length > 0) {
+                                cleanNotes = cleanNotes.replace(/\(\+\s*Con\s+[^)]+\)/gi, '').replace(/\+\s*Con\s+[^\n]+/gi, '').trim()
+                              }
                               const isTakeaway = (item.notes || '').toLowerCase().includes('llevar')
 
                               return (
@@ -1223,7 +1223,7 @@ if (item.additions && item.additions.length > 0) {
                         )}
                         {visibleItems.map((item: KitchenTicketItemSummary) => {
                           const isTakeaway = (item.notes || '').toLowerCase().includes('llevar')
-                          const cleanNotes = (item.notes || '').replace(/\[PARA LLEVAR\]/gi, '').replace(/\[MESA\]/gi, '').trim()
+                          const cleanNotes = sanitizeKitchenNote(item.notes, item.nameSnapshot).replace(/\[PARA LLEVAR\]/gi, '').replace(/\[MESA\]/gi, '').trim()
                           const previousQty = item.previousQty ?? 0
                           const quantityDiff = item.changeType === 'ADDED' || item.changeType === 'REMOVED'
                             ? item.quantity

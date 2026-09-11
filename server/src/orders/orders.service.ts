@@ -2068,11 +2068,16 @@ export class OrdersService implements OnModuleInit {
   private cleanNotes(notes?: string | null): string {
     if (!notes) return '';
     const cleaned = notes.replace(/\s*\(#[\w-]+\)/g, '').trim();
+    if (!cleaned) return '';
+
+    // Descartar consultas de precios o preguntas de chat
+    if (/[?¿]|\b(?:que\s+precio\s+tiene|cuanto\s+cuesta|cuanto\s+vale|que\s+cuesta|a\s+como|a\s+cómo|que\s+vale|precio\s+del?|costo\s+del?|valor\s+del?)\b/i.test(cleaned)) {
+      return '';
+    }
+
     const normalized = cleaned.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
-    // Nunca enviar como nota un producto o una variante mal interpretada del
-    // chat. Las notas de cocina deben ser instrucciones, por ejemplo "sin
-    // salsa" o "sin cebolla".
-    if (/^(?:\d+\s*(?:x\s*)?)?(?:perro|hamburguesa|pizza|gaseosa|jugo|combo|salchich\w*|doble\s+salchich\w*|triple\s+salchich\w*)(?:\s+\d+)?$/.test(normalized)) {
+    // Nunca enviar como nota un producto, cantidad o variante repetida del chat (ej: "3 sencillo", "sencillo", "gratinada")
+    if (/^(?:\d+\s*(?:x\s*)?)?(?:perro|hamburguesa|pizza|gaseosa|jugo|combo|salchipapa|desgranado|suizo|patacon|salchich\w*|doble\s+salchich\w*|triple\s+salchich\w*|sencill\w*|especial\w*|gratinad\w*|mixt\w*|personal\w*|familiar\w*|chica|tradicional|clasic\w*|grande|pequen\w*|super|gra)(?:\s+\d+)?$/.test(normalized)) {
       return '';
     }
     return cleaned;

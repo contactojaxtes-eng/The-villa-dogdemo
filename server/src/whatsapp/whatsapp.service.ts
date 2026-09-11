@@ -4804,9 +4804,12 @@ REGLAS DE RECONOCIMIENTO Y RELACIÓN DE PRODUCTOS (THE VILLA DOG):
   * Si no menciona tamaño familiar (1.5L o 3L), asume la presentación personal PET 400ml / 500ml.
 - ADICIONES:
   * Si el cliente pide queso extra, tocineta extra, salchicha extra, piña extra, etc., busca y asigna el ID exacto en "additions".
-- INSTRUCCIONES DE PREPARACIÓN Y NOTAS:
-  * Si el cliente escribe "sin cebolla", "sin salsas", "con tártara aparte", "sin ripio", "bien cocido", etc., colócalo en "notes" del producto correspondiente.
-  * PROHIBIDO INCLUIR CHARLA, SALUDOS O AFECTO: JAMÁS incluyas saludos ("hola", "buenas"), expresiones de cortesía ("por favor", "me regala", "me da"), ni frases afectivas ("te amo", "bebé", "mi amor", "linda", etc.) en las notas. En "notes" SOLO deben ir instrucciones directas y concisas de cocina (ej: "Sin cebolla").
+- INSTRUCCIONES DE PREPARACIÓN Y NOTAS ("notes"):
+  * "notes" es EXCLUSIVAMENTE para modificaciones de preparación culinaria en cocina (ejemplos válidos: "Sin cebolla", "Sin salsas", "Sin piña", "Con tártara aparte", "Sin ripio", "Bien asada", "Papas al vapor", "Tártara y piña aparte").
+  * PROHIBIDO PREGUNTAS DE PRECIOS O DUDAS: JAMÁS pongas en "notes" preguntas, consultas de precios o dudas del cliente (ej: NUNCA "qué precio tiene", "cuánto vale", "qué cuesta", "qué precio tiene gratinada", "precio del perro", "cuánto es", etc.). Si el cliente preguntó un precio o una duda en el chat, IGNÓRALO por completo para las notas.
+  * PROHIBIDO REPETIR PRODUCTOS O CANTIDADES: JAMÁS pongas en "notes" el nombre del producto ni su cantidad o variante (ej: NUNCA "3 sencillo", "1 perro", "hamburguesa sencilla", "gratinado", "sencillo", "combo"). La cantidad va en "quantity" y el producto en "menuItemId".
+  * PROHIBIDO CHARLA, SALUDOS O AFECTO: JAMÁS incluyas saludos ("hola", "buenas"), expresiones de cortesía ("por favor", "me regala", "me da"), ni frases afectivas ("te amo", "bebé", "mi amor", "linda", etc.) en las notas.
+  * REGLA DEFAULT: Si el cliente NO dio una instrucción explícita de modificación/cocina para ese producto, el campo "notes" DEBE SER EXACTAMENTE UNA CADENA VACÍA ("").
   * SEPARACIÓN DE PRODUCTOS CON DIFERENTE PREPARACIÓN (MUY IMPORTANTE): Si el cliente pide por ejemplo "2 perros sencillos 1 sin cebolla", NO los agrupes en un solo ítem de 2. Debes separarlos en dos ítems independientes en el array "items":
     - Ítem 1: menuItemId del Perro Sencillo, quantity: 1, notes: "Sin cebolla"
     - Ítem 2: menuItemId del Perro Sencillo, quantity: 1, notes: ""
@@ -5085,8 +5088,13 @@ Responde solo con JSON válido.`;
           const orderVerbs = /\b(me\s+regala[sn]?|me\s+da[sn]?|regalame|deme|mande(?:me)?|envie(?:me)?|traiga(?:me)?|quiero|quisiera|haga(?:me)?\s+el\s+favor|favor)\b/gi;
           cleanItemNotes = cleanItemNotes.replace(orderVerbs, ' ');
 
-          // Quitar repeticiones de cantidades y nombres de producto dentro de la nota (ej: "2 perro sencillos 1 sin cebolla" -> "sin cebolla")
-          cleanItemNotes = cleanItemNotes.replace(/\b\d+\s+(?:perro|hamburguesa|pizza|salchipapa|desgranado|suizo)s?\s*(?:sencill[oa]s?|especial(?:es)?|gratina[do]s?|mixt[oa]s?|personal(?:es)?|familiar(?:es)?)?/gi, ' ');
+          // Quitar consultas de precios y dudas del cliente que la IA pudo haber arrastrado
+          cleanItemNotes = cleanItemNotes.replace(/\b(?:que\s+precio\s+tiene|cuanto\s+cuesta|cuanto\s+vale|que\s+cuesta|a\s+como|a\s+cómo|que\s+vale|que\s+precio)\s+[a-záéíóúüñA-ZÁÉÍÓÚÜÑ0-9\s]*\b/gi, ' ');
+          cleanItemNotes = cleanItemNotes.replace(/\b(?:precio|costo|valor)\s+(?:del?|de\s+la)?\s+[a-záéíóúüñA-ZÁÉÍÓÚÜÑ0-9\s]*\b/gi, ' ');
+          cleanItemNotes = cleanItemNotes.replace(/[?¿]/g, ' ');
+
+          // Quitar repeticiones de cantidades y nombres de producto/variantes dentro de la nota (ej: "2 perro sencillos 1 sin cebolla" -> "sin cebolla", o "3 sencillos" -> "")
+          cleanItemNotes = cleanItemNotes.replace(/\b\d+\s*(?:x\s*)?(?:perros?|hamburguesas?|pizzas?|salchipapas?|desgranados?|suizos?|patacones?)?\s*(?:sencill[oa]s?|especial(?:es)?|gratina[do]s?|mixt[oa]s?|personal(?:es)?|familiar(?:es)?|chica|combo|tradicional|clasic[oa]s?|grande|pequeñ[oa]s?)\b/gi, ' ');
           cleanItemNotes = cleanItemNotes.replace(/\b\d+\s+(sin|con)\b/gi, '$1');
 
           cleanItemNotes = cleanItemNotes
@@ -5104,31 +5112,61 @@ Responde solo con JSON válido.`;
                 cleanItemNotes = cleanItemNotes.replace(new RegExp(`\\b${inside.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&')}\\b`, 'gi'), '');
               }
             }
+            const cleanProdName = menuItem.name.replace(/\([^)]+\)/g, '').trim();
+            if (cleanProdName.length > 2) {
+              cleanItemNotes = cleanItemNotes.replace(new RegExp(`\\b${cleanProdName.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&')}\\b`, 'gi'), '');
+            }
           }
 
-          // Si contiene una instrucción explícita de cocina (sin cebolla, sin salsa, con tártara, etc.), extraerla directamente
-          const specificInstruction = cleanItemNotes.match(/\b(sin\s+[\w\s]+|con\s+[\w\s]+|aparte|bien\s+asada|bien\s+cocid[oa]|termino\s+medio|papas?\s+[\w\s]+|salsa\s+[\w\s]+)\b/i);
-          if (specificInstruction) {
-            cleanItemNotes = specificInstruction[0].trim();
-          } else {
-            cleanItemNotes = cleanItemNotes
-              .split(/\s*[—–\-|,]\s*/)
-              .map((chunk: string) => chunk.trim())
-              .filter((chunk: string) => {
-                if (!chunk || chunk.length < 2) return false;
-                if (/^[\d\s.,$()\-—]+$/.test(chunk)) return false;
-                if (/^(valor|total|precio|domicilio|subtotal|papas francesa|papas francesas|papas vapor|papas al vapor)$/i.test(chunk)) return false;
-                return true;
-              })
-              .join(' — ')
-              .trim();
+          cleanItemNotes = cleanItemNotes.replace(/\s+/g, ' ').trim();
+
+          // Si después de limpiar solo quedó una repetición de cantidad/variante/producto (ej: "3 sencillo", "sencillo", "gratinada", "gra")
+          const isPureProductOrQty = /^(?:\d+\s*(?:x\s*)?)?(?:perros?|hamburguesas?|pizzas?|salchipapas?|desgranados?|suizos?|patacones?)?\s*(?:sencill[oa]s?|especial(?:es)?|gratina[do]s?|mixt[oa]s?|personal(?:es)?|familiar(?:es)?|chica|combo|tradicional|clasic[oa]s?|grande|pequeñ[oa]s?|super|gra\b)?\s*$/i.test(cleanItemNotes);
+          if (isPureProductOrQty) {
+            cleanItemNotes = '';
+          }
+
+          // Verificar si contiene una instrucción culinaria válida (soporta acentos y la letra ñ)
+          const kitchenPattern = /\b(?:sin\s+[a-záéíóúüñA-ZÁÉÍÓÚÜÑ0-9\s,./\-–—]+|con\s+[a-záéíóúüñA-ZÁÉÍÓÚÜÑ0-9\s,./\-–—]+|solo\s+con\s+[a-záéíóúüñA-ZÁÉÍÓÚÜÑ0-9\s,./\-–—]+|(?:[a-záéíóúüñA-ZÁÉÍÓÚÜÑ0-9\s]+\s+)?aparte|bien\s+(?:asada?|cocid[oa]|dorad[oa]|crocante)|termino\s+medio|papas?\s+(?:al\s+vapor|a\s+la\s+francesa|francesas?|vapor)|salsas?\s+[a-záéíóúüñA-ZÁÉÍÓÚÜÑ0-9\s,./\-–—]+)\b/i;
+
+          if (cleanItemNotes) {
+            if (kitchenPattern.test(cleanItemNotes)) {
+              // Si la nota ya es una instrucción directa completa (ej: "sin cebolla y sin piña", "tártara aparte"),
+              // NO la recortamos con regex para no truncar caracteres especiales ni palabras compuestas.
+              if (/^(?:sin|con|solo\s+con|aparte|salsa|bien|termino|papas)\b/i.test(cleanItemNotes)) {
+                cleanItemNotes = cleanItemNotes.replace(/^[—–\-|,.\s]+|[—–\-|,.\s]+$/g, '').trim();
+              } else {
+                const match = cleanItemNotes.match(kitchenPattern);
+                if (match) {
+                  cleanItemNotes = match[0].replace(/^[—–\-|,.\s]+|[—–\-|,.\s]+$/g, '').trim();
+                }
+              }
+            } else {
+              cleanItemNotes = cleanItemNotes
+                .split(/\s*[—–\-|,]\s*/)
+                .map((chunk: string) => chunk.trim())
+                .filter((chunk: string) => {
+                  if (!chunk || chunk.length < 2) return false;
+                  if (/^[\d\s.,$()\-—]+$/.test(chunk)) return false;
+                  if (/^(valor|total|precio|costo|domicilio|subtotal|papas francesa|papas francesas|papas vapor|papas al vapor|gra)$/i.test(chunk)) return false;
+                  if (/\b(precio|cuesta|vale|costo|cuanto)\b/i.test(chunk)) return false;
+                  return true;
+                })
+                .join(' — ')
+                .trim();
+
+              const normalizedRemain = cleanItemNotes.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+              if (!/\b(sin|con|solo|aparte|bien|termino|salsa|papas|queso|tocineta|ripio|cebolla|piña)\b/i.test(normalizedRemain)) {
+                cleanItemNotes = '';
+              }
+            }
           }
         }
 
         // Si la nota original especificaba una cantidad parcial (ej: "1 sin cebolla" cuando quantity es 2)
         const rawNoteStr = String(rawItem.notes || '');
         const wordToNum: Record<string, number> = { 'un': 1, 'una': 1, 'uno': 1, 'dos': 2, 'tres': 3, 'cuatro': 4, 'cinco': 5 };
-        const partialMatch = rawNoteStr.match(/(?:^|\s)(\d+|un|una|uno|dos|tres|cuatro|cinco)\s+(?:sin|con|solo\s+con)\s+([a-záéíóúñ\s]+)/i);
+        const partialMatch = rawNoteStr.match(/(?:^|\s)(\d+|un|una|uno|dos|tres|cuatro|cinco)\s+(?:sin|con|solo\s+con)\s+([a-záéíóúüñA-ZÁÉÍÓÚÜÑ\s,/.\-–—]+)/i);
         let partialQty = 0;
         if (partialMatch) {
           const rawPart = partialMatch[1].toLowerCase();
