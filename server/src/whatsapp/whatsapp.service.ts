@@ -5089,20 +5089,11 @@ Responde solo con JSON válido.`;
         const parsedItemQty = Math.min(99, Math.max(1, Math.trunc(Number(rawItem.quantity) || 1)));
 
         if (cleanItemNotes) {
-          // 0. Eliminar frases afectivas, saludos, despedidas o palabras de chat que nada tienen que ver con la cocina
-          const chatFluff = /\b(te\s+amo|te\s+quiero|te\s+adoro|bebe|bebecito|bebesito|bebesita|mi\s+amor|mi\s+vida|mi\s+cielo|mi\s+rey|mi\s+reina|amor|reina|rey|princesa|cariño|linda|lindo|hermoso|hermosa|corazon|vida|parce|parcero|hermano|amigo|amiga|vecino|vecina|por\s*fa(?:vor)?|porfa|por\s+fa|muchas\s+gracias|gracias|buen\s+dia|buenas\s+tardes|buenas\s+noches|buenas|hola|saludos|atentamente|chao|adios)\b/gi;
-          cleanItemNotes = cleanItemNotes.replace(chatFluff, ' ');
-
-          // Eliminar verbos y peticiones conversacionales ("me regala", "me da", "deme", "regalame", etc.)
-          const orderVerbs = /\b(me\s+regala[sn]?|me\s+da[sn]?|regalame|deme|mande(?:me)?|envie(?:me)?|traiga(?:me)?|quiero|quisiera|haga(?:me)?\s+el\s+favor|favor)\b/gi;
-          cleanItemNotes = cleanItemNotes.replace(orderVerbs, ' ');
-
-          // Quitar consultas de precios y dudas del cliente que la IA pudo haber arrastrado
-          cleanItemNotes = cleanItemNotes.replace(/\b(?:que\s+precio\s+tiene|cuanto\s+cuesta|cuanto\s+vale|que\s+cuesta|a\s+como|a\s+cómo|que\s+vale|que\s+precio)\s+[a-záéíóúüñA-ZÁÉÍÓÚÜÑ0-9\s]*\b/gi, ' ');
-          cleanItemNotes = cleanItemNotes.replace(/\b(?:precio|costo|valor)\s+(?:del?|de\s+la)?\s+[a-záéíóúüñA-ZÁÉÍÓÚÜÑ0-9\s]*\b/gi, ' ');
+          // Quitar consultas directas de precios
+          cleanItemNotes = cleanItemNotes.replace(/\b(?:que\s+precio\s+tiene|cuanto\s+cuesta|cuanto\s+vale|que\s+cuesta|a\s+como|a\s+cómo|que\s+vale|que\s+precio)\b/gi, ' ');
           cleanItemNotes = cleanItemNotes.replace(/[?¿]/g, ' ');
 
-          // Quitar repeticiones de cantidades y nombres de producto/variantes dentro de la nota (ej: "2 perro sencillos 1 sin cebolla" -> "sin cebolla", o "3 sencillos" -> "")
+          // Quitar repeticiones de cantidades y nombres de producto/variantes dentro de la nota
           cleanItemNotes = cleanItemNotes.replace(/\b\d+\s*(?:x\s*)?(?:perros?|hamburguesas?|pizzas?|salchipapas?|desgranados?|suizos?|patacones?)?\s*(?:sencill[oa]s?|especial(?:es)?|gratina[do]s?|mixt[oa]s?|personal(?:es)?|familiar(?:es)?|chica|combo|tradicional|clasic[oa]s?|grande|pequeñ[oa]s?)\b/gi, ' ');
           cleanItemNotes = cleanItemNotes.replace(/\b\d+\s+(sin|con)\b/gi, '$1');
 
@@ -5135,40 +5126,9 @@ Responde solo con JSON válido.`;
             cleanItemNotes = '';
           }
 
-          // Verificar si contiene una instrucción culinaria válida (soporta acentos y la letra ñ)
-          const kitchenPattern = /\b(?:sin\s+[a-záéíóúüñA-ZÁÉÍÓÚÜÑ0-9\s,./\-–—]+|con\s+[a-záéíóúüñA-ZÁÉÍÓÚÜÑ0-9\s,./\-–—]+|solo\s+con\s+[a-záéíóúüñA-ZÁÉÍÓÚÜÑ0-9\s,./\-–—]+|(?:[a-záéíóúüñA-ZÁÉÍÓÚÜÑ0-9\s]+\s+)?aparte|bien\s+(?:asada?|cocid[oa]|dorad[oa]|crocante)|termino\s+medio|papas?\s+(?:al\s+vapor|a\s+la\s+francesa|francesas?|vapor)|salsas?\s+[a-záéíóúüñA-ZÁÉÍÓÚÜÑ0-9\s,./\-–—]+)\b/i;
-
+          // Limpiar delimitadores iniciales y finales respetando la nota completa del cliente
           if (cleanItemNotes) {
-            if (kitchenPattern.test(cleanItemNotes)) {
-              // Si la nota ya es una instrucción directa completa (ej: "sin cebolla y sin piña", "tártara aparte"),
-              // NO la recortamos con regex para no truncar caracteres especiales ni palabras compuestas.
-              if (/^(?:sin|con|solo\s+con|aparte|salsa|bien|termino|papas)\b/i.test(cleanItemNotes)) {
-                cleanItemNotes = cleanItemNotes.replace(/^[—–\-|,.\s]+|[—–\-|,.\s]+$/g, '').trim();
-              } else {
-                const match = cleanItemNotes.match(kitchenPattern);
-                if (match) {
-                  cleanItemNotes = match[0].replace(/^[—–\-|,.\s]+|[—–\-|,.\s]+$/g, '').trim();
-                }
-              }
-            } else {
-              cleanItemNotes = cleanItemNotes
-                .split(/\s*[—–\-|,]\s*/)
-                .map((chunk: string) => chunk.trim())
-                .filter((chunk: string) => {
-                  if (!chunk || chunk.length < 2) return false;
-                  if (/^[\d\s.,$()\-—]+$/.test(chunk)) return false;
-                  if (/^(valor|total|precio|costo|domicilio|subtotal|papas francesa|papas francesas|papas vapor|papas al vapor|gra)$/i.test(chunk)) return false;
-                  if (/\b(precio|cuesta|vale|costo|cuanto)\b/i.test(chunk)) return false;
-                  return true;
-                })
-                .join(' — ')
-                .trim();
-
-              const normalizedRemain = cleanItemNotes.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-              if (!/\b(sin|con|solo|aparte|bien|termino|salsa|papas|queso|tocineta|ripio|cebolla|piña)\b/i.test(normalizedRemain)) {
-                cleanItemNotes = '';
-              }
-            }
+            cleanItemNotes = cleanItemNotes.replace(/^[—–\-|,.\s]+|[—–\-|,.\s]+$/g, '').trim();
           }
         }
 

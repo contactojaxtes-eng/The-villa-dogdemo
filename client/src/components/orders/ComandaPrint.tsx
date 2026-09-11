@@ -148,9 +148,10 @@ export function printComanda(order: ComandaOrder) {
           return `
           <div class="item">
             <span class="item-qty">${qty}x</span>
-            <span class="item-name" style="font-weight: bold;">${i.menuItem.code ? `[${i.menuItem.code}] ` : ''}${i.menuItem.name}${priceTag}${noteText ? ` <span style="font-weight:900; text-transform:uppercase;">(${noteText})</span>` : ''}</span>
+            <span class="item-name" style="font-weight: bold;">${i.menuItem.code ? `[${i.menuItem.code}] ` : ''}${i.menuItem.name}${priceTag}</span>
             ${rowSub > 0 ? `<span style="font-weight: bold; margin-left: 8px;">${formatCurrency(rowSub)}</span>` : ''}
-          </div>`
+          </div>
+          ${noteText ? `<div style="font-size: 11px; font-weight: 900; text-transform: uppercase; margin-left: 18px; margin-bottom: 3px; word-break: break-word; white-space: pre-wrap;">↳ NOTA: ${noteText}</div>` : ''}`
         }
 
         let productHtml = ''
@@ -175,7 +176,7 @@ export function printComanda(order: ComandaOrder) {
         `}).join('') || ''}
       `}).join('')}
     </div>
-    ${(() => { const cn = (order.notes || '').replace(/^\[MOSTRADOR\]\s*/i, '').replace(/^\[PICKUP\]\s*/i, '').trim(); return cn ? `<div class="section"><div class="label">Notas</div><div class="value">${cn}</div></div>` : '' })()}
+    ${(() => { const cn = (order.notes || '').replace(/^\[MOSTRADOR\]\s*/i, '').replace(/^\[PICKUP\]\s*/i, '').trim(); return cn ? `<div class="section"><div class="label">Notas</div><div class="value" style="font-size: 13px; font-weight: 800; word-break: break-word; white-space: pre-wrap;">${cn}</div></div>` : '' })()}
     <div class="section">
       <div class="item"><span>Subtotal</span><span>${formatCurrency(order.subtotal)}</span></div>
       ${order.deliveryFee > 0 ? `<div class="item"><span>Domicilio</span><span>${formatCurrency(order.deliveryFee)}</span></div>` : ''}

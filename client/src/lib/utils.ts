@@ -108,102 +108,32 @@ export function getItemRawNote(notes?: string | null): string {
 export function cleanNotes(notes?: string | null, productName?: string): string {
   if (!notes) return ''
   try {
+    // 1. Quitar identificadores internos (#...) y vínculos de adiciones
     let cleaned = notes.replace(/\s?\(#[\w-]+\)/g, '').trim()
     if (!cleaned) return ''
+    if (/^adici[oó]n\s+para:/i.test(cleaned)) return ''
 
-    // 0. Eliminar frases afectivas, saludos, despedidas o palabras de chat que nada tienen que ver con la cocina
-    const chatFluff = /\b(te\s+amo|te\s+quiero|te\s+adoro|bebe|bebecito|bebesito|bebesita|mi\s+amor|mi\s+vida|mi\s+cielo|mi\s+rey|mi\s+reina|amor|reina|rey|princesa|cariño|linda|lindo|hermoso|hermosa|corazon|vida|parce|parcero|hermano|amigo|amiga|vecino|vecina|por\s*fa(?:vor)?|porfa|por\s+fa|muchas\s+gracias|gracias|buen\s+dia|buenas\s+tardes|buenas\s+noches|buenas|hola|saludos|atentamente|chao|adios)\b/gi
-    cleaned = cleaned.replace(chatFluff, ' ')
+    // 2. Quitar etiquetas internas de enrutamiento y formato
+    cleaned = cleaned.replace(/\[\/?(PARA LLEVAR|MESA|MOSTRADOR|PICKUP|BIG|BOLD|HEIGHT|CENTER)\]/gi, '').trim()
+    if (!cleaned) return ''
 
-    // Eliminar verbos y peticiones conversacionales ("me regala", "me da", "deme", "regalame", etc.)
-    const orderVerbs = /\b(me\s+regala[sn]?|me\s+da[sn]?|regalame|deme|mande(?:me)?|envie(?:me)?|traiga(?:me)?|quiero|quisiera|haga(?:me)?\s+el\s+favor|favor)\b/gi
-    cleaned = cleaned.replace(orderVerbs, ' ')
-
-    // Quitar consultas de precios y dudas del cliente
-    cleaned = cleaned.replace(/\b(?:que\s+precio\s+tiene|cuanto\s+cuesta|cuanto\s+vale|que\s+cuesta|a\s+como|a\s+cómo|que\s+vale|que\s+precio)\s+[a-záéíóúüñA-ZÁÉÍÓÚÜÑ0-9\s]*\b/gi, ' ')
-    cleaned = cleaned.replace(/\b(?:precio|costo|valor)\s+(?:del?|de\s+la)?\s+[a-záéíóúüñA-ZÁÉÍÓÚÜÑ0-9\s]*\b/gi, ' ')
-    cleaned = cleaned.replace(/[?¿]/g, ' ')
-
-    // Quitar repeticiones de cantidades y nombres de producto/variantes dentro de la nota (ej: "2 perro sencillos 1 sin cebolla" -> "sin cebolla", o "3 sencillo" -> "")
-    cleaned = cleaned.replace(/\b\d+\s*(?:x\s*)?(?:perros?|hamburguesas?|pizzas?|salchipapas?|desgranados?|suizos?|patacones?)?\s*(?:sencill[oa]s?|especial(?:es)?|gratina[do]s?|mixt[oa]s?|personal(?:es)?|familiar(?:es)?|chica|combo|tradicional|clasic[oa]s?|grande|pequeñ[oa]s?)\b/gi, ' ')
-    cleaned = cleaned.replace(/\b\d+\s+(sin|con)\b/gi, '$1')
-
-    // 1. Quitar precios, signos de pesos y valores monetarios (ej: "$ 17.300", "($ 17.300)", "$34.600", "$ 4.000")
+    // 3. Quitar precios formateados entre corchetes o paréntesis como ($ 15.000) o [$ 4.000]
     cleaned = cleaned
       .replace(/\(\s*\$\s*[\d.,]+\s*\)/gi, '')
       .replace(/\[\s*\$\s*[\d.,]+\s*\]/gi, '')
-      .replace(/\$\s*[\d.,]+/g, '')
-      .replace(/\b\d{1,3}(?:\.\d{3})+(?:\s*(?:pesos|cop|mil|k))?\b/gi, '')
-      .replace(/\b\d{4,}(?:\s*(?:pesos|cop|mil|k))?\b/gi, '')
-
-    // 2. Si se proporciona el nombre del producto, remover repeticiones del nombre o variantes del plato
-    if (productName) {
-      const parenMatches = productName.match(/\(([^)]+)\)/g) || []
-      for (const p of parenMatches) {
-        const inside = p.replace(/[()]/g, '').trim()
-        if (inside.length > 2) {
-          cleaned = cleaned.replace(new RegExp(`\\b${inside.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&')}\\b`, 'gi'), '')
-        }
-      }
-      const cleanProdName = productName.replace(/\([^)]+\)/g, '').trim()
-      if (cleanProdName.length > 2) {
-        cleaned = cleaned.replace(new RegExp(`\\b${cleanProdName.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&')}\\b`, 'gi'), '')
-      }
-    }
-
-    // 3. Limpiar delimitadores y frases conversacionales de asesores/bot
-    cleaned = cleaned
-      .split(/\s*[—–\-|,]\s*/)
-      .map(chunk => chunk.trim())
-      .filter(chunk => {
-        if (!chunk || chunk.length < 2) return false
-        if (/^[\d\s.,$()\-—]+$/.test(chunk)) return false
-        
-        const normChunk = chunk.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim()
-        
-        // Descartar frases del bot/asesor o explicaciones de productos
-        if (
-          normChunk.startsWith('tengo la') ||
-          normChunk.startsWith('tengo el') ||
-          normChunk.startsWith('tengo los') ||
-          normChunk.startsWith('tenemos la') ||
-          normChunk.startsWith('tenemos el') ||
-          normChunk.startsWith('tenemos los') ||
-          normChunk.startsWith('te ofrezco') ||
-          normChunk.startsWith('te recomiendo') ||
-          normChunk.startsWith('viene con') ||
-          normChunk.startsWith('opcion') ||
-          normChunk.startsWith('variante') ||
-          normChunk.startsWith('el combo') ||
-          normChunk.startsWith('la salvajada') ||
-          normChunk.includes('para 1 persona') ||
-          normChunk.includes('para 2 persona') ||
-          normChunk.includes('para 3 persona') ||
-          normChunk.includes('para 4 persona') ||
-          normChunk.includes('para 5 persona') ||
-          normChunk.includes('para 6 persona') ||
-          normChunk.includes('para cuantas') ||
-          normChunk.startsWith('hola') ||
-          normChunk.startsWith('buenas') ||
-          normChunk.startsWith('con gusto') ||
-          normChunk.startsWith('un momento')
-        ) {
-          return false
-        }
-
-        if (/^(valor|total|precio|costo|domicilio|subtotal|papas francesa|papas francesas|papas vapor|papas al vapor|gra)$/i.test(chunk)) return false
-        if (/\b(precio|cuesta|vale|costo|cuanto)\b/i.test(chunk)) return false
-        return true
-      })
-      .join(' — ')
       .trim()
 
-    // Descartar si solo es un producto o variante repetida sin modificación de cocina (ej: "3 sencillo", "sencillo", "gratinada")
-    const isPureProductOrQty = /^(?:\d+\s*(?:x\s*)?)?(?:perros?|hamburguesas?|pizzas?|salchipapas?|desgranados?|suizos?|patacones?)?\s*(?:sencill[oa]s?|especial(?:es)?|gratina[do]s?|mixt[oa]s?|personal(?:es)?|familiar(?:es)?|chica|combo|tradicional|clasic[oa]s?|grande|pequeñ[oa]s?|super|gra\b)?\s*$/i.test(cleaned)
-    if (isPureProductOrQty) {
-      return ''
+    // 4. Si la nota resultante es únicamente el nombre exacto del producto repetido, se descarta
+    if (productName) {
+      const normCleaned = cleaned.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim()
+      const normProduct = productName.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim()
+      if (normCleaned === normProduct || normCleaned === `1 x ${normProduct}` || normCleaned === `nota: ${normProduct}`) {
+        return ''
+      }
     }
 
+    // 5. Normalizar espacios múltiples y limpiar signos sobrantes en los extremos
+    cleaned = cleaned.replace(/[ \t]+/g, ' ').replace(/^[—–\-|,.\s]+|[—–\-|,.\s]+$/g, '').trim()
     return cleaned
   } catch {
     return (notes || '').replace(/\s?\(#[\w-]+\)/g, '').trim()
@@ -213,59 +143,9 @@ export function cleanNotes(notes?: string | null, productName?: string): string 
 export function cleanNotesForPrint(notes?: string | null, productName?: string): string {
   if (!notes) return ''
   try {
-    let cleaned = cleanNotes(notes, productName)
+    const cleaned = cleanNotes(notes, productName)
     if (!cleaned) return ''
     if (cleaned.startsWith('Adición para:')) return ''
-
-    const normCleaned = cleaned.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-    const normProduct = (productName || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-
-    // 1. Ignorar si la nota es idéntica o sólo repite el nombre del producto, variantes o cantidades
-    const isPureProductOrQty = /^(?:\d+\s*(?:x\s*)?)?(?:perros?|hamburguesas?|pizzas?|salchipapas?|desgranados?|suizos?|patacones?)?\s*(?:sencill[oa]s?|especial(?:es)?|gratina[do]s?|mixt[oa]s?|personal(?:es)?|familiar(?:es)?|chica|combo|tradicional|clasic[oa]s?|grande|pequeñ[oa]s?|super|gra\b)?\s*$/i.test(cleaned)
-    if (isPureProductOrQty) {
-      return ''
-    }
-
-    if (normProduct && (normCleaned === normProduct || normCleaned === `1 x ${normProduct}` || normCleaned === `nota: ${normProduct}`)) {
-      return ''
-    }
-
-    // 2. Descartar frases descriptivas de chat, promociones o descripciones de porciones
-    if (
-      normCleaned.startsWith('tengo la') ||
-      normCleaned.startsWith('tengo el') ||
-      normCleaned.startsWith('tenemos la') ||
-      normCleaned.startsWith('tenemos el') ||
-      normCleaned.startsWith('te ofrezco') ||
-      normCleaned.startsWith('el combo') ||
-      normCleaned.startsWith('la salvajada') ||
-      normCleaned.startsWith('variante') ||
-      normCleaned.startsWith('opcion') ||
-      normCleaned.includes('para 1 persona') ||
-      normCleaned.includes('para 2 persona') ||
-      normCleaned.includes('para 3 persona') ||
-      normCleaned.includes('para 4 persona') ||
-      normCleaned.includes('para 5 persona')
-    ) {
-      const match = cleaned.match(/\b(sin\s+[a-záéíóúüñA-ZÁÉÍÓÚÜÑ0-9\s,./\-–—]+|con\s+papas\s+[a-záéíóúüñA-ZÁÉÍÓÚÜÑ0-9\s,./\-–—]+|salsas?\s+[a-záéíóúüñA-ZÁÉÍÓÚÜÑ0-9\s,./\-–—]+|bien\s+asada|termino\s+medio|jugo\s+en\s+[a-záéíóúüñA-ZÁÉÍÓÚÜÑ0-9]+)\b/i)
-      if (match) return match[0].trim()
-      return ''
-    }
-
-    // 3. Si contiene una instrucción explícita de cocina (sin cebolla, sin salsa, con tártara, etc.)
-    // Soporta acentos y la letra ñ; no trunca si la nota completa ya es una instrucción directa
-    const kitchenPattern = /\b(?:sin\s+[a-záéíóúüñA-ZÁÉÍÓÚÜÑ0-9\s,./\-–—]+|con\s+[a-záéíóúüñA-ZÁÉÍÓÚÜÑ0-9\s,./\-–—]+|solo\s+con\s+[a-záéíóúüñA-ZÁÉÍÓÚÜÑ0-9\s,./\-–—]+|(?:[a-záéíóúüñA-ZÁÉÍÓÚÜÑ0-9\s]+\s+)?aparte|bien\s+(?:asada?|cocid[oa]|dorad[oa]|crocante)|termino\s+medio|papas?\s+(?:al\s+vapor|a\s+la\s+francesa|francesas?|vapor)|salsas?\s+[a-záéíóúüñA-ZÁÉÍÓÚÜÑ0-9\s,./\-–—]+)\b/i
-
-    if (kitchenPattern.test(cleaned)) {
-      if (/^(?:sin|con|solo\s+con|aparte|salsa|bien|termino|papas)\b/i.test(cleaned)) {
-        return cleaned.replace(/^[—–\-|,.\s]+|[—–\-|,.\s]+$/g, '').trim()
-      }
-      const specificInstruction = cleaned.match(kitchenPattern)
-      if (specificInstruction) {
-        return specificInstruction[0].replace(/^[—–\-|,.\s]+|[—–\-|,.\s]+$/g, '').trim()
-      }
-    }
-
     return cleaned
   } catch {
     return ''

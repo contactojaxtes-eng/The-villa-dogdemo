@@ -164,7 +164,7 @@ h1 { font-size:22px; text-align:center; font-weight:900; letter-spacing:1px; }
 .item .item-name { font-weight:900; font-size:19px; word-break: break-word; }
 .addition { display:flex; gap:6px; margin:2px 0 2px 14px; font-size:15px; font-weight:bold; }
 .addition .qty { font-weight:900; min-width:24px; }
-.note { font-size:15px; font-weight:bold; margin:2px 0 4px 14px; font-style:italic; border-left:3px solid #000; padding-left:6px; }
+.note { font-size:15px; font-weight:bold; margin:2px 0 4px 14px; font-style:italic; border-left:3px solid #000; padding-left:6px; word-break: break-word; white-space: pre-wrap; }
 .footer { text-align:center; font-size:13px; margin-top:10px; font-weight:900; letter-spacing:1px; }
 </style></head><body>
 ${order.status === 'CANCELLED' ? `
@@ -184,7 +184,7 @@ ${order.orderType === 'DELIVERY' ? `<div class="info">${fullAddress}</div>${orde
 <div class="lbl" style="font-size:16px; margin-bottom:4px;">${order.status === 'CANCELLED' ? '❌ NO PREPARAR / PEDIDO CANCELADO:' : (isEdited ? '⚠️ PRODUCTOS EDITADOS (REVISAR CAMBIOS):' : '🍽 PREPARAR:')}</div>
 ${items}
 <div class="line"></div>
-${cleanOrderNotes ? `<div style="font-weight:900; font-size:16px; border:2px solid #000; padding:6px;">⚠ NOTA GENERAL:<br/>${cleanOrderNotes}</div><div class="line"></div>` : ''}
+${cleanOrderNotes ? `<div style="font-weight:900; font-size:16px; border:2px solid #000; padding:6px; word-break: break-word; white-space: pre-wrap;">⚠ NOTA GENERAL:<br/>${cleanOrderNotes}</div><div class="line"></div>` : ''}
 <div class="footer">${order.status === 'CANCELLED' ? `** TICKET DE CANCELACION (${stationName?.toUpperCase() || 'COCINA'}) **` : `** TICKET DE ${stationName?.toUpperCase() || 'COCINA'} ${isEdited ? '(EDITADO)' : ''} **`}</div>
 </body></html>`
   } else {
@@ -192,13 +192,17 @@ ${cleanOrderNotes ? `<div style="font-weight:900; font-size:16px; border:2px sol
     const items = grouped.map(i => {
       const priceVal = i.price || i.unitPrice || 0
       const totalBasePrice = priceVal * i.quantity
+      const cleanedItemNote = i.notes && !i.notes.startsWith('Adición para:') ? cleanNotes(i.notes, i.menuItem?.name) : ''
       let html = `<div class="item" style="justify-content: space-between;">
         <div style="display:flex; gap:6px;">
           <span class="qty">${i.quantity}x</span>
-          <span style="font-weight: bold;">${i.menuItem.name}${i.notes && cleanNotes(i.notes) && !i.notes.startsWith('Adición para:') ? ` (${cleanNotes(i.notes)})` : ''}</span>
+          <span style="font-weight: bold;">${i.menuItem.name}</span>
         </div>
         <span style="font-weight: bold;">${formatCurrency(totalBasePrice)}</span>
       </div>`
+      if (cleanedItemNote) {
+        html += `<div style="font-size: 10px; font-style: italic; margin-left: 18px; margin-bottom: 2px; word-break: break-word; white-space: pre-wrap;">↳ NOTA: ${cleanedItemNote}</div>`
+      }
       if (i.additions && i.additions.length > 0) {
         html += i.additions.map(a => {
           const addPriceVal = a.price || a.unitPrice || 0
@@ -226,14 +230,14 @@ ${cleanOrderNotes ? `<div style="font-weight:900; font-size:16px; border:2px sol
 <style>
 @page { size: ${width} auto; margin: 2mm; }
 * { margin:0; padding:0; box-sizing:border-box; }
-body { font-family: 'Courier New', monospace; width:${width}; font-size:11px; color:#000; padding:4mm; }
+body { font-family: 'Courier New', monospace; width:${width}; font-size:11px; color:#000; padding:4mm; word-break: break-word; }
 h1 { font-size:16px; text-align:center; font-weight:bold; }
 .sub { text-align:center; font-size:9px; margin-bottom:6px; line-height: 1.3; }
 .num { font-size:18px; font-weight:bold; text-align:center; margin:6px 0 2px 0; }
 .edit-badge { background-color:#000; color:#fff; text-align:center; font-weight:bold; font-size:12px; padding:4px; margin:4px 0; }
 .line { border-top:1px dashed #000; margin:6px 0; }
 .lbl { font-size:9px; font-weight:bold; text-transform:uppercase; color:#555; }
-.addr { font-size:11px; font-weight:bold; line-height:1.3; margin:4px 0; }
+.addr { font-size:11px; font-weight:bold; line-height:1.3; margin:4px 0; word-break: break-word; }
 .item { display:flex; gap:6px; margin:3px 0; }
 .qty { font-weight:bold; min-width:24px; }
 .summary-row { display:flex; justify-content:space-between; margin:2px 0; }
@@ -278,9 +282,51 @@ ${order.tax > 0 ? `<div class="summary-row"><span>Impoconsumo (8%):</span><span>
 <div class="summary-row"><span>Atiende:</span><span>${order.assignee?.name || order.waiter?.name || '—'}</span></div>
 ${(!(order.tableId || order.orderType === 'LOCAL') && (order.orderType === 'DELIVERY' || order.deliveryDriver?.name || (order as any).deliveryDriverName || (order as any).driverName || (order as any).driver?.name)) ? `<div class="summary-row"><span>Domiciliario:</span><span>${order.deliveryDriver?.name || (order as any).deliveryDriverName || (order as any).driverName || (order as any).driver?.name || 'Sin Asignar'}</span></div>` : ''}
 <div class="summary-row"><span>Fecha:</span><span>${formatDate(order.createdAt)}</span></div>
+${cleanOrderNotes ? `
+<div class="line"></div>
+<div class="lbl">Observaciones / Nota General</div>
+<div style="font-size: 11px; font-weight: bold; margin: 4px 0; word-break: break-word; white-space: pre-wrap;">${cleanOrderNotes}</div>
+` : ''}
 <div class="footer">¡Muchas gracias por su compra!<br/>Vuelve pronto</div>
 </body></html>`
   }
+}
+
+function wrapText(text: string, maxWidth: number): string[] {
+  if (!text || text.length <= maxWidth) return [text || '']
+  const words = text.split(/\s+/)
+  const lines: string[] = []
+  let currentLine = ''
+
+  for (const word of words) {
+    if (!currentLine) {
+      currentLine = word
+    } else if ((currentLine + ' ' + word).length <= maxWidth) {
+      currentLine += ' ' + word
+    } else {
+      lines.push(currentLine)
+      if (word.length > maxWidth) {
+        let rest = word
+        while (rest.length > maxWidth) {
+          lines.push(rest.slice(0, maxWidth))
+          rest = rest.slice(maxWidth)
+        }
+        currentLine = rest
+      } else {
+        currentLine = word
+      }
+    }
+  }
+  if (currentLine) lines.push(currentLine)
+  return lines
+}
+
+function wrapTextWithPrefix(prefix: string, text: string, maxWidth: number): string[] {
+  const available = Math.max(10, maxWidth - prefix.length)
+  const rawLines = wrapText(text, available)
+  if (rawLines.length === 0) return [prefix]
+  const indent = ' '.repeat(prefix.length)
+  return rawLines.map((line, idx) => (idx === 0 ? prefix + line : indent + line))
 }
 
 /** Construye el texto de comanda para ESC/POS (USB/Red) */
@@ -388,7 +434,10 @@ export function buildComandaText(
         const pSub = uPrice * partialQty
         const pTag = uPrice > 0 ? ` ($ ${Math.round(uPrice).toLocaleString('es-CO')} c/u = $ ${Math.round(pSub).toLocaleString('es-CO')})` : ''
         lines.push(`[BOLD][HEIGHT]${partialQty} x ${item.menuItem?.name || 'Item'}${pTag}[/HEIGHT][/BOLD]`)
-        lines.push(`[BOLD][HEIGHT]  ↳ NOTA: ${cleaned.toUpperCase()}[/HEIGHT][/BOLD]`)
+        const noteLines = wrapTextWithPrefix('  ↳ NOTA: ', cleaned.toUpperCase(), is80 ? 44 : 28)
+        for (const nl of noteLines) {
+          lines.push(`[BOLD][HEIGHT]${nl}[/HEIGHT][/BOLD]`)
+        }
 
         const remQty = item.quantity - partialQty
         const remSub = uPrice * remQty
@@ -399,7 +448,10 @@ export function buildComandaText(
         const priceTag = uPrice > 0 ? ` ($ ${Math.round(uPrice).toLocaleString('es-CO')} c/u = $ ${Math.round(sub).toLocaleString('es-CO')})` : ''
         lines.push(`[BOLD][HEIGHT]${item.quantity} x ${item.menuItem?.name || 'Item'}${priceTag}[/HEIGHT][/BOLD]`)
         if (item.notes && cleaned && !item.notes.startsWith('Adición para:')) {
-          lines.push(`[BOLD][HEIGHT]  ↳ NOTA: ${cleaned.toUpperCase()}[/HEIGHT][/BOLD]`)
+          const noteLines = wrapTextWithPrefix('  ↳ NOTA: ', cleaned.toUpperCase(), is80 ? 44 : 28)
+          for (const nl of noteLines) {
+            lines.push(`[BOLD][HEIGHT]${nl}[/HEIGHT][/BOLD]`)
+          }
         }
       }
       if (item.additions && item.additions.length > 0) {
@@ -425,7 +477,12 @@ export function buildComandaText(
 
     if (cleanOrderNotes) {
       lines.push(divider)
-      lines.push(`[BIG][BOLD]NOTA GENERAL:[/BOLD]\n${cleanOrderNotes.toUpperCase()}[/BIG]`, divider)
+      lines.push('[BIG][BOLD]NOTA GENERAL:[/BOLD][/BIG]')
+      const gnLines = wrapText(cleanOrderNotes.toUpperCase(), is80 ? 44 : 28)
+      for (const gnl of gnLines) {
+        lines.push(`[BOLD]${gnl}[/BOLD]`)
+      }
+      lines.push(divider)
     }
     lines.push(`[CENTER]** ${stationName?.toUpperCase() || 'COCINA'} TICKET **[/CENTER]`, divider)
   } else {
@@ -521,7 +578,10 @@ export function buildComandaText(
 
       const cleaned = cleanNotesForPrint(item.notes, item.menuItem?.name)
       if (item.notes && cleaned && !item.notes.startsWith('Adición para:')) {
-        lines.push(`   ↳ NOTA: ${cleaned.toUpperCase()}`)
+        const noteLines = wrapTextWithPrefix('   ↳ NOTA: ', cleaned.toUpperCase(), is80 ? 44 : 28)
+        for (const nl of noteLines) {
+          lines.push(nl)
+        }
       }
 
       if (item.additions && item.additions.length > 0) {
@@ -572,8 +632,16 @@ export function buildComandaText(
 
     const obsParts = [order.notes, (order as any).addressReference].filter(Boolean).map(s => String(s).trim()).filter(Boolean);
     const realObs = obsParts.join(' — ');
+    if (realObs) {
+      lines.push('Observaciones:');
+      const obsLines = wrapText(realObs.toUpperCase(), is80 ? 46 : 30);
+      for (const ol of obsLines) {
+        lines.push(`  ${ol}`);
+      }
+    } else {
+      lines.push('Observaciones:');
+    }
     lines.push(
-      `Observaciones: ${realObs ? realObs.toUpperCase() : ''}`,
       lineDivider,
       `[CENTER][BIG][BOLD]Turno: ${order.orderNumber}[/BOLD][/BIG][/CENTER]`,
       divider,
@@ -636,6 +704,8 @@ export function printReceiptText(rawText: string, paper: '58' | '80' = '80') {
         padding: 4mm;
         color: #000;
         background: #fff;
+        word-break: break-word;
+        white-space: pre-wrap;
       }
       div { margin: 0; padding: 0; }
     </style>
