@@ -9,7 +9,7 @@ import { Input } from '@/components/ui/input'
 import { Dialog, DialogContent } from '@/components/ui/dialog'
 import { api } from '@/lib/api'
 import { alerts } from '@/lib/alerts'
-import { formatCurrency, cn } from '@/lib/utils'
+import { formatCurrency, cn, groupOrderItems } from '@/lib/utils'
 import { useAuth } from '@/hooks/useAuth'
 
 interface ProofPhoto {
@@ -519,15 +519,30 @@ export default function TableDetailPage() {
 
               {/* Items List */}
               <div className="mt-3 space-y-1.5">
-                {order.items?.map((item: any) => (
-                  <div key={item.id} className="flex items-start justify-between rounded-xl bg-[var(--bg-elevated)] p-2.5 text-sm">
-                    <div>
-                      <b className="text-[var(--text-primary)]">{item.quantity} x {item.menuItem?.name || item.nameSnapshot}</b>
-                      {item.notes && <p className="text-xs text-[var(--text-muted)] mt-0.5">Nota: {item.notes}</p>}
+                {groupOrderItems(order.items || []).map((item: any) => {
+                  const cleanedNote = (item.notes || '').replace(/\s*\(#[\w-]+\)/g, '').replace(/\[PARA LLEVAR\]/gi, '').replace(/\[MESA\]/gi, '').trim()
+                  return (
+                    <div key={item.id} className="rounded-xl bg-[var(--bg-elevated)] p-2.5 text-sm space-y-1.5">
+                      <div className="flex items-start justify-between">
+                        <div>
+                          <b className="text-[var(--text-primary)]">{item.quantity} x {item.menuItem?.name || item.nameSnapshot}</b>
+                          {cleanedNote && !item.notes?.startsWith('Adición para:') && <p className="text-xs text-[var(--text-muted)] mt-0.5">Nota: {cleanedNote}</p>}
+                        </div>
+                        <b className="text-[var(--accent)]">{formatCurrency(item.totalPrice || (item.unitPrice * item.quantity) || 0)}</b>
+                      </div>
+                      {item.additions && item.additions.length > 0 && (
+                        <div className="pl-3 border-l-2 border-amber-500/50 space-y-1">
+                          {item.additions.map((add: any) => (
+                            <div key={add.id} className="flex items-center justify-between text-xs text-amber-900 dark:text-amber-300 font-bold bg-amber-500/10 px-2 py-0.5 rounded-md">
+                              <span>+ {add.quantity}x {add.menuItem?.name || add.nameSnapshot}</span>
+                              <span className="text-[var(--text-secondary)]">{formatCurrency(add.totalPrice || (add.unitPrice * add.quantity) || 0)}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </div>
-                    <b className="text-[var(--accent)]">{formatCurrency(item.totalPrice || (item.unitPrice * item.quantity) || 0)}</b>
-                  </div>
-                ))}
+                  )
+                })}
               </div>
 
               {/* Change log if edited */}

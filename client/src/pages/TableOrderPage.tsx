@@ -856,20 +856,24 @@ export default function TableOrderPage() {
         noteText = noteText ? `[MESA] ${noteText}` : '[MESA]'
       }
 
+      const hasAdds = !!(item.additions && item.additions.length > 0)
+      const lineTag = hasAdds ? (item.cartKey.replace(/[^a-zA-Z0-9_-]/g, '').slice(-8) || `line_${Math.random().toString(36).slice(2, 7)}`) : ''
+      const finalNoteText = lineTag ? (noteText ? `${noteText} (#${lineTag})` : `(#${lineTag})`) : noteText
+
       // Producto principal
       itemsPayload.push({
         menuItemId: item.menuItemId,
         quantity: item.quantity,
-        notes: noteText || undefined,
+        notes: finalNoteText || undefined,
       })
 
-      // Cada adición seleccionada como ítem adicional facturable
-      if (item.additions && item.additions.length > 0) {
-        for (const add of item.additions) {
+      // Cada adición seleccionada como ítem adicional facturable vinculado directamente
+      if (hasAdds) {
+        for (const add of item.additions!) {
           itemsPayload.push({
             menuItemId: add.id,
             quantity: item.quantity,
-            notes: `Adición para: ${item.name} ${item.takeaway ? '[PARA LLEVAR]' : '[MESA]'}`,
+            notes: `Adición para: ${item.name} (#${lineTag}) ${item.takeaway ? '[PARA LLEVAR]' : '[MESA]'}`,
           })
         }
       }

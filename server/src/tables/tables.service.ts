@@ -970,10 +970,42 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
     });
 
     // 3. Agrupar comida en sus estaciones respectivas
+    // REGLA CRÍTICA: Las adiciones (ej: Adición de Queso, Adición de Tocineta) SIEMPRE van a la
+    // MISMA estación de cocina que su producto padre (ej: Perro Sencillo, Hamburguesa) para
+    // que el cocinero que prepara el plato las reciba en su misma comanda y nunca se confunda.
     const stationGroups = new Map<string, any[]>();
     for (const item of foodItems) {
-      const categoryId = item.menuItem?.categoryId;
-      const targetStation = eligibleStations.find(s => s.categories?.some(c => c.id === categoryId)) || generalStation;
+      const notesStr = (item.notes || '').trim();
+      const isAdd = /adici[oó]n\s+para:/i.test(notesStr) || /^adici[oó]n/i.test(item.menuItem?.name || '');
+      let targetStation: any = null;
+
+      if (isAdd) {
+        // Buscar el producto padre en foodItems
+        const tagMatch = notesStr.match(/\(#[\w-]+\)/);
+        let parentItem: any = null;
+        if (tagMatch) {
+          parentItem = foodItems.find(fi => fi !== item && (fi.notes || '').includes(tagMatch[0]));
+        }
+        if (!parentItem) {
+          const parentName = notesStr
+            .replace(/^(?:adici[oó]n\s+)?para:\s*/i, '')
+            .replace(/\[(?:para llevar|mesa)\]/gi, '')
+            .replace(/\s*\(#[\w-]+\)/g, '')
+            .trim()
+            .toLowerCase();
+          parentItem = foodItems.find(fi => fi !== item && (fi.menuItem?.name || '').trim().toLowerCase() === parentName);
+        }
+        if (parentItem) {
+          const pCatId = parentItem.menuItem?.categoryId;
+          targetStation = eligibleStations.find(s => s.categories?.some(c => c.id === pCatId)) || generalStation;
+        }
+      }
+
+      if (!targetStation) {
+        const categoryId = item.menuItem?.categoryId;
+        targetStation = eligibleStations.find(s => s.categories?.some(c => c.id === categoryId)) || generalStation;
+      }
+
       if (!targetStation) continue;
       if (!stationGroups.has(targetStation.id)) stationGroups.set(targetStation.id, []);
       stationGroups.get(targetStation.id)!.push(item);

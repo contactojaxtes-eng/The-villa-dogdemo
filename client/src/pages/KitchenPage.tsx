@@ -48,8 +48,8 @@ function groupKitchenItems(items: KitchenTicketItemSummary[]): GroupedKitchenIte
   for (const item of items) {
     const notesStr = (item.notes || '').trim().toLowerCase()
     const nameLower = (item.nameSnapshot || '').trim().toLowerCase()
-    const isAddition = notesStr.startsWith('adición para:') ||
-                       notesStr.startsWith('adicion para:') ||
+    const isAddition = notesStr.includes('adición para:') ||
+                       notesStr.includes('adicion para:') ||
                        notesStr.startsWith('para:') ||
                        nameLower.startsWith('adición') ||
                        nameLower.startsWith('adicion')
@@ -63,27 +63,55 @@ function groupKitchenItems(items: KitchenTicketItemSummary[]): GroupedKitchenIte
 
   for (const add of additions) {
     const notesStr = (add.notes || '').trim()
+    const isTakeaway = notesStr.toLowerCase().includes('llevar')
+
+    // 1. Intentar enlazar primero por etiqueta de línea (#lineId)
+    const tagMatch = notesStr.match(/\(#[\w-]+\)/)
+    let parent: GroupedKitchenItem | undefined = undefined
+
+    if (tagMatch) {
+      parent = baseItems.find(b => (b.notes || '').includes(tagMatch[0]))
+    }
+
+    // 2. Si no hay tag, enlazar por nombre del producto padre
     const parentName = notesStr
-      .replace(/^(adici[oó]ns+)?para:s*/i, '')
-      .replace(/\[(para llevar|mesa)\]/gi, '')
-      .replace(/\(#[-_\w]+\)/g, '')
+      .replace(/^(?:adici[oó]n\s+)?para:\s*/i, '')
+      .replace(/\[(?:para llevar|mesa)\]/gi, '')
+      .replace(/\s*\(#[-_\w]+\)/g, '')
       .trim()
       .toLowerCase()
 
-    const isTakeaway = notesStr.toLowerCase().includes('llevar')
-
-    let parent = baseItems.find(b => {
-      const bName = (b.nameSnapshot || '').trim().toLowerCase()
-      const bTakeaway = (b.notes || '').toLowerCase().includes('llevar')
-      return bName === parentName && bTakeaway === isTakeaway
-    })
+    if (!parent && parentName) {
+      parent = baseItems.find(b => {
+        const bName = (b.nameSnapshot || '').trim().toLowerCase()
+        const bTakeaway = (b.notes || '').toLowerCase().includes('llevar')
+        return bName === parentName && bTakeaway === isTakeaway
+      })
+    }
 
     if (!parent && parentName) {
       parent = baseItems.find(b => (b.nameSnapshot || '').trim().toLowerCase() === parentName)
     }
 
+    // 3. Si no coincide exactamente, buscar coincidencia parcial por nombre
+    if (!parent && parentName) {
+      parent = baseItems.find(b => {
+        const bName = (b.nameSnapshot || '').trim().toLowerCase()
+        return bName.includes(parentName) || parentName.includes(bName)
+      })
+    }
+
+    // 4. Si solo hay 1 producto base, asignar directamente a ese producto
     if (!parent && baseItems.length === 1) {
       parent = baseItems[0]
+    }
+
+    // 5. Fallback: si hay productos base en la mesa, asignar al primer plato con el mismo destino
+    if (!parent && baseItems.length > 0) {
+      parent = baseItems.find(b => {
+        const bTakeaway = (b.notes || '').toLowerCase().includes('llevar')
+        return bTakeaway === isTakeaway
+      }) || baseItems[0]
     }
 
     if (parent) {
@@ -1223,7 +1251,10 @@ export default function KitchenPage() {
                         )}
                         {visibleItems.map((item: KitchenTicketItemSummary) => {
                           const isTakeaway = (item.notes || '').toLowerCase().includes('llevar')
-                          const cleanNotes = sanitizeKitchenNote(item.notes, item.nameSnapshot).replace(/\[PARA LLEVAR\]/gi, '').replace(/\[MESA\]/gi, '').trim()
+                          let cleanNotes = sanitizeKitchenNote(item.notes, item.nameSnapshot).replace(/\[PARA LLEVAR\]/gi, '').replace(/\[MESA\]/gi, '').trim()
+                          if (item.additions && item.additions.length > 0) {
+                            cleanNotes = cleanNotes.replace(/\(\+\s*Con\s+[^)]+\)/gi, '').replace(/\+\s*Con\s+[^\n]+/gi, '').trim()
+                          }
                           const previousQty = item.previousQty ?? 0
                           const quantityDiff = item.changeType === 'ADDED' || item.changeType === 'REMOVED'
                             ? item.quantity

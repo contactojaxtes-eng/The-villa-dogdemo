@@ -2088,8 +2088,10 @@ export class OrdersService implements OnModuleInit {
     const additions: any[] = [];
 
     for (const item of items) {
-      const notesStr = item.notes || '';
-      if (notesStr.startsWith('Adición para:')) {
+      const notesStr = (item.notes || '').trim();
+      const nameStr = (item.name || item.menuItem?.name || '').trim().toLowerCase();
+      const isAdd = /adici[oó]n\s+para:/i.test(notesStr) || notesStr.startsWith('para:') || nameStr.startsWith('adición') || nameStr.startsWith('adicion');
+      if (isAdd) {
         additions.push(item);
       } else {
         baseItems.push({ ...item, additions: [] });
@@ -2097,7 +2099,7 @@ export class OrdersService implements OnModuleInit {
     }
 
     for (const add of additions) {
-      const notesStr = add.notes || '';
+      const notesStr = (add.notes || '').trim();
       const tagMatch = notesStr.match(/\(#[\w-]+\)/);
       let parent: any = null;
 
@@ -2107,14 +2109,32 @@ export class OrdersService implements OnModuleInit {
       }
 
       if (!parent) {
-        const parentName = notesStr.replace('Adición para:', '').replace(/\s*\(#[\w-]+\)/g, '').trim().toLowerCase();
+        const parentName = notesStr
+          .replace(/^(?:adici[oó]n\s+)?para:\s*/i, '')
+          .replace(/\[(?:para llevar|mesa)\]/gi, '')
+          .replace(/\s*\(#[\w-]+\)/g, '')
+          .trim()
+          .toLowerCase();
+
         parent = baseItems.find(bi => {
-          const name = bi.menuItem?.name || bi.name || '';
-          return name.toLowerCase().trim() === parentName;
+          const name = (bi.menuItem?.name || bi.name || '').trim().toLowerCase();
+          return name === parentName;
         });
+
+        if (!parent && parentName) {
+          parent = baseItems.find(bi => {
+            const name = (bi.menuItem?.name || bi.name || '').trim().toLowerCase();
+            return name.includes(parentName) || parentName.includes(name);
+          });
+        }
+
+        if (!parent && baseItems.length === 1) {
+          parent = baseItems[0];
+        }
       }
 
       if (parent) {
+        if (!parent.additions) parent.additions = [];
         parent.additions.push(add);
       } else {
         baseItems.push({ ...add, additions: [] });
