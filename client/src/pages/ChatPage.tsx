@@ -485,7 +485,17 @@ const formatTemplateContent = (text: string) => {
   return text
 }
 
-const MessageStatus = ({ status, direction, isList = false }: { status: string; direction: 'IN' | 'OUT'; isList?: boolean }) => {
+const MessageStatus = ({ 
+  status, 
+  direction, 
+  isList = false, 
+  onRetry 
+}: { 
+  status: string; 
+  direction: 'IN' | 'OUT'; 
+  isList?: boolean; 
+  onRetry?: () => void 
+}) => {
   if (direction === 'IN') return null;
   
   const defaultIconColor = isList ? 'text-[var(--text-muted)]' : 'text-emerald-100/70';
@@ -501,7 +511,23 @@ const MessageStatus = ({ status, direction, isList = false }: { status: string; 
     return <span title="Enviando..."><Clock className={cn("h-2.5 w-2.5 animate-pulse inline shrink-0", defaultIconColor)} /></span>
   }
   if (norm === 'failed') {
-    return <span title="No se pudo enviar"><AlertCircle className="h-3.5 w-3.5 text-red-200 inline shrink-0" /></span>
+    return (
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation()
+          if (onRetry) onRetry()
+        }}
+        className={cn(
+          "inline-flex items-center gap-1 text-red-200 hover:text-white font-bold cursor-pointer transition-colors",
+          onRetry ? "hover:scale-105" : ""
+        )}
+        title="Error al enviar a WhatsApp. Haz clic para reintentar"
+      >
+        <AlertCircle className="h-3.5 w-3.5 text-red-200 inline shrink-0 animate-bounce" />
+        {onRetry && !isList && <span className="text-[9px] underline font-sans">Reintentar</span>}
+      </button>
+    )
   }
   return <span title="Enviado a WhatsApp"><Check className={cn("h-3.5 w-3.5 inline shrink-0", defaultIconColor)} /></span>
 }
@@ -2467,6 +2493,50 @@ function ChatPage() {
     }
   }
 
+  const handleRetryFailedMessage = async (failedMsg: Message) => {
+    if (!activeSession || !failedMsg) return
+    const text = failedMsg.content
+    if (!failedMsg.messageType || failedMsg.messageType === 'text') {
+      setMessagesCached(prev => prev.map(m => m.id === failedMsg.id ? { ...m, status: 'sending' } : m))
+      setSessions(prev => prev.map(s => s.id === activeSession.id ? {
+        ...s,
+        messages: (s.messages || []).map(m => m.id === failedMsg.id ? { ...m, status: 'sending' } : m)
+      } : s))
+
+      try {
+        const result = await api.post<{
+          sent: boolean
+          message?: Message & { sessionId?: string }
+        }>('/whatsapp/send', {
+          phone: activeSession.phone,
+          text: text,
+        })
+        if (result.message) {
+          const persisted = result.message
+          setMessagesCached(prev => prev.map(m => m.id === failedMsg.id ? persisted : m))
+          setSessions(prev => prev.map(session => session.id === activeSession.id ? {
+            ...session,
+            lastMessageAt: persisted.createdAt,
+            messages: [persisted, ...(session.messages || []).filter(m => m.id !== failedMsg.id)]
+          } : session))
+        } else {
+          setMessagesCached(prev => prev.map(m => m.id === failedMsg.id ? { ...m, status: 'sent' } : m))
+        }
+        alerts.toast('Mensaje reenviado exitosamente')
+      } catch (err: any) {
+        console.error('Error reintentando mensaje:', err)
+        setMessagesCached(prev => prev.map(m => m.id === failedMsg.id ? { ...m, status: 'failed' } : m))
+        setSessions(prev => prev.map(s => s.id === activeSession.id ? {
+          ...s,
+          messages: (s.messages || []).map(m => m.id === failedMsg.id ? { ...m, status: 'failed' } : m)
+        } : s))
+        alerts.error('Error de Reintento', err.message || 'No se pudo entregar el mensaje de WhatsApp. Inténtalo de nuevo.')
+      }
+    } else {
+      alerts.toast('Para mensajes con archivo o multimedia, por favor adjúntalos nuevamente.')
+    }
+  }
+
   const [sendingMenu, setSendingMenu] = useState(false)
   const [sendingPaymentQr, setSendingPaymentQr] = useState(false)
   const lastSendMenuAtRef = useRef<number>(0)
@@ -3976,6 +4046,20 @@ function ChatPage() {
                                         </button>
                                       )}
 
+                                      {!isIncoming && m.status === 'failed' && (
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            handleRetryFailedMessage(m)
+                                            setActiveMsgMenuId(null)
+                                          }}
+                                          className="w-full text-left px-3 py-2 text-xs font-bold flex items-center gap-2 hover:bg-emerald-500/10 rounded-xl text-emerald-500 transition-colors"
+                                        >
+                                          <RotateCw className="h-3.5 w-3.5 text-emerald-500" />
+                                          <span>Reintentar envío</span>
+                                        </button>
+                                      )}
+
                                       {!isIncoming && (user?.role === 'ADMIN' || user?.role === 'SUPERADMIN') && (
                                         <button
                                           type="button"
@@ -4086,7 +4170,11 @@ function ChatPage() {
                                     <span className="text-[9px] font-sans italic opacity-85">Editado</span>
                                   )}
                                   {!isIncoming && (
-                                    <MessageStatus status={m.status} direction={m.direction} />
+                                    <MessageStatus 
+                                      status={m.status} 
+                                      direction={m.direction} 
+                                      onRetry={() => handleRetryFailedMessage(m)} 
+                                    />
                                   )}
                                   {formatMessageTime(m.createdAt)}
                                 </span>

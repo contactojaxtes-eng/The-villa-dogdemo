@@ -309,8 +309,14 @@ export class WhatsappService implements OnModuleInit {
     if (lastIn?.waMessageId) {
       const waId = lastIn.waMessageId;
       // 1. Si el último mensaje entrante vino de un teléfono móvil MSISDN real (wamid.HBgM):
+      // IMPORTANTE: session.phone es el número del usuario que está chateando en WhatsApp.
+      // NUNCA debemos anteponer customerPhone porque customerPhone puede ser un teléfono de Nequi o alterno
+      // que no tiene ventana de 24h abierta, provocando que los mensajes salientes fallen.
       if (waId.startsWith('wamid.HBgM')) {
-        const bestPhone = targetSession?.customerPhone || targetSession?.phone || fallbackPhone || '';
+        const bestPhone = (!this.isDummyPhoneNumber(targetSession?.phone) ? targetSession?.phone : null)
+          || (!this.isDummyPhoneNumber(fallbackPhone) ? fallbackPhone : null)
+          || targetSession?.customerPhone
+          || '';
         return { recipientPhone: bestPhone, lastInWaId: waId, isId: false };
       }
       // 2. Si el último mensaje entrante vino de un ID/BSUID de anuncio (wamid.HBgTQ08u o contiene Q08u):
@@ -321,7 +327,10 @@ export class WhatsappService implements OnModuleInit {
     }
 
     // 3. Fallback limpio
-    const candidate = targetSession?.phone || fallbackPhone || '';
+    const candidate = (!this.isDummyPhoneNumber(targetSession?.phone) ? targetSession?.phone : null)
+      || (!this.isDummyPhoneNumber(fallbackPhone) ? fallbackPhone : null)
+      || targetSession?.customerPhone
+      || '';
     const clean = candidate.replace(/\D/g, '');
     const isId = candidate.startsWith('CO.') || (clean.length >= 13 && !clean.startsWith('573'));
     return { recipientPhone: candidate, lastInWaId: lastIn?.waMessageId, isId };
