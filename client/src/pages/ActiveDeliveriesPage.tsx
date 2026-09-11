@@ -1612,7 +1612,7 @@ export default function ActiveDeliveriesPage() {
                                     deliveryDriver: order.deliveryDriver || (order.deliveryDriverId ? drivers.find(d => d.id === order.deliveryDriverId) : undefined)
                                   };
                                   alerts.toast(`Enviando pedido #${order.orderNumber} a impresión...`, 'info');
-                                  const res = await printComandaSmart(orderWithDriver, undefined, user?.role, false, false);
+                                  const res = await printComandaSmart(orderWithDriver, 'caja', user?.role, false, false);
                                   if (res?.error) {
                                     alerts.error('Error al imprimir', res.error);
                                   } else {
@@ -2684,7 +2684,7 @@ export default function ActiveDeliveriesPage() {
                           deliveryDriver: o.deliveryDriver || (o.deliveryDriverId ? drivers.find(d => d.id === o.deliveryDriverId) : undefined)
                         };
                         alerts.toast(`Enviando pedido #${o.orderNumber} a impresión...`, 'info');
-                        const res = await printComandaSmart(orderWithDriver, undefined, user?.role, false, false);
+                        const res = await printComandaSmart(orderWithDriver, 'caja', user?.role, false, false);
                         if (res?.error) {
                           alerts.error('Error al imprimir', res.error);
                         } else {

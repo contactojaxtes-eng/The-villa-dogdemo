@@ -715,21 +715,40 @@ async function printSinglePrinter(
     try {
       const result = await api.post<{ ok: boolean; error?: string; text?: string; paper?: '58' | '80' }>(`/print/order/${order.id}?target=${targetId}&kickDrawer=${kickDrawer}`)
       if (result.ok) {
+        // Si la impresora de caja está en modo browser, imprimir vía navegador/iframe
+        if (printerConfig.mode === 'browser') {
+          if (result.text) {
+            printReceiptText(result.text, (result.paper || printerConfig.paper || '80') as any)
+          } else {
+            printViaIframe(buildPrintHtml(order, printerConfig.paper, targetId === 'caja' ? 'caja' : 'cocina', categories, printerConfig.name, allPrinters, restaurantInfo))
+          }
+          return { method: 'browser', silent: false }
+        }
         return { method: 'local_bridge', silent: true }
       }
       if (printerConfig.mode !== 'browser') {
+        // Si falló en modo red o puente en una reimpresión manual, permitir respaldo en navegador
+        if (!isAutoPrint && !isWaiter) {
+          console.warn('Fallo en impresión por red/puente, usando respaldo en navegador:', result.error)
+          printViaIframe(buildPrintHtml(order, printerConfig.paper, targetId === 'caja' ? 'caja' : 'cocina', categories, printerConfig.name, allPrinters, restaurantInfo))
+          return { method: 'browser', silent: false }
+        }
         return { method: (printerConfig.mode as any) || 'local_bridge', silent: true, error: result.error }
       }
     } catch (err: any) {
       if (printerConfig.mode !== 'browser') {
+        if (!isAutoPrint && !isWaiter) {
+          console.warn('Error de conexión con servicio de impresión, usando respaldo en navegador:', err)
+          printViaIframe(buildPrintHtml(order, printerConfig.paper, targetId === 'caja' ? 'caja' : 'cocina', categories, printerConfig.name, allPrinters, restaurantInfo))
+          return { method: 'browser', silent: false }
+        }
         return { method: (printerConfig.mode as any) || 'local_bridge', silent: true, error: err.message || 'Error de conexión' }
       }
     }
   }
 
-  // 3) Modo Navegador: Solo si no hay ID de pedido y no es mesera.
-  // En pedidos existentes, no abrir el diálogo de PDF emergente para evitar bloquear la operación.
-  if (printerConfig.mode === 'browser' && !order.id && !isWaiter) {
+  // 3) Modo Navegador:
+  if (printerConfig.mode === 'browser' && !isWaiter) {
     printViaIframe(buildPrintHtml(order, printerConfig.paper, targetId === 'caja' ? 'caja' : 'cocina', categories, printerConfig.name, allPrinters, restaurantInfo))
     return { method: 'browser', silent: false }
   }
@@ -745,10 +764,11 @@ export async function printComandaSmart(
   kickDrawer = false
 ): Promise<{ method: 'usb' | 'network' | 'browser' | 'local_bridge'; silent: boolean; error?: string }> {
   const settings = await getPrinterSettings()
-  const isDeliveryOrder = !order.tableId && ['DELIVERY', 'PICKUP'].includes(order.orderType)
+  const orderTypeNormalized = String(order.orderType || '').toUpperCase()
+  const isDeliveryOrder = !order.tableId && ['DELIVERY', 'PICKUP'].includes(orderTypeNormalized)
 
-  // En pedidos de domicilio o para llevar (o cuando se solicita factura de caja), se imprime UNA SOLA factura/comanda completa
-  if (target === 'caja' || isDeliveryOrder) {
+  // En pedidos de domicilio o para llevar (o cuando se solicita factura de caja o target no especificado en reimpresión), se imprime factura completa de caja
+  if (target === 'caja' || isDeliveryOrder || !target) {
     return printSinglePrinter(order, settings.caja, 'caja', userRole, isAutoPrint, undefined, undefined, settings.restaurant, kickDrawer)
   }
 
