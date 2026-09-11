@@ -1371,19 +1371,6 @@ export class OrdersService implements OnModuleInit {
       throw new BadRequestException('No se puede poner en ruta un pedido de domicilio sin domiciliario asignado.');
     }
 
-    if (targetDriverId && status === 'IN_ROUTE') {
-      const activeCount = await this.prisma.order.count({
-        where: {
-          deliveryDriverId: targetDriverId,
-          status: 'IN_ROUTE',
-          id: { not: id },
-        },
-      });
-      if (activeCount >= 5) {
-        throw new BadRequestException('El domiciliario ha alcanzado el límite máximo de 5 pedidos activos (En Ruta). Confirma el cobro de alguno antes de asignarle más.');
-      }
-    }
-
     const isPickupOrLocal = order.orderType === 'PICKUP' || order.orderType === 'LOCAL';
     const dataUpdate: any = { status };
     if (isPickupOrLocal) {
@@ -1473,6 +1460,39 @@ export class OrdersService implements OnModuleInit {
     }
 
     return updated;
+  }
+
+  async batchAssignDriver(orderIds: string[], deliveryDriverId: string, user?: { id: string; role: string }) {
+    if (!orderIds || !Array.isArray(orderIds) || orderIds.length === 0) {
+      throw new BadRequestException('Debes proporcionar al menos un ID de pedido');
+    }
+    if (!deliveryDriverId) {
+      throw new BadRequestException('El ID del repartidor es obligatorio');
+    }
+
+    const driver = await this.prisma.deliveryDriver.findUnique({ where: { id: deliveryDriverId } });
+    if (!driver) {
+      throw new NotFoundException('Repartidor no encontrado');
+    }
+
+    const results = [];
+    for (const orderId of orderIds) {
+      try {
+        const order = await this.prisma.order.findUnique({ where: { id: orderId } });
+        if (!order || ['DELIVERED', 'CANCELLED'].includes(order.status)) continue;
+        const nextStatus = (order.status === 'PENDING' || order.status === 'READY') ? 'IN_ROUTE' : order.status;
+        const updated = await this.updateStatus(orderId, nextStatus, user, deliveryDriverId);
+        results.push(updated);
+      } catch (err: any) {
+        this.logger.warn(`Error al asignar pedido ${orderId} en lote: ${err.message}`);
+      }
+    }
+
+    return {
+      success: true,
+      assignedCount: results.length,
+      orders: results,
+    };
   }
 
   async cancelOrder(id: string, reason: string, userParam: any) {

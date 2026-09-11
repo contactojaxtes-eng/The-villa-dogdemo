@@ -168,6 +168,14 @@ export default function ActiveDeliveriesPage() {
   const [registeringDriverInline, setRegisteringDriverInline] = useState(false)
   const [dispatchError, setDispatchError] = useState('')
 
+  const [selectedOrderIds, setSelectedOrderIds] = useState<string[]>([])
+  const [batchDispatchOpen, setBatchDispatchOpen] = useState(false)
+  const [batchDriverId, setBatchDriverId] = useState('')
+  const [batchDriverSearch, setBatchDriverSearch] = useState('')
+  const [batchAutoPrint, setBatchAutoPrint] = useState(true)
+  const [isSubmittingBatch, setIsSubmittingBatch] = useState(false)
+  const [batchError, setBatchError] = useState('')
+
   const filteredDrivers = useMemo(() => {
     if (!driverSearch.trim()) return drivers
     const q = driverSearch.trim().toLowerCase()
@@ -375,13 +383,7 @@ export default function ActiveDeliveriesPage() {
         return
       }
 
-      // Check workload limit
       const orderToUpdate = dispatchDialog.order
-      const selectedDriverObj = drivers.find(d => d.id === driverId)
-      if (selectedDriverObj && orderToUpdate.deliveryDriverId !== driverId && selectedDriverObj.activeDeliveries >= 5) {
-        setDispatchError('Este repartidor ha alcanzado el límite máximo de 5 pedidos activos. Registra el cobro de alguno antes de asignarle más.')
-        return
-      }
       const isPending = orderToUpdate.status === 'PENDING'
       const nextStatus = isPending ? 'IN_ROUTE' : orderToUpdate.status
 
@@ -558,6 +560,92 @@ export default function ActiveDeliveriesPage() {
     if (statusFilter === 'IN_ROUTE') return visibleOrders.filter(o => o.status === 'IN_ROUTE')
     return visibleOrders
   }, [visibleOrders, statusFilter])
+
+  const filteredBatchDrivers = useMemo(() => {
+    if (!batchDriverSearch.trim()) return drivers
+    const q = batchDriverSearch.trim().toLowerCase()
+    return drivers.filter(d => 
+      (d.name && d.name.toLowerCase().includes(q)) || 
+      (d.phone && d.phone.includes(q))
+    )
+  }, [batchDriverSearch, drivers])
+
+  const selectableOrders = useMemo(() => {
+    return statusVisibleOrders.filter(o => o.orderType === 'DELIVERY' && !['DELIVERED', 'CANCELLED'].includes(o.status))
+  }, [statusVisibleOrders])
+
+  const handleToggleSelectOrder = (id: string) => {
+    setSelectedOrderIds(prev => 
+      prev.includes(id) ? prev.filter(item => item !== id) : [...prev, id]
+    )
+  }
+
+  const handleToggleSelectAll = () => {
+    const allIds = selectableOrders.map(o => o.id)
+    if (allIds.length > 0 && allIds.every(id => selectedOrderIds.includes(id))) {
+      setSelectedOrderIds(prev => prev.filter(id => !allIds.includes(id)))
+    } else {
+      setSelectedOrderIds(prev => Array.from(new Set([...prev, ...allIds])))
+    }
+  }
+
+  const handleConfirmBatchDispatch = async () => {
+    if (!batchDriverId) {
+      setBatchError('Debes seleccionar un repartidor para asignar los pedidos.')
+      return
+    }
+    if (selectedOrderIds.length === 0) return
+
+    setIsSubmittingBatch(true)
+    setBatchError('')
+
+    try {
+      const selectedOrdersList = orders.filter(o => selectedOrderIds.includes(o.id))
+      
+      try {
+        await api.put<any>('/orders/batch-dispatch', {
+          orderIds: selectedOrderIds,
+          deliveryDriverId: batchDriverId,
+        })
+      } catch (endpointErr) {
+        await Promise.all(selectedOrdersList.map(o => {
+          const nextStatus = (o.status === 'PENDING' || o.status === 'READY') ? 'IN_ROUTE' : o.status
+          return api.put(`/orders/${o.id}/status`, {
+            status: nextStatus,
+            deliveryDriverId: batchDriverId
+          })
+        }))
+      }
+
+      if (batchAutoPrint) {
+        for (const ord of selectedOrdersList) {
+          if (ord.status === 'PENDING') {
+            try {
+              await printComandaSmart({ ...ord, status: 'IN_ROUTE', deliveryDriverId: batchDriverId }, 'caja', user?.role, false, false)
+            } catch (pErr) {
+              console.warn('Error imprimiendo comanda en lote:', pErr)
+            }
+          }
+        }
+      }
+
+      alerts.success(
+        'Pedidos Asignados',
+        `Se asignaron ${selectedOrderIds.length} pedidos al domiciliario correctamente.`
+      )
+
+      setSelectedOrderIds([])
+      setBatchDispatchOpen(false)
+      setBatchDriverId('')
+      setBatchDriverSearch('')
+      loadOrders(false, true)
+      loadDrivers()
+    } catch (err: any) {
+      setBatchError(err.message || 'Error al despachar pedidos en lote')
+    } finally {
+      setIsSubmittingBatch(false)
+    }
+  }
 
   const updateStatus = async (id: string, newStatus: string) => {
     setUpdatingId(id)
@@ -779,6 +867,50 @@ export default function ActiveDeliveriesPage() {
         </div>
       </motion.div>
 
+      {/* ── Selection Action Bar (Asignación Múltiple / en Lote) ── */}
+      {selectedOrderIds.length > 0 && (
+        <motion.div
+          initial={{ opacity: 0, y: -10 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="flex items-center justify-between bg-[var(--accent)] text-[var(--accent-fg)] p-3.5 rounded-2xl shadow-xl gap-3 flex-wrap border-2 border-white/20"
+        >
+          <div className="flex items-center gap-3">
+            <span className="bg-black/20 px-3 py-1 rounded-xl text-sm font-black flex items-center gap-2">
+              <CheckCircle2 className="h-4 w-4" />
+              {selectedOrderIds.length} {selectedOrderIds.length === 1 ? 'pedido seleccionado' : 'pedidos seleccionados'}
+            </span>
+            <span className="text-xs font-bold opacity-90 hidden md:inline">
+              Pedidos: {orders.filter(o => selectedOrderIds.includes(o.id)).map(o => `#${o.orderNumber}`).join(', ')}
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => setSelectedOrderIds([])}
+              className="h-9 px-3 text-xs font-extrabold rounded-xl bg-black/20 hover:bg-black/30 text-white border-0 cursor-pointer"
+            >
+              Deseleccionar
+            </Button>
+            {hasPermission('dispatch.change_status') && (
+              <Button
+                size="sm"
+                onClick={() => {
+                  setBatchDriverId('')
+                  setBatchDriverSearch('')
+                  setBatchError('')
+                  setBatchDispatchOpen(true)
+                }}
+                className="h-9 px-4 text-xs font-black rounded-xl bg-white text-[var(--accent)] hover:bg-white/90 shadow-md border-0 cursor-pointer flex items-center gap-1.5"
+              >
+                <Bike className="h-4 w-4" />
+                Asignar Repartidor a los {selectedOrderIds.length} pedidos
+              </Button>
+            )}
+          </div>
+        </motion.div>
+      )}
+
       {/* ── Compact Table ── */}
       <motion.div variants={fadeUp}>
         <Card className="border border-[var(--border-subtle)] bg-[var(--bg-panel)] shadow-md rounded-2xl overflow-hidden">
@@ -793,6 +925,15 @@ export default function ActiveDeliveriesPage() {
               <table className="w-full text-xs">
                 <thead>
                   <tr className="border-b border-[var(--border-subtle)] bg-[var(--bg-subtle)]">
+                    <th className="w-10 text-center px-2 py-2.5">
+                      <input
+                        type="checkbox"
+                        className="h-4 w-4 rounded accent-[var(--accent)] cursor-pointer"
+                        checked={selectableOrders.length > 0 && selectableOrders.every(o => selectedOrderIds.includes(o.id))}
+                        onChange={handleToggleSelectAll}
+                        title="Seleccionar todos los pedidos activos"
+                      />
+                    </th>
                     <th className="text-left px-3 py-2.5 font-extrabold text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Cola / Pedido</th>
                     <th className="text-left px-3 py-2.5 font-extrabold text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Estado</th>
                     <th className="text-left px-3 py-2.5 font-extrabold text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Cliente</th>
@@ -818,15 +959,32 @@ export default function ActiveDeliveriesPage() {
                       const isUrgent = waitingForDispatch && elapsedMinutes >= DISPATCH_ALERT_MINUTES
                       const isWarning = waitingForDispatch && !isUrgent && elapsedMinutes >= DISPATCH_WARNING_MINUTES
                       const queuePosition = visibleOrders.findIndex(item => item.id === order.id) + 1
+                      const isSelectedRow = selectedOrderIds.includes(order.id)
+                      const isSelectable = order.orderType === 'DELIVERY' && !['DELIVERED', 'CANCELLED'].includes(order.status)
                       return (
                         <motion.tr key={order.id} layout initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
                           className={`border-b transition-colors ${
-                            isUrgent
-                              ? 'border-red-500/30 bg-red-500/[0.07] hover:bg-red-500/[0.11]'
-                              : isWarning
-                                ? 'border-amber-500/20 bg-amber-500/[0.04] hover:bg-amber-500/[0.08]'
-                                : 'border-[var(--border-subtle)]/50 hover:bg-[var(--bg-hover)]'
+                            isSelectedRow
+                              ? 'bg-[var(--accent)]/10 border-[var(--accent)]/40 hover:bg-[var(--accent)]/15'
+                              : isUrgent
+                                ? 'border-red-500/30 bg-red-500/[0.07] hover:bg-red-500/[0.11]'
+                                : isWarning
+                                  ? 'border-amber-500/20 bg-amber-500/[0.04] hover:bg-amber-500/[0.08]'
+                                  : 'border-[var(--border-subtle)]/50 hover:bg-[var(--bg-hover)]'
                           }`}>
+                          <td className="w-10 text-center px-2 py-2.5">
+                            {isSelectable ? (
+                              <input
+                                type="checkbox"
+                                checked={isSelectedRow}
+                                onChange={() => handleToggleSelectOrder(order.id)}
+                                className="h-4.5 w-4.5 rounded accent-[var(--accent)] cursor-pointer"
+                                title={`Seleccionar pedido #${order.orderNumber}`}
+                              />
+                            ) : (
+                              <span className="text-[10px] text-[var(--text-muted)] opacity-30">—</span>
+                            )}
+                          </td>
                           <td className="px-3 py-2.5">
                             <div className="flex items-center gap-2">
                               <span className={`flex h-7 min-w-7 items-center justify-center rounded-lg px-1 text-[10px] font-black ${
@@ -1309,7 +1467,7 @@ export default function ActiveDeliveriesPage() {
                         setDriverSearch(val)
                         const q = val.trim().toLowerCase()
                         if (q) {
-                          const auto = drivers.find(d => d.name.toLowerCase().startsWith(q) && (d.activeDeliveries || 0) < 5)
+                          const auto = drivers.find(d => d.name.toLowerCase().startsWith(q))
                           if (auto) setSelectedDriverId(auto.id)
                         }
                       }}
@@ -1332,21 +1490,15 @@ export default function ActiveDeliveriesPage() {
                   <div className="max-h-52 overflow-y-auto space-y-1 border border-[var(--border-subtle)] rounded-xl p-1 bg-[var(--bg-input)]/50">
                     {filteredDrivers.map(d => {
                       const isSelected = selectedDriverId === d.id
-                      const isOverwork = (d.activeDeliveries || 0) >= 5
-                      const isCurrent = dispatchDialog?.order?.deliveryDriverId === d.id
-                      const disableOption = isOverwork && !isCurrent
                       return (
                         <button
                           key={d.id}
                           type="button"
-                          disabled={disableOption}
                           onClick={() => setSelectedDriverId(d.id)}
                           className={cn(
                             "w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer text-left border",
                             isSelected 
                               ? "bg-[var(--accent)] text-[var(--accent-fg)] border-[var(--accent)] shadow-xs" 
-                              : disableOption
-                              ? "opacity-40 cursor-not-allowed bg-transparent border-transparent"
                               : "hover:bg-[var(--bg-hover)] text-[var(--text-primary)] border-transparent"
                           )}
                         >
@@ -1357,9 +1509,9 @@ export default function ActiveDeliveriesPage() {
                           {d.activeDeliveries > 0 ? (
                             <span className={cn(
                               "text-[10px] font-extrabold px-2 py-0.5 rounded-full",
-                              isSelected ? "bg-black/20 text-white" : disableOption ? "text-red-500 bg-red-500/10" : "text-amber-500 bg-amber-500/10"
+                              isSelected ? "bg-black/20 text-white" : "text-amber-500 bg-amber-500/10"
                             )}>
-                              ({d.activeDeliveries}/5 {disableOption ? '🚫 Límite' : 'activos'})
+                              ({d.activeDeliveries} activos)
                             </span>
                           ) : (
                             <span className={cn(
@@ -1404,6 +1556,160 @@ export default function ActiveDeliveriesPage() {
               <Button variant="outline" className="flex-1 h-11 rounded-xl font-bold text-sm cursor-pointer" onClick={() => setDispatchDialog(null)}>Cancelar</Button>
               <Button className="flex-1 h-11 bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-fg)] rounded-xl font-bold text-sm shadow-md border-0 cursor-pointer" onClick={handleConfirmDispatch}>
                 {dispatchDialog?.order?.status === 'PENDING' ? 'Despachar e Imprimir' : 'Confirmar'}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Batch Dispatch Dialog (Asignación en Lote de Múltiples Domicilios) ── */}
+      <Dialog open={batchDispatchOpen} onOpenChange={open => { if (!open) { setBatchDispatchOpen(false); setBatchDriverSearch(''); setBatchError(''); } }}>
+        <DialogContent className="bg-[var(--bg-panel)] border-[var(--border-default)] rounded-3xl max-w-md p-6">
+          <DialogHeader>
+            <DialogTitle className="text-lg font-black text-[var(--text-primary)] flex items-center gap-2">
+              <Bike className="h-5 w-5 text-[var(--accent)]" />
+              Asignar Repartidor a Múltiples Pedidos
+            </DialogTitle>
+          </DialogHeader>
+
+          <div className="space-y-4 pt-2">
+            <div className="p-3.5 rounded-2xl bg-[var(--accent)]/10 border border-[var(--accent)]/25">
+              <p className="text-xs font-black text-[var(--accent)] flex items-center gap-1.5">
+                <CheckCircle2 className="h-4 w-4" />
+                {selectedOrderIds.length} pedidos seleccionados para asignación conjunta:
+              </p>
+              <div className="mt-2 flex flex-wrap gap-1.5 max-h-24 overflow-y-auto">
+                {orders.filter(o => selectedOrderIds.includes(o.id)).map(o => (
+                  <span key={o.id} className="bg-[var(--bg-panel)] px-2 py-0.5 rounded-lg border border-[var(--border-default)] text-xs font-black">
+                    #{o.orderNumber}
+                  </span>
+                ))}
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <Label className="text-[10px] font-bold text-[var(--text-secondary)] uppercase tracking-wider">Seleccionar Repartidor *</Label>
+                <span className="text-[10px] text-[var(--text-muted)] font-bold">{filteredBatchDrivers.length} repartidores</span>
+              </div>
+
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-[var(--text-muted)]" />
+                <Input
+                  value={batchDriverSearch}
+                  onChange={e => {
+                    const val = e.target.value
+                    setBatchDriverSearch(val)
+                    const q = val.trim().toLowerCase()
+                    if (q) {
+                      const auto = drivers.find(d => d.name.toLowerCase().startsWith(q))
+                      if (auto) setBatchDriverId(auto.id)
+                    }
+                  }}
+                  placeholder="Escribe el nombre del repartidor..."
+                  className="bg-[var(--bg-input)] border-[var(--border-default)] rounded-xl text-xs h-9.5 pl-9 pr-8 focus:border-[var(--accent)] font-semibold"
+                  autoFocus
+                />
+                {batchDriverSearch && (
+                  <button
+                    type="button"
+                    onClick={() => setBatchDriverSearch('')}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-xs font-bold text-[var(--text-muted)] hover:text-[var(--text-primary)] cursor-pointer"
+                  >
+                    ✕
+                  </button>
+                )}
+              </div>
+
+              {/* Lista interactiva de repartidores sin límite */}
+              <div className="max-h-52 overflow-y-auto space-y-1 border border-[var(--border-subtle)] rounded-xl p-1 bg-[var(--bg-input)]/50">
+                {filteredBatchDrivers.map(d => {
+                  const isSelected = batchDriverId === d.id
+                  return (
+                    <button
+                      key={d.id}
+                      type="button"
+                      onClick={() => setBatchDriverId(d.id)}
+                      className={cn(
+                        "w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer text-left border",
+                        isSelected 
+                          ? "bg-[var(--accent)] text-[var(--accent-fg)] border-[var(--accent)] shadow-xs" 
+                          : "hover:bg-[var(--bg-hover)] text-[var(--text-primary)] border-transparent"
+                      )}
+                    >
+                      <div className="flex items-center gap-2">
+                        <Bike className={cn("h-3.5 w-3.5 shrink-0", isSelected ? "text-[var(--accent-fg)]" : "text-[var(--accent)]")} />
+                        <span className="font-extrabold">{d.name}</span>
+                      </div>
+                      {d.activeDeliveries > 0 ? (
+                        <span className={cn(
+                          "text-[10px] font-extrabold px-2 py-0.5 rounded-full",
+                          isSelected ? "bg-black/20 text-white" : "text-amber-500 bg-amber-500/10"
+                        )}>
+                          ({d.activeDeliveries} activos)
+                        </span>
+                      ) : (
+                        <span className={cn(
+                          "text-[10px] font-extrabold px-2 py-0.5 rounded-full",
+                          isSelected ? "bg-black/20 text-white" : "text-emerald-500 bg-emerald-500/10"
+                        )}>
+                          ✓ Libre
+                        </span>
+                      )}
+                    </button>
+                  )
+                })}
+                {filteredBatchDrivers.length === 0 && (
+                  <div className="p-3 text-center text-xs text-[var(--text-muted)] font-semibold">
+                    No se encontró ningún repartidor con "{batchDriverSearch}"
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Imprimir comandas para los pedidos pendientes */}
+            <div className="flex items-center gap-2.5 p-3 rounded-xl bg-[var(--bg-subtle)] border border-[var(--border-subtle)]">
+              <input
+                type="checkbox"
+                id="batchAutoPrint"
+                checked={batchAutoPrint}
+                onChange={e => setBatchAutoPrint(e.target.checked)}
+                className="h-4 w-4 rounded accent-[var(--accent)] cursor-pointer shrink-0"
+              />
+              <Label htmlFor="batchAutoPrint" className="text-xs font-bold text-[var(--text-secondary)] cursor-pointer select-none">
+                Imprimir factura de caja para pedidos que pasen a En Ruta
+              </Label>
+            </div>
+
+            {batchError && (
+              <div className="rounded-xl border border-[var(--destructive)]/20 bg-[var(--destructive)]/5 p-2.5 text-xs text-[var(--destructive)] font-semibold flex items-center gap-1.5 animate-fade-in">
+                <AlertTriangle className="h-4 w-4 shrink-0" />
+                <span>{batchError}</span>
+              </div>
+            )}
+
+            <div className="flex gap-3 pt-2 border-t border-[var(--border-subtle)]/40">
+              <Button
+                variant="outline"
+                className="flex-1 h-12 rounded-xl font-bold text-sm cursor-pointer"
+                onClick={() => setBatchDispatchOpen(false)}
+                disabled={isSubmittingBatch}
+              >
+                Cancelar
+              </Button>
+              <Button
+                className="flex-1 h-12 bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-fg)] rounded-xl font-bold text-sm shadow-md border-0 cursor-pointer"
+                onClick={handleConfirmBatchDispatch}
+                disabled={isSubmittingBatch || !batchDriverId}
+              >
+                {isSubmittingBatch ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Asignando...
+                  </>
+                ) : (
+                  `Asignar los ${selectedOrderIds.length} pedidos`
+                )}
               </Button>
             </div>
           </div>

@@ -142,6 +142,18 @@ export class OrdersController {
     });
   }
 
+  @Put('batch-dispatch')
+  @Permissions('dispatch.change_status')
+  @UseGuards(PermissionsGuard)
+  @ApiOperation({ summary: 'Asignar repartidor a múltiples pedidos en lote' })
+  batchAssignDriver(
+    @Body('orderIds') orderIds: string[],
+    @Body('deliveryDriverId') deliveryDriverId: string,
+    @Request() req: any,
+  ) {
+    return this.ordersService.batchAssignDriver(orderIds, deliveryDriverId, req.user);
+  }
+
   @Put(':id')
   @Permissions('orders.edit')
   @UseGuards(PermissionsGuard)

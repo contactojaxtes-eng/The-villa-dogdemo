@@ -306,13 +306,6 @@ export default function OrdersPage() {
         return
       }
 
-      // Check workload limit
-      const orderToUpdate = dispatchDialog.order
-      const selectedDriverObj = drivers.find(d => d.id === driverId)
-      if (selectedDriverObj && orderToUpdate.deliveryDriverId !== driverId && selectedDriverObj.activeDeliveries >= 5) {
-        setDispatchError('Este repartidor ha alcanzado el límite máximo de 5 pedidos activos. Registra el cobro de alguno antes de asignarle más.')
-        return
-      }
       const isPending = orderToUpdate.status === 'PENDING'
       const nextStatus = isPending ? 'IN_ROUTE' : orderToUpdate.status
 
@@ -1419,7 +1412,7 @@ export default function OrdersPage() {
                           setDriverSearch(val)
                           const q = val.trim().toLowerCase()
                           if (q) {
-                            const auto = drivers.find(d => d.name.toLowerCase().startsWith(q) && (d.activeDeliveries || 0) < 5)
+                            const auto = drivers.find(d => d.name.toLowerCase().startsWith(q))
                             if (auto) setSelectedDriverId(auto.id)
                           }
                         }}
@@ -1447,21 +1440,15 @@ export default function OrdersPage() {
                       <div className="max-h-52 overflow-y-auto space-y-1 border border-[var(--border-subtle)] rounded-xl p-1 bg-[var(--bg-input)]/50">
                         {filteredDrivers.map(d => {
                           const isSelected = selectedDriverId === d.id
-                          const isOverwork = (d.activeDeliveries || 0) >= 5
-                          const isCurrent = dispatchDialog?.order?.deliveryDriverId === d.id
-                          const disableOption = isOverwork && !isCurrent
                           return (
                             <button
                               key={d.id}
                               type="button"
-                              disabled={disableOption}
                               onClick={() => setSelectedDriverId(d.id)}
                               className={cn(
                                 "w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer text-left border",
                                 isSelected 
                                   ? "bg-[var(--accent)] text-[var(--accent-fg)] border-[var(--accent)] shadow-xs" 
-                                  : disableOption
-                                  ? "opacity-40 cursor-not-allowed bg-transparent border-transparent"
                                   : "hover:bg-[var(--bg-hover)] text-[var(--text-primary)] border-transparent"
                               )}
                             >
@@ -1472,9 +1459,9 @@ export default function OrdersPage() {
                               {d.activeDeliveries > 0 ? (
                                 <span className={cn(
                                   "text-[10px] font-extrabold px-2 py-0.5 rounded-full",
-                                  isSelected ? "bg-black/20 text-white" : disableOption ? "text-red-500 bg-red-500/10" : "text-amber-500 bg-amber-500/10"
+                                  isSelected ? "bg-black/20 text-white" : "text-amber-500 bg-amber-500/10"
                                 )}>
-                                  ({d.activeDeliveries}/5 {disableOption ? '🚫 Límite' : 'activos'})
+                                  ({d.activeDeliveries} activos)
                                 </span>
                               ) : (
                                 <span className={cn(
@@ -1501,20 +1488,10 @@ export default function OrdersPage() {
                     if (!selectedDriver) return null;
                     return (
                       <div className="animate-fade-in mt-1">
-                        {selectedDriver.activeDeliveries >= 5 ? (
-                          <div className="rounded-xl border border-[var(--destructive)]/30 bg-[var(--destructive)]/5 p-3 text-[11px] text-[var(--destructive)] font-bold flex items-center gap-1.5">
-                            <AlertTriangle className="h-4 w-4 shrink-0 animate-bounce" />
-                            <span>Límite de 5 alcanzado 🚫 Libera cobros para este repartidor.</span>
-                          </div>
-                        ) : selectedDriver.activeDeliveries >= 3 ? (
-                          <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 p-3 text-[11px] text-amber-500 font-bold flex items-center gap-1.5">
-                            <AlertTriangle className="h-4 w-4 shrink-0 animate-pulse text-amber-500" />
-                            <span>¡Alerta! Lleva {selectedDriver.activeDeliveries} asignados. No olvides cobrarle cuando regrese.</span>
-                          </div>
-                        ) : selectedDriver.activeDeliveries > 0 ? (
+                        {selectedDriver.activeDeliveries > 0 ? (
                           <div className="rounded-xl border border-blue-500/20 bg-blue-500/5 p-3 text-[11px] text-blue-400 font-bold flex items-center gap-1.5">
                             <Clock className="h-4 w-4 shrink-0 text-blue-400" />
-                            <span>Lleva {selectedDriver.activeDeliveries} asignados.</span>
+                            <span>Lleva {selectedDriver.activeDeliveries} pedido(s) asignado(s).</span>
                           </div>
                         ) : (
                           <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-3 text-[11px] text-emerald-500 font-bold flex items-center gap-1.5">
