@@ -401,7 +401,8 @@ export default function ActiveDeliveriesPage() {
   }
 
   const handleConfirmDispatch = async () => {
-    if (!dispatchDialog) return
+    if (!dispatchDialog?.order) return
+    const orderToUpdate = dispatchDialog.order
     setDispatchError('')
     let driverId = selectedDriverId
 
@@ -2116,8 +2117,25 @@ export default function ActiveDeliveriesPage() {
       </Dialog>
 
       {/* ── Batch Collect Dialog (Cobro Masivo / Cobrar Todo) ── */}
-      <Dialog open={batchCollectOpen} onOpenChange={open => { if (!open) { setBatchCollectOpen(false); setBatchCollectError(''); } }}>
-        <DialogContent className="bg-[var(--bg-panel)] border-[var(--border-default)] rounded-3xl max-w-xl p-6 max-h-[90vh] overflow-y-auto">
+      <Dialog 
+        open={batchCollectOpen} 
+        onOpenChange={open => { 
+          if (chatModalOrder) return
+          if (!open) { setBatchCollectOpen(false); setBatchCollectError(''); } 
+        }}
+      >
+        <DialogContent 
+          onPointerDownOutside={(e) => {
+            if (chatModalOrder) e.preventDefault()
+          }}
+          onInteractOutside={(e) => {
+            if (chatModalOrder) e.preventDefault()
+          }}
+          onEscapeKeyDown={(e) => {
+            if (chatModalOrder) e.preventDefault()
+          }}
+          className="bg-[var(--bg-panel)] border-[var(--border-default)] rounded-3xl max-w-xl p-6 max-h-[90vh] overflow-y-auto"
+        >
           <DialogHeader>
             <DialogTitle className="text-xl font-black text-[var(--text-primary)] flex items-center gap-2">
               <DollarSign className="h-6 w-6 text-emerald-500" />
@@ -2264,7 +2282,7 @@ export default function ActiveDeliveriesPage() {
                             type="button"
                             onClick={() => setChatModalOrder(ord)}
                             className="font-black text-[var(--accent)] hover:underline inline-flex items-center gap-1 cursor-pointer bg-transparent border-0 p-0 group shrink-0"
-                            title={`Abrir WhatsApp real para verificar pago de pedido #${ord.orderNumber}`}
+                            aria-label={`Ver chat WhatsApp pedido #${ord.orderNumber}`}
                           >
                             <span>#{ord.orderNumber}</span>
                             <MessageSquare className="w-3.5 h-3.5 text-emerald-500 opacity-80 group-hover:opacity-100 group-hover:scale-115 transition-all" />
@@ -2329,8 +2347,8 @@ export default function ActiveDeliveriesPage() {
                       key={o.id}
                       type="button"
                       onClick={() => setChatModalOrder(o)}
-                      className="bg-[var(--bg-panel)] hover:bg-emerald-500/10 px-2 py-0.5 rounded-lg border border-[var(--border-subtle)] hover:border-emerald-500/40 text-xs font-black cursor-pointer inline-flex items-center gap-1 transition-all group"
-                      title={`Abrir WhatsApp real de #${o.orderNumber}`}
+                      className="bg-[var(--bg-panel)] hover:bg-emerald-500/10 px-2.5 py-1 rounded-lg border border-[var(--border-subtle)] hover:border-emerald-500/40 text-xs font-black cursor-pointer inline-flex items-center gap-1.5 transition-all group"
+                      aria-label={`Ver chat WhatsApp pedido #${o.orderNumber}`}
                     >
                       <span className="text-[var(--accent)]">#{o.orderNumber}</span>
                       <MessageSquare className="w-3 h-3 text-emerald-500 opacity-80 group-hover:opacity-100 shrink-0" />

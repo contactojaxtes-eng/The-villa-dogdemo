@@ -273,7 +273,8 @@ export default function OrdersPage() {
   }
 
   const handleConfirmDispatch = async () => {
-    if (!dispatchDialog) return
+    if (!dispatchDialog?.order) return
+    const orderToUpdate = dispatchDialog.order
     setDispatchError('')
     let driverId = selectedDriverId
 
