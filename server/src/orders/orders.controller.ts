@@ -214,7 +214,7 @@ export class OrdersController {
   }
 
   @Put(':id/payment')
-  @Permissions('orders.edit', 'dispatch.change_status', 'payment_validation.cash', 'payment_validation.transfer')
+  @Permissions('orders.edit', 'payment_validation.cash', 'payment_validation.transfer')
   @UseGuards(PermissionsGuard)
   @ApiOperation({ summary: 'Actualizar método y estado de pago' })
   updatePayment(@Param('id') id: string, @Body() body: any, @Request() req: any) {

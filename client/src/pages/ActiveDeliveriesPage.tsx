@@ -138,6 +138,11 @@ const stagger = {
 
 export default function ActiveDeliveriesPage() {
   const { user, hasPermission } = useAuth()
+  const isAdmin = ['SUPERADMIN', 'ADMIN'].includes(user?.role || '')
+  const isDeliveryStaff = !isAdmin && (
+    ['DELIVERY_MANAGER', 'DISPATCHER'].includes(user?.role || '') ||
+    Boolean(user?.role && /dispatch|domicil/i.test(user.role))
+  )
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
   const [orders, setOrders] = useState<Order[]>([])
@@ -287,7 +292,7 @@ export default function ActiveDeliveriesPage() {
   }, [paymentEditDialog])
 
   const handleSavePaymentMethod = async () => {
-    if (!paymentEditDialog) return
+    if (!paymentEditDialog || isDeliveryStaff) return
     setIsSavingPaymentMethod(true)
     try {
       const isMixed = editMethod === 'MIXED'
@@ -1166,25 +1171,27 @@ export default function ActiveDeliveriesPage() {
                           </td>
                           <td className="px-3 py-2.5">
                             <div className="flex flex-col gap-1 items-start">
-                              <button
-                                type="button"
-                                onClick={() => setPaymentEditDialog(order)}
-                                className="text-[10px] font-extrabold px-2 py-0.5 rounded-lg border transition-all cursor-pointer inline-flex items-center gap-1 bg-[var(--bg-elevated)] border-[var(--border-default)] hover:border-[var(--accent)] text-[var(--text-primary)] hover:bg-[var(--bg-hover)]"
-                                title="Hacer clic para cambiar método de pago (Efectivo / Transferencia)"
-                              >
-                                <span>
-                                  {order.paymentMethod === 'CASH' ? '💵 Efectivo' :
-                                   order.paymentMethod === 'TRANSFER' ? '📱 Transferencia' :
-                                   order.paymentMethod === 'NEQUI' ? '💜 Nequi' :
-                                   order.paymentMethod === 'BANCOLOMBIA' ? '💛 Bancolombia' :
-                                   order.paymentMethod === 'DAVIPLATA' ? '❤️ Daviplata' :
-                                   order.paymentMethod === 'MIXED' ? '🔀 Mixto' :
-                                   order.paymentMethod === 'CREDIT' ? '💳 Crédito' :
-                                   order.paymentMethod === 'CORTESIA' ? '🎁 Cortesía' :
-                                   getStatusLabel(order.paymentMethod)}
-                                </span>
-                                <Edit className="h-2.5 w-2.5 opacity-60 ml-0.5 text-[var(--accent)]" />
-                              </button>
+                              {!isDeliveryStaff && (
+                                <button
+                                  type="button"
+                                  onClick={() => setPaymentEditDialog(order)}
+                                  className="text-[10px] font-extrabold px-2 py-0.5 rounded-lg border transition-all cursor-pointer inline-flex items-center gap-1 bg-[var(--bg-elevated)] border-[var(--border-default)] hover:border-[var(--accent)] text-[var(--text-primary)] hover:bg-[var(--bg-hover)]"
+                                  title="Hacer clic para cambiar método de pago (Efectivo / Transferencia)"
+                                >
+                                  <span>
+                                    {order.paymentMethod === 'CASH' ? '💵 Efectivo' :
+                                     order.paymentMethod === 'TRANSFER' ? '📱 Transferencia' :
+                                     order.paymentMethod === 'NEQUI' ? '💜 Nequi' :
+                                     order.paymentMethod === 'BANCOLOMBIA' ? '💛 Bancolombia' :
+                                     order.paymentMethod === 'DAVIPLATA' ? '❤️ Daviplata' :
+                                     order.paymentMethod === 'MIXED' ? '🔀 Mixto' :
+                                     order.paymentMethod === 'CREDIT' ? '💳 Crédito' :
+                                     order.paymentMethod === 'CORTESIA' ? '🎁 Cortesía' :
+                                     getStatusLabel(order.paymentMethod)}
+                                  </span>
+                                  <Edit className="h-2.5 w-2.5 opacity-60 ml-0.5 text-[var(--accent)]" />
+                                </button>
+                              )}
                               <span className={`text-[9px] font-bold px-1.5 py-0.2 rounded-md ${
                                 order.paymentStatus === 'CONFIRMED'
                                   ? 'text-emerald-600 bg-emerald-500/10'
@@ -1198,7 +1205,7 @@ export default function ActiveDeliveriesPage() {
                           </td>
                           <td className="px-3 py-2.5">
                             <div className="flex items-center justify-center gap-1">
-                              {order.paymentStatus !== 'CONFIRMED' && order.status !== 'CANCELLED' && (
+                              {!isDeliveryStaff && order.paymentStatus !== 'CONFIRMED' && order.status !== 'CANCELLED' && (
                                 <Button size="sm" className="h-7 px-2 text-[10px] font-extrabold bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-fg)] rounded-lg gap-1 border-0 cursor-pointer shadow-xs active:scale-95 transition-all"
                                   onClick={() => setCollectDialog(order)}
                                   title="Cobrar pedido"
@@ -1209,7 +1216,7 @@ export default function ActiveDeliveriesPage() {
                               <Button
                                 size="sm" 
                                 variant="ghost" 
-                                title="Imprimir Factura"
+                                title="Reimprimir Comanda / Factura"
                                 className="h-7 w-7 p-0 rounded-lg text-blue-500 hover:bg-blue-500/10 cursor-pointer"
                                 onClick={async () => {
                                   const orderWithDriver = {
@@ -1227,7 +1234,7 @@ export default function ActiveDeliveriesPage() {
                               >
                                 <Printer className="h-3.5 w-3.5" />
                               </Button>
-                              {order.status !== 'CANCELLED' && (
+                              {!isDeliveryStaff && order.status !== 'CANCELLED' && (
                                 <Button 
                                   size="sm" 
                                   variant="ghost" 
@@ -1238,11 +1245,13 @@ export default function ActiveDeliveriesPage() {
                                   <Edit className="h-3.5 w-3.5" />
                                 </Button>
                               )}
-                              <Button size="sm" variant="ghost" className="h-7 w-7 p-0 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-primary)] cursor-pointer"
-                                onClick={() => setDetailOrder(order)}>
-                                <Eye className="h-3.5 w-3.5" />
-                              </Button>
-                              {activeStatuses.includes(order.status) && ['SUPERADMIN', 'ADMIN', 'CASHIER', 'WAITER'].includes(user?.role || '') && (
+                              {!isDeliveryStaff && (
+                                <Button size="sm" variant="ghost" className="h-7 w-7 p-0 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-primary)] cursor-pointer"
+                                  onClick={() => setDetailOrder(order)}>
+                                  <Eye className="h-3.5 w-3.5" />
+                                </Button>
+                              )}
+                              {!isDeliveryStaff && activeStatuses.includes(order.status) && ['SUPERADMIN', 'ADMIN', 'CASHIER', 'WAITER'].includes(user?.role || '') && (
                                 <Button size="sm" variant="ghost" className="h-7 w-7 p-0 rounded-lg text-red-400 hover:bg-red-500/10 cursor-pointer" title="Cancelar Pedido"
                                   onClick={() => { setCancelDialog({ id: order.id, orderNumber: order.orderNumber }); setCancelConfirmStep(false); setCancelReason('') }}>
                                   <XCircle className="h-3.5 w-3.5" />
@@ -1717,7 +1726,8 @@ export default function ActiveDeliveriesPage() {
       </Dialog>
 
       {/* ── Dialog para Editar Método de Pago del Domicilio ── */}
-      <Dialog open={!!paymentEditDialog} onOpenChange={() => setPaymentEditDialog(null)}>
+      {!isDeliveryStaff && (
+        <Dialog open={!!paymentEditDialog} onOpenChange={() => setPaymentEditDialog(null)}>
         <DialogContent className="bg-[var(--bg-panel)] border-[var(--border-default)] rounded-3xl max-w-md">
           <DialogHeader>
             <DialogTitle className="text-lg font-black text-[var(--text-primary)] flex items-center">
@@ -1865,6 +1875,7 @@ export default function ActiveDeliveriesPage() {
           )}
         </DialogContent>
       </Dialog>
+      )}
 
       {/* ── Order Detail Dialog (inline, no navigation) ── */}
       <Dialog open={!!detailOrder} onOpenChange={() => setDetailOrder(null)}>
@@ -1996,7 +2007,7 @@ export default function ActiveDeliveriesPage() {
                     >
                       <Printer className="h-3.5 w-3.5 text-blue-500" /> Imprimir Ticket
                     </Button>
-                    {o.paymentStatus !== 'CONFIRMED' && o.status !== 'CANCELLED' && (
+                    {!isDeliveryStaff && o.paymentStatus !== 'CONFIRMED' && o.status !== 'CANCELLED' && (
                       <Button size="sm" className="h-9 px-4 text-xs font-extrabold bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-fg)] rounded-xl gap-1.5 border-0 cursor-pointer shadow-xs active:scale-95 transition-all"
                         onClick={() => { setDetailOrder(null); setCollectDialog(o); }}
                         title="Cobrar pedido"
@@ -2012,7 +2023,7 @@ export default function ActiveDeliveriesPage() {
                         {o.deliveryDriver ? `Repartidor: ${o.deliveryDriver.name}` : 'Asignar Repartidor'}
                       </Button>
                     )}
-                    {o.status !== 'CANCELLED' && (
+                    {!isDeliveryStaff && o.status !== 'CANCELLED' && (
                       <Button size="sm" variant="outline" className="h-9 px-4 text-xs font-bold rounded-xl gap-1.5 cursor-pointer border-amber-500/30 text-amber-600 hover:bg-amber-500/10"
                         onClick={() => { setDetailOrder(null); navigate(o.tableId ? `/tables/new?tableId=${o.tableId}&editOrderId=${o.id}` : `/orders/new?edit=${o.id}`) }}
                         title="Editar pedido">

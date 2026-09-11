@@ -1776,6 +1776,11 @@ export class OrdersService implements OnModuleInit {
     cashAmount?: number,
     transferAmount?: number
   ) {
+    const userRole = user?.role;
+    if (userRole && !['SUPERADMIN', 'ADMIN', 'CASHIER'].includes(userRole) && (['DELIVERY_MANAGER', 'DISPATCHER'].includes(userRole) || /dispatch|domicil/i.test(userRole))) {
+      throw new ForbiddenException('Los despachadores de domicilios no tienen permiso para modificar el método de pago');
+    }
+
     const order = await this.findOne(id);
 
     // Si se especificaron productos individuales para Cortesía
