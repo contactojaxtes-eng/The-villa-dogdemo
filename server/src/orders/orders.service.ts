@@ -1497,6 +1497,92 @@ export class OrdersService implements OnModuleInit {
     };
   }
 
+  async batchCollectPayments(
+    ordersPayload: Array<{ id: string; method?: string; cashAmount?: number; transferAmount?: number; reference?: string }>,
+    globalMethod?: string,
+    globalReference?: string,
+    user?: { id: string; role: string }
+  ) {
+    const userRole = user?.role;
+    if (userRole && !['SUPERADMIN', 'ADMIN', 'CASHIER'].includes(userRole) && (['DELIVERY_MANAGER', 'DISPATCHER'].includes(userRole) || /dispatch|domicil/i.test(userRole))) {
+      throw new ForbiddenException('Los despachadores de domicilios no tienen permiso para cobrar pedidos');
+    }
+
+    if (!ordersPayload || !Array.isArray(ordersPayload) || ordersPayload.length === 0) {
+      throw new BadRequestException('Debes proporcionar al menos un ID de pedido para cobrar');
+    }
+
+    const activeClosing = await this.prisma.cashClosing.findFirst({
+      where: { isOpen: true, cashRegister: { purpose: 'DELIVERY', active: true } },
+      orderBy: { shiftStart: 'desc' },
+    });
+    if (!activeClosing) {
+      throw new BadRequestException('La Caja Domicilios está cerrada. Ábrela antes de confirmar el pago.');
+    }
+
+    const results = [];
+    let totalCash = 0;
+    let totalTransfer = 0;
+    let grandTotal = 0;
+
+    for (const item of ordersPayload) {
+      try {
+        const order = await this.prisma.order.findUnique({ where: { id: item.id } });
+        if (!order || ['DELIVERED', 'CANCELLED'].includes(order.status)) continue;
+
+        let effectiveMethod = item.method || order.paymentMethod || 'CASH';
+        if (globalMethod === 'CASH') effectiveMethod = 'CASH';
+        else if (globalMethod === 'TRANSFER') effectiveMethod = 'TRANSFER';
+
+        const orderTotal = order.total || 0;
+        let cashAmount = 0;
+        let transferAmount = 0;
+
+        if (effectiveMethod === 'CASH') {
+          cashAmount = orderTotal;
+          transferAmount = 0;
+        } else if (effectiveMethod === 'TRANSFER' || ['NEQUI', 'BANCOLOMBIA', 'DAVIPLATA'].includes(effectiveMethod)) {
+          cashAmount = 0;
+          transferAmount = orderTotal;
+        } else if (effectiveMethod === 'MIXED') {
+          cashAmount = typeof item.cashAmount === 'number' ? item.cashAmount : (order.cashAmount || Math.round(orderTotal / 2));
+          transferAmount = typeof item.transferAmount === 'number' ? item.transferAmount : (orderTotal - cashAmount);
+        }
+
+        const ref = item.reference || globalReference || order.paymentReference || undefined;
+
+        const updated = await this.updatePayment(
+          item.id,
+          effectiveMethod,
+          'CONFIRMED',
+          ref,
+          user,
+          undefined,
+          undefined,
+          cashAmount,
+          transferAmount
+        );
+
+        totalCash += cashAmount;
+        totalTransfer += transferAmount;
+        grandTotal += orderTotal;
+        results.push(updated);
+      } catch (err: any) {
+        this.logger.warn(`Error al cobrar pedido ${item.id} en lote: ${err.message}`);
+      }
+    }
+
+    return {
+      success: true,
+      collectedCount: results.length,
+      orders: results,
+      total: grandTotal,
+      cash: totalCash,
+      transfer: totalTransfer,
+      hasCash: totalCash > 0,
+    };
+  }
+
   async cancelOrder(id: string, reason: string, userParam: any) {
     const userId = typeof userParam === 'string' ? userParam : userParam?.id;
     const userRole = typeof userParam === 'object' ? userParam?.role : null;

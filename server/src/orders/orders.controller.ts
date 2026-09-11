@@ -154,6 +154,19 @@ export class OrdersController {
     return this.ordersService.batchAssignDriver(orderIds, deliveryDriverId, req.user);
   }
 
+  @Put('batch-collect')
+  @Permissions('orders.edit', 'payment_validation.cash', 'payment_validation.transfer')
+  @UseGuards(PermissionsGuard)
+  @ApiOperation({ summary: 'Cobrar múltiples pedidos en lote' })
+  batchCollectPayments(
+    @Body('orders') ordersPayload: any[],
+    @Body('globalMethod') globalMethod: string,
+    @Body('globalReference') globalReference: string,
+    @Request() req: any,
+  ) {
+    return this.ordersService.batchCollectPayments(ordersPayload, globalMethod, globalReference, req.user);
+  }
+
   @Put(':id')
   @Permissions('orders.edit')
   @UseGuards(PermissionsGuard)

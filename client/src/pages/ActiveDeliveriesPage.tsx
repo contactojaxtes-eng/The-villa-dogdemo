@@ -213,6 +213,14 @@ export default function ActiveDeliveriesPage() {
   const [isSubmittingBatch, setIsSubmittingBatch] = useState(false)
   const [batchError, setBatchError] = useState('')
 
+  const [batchCollectOpen, setBatchCollectOpen] = useState(false)
+  const [batchCollectMode, setBatchCollectMode] = useState<'AS_IS' | 'CASH' | 'TRANSFER' | 'MANUAL'>('AS_IS')
+  const [batchCollectReference, setBatchCollectReference] = useState('')
+  const [batchCollectDrawerKick, setBatchCollectDrawerKick] = useState(true)
+  const [isSubmittingBatchCollect, setIsSubmittingBatchCollect] = useState(false)
+  const [batchCollectError, setBatchCollectError] = useState('')
+  const [manualItemMethods, setManualItemMethods] = useState<Record<string, { method: string; cashAmount?: number; transferAmount?: number }>>({})
+
   const filteredDrivers = useMemo(() => {
     if (!driverSearch.trim()) return drivers
     const q = driverSearch.trim().toLowerCase()
@@ -628,7 +636,7 @@ export default function ActiveDeliveriesPage() {
   }, [batchDriverSearch, drivers])
 
   const selectableOrders = useMemo(() => {
-    return statusVisibleOrders.filter(o => o.orderType === 'DELIVERY' && !['DELIVERED', 'CANCELLED'].includes(o.status))
+    return statusVisibleOrders.filter(o => !['DELIVERED', 'CANCELLED'].includes(o.status))
   }, [statusVisibleOrders])
 
   const handleToggleSelectOrder = (id: string) => {
@@ -701,6 +709,116 @@ export default function ActiveDeliveriesPage() {
       setBatchError(err.message || 'Error al despachar pedidos en lote')
     } finally {
       setIsSubmittingBatch(false)
+    }
+  }
+
+  const selectedOrdersList = useMemo(() => {
+    return orders.filter(o => selectedOrderIds.includes(o.id))
+  }, [orders, selectedOrderIds])
+
+  const batchCollectTotals = useMemo(() => {
+    let cash = 0
+    let transfer = 0
+    let total = 0
+
+    for (const ord of selectedOrdersList) {
+      const ordTotal = ord.total || 0
+      total += ordTotal
+
+      if (batchCollectMode === 'CASH') {
+        cash += ordTotal
+      } else if (batchCollectMode === 'TRANSFER') {
+        transfer += ordTotal
+      } else if (batchCollectMode === 'MANUAL') {
+        const custom = manualItemMethods[ord.id]
+        const m = (custom?.method || ord.paymentMethod || 'CASH').toUpperCase()
+        if (m === 'CASH') {
+          cash += ordTotal
+        } else if (['TRANSFER', 'NEQUI', 'BANCOLOMBIA', 'DAVIPLATA'].includes(m)) {
+          transfer += ordTotal
+        } else if (m === 'MIXED') {
+          const c = typeof custom?.cashAmount === 'number' ? custom.cashAmount : (ord.cashAmount || Math.round(ordTotal / 2))
+          cash += c
+          transfer += (ordTotal - c)
+        }
+      } else {
+        // 'AS_IS'
+        const b = getOrderBreakdown(ord)
+        cash += b.cash
+        transfer += b.transfer
+      }
+    }
+
+    return { cash, transfer, total, count: selectedOrdersList.length }
+  }, [selectedOrdersList, batchCollectMode, manualItemMethods])
+
+  const handleConfirmBatchCollect = async () => {
+    if (selectedOrderIds.length === 0) return
+    setIsSubmittingBatchCollect(true)
+    setBatchCollectError('')
+
+    try {
+      const itemsPayload = selectedOrdersList.map(ord => {
+        const custom = manualItemMethods[ord.id]
+        const method = batchCollectMode === 'CASH'
+          ? 'CASH'
+          : batchCollectMode === 'TRANSFER'
+            ? 'TRANSFER'
+            : batchCollectMode === 'MANUAL'
+              ? (custom?.method || ord.paymentMethod || 'CASH')
+              : (ord.paymentMethod || 'CASH')
+        return {
+          id: ord.id,
+          method,
+          reference: batchCollectReference || undefined,
+          cashAmount: method === 'CASH' ? ord.total : method === 'MIXED' ? (custom?.cashAmount ?? ord.cashAmount) : 0,
+          transferAmount: method === 'TRANSFER' ? ord.total : method === 'MIXED' ? (custom?.transferAmount ?? ord.transferAmount) : 0,
+        }
+      })
+
+      try {
+        await api.put<any>('/orders/batch-collect', {
+          orders: itemsPayload,
+          globalMethod: batchCollectMode,
+          globalReference: batchCollectReference || undefined,
+        })
+      } catch (endpointErr) {
+        for (const item of itemsPayload) {
+          await api.put(`/orders/${item.id}/payment`, {
+            method: item.method,
+            paymentStatus: 'CONFIRMED',
+            reference: item.reference || null,
+            cashAmount: item.cashAmount,
+            transferAmount: item.transferAmount,
+          })
+        }
+      }
+
+      const hadCash = batchCollectTotals.cash > 0
+      if (batchCollectDrawerKick && hadCash) {
+        try {
+          await openCashDrawer()
+        } catch (cErr) {
+          console.warn('No se pudo abrir el cajón:', cErr)
+        }
+      }
+
+      alerts.success(
+        'Cobro Masivo Exitoso',
+        `Se cobraron ${selectedOrdersList.length} pedidos por un total de ${formatCurrency(batchCollectTotals.total)}.`
+      )
+
+      setSelectedOrderIds([])
+      setBatchCollectOpen(false)
+      setBatchCollectMode('AS_IS')
+      setBatchCollectReference('')
+      setManualItemMethods({})
+      loadOrders(false, true)
+    } catch (err: any) {
+      console.error('Error en cobro masivo:', err)
+      setBatchCollectError(err.message || 'Error al procesar el cobro masivo.')
+    } finally {
+      setIsSubmittingBatchCollect(false)
     }
   }
 
@@ -1029,7 +1147,7 @@ export default function ActiveDeliveriesPage() {
             </Badge>
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2.5 flex-wrap">
             {user?.role !== 'DELIVERY_MANAGER' && !isDeliveryStaff && (
               <div className="hidden sm:flex items-center gap-2 text-xs font-bold">
                 <span className="text-emerald-600 font-black">💵 Efectivo: {formatCurrency(summary.cash)}</span>
@@ -1038,6 +1156,23 @@ export default function ActiveDeliveriesPage() {
                 <span className="text-[var(--border-subtle)]">·</span>
                 <span className="text-[var(--accent)] font-black">💰 Total: {formatCurrency(summary.total)}</span>
               </div>
+            )}
+            {user?.role !== 'DELIVERY_MANAGER' && !isDeliveryStaff && visibleOrders.length > 0 && (
+              <Button
+                size="sm"
+                type="button"
+                onClick={() => {
+                  const driverOrderIds = visibleOrders.filter(o => !['DELIVERED', 'CANCELLED'].includes(o.status)).map(o => o.id)
+                  setSelectedOrderIds(driverOrderIds)
+                  setBatchCollectError('')
+                  setBatchCollectMode('AS_IS')
+                  setBatchCollectOpen(true)
+                }}
+                className="h-7.5 px-3 text-[11px] font-black rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white shadow-md flex items-center gap-1.5 cursor-pointer border border-emerald-400/30"
+              >
+                <DollarSign className="h-3.5 w-3.5" />
+                <span>Cobrar todo ({formatCurrency(summary.total)})</span>
+              </Button>
             )}
             <button
               type="button"
@@ -1086,7 +1221,7 @@ export default function ActiveDeliveriesPage() {
               Pedidos: {orders.filter(o => selectedOrderIds.includes(o.id)).map(o => `#${o.orderNumber}`).join(', ')}
             </span>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <Button
               size="sm"
               variant="ghost"
@@ -1095,6 +1230,20 @@ export default function ActiveDeliveriesPage() {
             >
               Deseleccionar
             </Button>
+            {user?.role !== 'DELIVERY_MANAGER' && !isDeliveryStaff && (
+              <Button
+                size="sm"
+                onClick={() => {
+                  setBatchCollectError('')
+                  setBatchCollectMode('AS_IS')
+                  setBatchCollectOpen(true)
+                }}
+                className="h-9 px-4 text-xs font-black rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white shadow-lg flex items-center gap-2 cursor-pointer border border-emerald-400/40"
+              >
+                <DollarSign className="h-4 w-4" />
+                <span>Cobrar los {selectedOrderIds.length} pedidos ({formatCurrency(batchCollectTotals.total)})</span>
+              </Button>
+            )}
             {hasPermission('dispatch.change_status') && (
               <Button
                 size="sm"
@@ -1916,6 +2065,240 @@ export default function ActiveDeliveriesPage() {
                   </>
                 ) : (
                   `Asignar los ${selectedOrderIds.length} pedidos`
+                )}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Batch Collect Dialog (Cobro Masivo / Cobrar Todo) ── */}
+      <Dialog open={batchCollectOpen} onOpenChange={open => { if (!open) { setBatchCollectOpen(false); setBatchCollectError(''); } }}>
+        <DialogContent className="bg-[var(--bg-panel)] border-[var(--border-default)] rounded-3xl max-w-xl p-6 max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="text-xl font-black text-[var(--text-primary)] flex items-center gap-2">
+              <DollarSign className="h-6 w-6 text-emerald-500" />
+              Cobro Masivo y Liquidación de Pedidos
+            </DialogTitle>
+            <p className="text-xs text-[var(--text-secondary)]">
+              Vas a cobrar y finalizar <strong className="text-[var(--text-primary)]">{selectedOrdersList.length} pedidos</strong> seleccionados.
+            </p>
+          </DialogHeader>
+
+          <div className="space-y-4 pt-2">
+            {/* Resumen Financiero Destacado */}
+            <div className="grid grid-cols-3 gap-2">
+              <div className="p-3 rounded-2xl bg-emerald-500/10 border border-emerald-500/25 flex flex-col items-center justify-center text-center">
+                <span className="text-[10px] font-black uppercase text-emerald-600 dark:text-emerald-400">💵 Efectivo</span>
+                <span className="text-sm sm:text-base font-black text-emerald-600 dark:text-emerald-400 tabular-nums">
+                  {formatCurrency(batchCollectTotals.cash)}
+                </span>
+              </div>
+              <div className="p-3 rounded-2xl bg-blue-500/10 border border-blue-500/25 flex flex-col items-center justify-center text-center">
+                <span className="text-[10px] font-black uppercase text-blue-600 dark:text-blue-400">📱 Transferencia</span>
+                <span className="text-sm sm:text-base font-black text-blue-600 dark:text-blue-400 tabular-nums">
+                  {formatCurrency(batchCollectTotals.transfer)}
+                </span>
+              </div>
+              <div className="p-3 rounded-2xl bg-[var(--accent)]/10 border border-[var(--accent)]/30 flex flex-col items-center justify-center text-center">
+                <span className="text-[10px] font-black uppercase text-[var(--accent)]">💰 Gran Total</span>
+                <span className="text-sm sm:text-base font-black text-[var(--accent)] tabular-nums">
+                  {formatCurrency(batchCollectTotals.total)}
+                </span>
+              </div>
+            </div>
+
+            {/* Selector de Modo de Cobro */}
+            <div className="space-y-2">
+              <Label className="text-[10px] font-bold text-[var(--text-secondary)] uppercase tracking-wider">
+                ¿Cómo deseas liquidar estos {selectedOrdersList.length} pedidos?
+              </Label>
+              <div className="grid grid-cols-2 gap-2">
+                {[
+                  {
+                    id: 'AS_IS',
+                    title: '⚡ Respetar cada pedido',
+                    desc: 'Usa el método ya asignado en cada comanda (Recomendado)',
+                  },
+                  {
+                    id: 'CASH',
+                    title: '💵 Todo en Efectivo',
+                    desc: 'El repartidor entregó todo el total en efectivo',
+                  },
+                  {
+                    id: 'TRANSFER',
+                    title: '📱 Todo en Transferencia',
+                    desc: 'Se canceló el monto completo por transferencia',
+                  },
+                  {
+                    id: 'MANUAL',
+                    title: '📝 Ajuste Manual',
+                    desc: 'Cambiar método de pago pedido por pedido',
+                  },
+                ].map(mode => (
+                  <button
+                    key={mode.id}
+                    type="button"
+                    onClick={() => setBatchCollectMode(mode.id as any)}
+                    className={`p-3 rounded-2xl border text-left transition-all cursor-pointer flex flex-col gap-0.5 ${
+                      batchCollectMode === mode.id
+                        ? 'bg-[var(--accent)] text-[var(--accent-fg)] border-[var(--accent)] shadow-md scale-[1.01]'
+                        : 'bg-[var(--bg-subtle)] text-[var(--text-primary)] border-[var(--border-subtle)] hover:border-[var(--accent)]/40'
+                    }`}
+                  >
+                    <span className="text-xs font-black">{mode.title}</span>
+                    <span className={`text-[10px] ${batchCollectMode === mode.id ? 'text-white/80' : 'text-[var(--text-muted)]'}`}>
+                      {mode.desc}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Referencia si es Transferencia */}
+            {batchCollectMode === 'TRANSFER' && (
+              <div className="space-y-1.5 p-3 rounded-2xl bg-[var(--bg-subtle)] border border-[var(--border-subtle)]">
+                <Label className="text-xs font-bold text-[var(--text-secondary)] uppercase">
+                  Referencia o Comprobante General (opcional)
+                </Label>
+                <Input
+                  value={batchCollectReference}
+                  onChange={e => setBatchCollectReference(e.target.value)}
+                  placeholder="Ej: Nequi / Bancolombia #123456..."
+                  className="bg-[var(--bg-input)] border-[var(--border-default)] rounded-xl text-xs h-9.5"
+                />
+              </div>
+            )}
+
+            {/* Ajuste Manual Comanda por Comanda */}
+            {batchCollectMode === 'MANUAL' && (
+              <div className="space-y-2 border rounded-2xl p-3 bg-[var(--bg-subtle)] border-[var(--border-subtle)]">
+                <div className="flex items-center justify-between pb-1 border-b border-[var(--border-subtle)]">
+                  <span className="text-[11px] font-black text-[var(--text-secondary)] uppercase">
+                    Comandas Seleccionadas ({selectedOrdersList.length})
+                  </span>
+                  <span className="text-[10px] text-[var(--text-muted)] font-bold">Haz clic en el método para alternar</span>
+                </div>
+                <div className="space-y-1.5 max-h-52 overflow-y-auto pr-1 scrollbar-thin">
+                  {selectedOrdersList.map(ord => {
+                    const custom = manualItemMethods[ord.id]
+                    const currentM = (custom?.method || ord.paymentMethod || 'CASH').toUpperCase()
+                    return (
+                      <div
+                        key={ord.id}
+                        className="flex items-center justify-between gap-2 p-2 rounded-xl bg-[var(--bg-panel)] border border-[var(--border-subtle)] text-xs"
+                      >
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className="font-black text-[var(--accent)]">#{ord.orderNumber}</span>
+                          <span className="font-bold text-[var(--text-primary)] truncate max-w-[140px] sm:max-w-[200px]">
+                            {ord.customerName}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-2 shrink-0">
+                          <span className="font-black tabular-nums">{formatCurrency(ord.total)}</span>
+                          <div className="flex items-center gap-1">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setManualItemMethods(prev => ({
+                                  ...prev,
+                                  [ord.id]: { method: 'CASH', cashAmount: ord.total, transferAmount: 0 }
+                                }))
+                              }}
+                              className={`px-2 py-0.5 rounded-lg text-[10px] font-black border transition-all cursor-pointer ${
+                                currentM === 'CASH'
+                                  ? 'bg-emerald-500 text-white border-emerald-600 shadow-sm'
+                                  : 'bg-[var(--bg-subtle)] text-[var(--text-muted)] border-[var(--border-subtle)] hover:text-[var(--text-primary)]'
+                              }`}
+                            >
+                              💵 Efec
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setManualItemMethods(prev => ({
+                                  ...prev,
+                                  [ord.id]: { method: 'TRANSFER', cashAmount: 0, transferAmount: ord.total }
+                                }))
+                              }}
+                              className={`px-2 py-0.5 rounded-lg text-[10px] font-black border transition-all cursor-pointer ${
+                                ['TRANSFER', 'NEQUI', 'BANCOLOMBIA', 'DAVIPLATA'].includes(currentM)
+                                  ? 'bg-blue-500 text-white border-blue-600 shadow-sm'
+                                  : 'bg-[var(--bg-subtle)] text-[var(--text-muted)] border-[var(--border-subtle)] hover:text-[var(--text-primary)]'
+                              }`}
+                            >
+                              📱 Transf
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* Listado resumido de pedidos incluidos */}
+            {batchCollectMode !== 'MANUAL' && (
+              <div className="p-3 rounded-2xl bg-[var(--bg-subtle)] border border-[var(--border-subtle)] space-y-1.5">
+                <span className="text-[10px] font-bold text-[var(--text-secondary)] uppercase tracking-wider block">
+                  Pedidos que se cobrarán ({selectedOrdersList.length}):
+                </span>
+                <div className="flex flex-wrap gap-1.5 max-h-24 overflow-y-auto scrollbar-thin">
+                  {selectedOrdersList.map(o => (
+                    <span key={o.id} className="bg-[var(--bg-panel)] px-2 py-0.5 rounded-lg border border-[var(--border-subtle)] text-xs font-black">
+                      #{o.orderNumber} <span className="text-[10px] text-[var(--text-muted)] font-medium">({formatCurrency(o.total)})</span>
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Opción Abrir Cajón */}
+            <div className="flex items-center gap-2.5 p-3 rounded-2xl bg-[var(--bg-subtle)] border border-[var(--border-subtle)]">
+              <input
+                type="checkbox"
+                id="batchCollectDrawerKick"
+                checked={batchCollectDrawerKick}
+                onChange={e => setBatchCollectDrawerKick(e.target.checked)}
+                className="h-4 w-4 rounded accent-[var(--accent)] cursor-pointer shrink-0"
+              />
+              <Label htmlFor="batchCollectDrawerKick" className="text-xs font-bold text-[var(--text-primary)] cursor-pointer select-none">
+                🗄 Abrir cajón monedero al confirmar (si hay cobro en efectivo)
+              </Label>
+            </div>
+
+            {batchCollectError && (
+              <div className="rounded-xl border border-[var(--destructive)]/20 bg-[var(--destructive)]/5 p-3 text-xs text-[var(--destructive)] font-bold flex items-center gap-2 animate-fade-in">
+                <AlertTriangle className="h-4 w-4 shrink-0" />
+                <span>{batchCollectError}</span>
+              </div>
+            )}
+
+            <div className="flex gap-3 pt-2 border-t border-[var(--border-subtle)]/40">
+              <Button
+                variant="outline"
+                className="flex-1 h-12 rounded-xl font-bold text-sm cursor-pointer"
+                onClick={() => setBatchCollectOpen(false)}
+                disabled={isSubmittingBatchCollect}
+              >
+                Cancelar
+              </Button>
+              <Button
+                className="flex-[2] h-12 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-black text-sm shadow-xl border-0 cursor-pointer flex items-center justify-center gap-2"
+                onClick={handleConfirmBatchCollect}
+                disabled={isSubmittingBatchCollect || selectedOrdersList.length === 0}
+              >
+                {isSubmittingBatchCollect ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    <span>Cobrando {selectedOrdersList.length} pedidos...</span>
+                  </>
+                ) : (
+                  <>
+                    <DollarSign className="h-4 w-4" />
+                    <span>Confirmar Cobro ({formatCurrency(batchCollectTotals.total)})</span>
+                  </>
                 )}
               </Button>
             </div>
