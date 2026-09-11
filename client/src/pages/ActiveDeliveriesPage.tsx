@@ -173,9 +173,16 @@ export default function ActiveDeliveriesPage() {
       (d.name && d.name.toLowerCase().includes(q)) || 
       (d.phone && d.phone.includes(q))
     )
-  }, [drivers, driverSearch])
+  }, [driverSearch, drivers])
+
   const [detailOrder, setDetailOrder] = useState<Order | null>(null)
   const [markingPickupReadyId, setMarkingPickupReadyId] = useState<string | null>(null)
+  const [paymentEditDialog, setPaymentEditDialog] = useState<Order | null>(null)
+  const [editMethod, setEditMethod] = useState<string>('CASH')
+  const [editCashAmount, setEditCashAmount] = useState<string>('')
+  const [editTransferAmount, setEditTransferAmount] = useState<string>('')
+  const [editReference, setEditReference] = useState<string>('')
+  const [isSavingPaymentMethod, setIsSavingPaymentMethod] = useState(false)
   const socketRef = useRef<Socket | null>(null)
 
   const loadDrivers = useCallback(async () => {
@@ -248,6 +255,53 @@ export default function ActiveDeliveriesPage() {
       alerts.error('Error al cobrar', err.message || 'No se pudo registrar el pago')
     } finally {
       setIsSubmittingPayment(false)
+    }
+  }
+
+  useEffect(() => {
+    if (paymentEditDialog) {
+      const m = paymentEditDialog.paymentMethod || 'CASH'
+      setEditMethod(m)
+      setEditReference('')
+      const tot = paymentEditDialog.total || 0
+      if (m === 'MIXED') {
+        const cash = (paymentEditDialog as any).cashAmount || Math.round(tot / 2)
+        setEditCashAmount(String(cash))
+        setEditTransferAmount(String(tot - cash))
+      } else {
+        const half = Math.round(tot / 2)
+        setEditCashAmount(String(half))
+        setEditTransferAmount(String(tot - half))
+      }
+    }
+  }, [paymentEditDialog])
+
+  const handleSavePaymentMethod = async () => {
+    if (!paymentEditDialog) return
+    setIsSavingPaymentMethod(true)
+    try {
+      const isMixed = editMethod === 'MIXED'
+      const cashVal = isMixed ? (parseFloat(editCashAmount) || 0) : undefined
+      const transferVal = isMixed ? (parseFloat(editTransferAmount) || 0) : undefined
+
+      await api.put(`/orders/${paymentEditDialog.id}/payment`, {
+        method: editMethod,
+        paymentStatus: paymentEditDialog.paymentStatus,
+        reference: editReference || undefined,
+        cashAmount: cashVal,
+        transferAmount: transferVal,
+      })
+
+      alerts.success(
+        'Método de Pago Actualizado',
+        `Pedido #${paymentEditDialog.orderNumber} ahora está configurado como ${getStatusLabel(editMethod)}.`
+      )
+      setPaymentEditDialog(null)
+      loadOrders(false, true)
+    } catch (err: any) {
+      alerts.error('Error al actualizar método de pago', err.message || 'No se pudo actualizar.')
+    } finally {
+      setIsSavingPaymentMethod(false)
     }
   }
 
@@ -870,9 +924,36 @@ export default function ActiveDeliveriesPage() {
                             </span>
                           </td>
                           <td className="px-3 py-2.5">
-                            <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-md ${order.paymentStatus === 'CONFIRMED' ? 'text-emerald-600 bg-emerald-500/10' : 'text-amber-600 bg-amber-500/10'}`}>
-                              {order.paymentStatus === 'CONFIRMED' ? '✓ Cobrado' : order.paymentStatus === 'DRIVER_CASH_PENDING' ? 'Con domiciliario' : 'Pendiente'}
-                            </span>
+                            <div className="flex flex-col gap-1 items-start">
+                              <button
+                                type="button"
+                                onClick={() => setPaymentEditDialog(order)}
+                                className="text-[10px] font-extrabold px-2 py-0.5 rounded-lg border transition-all cursor-pointer inline-flex items-center gap-1 bg-[var(--bg-elevated)] border-[var(--border-default)] hover:border-[var(--accent)] text-[var(--text-primary)] hover:bg-[var(--bg-hover)]"
+                                title="Hacer clic para cambiar método de pago (Efectivo / Transferencia)"
+                              >
+                                <span>
+                                  {order.paymentMethod === 'CASH' ? '💵 Efectivo' :
+                                   order.paymentMethod === 'TRANSFER' ? '📱 Transferencia' :
+                                   order.paymentMethod === 'NEQUI' ? '💜 Nequi' :
+                                   order.paymentMethod === 'BANCOLOMBIA' ? '💛 Bancolombia' :
+                                   order.paymentMethod === 'DAVIPLATA' ? '❤️ Daviplata' :
+                                   order.paymentMethod === 'MIXED' ? '🔀 Mixto' :
+                                   order.paymentMethod === 'CREDIT' ? '💳 Crédito' :
+                                   order.paymentMethod === 'CORTESIA' ? '🎁 Cortesía' :
+                                   getStatusLabel(order.paymentMethod)}
+                                </span>
+                                <Edit className="h-2.5 w-2.5 opacity-60 ml-0.5 text-[var(--accent)]" />
+                              </button>
+                              <span className={`text-[9px] font-bold px-1.5 py-0.2 rounded-md ${
+                                order.paymentStatus === 'CONFIRMED'
+                                  ? 'text-emerald-600 bg-emerald-500/10'
+                                  : order.paymentStatus === 'DRIVER_CASH_PENDING'
+                                    ? 'text-purple-600 bg-purple-500/10'
+                                    : 'text-amber-600 bg-amber-500/10'
+                              }`}>
+                                {order.paymentStatus === 'CONFIRMED' ? '✓ Cobrado' : order.paymentStatus === 'DRIVER_CASH_PENDING' ? 'Con domiciliario' : 'Pendiente'}
+                              </span>
+                            </div>
                           </td>
                           <td className="px-3 py-2.5">
                             <div className="flex items-center justify-center gap-1">
@@ -1243,6 +1324,156 @@ export default function ActiveDeliveriesPage() {
               </Button>
             </div>
           </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Dialog para Editar Método de Pago del Domicilio ── */}
+      <Dialog open={!!paymentEditDialog} onOpenChange={() => setPaymentEditDialog(null)}>
+        <DialogContent className="bg-[var(--bg-panel)] border-[var(--border-default)] rounded-3xl max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-lg font-black text-[var(--text-primary)] flex items-center">
+              <DollarSign className="h-5 w-5 mr-2 text-[var(--accent)]" />
+              Cambiar Método de Pago
+            </DialogTitle>
+          </DialogHeader>
+
+          {paymentEditDialog && (
+            <div className="space-y-4">
+              <div className="p-3 rounded-2xl bg-[var(--bg-subtle)] border border-[var(--border-subtle)] flex items-center justify-between">
+                <div>
+                  <p className="text-xs font-bold text-[var(--text-secondary)]">Pedido #{paymentEditDialog.orderNumber}</p>
+                  <p className="text-sm font-extrabold text-[var(--text-primary)] truncate max-w-[200px]">
+                    {paymentEditDialog.customerName || 'Cliente'}
+                  </p>
+                </div>
+                <div className="text-right">
+                  <p className="text-[10px] font-bold text-[var(--text-secondary)] uppercase">Total</p>
+                  <p className="text-base font-black text-emerald-500">
+                    {formatCurrency(paymentEditDialog.total)}
+                  </p>
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <Label className="text-xs font-bold text-[var(--text-secondary)] uppercase">
+                  Selecciona el método de pago
+                </Label>
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                  {[
+                    { val: 'CASH', label: '💵 Efectivo' },
+                    { val: 'TRANSFER', label: '📱 Transferencia' },
+                    { val: 'NEQUI', label: '💜 Nequi' },
+                    { val: 'BANCOLOMBIA', label: '💛 Bancolombia' },
+                    { val: 'DAVIPLATA', label: '❤️ Daviplata' },
+                    { val: 'MIXED', label: '🔀 Pago Mixto' },
+                    { val: 'CREDIT', label: '📋 Crédito' },
+                  ].map(m => (
+                    <button
+                      key={m.val}
+                      type="button"
+                      onClick={() => {
+                        setEditMethod(m.val)
+                        if (m.val === 'MIXED') {
+                          const tot = paymentEditDialog.total || 0
+                          const half = Math.round(tot / 2)
+                          setEditCashAmount(String(half))
+                          setEditTransferAmount(String(tot - half))
+                        }
+                      }}
+                      className={cn(
+                        "p-2.5 rounded-xl text-xs font-bold border transition-all cursor-pointer text-center",
+                        editMethod === m.val
+                          ? "bg-[var(--accent)] text-[var(--accent-fg)] border-[var(--accent)] shadow-md scale-[1.02]"
+                          : "bg-[var(--bg-subtle)] text-[var(--text-secondary)] border-[var(--border-subtle)] hover:border-[var(--accent)]/30 hover:bg-[var(--bg-hover)]"
+                      )}
+                    >
+                      {m.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {editMethod === 'MIXED' && (
+                <div className="grid grid-cols-2 gap-3 p-3 bg-[var(--bg-subtle)] rounded-xl border border-[var(--border-subtle)]">
+                  <div>
+                    <Label className="text-[10px] font-extrabold text-[var(--text-secondary)] uppercase">
+                      💵 Efectivo ($)
+                    </Label>
+                    <Input
+                      type="text"
+                      inputMode="numeric"
+                      placeholder="0"
+                      value={formatThousandsInput(editCashAmount)}
+                      onChange={e => {
+                        const num = parseThousandsInput(e.target.value)
+                        setEditCashAmount(num > 0 ? String(num) : '')
+                        const rest = Math.max(0, (paymentEditDialog.total || 0) - num)
+                        setEditTransferAmount(rest > 0 ? String(rest) : '0')
+                      }}
+                      className="bg-[var(--bg-panel)] border-[var(--border-default)] rounded-lg h-9 text-xs font-bold text-emerald-500 mt-1"
+                    />
+                  </div>
+                  <div>
+                    <Label className="text-[10px] font-extrabold text-[var(--text-secondary)] uppercase">
+                      📱 Transferencia ($)
+                    </Label>
+                    <Input
+                      type="text"
+                      inputMode="numeric"
+                      placeholder="0"
+                      value={formatThousandsInput(editTransferAmount)}
+                      onChange={e => {
+                        const num = parseThousandsInput(e.target.value)
+                        setEditTransferAmount(num > 0 ? String(num) : '')
+                        const rest = Math.max(0, (paymentEditDialog.total || 0) - num)
+                        setEditCashAmount(rest > 0 ? String(rest) : '0')
+                      }}
+                      className="bg-[var(--bg-panel)] border-[var(--border-default)] rounded-lg h-9 text-xs font-bold text-blue-500 mt-1"
+                    />
+                  </div>
+                </div>
+              )}
+
+              {!['CASH', 'CREDIT'].includes(editMethod) && (
+                <div className="space-y-1.5">
+                  <Label className="text-xs font-bold text-[var(--text-secondary)] uppercase">
+                    Referencia / Comprobante (opcional)
+                  </Label>
+                  <Input
+                    value={editReference}
+                    onChange={e => setEditReference(e.target.value)}
+                    placeholder="# de transferencia o comprobante..."
+                    className="bg-[var(--bg-input)] border-[var(--border-default)] rounded-xl text-xs h-10"
+                  />
+                </div>
+              )}
+
+              <div className="flex gap-3 pt-2 border-t border-[var(--border-subtle)]/40">
+                <Button
+                  variant="outline"
+                  className="flex-1 h-11 rounded-xl font-bold text-sm cursor-pointer"
+                  onClick={() => setPaymentEditDialog(null)}
+                  disabled={isSavingPaymentMethod}
+                >
+                  Cancelar
+                </Button>
+                <Button
+                  className="flex-1 h-11 bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-fg)] rounded-xl font-bold text-sm shadow-md border-0 cursor-pointer"
+                  onClick={handleSavePaymentMethod}
+                  disabled={isSavingPaymentMethod}
+                >
+                  {isSavingPaymentMethod ? (
+                    <>
+                      <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                      Guardando...
+                    </>
+                  ) : (
+                    'Guardar Método'
+                  )}
+                </Button>
+              </div>
+            </div>
+          )}
         </DialogContent>
       </Dialog>
 

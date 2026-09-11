@@ -381,5 +381,9 @@ export function buildEscPosBuffer(text: string, paper: '58' | '80' = '80'): Uint
   // Corte de papel (si la impresora lo soporta)
   bytes.push(GS, 0x56, 0x00)
 
+  // 3 pititos a la impresora cuando sale un pedido (ESC B 3 2 + BEL BEL BEL)
+  bytes.push(ESC, 0x42, 3, 2)
+  bytes.push(0x07, 0x07, 0x07)
+
   return new Uint8Array(bytes)
 }

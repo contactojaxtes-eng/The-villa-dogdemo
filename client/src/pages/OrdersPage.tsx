@@ -8,6 +8,7 @@ import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { api } from '@/lib/api'
 import { useAuth } from '@/hooks/useAuth'
+import { statusAccent, statusOrder } from '@/lib/brand'
 import { cn, formatCurrency, formatDate, getStatusColor, getStatusLabel, cleanNotes, groupOrderItems, formatThousandsInput, parseThousandsInput, getLocalDateString } from '@/lib/utils'
 import { 
   Plus, 
@@ -830,7 +831,7 @@ export default function OrdersPage() {
         )}
         <AnimatePresence>
           {displayedOrders.map((order, index) => {
-            const phoneDigits = order.customerPhone.replace(/\D/g, '')
+            const phoneDigits = (order.customerPhone || '').replace(/\D/g, '')
             const whatsappMsg = buildWhatsAppMessage(order)
             const whatsapp = phoneDigits ? `https://wa.me/57${phoneDigits}?text=${whatsappMsg}` : '#'
             const StatusIcon = statusIcons[order.status] || Clock
@@ -942,7 +943,7 @@ export default function OrdersPage() {
                         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-[var(--text-muted)] font-medium">
                           <span className="flex items-center gap-1"><Clock className="h-3.5 w-3.5 text-[var(--text-muted)]" /> {formatDate(order.createdAt)}</span>
                           <span>•</span>
-                          <span className="flex items-center gap-1"><User className="h-3.5 w-3.5 text-[var(--text-muted)]" /> Atiende: {order.waiter.name}</span>
+                          <span className="flex items-center gap-1"><User className="h-3.5 w-3.5 text-[var(--text-muted)]" /> Atiende: {order.waiter?.name || order.assignee?.name || '—'}</span>
                           <span>•</span>
                           <span className="flex items-center gap-1">
                             <ClipboardList className="h-3.5 w-3.5 text-[var(--text-muted)]" /> 

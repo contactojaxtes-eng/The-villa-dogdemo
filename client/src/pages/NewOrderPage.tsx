@@ -3502,12 +3502,15 @@ export default function NewOrderPage({
                 <Input 
                   value={customerPhone} 
                   onChange={e => {
-                    const cleaned = e.target.value.replace(/[^\d\w.@_\-]/g, '').slice(0, 35)
+                    const val = e.target.value
+                    const cleaned = val.startsWith('@')
+                      ? val.replace(/[^\w.@_\-]/g, '').slice(0, 30)
+                      : val.replace(/\D/g, '').slice(0, 10)
                     setCustomerPhone(cleaned)
                   }} 
                   onBlur={handlePhoneBlur} 
-                  placeholder="3001234567 o @usuario" 
-                  maxLength={35}
+                  placeholder="3001234567" 
+                  maxLength={customerPhone.startsWith('@') ? 30 : 10}
                   className="bg-[var(--bg-input)] border-[var(--border-default)] rounded-xl h-8 text-xs focus:border-[var(--accent)] font-semibold tracking-wide" 
                 />
               </div>

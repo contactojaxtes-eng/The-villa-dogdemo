@@ -248,6 +248,10 @@ export class PrintService {
     // Corte de papel
     out += GS + 'V' + String.fromCharCode(0);
     
+    // 3 pititos a la impresora cuando sale un pedido (ESC B 3 2 + BEL BEL BEL)
+    out += ESC + 'B' + String.fromCharCode(3) + String.fromCharCode(2);
+    out += '\x07\x07\x07';
+
     return Buffer.from(out, 'latin1');
   }
 
