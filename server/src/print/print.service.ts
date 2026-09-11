@@ -248,9 +248,16 @@ export class PrintService {
     // Corte de papel
     out += GS + 'V' + String.fromCharCode(0);
     
-    // 3 pititos a la impresora cuando sale un pedido (ESC B 3 2 + BEL BEL BEL)
-    out += ESC + 'B' + String.fromCharCode(3) + String.fromCharCode(2);
-    out += '\x07\x07\x07';
+    // Pitidos potentes para alerta en cocina y despacho:
+    // 1. ESC B 3 6 (3 pitidos de 600ms de duración para máximo volumen y duración)
+    out += ESC + 'B' + String.fromCharCode(3) + String.fromCharCode(6);
+    // 2. ESC \x1E (comando específico de chicharra de alta potencia para impresoras Xprinter / POS-80)
+    out += ESC + '\x1E';
+    // 3. Pulsos de 24V en pines 2 y 5 del puerto RJ11 (activa alarmas externas de cocina conectadas a la impresora)
+    out += ESC + 'p' + String.fromCharCode(0) + String.fromCharCode(80) + String.fromCharCode(80);
+    out += ESC + 'p' + String.fromCharCode(1) + String.fromCharCode(80) + String.fromCharCode(80);
+    // 4. Caracteres BEL
+    out += '\x07\x07\x07\x07\x07';
 
     return Buffer.from(out, 'latin1');
   }
@@ -573,14 +580,25 @@ export class PrintService {
     const barrio = order.zone?.name || order.zoneName || order.barrio;
     const driverName = order.deliveryDriver?.name || order.deliveryDriverName || order.driverName || order.driver?.name;
 
+    const isEdited = Boolean(
+      order.isEdited ||
+      (order.createdAt && order.updatedAt && new Date(order.updatedAt).getTime() - new Date(order.createdAt).getTime() > 10000)
+    );
+
     const lines: string[] = [
       `[CENTER][BIG][BOLD]${restInfo.name.toUpperCase()}[/BOLD][/BIG][/CENTER]`,
       `[CENTER]NIT: ${restInfo.nit}[/CENTER]`,
       `[CENTER]Dir: ${restInfo.address.toUpperCase()}[/CENTER]`,
       `[CENTER]Tel: ${restInfo.phone}[/CENTER]`,
       divider,
-      `[CENTER][BIG][BOLD]PEDIDO #${order.orderNumber}[/BOLD][/BIG][/CENTER]`,
-      `Factura: No. ${order.invoiceNumber || order.orderNumber}`,
+      ...(isEdited ? [
+        '[CENTER][BIG][BOLD]⚠️ FACTURA EDITADA ⚠️[/BOLD][/BIG][/CENTER]',
+        `[CENTER][BIG][BOLD]PEDIDO EDITADO #${order.orderNumber}[/BOLD][/BIG][/CENTER]`,
+        `Fecha Edición: ${new Date(order.updatedAt || Date.now()).toLocaleString('es-CO', { timeZone: 'America/Bogota', hour12: true })}`,
+      ] : [
+        `[CENTER][BIG][BOLD]PEDIDO #${order.orderNumber}[/BOLD][/BIG][/CENTER]`,
+      ]),
+      `Factura: No. ${order.invoiceNumber || order.orderNumber}${isEdited ? ' (EDITADA)' : ''}`,
       `Fecha: ${new Date(order.createdAt).toLocaleString('es-CO', { timeZone: 'America/Bogota', hour12: true })}`,
       divider,
       isTableOrder
@@ -701,6 +719,10 @@ export class PrintService {
       lineDivider,
       `[CENTER][BIG][BOLD]Turno: ${order.orderNumber}[/BOLD][/BIG][/CENTER]`,
       divider,
+      ...(isEdited ? [
+        `[CENTER][BIG][BOLD]⚠️ FACTURA EDITADA - REVISAR CAMBIOS ⚠️[/BOLD][/BIG][/CENTER]`,
+        divider,
+      ] : []),
       '   ¡Muchas gracias por su compra!',
       divider
     );

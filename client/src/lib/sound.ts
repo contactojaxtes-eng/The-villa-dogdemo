@@ -116,34 +116,39 @@ export function playUrgentBell() {
       })
     }
 
-    // 2. Ejecutar también con Web Audio API en paralelo para garantizar volumen alto
+    // 2. Web Audio API con 3 campanadas potentes a volumen máximo
     const ctx = getAudioContext()
     if (ctx) {
       if (ctx.state === 'suspended') {
         ctx.resume().catch(() => {})
       }
-      const now = ctx.currentTime
-      const osc1 = ctx.createOscillator()
-      const gain1 = ctx.createGain()
-      osc1.type = 'sine'
-      osc1.frequency.setValueAtTime(880, now)
-      gain1.gain.setValueAtTime(0.6, now)
-      gain1.gain.exponentialRampToValueAtTime(0.001, now + 0.6)
-      osc1.connect(gain1)
-      gain1.connect(ctx.destination)
-      osc1.start(now)
-      osc1.stop(now + 0.6)
+      const playChime = (offset: number) => {
+        const start = ctx.currentTime + offset
+        const osc1 = ctx.createOscillator()
+        const osc2 = ctx.createOscillator()
+        const gain = ctx.createGain()
 
-      const osc2 = ctx.createOscillator()
-      const gain2 = ctx.createGain()
-      osc2.type = 'sine'
-      osc2.frequency.setValueAtTime(1320, now + 0.08)
-      gain2.gain.setValueAtTime(0.5, now + 0.08)
-      gain2.gain.exponentialRampToValueAtTime(0.001, now + 0.7)
-      osc2.connect(gain2)
-      gain2.connect(ctx.destination)
-      osc2.start(now + 0.08)
-      osc2.stop(now + 0.7)
+        osc1.type = 'sine'
+        osc1.frequency.setValueAtTime(950, start)
+        osc2.type = 'sine'
+        osc2.frequency.setValueAtTime(1450, start)
+
+        gain.gain.setValueAtTime(1.0, start)
+        gain.gain.exponentialRampToValueAtTime(0.001, start + 0.35)
+
+        osc1.connect(gain)
+        osc2.connect(gain)
+        gain.connect(ctx.destination)
+
+        osc1.start(start)
+        osc2.start(start)
+        osc1.stop(start + 0.35)
+        osc2.stop(start + 0.35)
+      }
+
+      playChime(0)
+      playChime(0.25)
+      playChime(0.50)
     }
   } catch (err) {
     console.warn('[Sound] Error al reproducir campana:', err)

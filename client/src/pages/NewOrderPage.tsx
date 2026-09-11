@@ -541,7 +541,7 @@ export default function NewOrderPage({
 
   const [zoneId, setZoneId] = useState('')
   const [zoneSearch, setZoneSearch] = useState('')
-  const [zoneRateEdit, setZoneRateEdit] = useState('')
+  const [zoneRateEdit, setZoneRateEdit] = useState('0')
   const [zoneResultsOpen, setZoneResultsOpen] = useState(false)
   const zoneContainerRef = useRef<HTMLDivElement>(null)
   const [orderReaderEnabled, setOrderReaderEnabled] = useState(false)
@@ -885,7 +885,7 @@ export default function NewOrderPage({
       setAddressReference('')
       setZoneId('')
       setZoneSearch('')
-      setZoneRateEdit('')
+      setZoneRateEdit('0')
       setMapSearch('')
       setPaymentMethod('CASH')
       setPaymentReference('')
@@ -910,7 +910,7 @@ export default function NewOrderPage({
         setAddressReference(draft.addressReference || '')
         setZoneId(draft.zoneId || '')
         setZoneSearch(draft.zoneSearch || '')
-        setZoneRateEdit(draft.zoneRateEdit || '')
+        setZoneRateEdit(draft.zoneRateEdit ?? '0')
         setMapSearch(draft.mapSearch || '')
         setPaymentMethod(draft.paymentMethod || 'CASH')
         setPaymentReference(draft.paymentReference || '')
@@ -2888,19 +2888,14 @@ export default function NewOrderPage({
         submittingRef.current = false
         return
       }
-      if (!zoneSearch.trim()) {
-        setError('Selecciona o escribe el barrio del domicilio.')
-        submittingRef.current = false
-        return
-      }
       if (!exactAddress.trim()) {
         setError('Ingresa la dirección exacta para que el domiciliario pueda entregar el pedido.')
         submittingRef.current = false
         return
       }
-      const confirmedDeliveryFee = Number(zoneRateEdit)
+      const confirmedDeliveryFee = Number(zoneRateEdit || 0)
       if (!Number.isFinite(confirmedDeliveryFee) || confirmedDeliveryFee < 0) {
-        setError('Selecciona una zona configurada o escribe la tarifa de domicilio confirmada por el asesor.')
+        setError('Ingresa una tarifa válida (o 0 si no se cobra domicilio).')
         submittingRef.current = false
         return
       }
@@ -2917,7 +2912,7 @@ export default function NewOrderPage({
       ? rawTypedName
       : (isPickup ? 'Cliente Recoger' : (cleanDigits.length >= 4 ? `Cliente ${cleanDigits.slice(-4)}` : 'Cliente Domicilio'))
     let effectivePhone = isId ? trimmedPhone : cleanDigits
-    if (isDelivery && (!effectivePhone || effectivePhone === '3000000000' || effectivePhone === '0000000000')) {
+    if ((isDelivery || isPickup) && (!effectivePhone || effectivePhone === '3000000000' || effectivePhone === '0000000000')) {
       const custMatch = dbCustomers.find(c => (customerId && c.id === customerId) || (rawTypedName && c.name?.toLowerCase() === rawTypedName.toLowerCase()))
       if (custMatch?.phone && custMatch.phone !== '3000000000' && custMatch.phone !== '0000000000') {
         const cClean = custMatch.phone.replace(/\D/g, '')
@@ -2966,7 +2961,7 @@ export default function NewOrderPage({
         orderType: finalOrderType,
         notes: finalNotes,
         items: cart.map(item => ({ menuItemId: item.menuItemId, quantity: item.quantity, notes: serializeItemNote(item), isCourtesy: item.isCourtesy || false })),
-        deliveryFee: (isPickup || isGlobalCourtesy) ? 0 : (parseFloat(zoneRateEdit) || 0),
+        deliveryFee: (isPickup || isGlobalCourtesy) ? 0 : (parseFloat(zoneRateEdit || '0') || 0),
         tax: tax,
         latitude: isPickup ? undefined : (latitude || undefined),
         longitude: isPickup ? undefined : (longitude || undefined),
@@ -3029,7 +3024,7 @@ export default function NewOrderPage({
     localStorage.removeItem(activeDraftKey)
     setClientMutationId(createClientMutationId())
     setCustomerName(''); setCustomerPhone(''); setExactAddress(''); setZoneId('')
-    setZoneSearch(''); setZoneRateEdit('')
+    setZoneSearch(''); setZoneRateEdit('0')
     setPaymentMethod('CASH'); setNotes(''); setCart([]); setError(''); setOrderType('delivery'); setIsCartCollapsed(false)
   }
 
@@ -3557,7 +3552,7 @@ export default function NewOrderPage({
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                 <div className="space-y-1">
                   <Label className="flex items-center gap-1 text-[10px] font-bold text-[var(--text-secondary)] uppercase">
-                    <MapPin className="h-3 w-3 text-[var(--accent)]" /> Barrio o Zona *
+                    <MapPin className="h-3 w-3 text-[var(--accent)]" /> Barrio o Zona (Opcional)
                   </Label>
                   <AddressSearch
                     value={mapSearch}
@@ -3567,7 +3562,7 @@ export default function NewOrderPage({
                       setZoneId('')
                     }}
                     onSelect={handleAddressSelect}
-                    placeholder="Busca barrio (Ej: La Granja)..."
+                    placeholder="Escribe barrio o zona (opcional)..."
                     zones={uniqueZones}
                   />
                 </div>
@@ -3575,7 +3570,7 @@ export default function NewOrderPage({
                 <div className="space-y-1">
                   <div className="flex items-center justify-between">
                     <Label className="text-[10px] font-bold text-[var(--text-secondary)] uppercase flex items-center gap-1">
-                      <DollarSign className="h-3 w-3 text-[var(--accent)]" /> Tarifa Domicilio *
+                      <DollarSign className="h-3 w-3 text-[var(--accent)]" /> Tarifa Domicilio
                     </Label>
                     {estimatedKm != null && (
                       <span className="text-[9px] font-bold text-[var(--accent)] bg-[var(--accent-muted)] px-1 rounded">
@@ -3588,10 +3583,15 @@ export default function NewOrderPage({
                     inputMode="numeric"
                     value={formatThousandsInput(zoneRateEdit)}
                     onChange={e => {
-                      const num = parseThousandsInput(e.target.value)
-                      setZoneRateEdit(num > 0 ? String(num) : (e.target.value.trim() === '' ? '' : '0'))
+                      const raw = e.target.value.trim()
+                      if (raw === '') {
+                        setZoneRateEdit('')
+                      } else {
+                        const num = parseThousandsInput(raw)
+                        setZoneRateEdit(String(num))
+                      }
                     }}
-                    placeholder="Ej: 4.000"
+                    placeholder="0"
                     className="bg-[var(--bg-input)] border-[var(--border-default)] rounded-xl h-8 text-xs focus:border-[var(--accent)] font-bold"
                   />
                 </div>

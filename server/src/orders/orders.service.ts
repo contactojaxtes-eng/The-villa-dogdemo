@@ -129,6 +129,17 @@ export class OrdersService implements OnModuleInit {
     return true;
   }
 
+  private canSendWhatsApp(order: any): boolean {
+    if (!order) return false;
+    if (order.tableId || order.orderType === 'LOCAL' || order.customerName === 'Cliente Mostrador') {
+      return false;
+    }
+    if (order.chatSessionId) {
+      return true;
+    }
+    return this.isSendableWhatsAppPhone(order.customerPhone, order.orderType, order.customerName, order.tableId);
+  }
+
   private isDummyPhoneNumber(phone?: string | null): boolean {
     if (!phone) return true;
     const trimmed = phone.trim();
@@ -857,8 +868,7 @@ export class OrdersService implements OnModuleInit {
     // NO se envían a las tablets de cocina de meseras/salón.
 
     try {
-      if (this.isSendableWhatsAppPhone(order.customerPhone, order.orderType, order.customerName, order.tableId)) {
-        const rawPhone = order.customerPhone.trim();
+      if (this.canSendWhatsApp(order)) {
         const formatCOP = (val: number) => new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', minimumFractionDigits: 0 }).format(val);
 
         const grouped = this.groupOrderItems(order.items || []);
@@ -892,11 +902,11 @@ export class OrdersService implements OnModuleInit {
             `*Método de pago:* ${pmText}\n\n` +
             `Te avisaremos apenas tu pedido salga en camino.`;
         } else if (order.orderType === 'PICKUP') {
-          text = `¡Hola ${order.customerName}! Tu pedido #${order.orderNumber} (para retirar) en The Villa Dog ha sido recibido y está siendo preparado.\n\n` +
+          text = `¡Hola ${order.customerName}! Tu pedido #${order.orderNumber} (para pasar a recoger) en The Villa Dog ha sido recibido y está siendo preparado.\n\n` +
             `*Detalle de tu pedido:*\n${itemsList}\n\n` +
             `*Total a pagar: ${formatCOP(order.total)}*\n` +
             `*Método de pago:* ${pmText}\n\n` +
-            `¡Te avisaremos apenas esté listo para que pases a retirarlo por el restaurante!`;
+            `¡Te avisaremos apenas esté listo para que pases a recogerlo en nuestro restaurante!`;
         }
 
         if (text) {
@@ -1192,8 +1202,7 @@ export class OrdersService implements OnModuleInit {
     this.socketGateway.emitOrderStatusChange(id, updated.status, updated);
 
     try {
-      if (this.isSendableWhatsAppPhone(updated.customerPhone, updated.orderType, updated.customerName, updated.tableId)) {
-        const rawPhone = updated.customerPhone.trim();
+      if (this.canSendWhatsApp(updated)) {
         const formatCOP = (val: number) => new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', minimumFractionDigits: 0 }).format(val);
 
         const grouped = this.groupOrderItems(updated.items || []);
@@ -1222,7 +1231,7 @@ export class OrdersService implements OnModuleInit {
             `*Nuevo total a pagar: ${formatCOP(updated.total)}*\n` +
             `*Método de pago:* ${pmText}`;
         } else if (updated.orderType === 'PICKUP') {
-          text = `¡Hola ${updated.customerName}! Tu pedido #${updated.orderNumber} (para retirar) en The Villa Dog ha sido actualizado.\n\n` +
+          text = `¡Hola ${updated.customerName}! Tu pedido #${updated.orderNumber} (para pasar a recoger) en The Villa Dog ha sido actualizado.\n\n` +
             `*Detalle actualizado de tu pedido:*\n${itemsList}\n\n` +
             `*Nuevo total a pagar: ${formatCOP(updated.total)}*\n` +
             `*Método de pago:* ${pmText}`;
@@ -1415,11 +1424,10 @@ export class OrdersService implements OnModuleInit {
     this.socketGateway.emitWhatsApp('whatsappSessionUpdated', { orderUpdated: true, phone: updated.customerPhone, orderNumber: updated.orderNumber, status: updated.status });
 
     try {
-      if (this.isSendableWhatsAppPhone(updated.customerPhone, updated.orderType, updated.customerName, updated.tableId)) {
-        const rawPhone = updated.customerPhone.trim();
+      if (this.canSendWhatsApp(updated)) {
         let text = '';
         if (status === 'READY' && updated.orderType === 'PICKUP') {
-          text = `¡Tu pedido ya está listo!\n\nPuedes pasar a recogerlo en nuestro punto de domicilios. 🛵\n¡Te esperamos!`;
+          text = `¡Tu pedido ya está listo!\n\nPuedes pasar a recogerlo en nuestro restaurante. 🏠\n¡Te esperamos!`;
         } else if (status === 'IN_ROUTE' && updated.orderType === 'DELIVERY') {
           const driver: any = updated.deliveryDriver || updated.assignee;
           const driverInfo = driver?.name ? `con tu domiciliario ${driver.name}` : 'con el domiciliario';
@@ -1543,7 +1551,7 @@ export class OrdersService implements OnModuleInit {
     this.socketGateway.emitOrderStatusChange(id, 'CANCELLED', updated);
 
     try {
-      if (this.isSendableWhatsAppPhone(updated.customerPhone, updated.orderType, updated.customerName, updated.tableId)) {
+      if (this.canSendWhatsApp(updated)) {
         const text = `Hola ${updated.customerName}. Te informamos que tu pedido #${updated.orderNumber} ha sido cancelado.\nMotivo: ${reason || 'No especificado'}.`;
         await this.sendOrderWhatsAppNotification(updated, text);
       }

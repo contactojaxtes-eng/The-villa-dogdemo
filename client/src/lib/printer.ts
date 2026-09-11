@@ -442,14 +442,25 @@ export function buildComandaText(
     const barrio = order.zone?.name || (order as any).zoneName || (order as any).barrio;
     const driverName = order.deliveryDriver?.name || (order as any).deliveryDriverName || (order as any).driverName || (order as any).driver?.name;
 
+    const isEdited = Boolean(
+      order.isEdited ||
+      (order.createdAt && order.updatedAt && new Date(order.updatedAt).getTime() - new Date(order.createdAt).getTime() > 10000)
+    );
+
     lines.push(
       `[CENTER][BIG][BOLD]${restInfo.name}[/BOLD][/BIG][/CENTER]`,
       `[CENTER]NIT: ${restInfo.nit}[/CENTER]`,
       `[CENTER]Dir: ${restInfo.address}[/CENTER]`,
       `[CENTER]Tel: ${restInfo.phone}[/CENTER]`,
       divider,
-      `[CENTER][BIG][BOLD]PEDIDO #${order.orderNumber}[/BOLD][/BIG][/CENTER]`,
-      `Factura: No. ${order.invoiceNumber || order.orderNumber}`,
+      ...(isEdited ? [
+        '[CENTER][BIG][BOLD]⚠️ FACTURA EDITADA ⚠️[/BOLD][/BIG][/CENTER]',
+        `[CENTER][BIG][BOLD]PEDIDO EDITADO #${order.orderNumber}[/BOLD][/BIG][/CENTER]`,
+        `Fecha Edición: ${new Date(order.updatedAt || Date.now()).toLocaleString('es-CO', { timeZone: 'America/Bogota', hour12: true })}`,
+      ] : [
+        `[CENTER][BIG][BOLD]PEDIDO #${order.orderNumber}[/BOLD][/BIG][/CENTER]`,
+      ]),
+      `Factura: No. ${order.invoiceNumber || order.orderNumber}${isEdited ? ' (EDITADA)' : ''}`,
       `Fecha: ${new Date(order.createdAt).toLocaleString('es-CO', { timeZone: 'America/Bogota', hour12: true })}`,
       divider,
       (order.tableId || order.orderType === 'LOCAL' || order.diningTable)
@@ -560,6 +571,10 @@ export function buildComandaText(
       lineDivider,
       `[CENTER][BIG][BOLD]Turno: ${order.orderNumber}[/BOLD][/BIG][/CENTER]`,
       divider,
+      ...(isEdited ? [
+        `[CENTER][BIG][BOLD]⚠️ FACTURA EDITADA - REVISAR CAMBIOS ⚠️[/BOLD][/BIG][/CENTER]`,
+        divider,
+      ] : []),
       '   ¡Muchas gracias por su compra!',
       divider
     )
