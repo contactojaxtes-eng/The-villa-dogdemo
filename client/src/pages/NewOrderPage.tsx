@@ -262,8 +262,26 @@ function consolidateCart(items: CartItem[]): CartItem[] {
         result.push(newItem)
       }
     } else {
-      result.push(item)
+      result.push({ ...item })
     }
+  }
+
+  // Garantizar que CADA elemento en result tenga un lineId único y no nulo
+  const seenLineIds = new Set<string>()
+  for (const item of result) {
+    if (!item.lineId || seenLineIds.has(item.lineId)) {
+      const oldLineId = item.lineId
+      const newLineId = `line-${Math.random().toString(36).substring(2, 9)}`
+      item.lineId = newLineId
+      if (oldLineId) {
+        for (const other of result) {
+          if (other && other.notes && other.notes.includes(`(#${oldLineId})`)) {
+            other.notes = other.notes.replace(`(#${oldLineId})`, `(#${newLineId})`)
+          }
+        }
+      }
+    }
+    seenLineIds.add(item.lineId)
   }
 
   return result
@@ -616,6 +634,8 @@ export default function NewOrderPage({
   const autoParsedCartRef = useRef<CartItem[] | null>(null)
   const restoredDraftHasItemsRef = useRef(false)
   const restoredDraftUpdatedAtRef = useRef(0)
+  const userInteractedWithCartRef = useRef(false)
+  const userClearedDraftRef = useRef(false)
 
   useEffect(() => {
     cleanupStaleChatDrafts()
@@ -1703,6 +1723,8 @@ export default function NewOrderPage({
     const chatParseKey = chatSessionId ? `${chatSessionId}:${chatTranscriptRevision}` : null
     if (chatSessionId && categories.length > 0 && lastParsedSessionIdRef.current !== chatParseKey) {
       lastParsedSessionIdRef.current = chatParseKey
+      userInteractedWithCartRef.current = false
+      userClearedDraftRef.current = false
       
       const initialUrlAddress = initialAddress
       const initialUrlZone = initialZone
@@ -1989,16 +2011,37 @@ export default function NewOrderPage({
               })
             }
 
+            if (userClearedDraftRef.current) return
+
             if (parsedCartItems && parsedCartItems.length > 0) {
               setSuggestedProducts(parsedCartItems.map((p: any) => p.menuItem).filter((v: any, i: number, a: any[]) => a.findIndex(t => t.id === v.id) === i))
               
               const newCart: CartItem[] = []
+              const usedLineIds = new Set<string>()
+              const availableExistingMain = [...(autoParsedCartRef.current || [])].filter(i => !i.notes?.startsWith('Adición para:'))
+              const availableExistingAdds = [...(autoParsedCartRef.current || [])].filter(i => i.notes?.startsWith('Adición para:'))
 
               for (const parsedItem of parsedCartItems) {
                 const item = parsedItem.menuItem
-                // Reutilizar lineId existente si coincide el menuItemId para preservar claves de React y evitar parpadeos
-                const existingMatch = (autoParsedCartRef.current || []).find(c => c.menuItemId === item.id)
-                const lineId = existingMatch?.lineId || `line-${Math.random().toString(36).substring(2, 9)}`
+                // Reutilizar lineId existente si coincide el menuItemId pero consumirlo para NO compartir lineId entre platos
+                const existingIdx = availableExistingMain.findIndex(c => {
+                  if (c.menuItemId !== item.id) return false
+                  if (usedLineIds.has(c.lineId || '')) return false
+                  return true
+                })
+
+                let lineId: string
+                if (existingIdx !== -1) {
+                  lineId = availableExistingMain[existingIdx].lineId || `line-${Math.random().toString(36).substring(2, 9)}`
+                  availableExistingMain.splice(existingIdx, 1)
+                } else {
+                  lineId = `line-${Math.random().toString(36).substring(2, 9)}`
+                }
+                while (usedLineIds.has(lineId)) {
+                  lineId = `line-${Math.random().toString(36).substring(2, 9)}`
+                }
+                usedLineIds.add(lineId)
+
                 const parentTag = `(#${lineId})`
 
                 const additionsToInsert: MenuItem[] = []
@@ -2051,13 +2094,27 @@ export default function NewOrderPage({
                 })
 
                 for (const addition of additionsToInsert) {
-                  const existingAdd = (autoParsedCartRef.current || []).find(c => c.menuItemId === addition.id && c.notes?.includes(parentTag))
+                  const existingAddIdx = availableExistingAdds.findIndex(c => {
+                    return c.menuItemId === addition.id && !usedLineIds.has(c.lineId || '')
+                  })
+                  let addLineId: string
+                  if (existingAddIdx !== -1) {
+                    addLineId = availableExistingAdds[existingAddIdx].lineId || `line-${Math.random().toString(36).substring(2, 9)}`
+                    availableExistingAdds.splice(existingAddIdx, 1)
+                  } else {
+                    addLineId = `line-${Math.random().toString(36).substring(2, 9)}`
+                  }
+                  while (usedLineIds.has(addLineId)) {
+                    addLineId = `line-${Math.random().toString(36).substring(2, 9)}`
+                  }
+                  usedLineIds.add(addLineId)
+
                   newCart.push({
                     menuItemId: addition.id,
                     name: addition.name,
                     price: addition.price,
                     quantity: parsedItem.quantity,
-                    lineId: existingAdd?.lineId || `line-${Math.random().toString(36).substring(2, 9)}`,
+                    lineId: addLineId,
                     notes: `Adición para: ${item.name} ${parentTag}`
                   })
                 }
@@ -2081,9 +2138,11 @@ export default function NewOrderPage({
 
                 if (source === 'local') {
                   autoParsedCartRef.current = normalizedCart
-                  // Un borrador que el asesor ya empezó a editar tiene prioridad.
-                  setCart(prev => prev.length > 0 ? prev : normalizedCart)
+                  // Un borrador que el asesor ya empezó a editar o limpiar tiene prioridad.
+                  setCart(prev => (prev.length > 0 || userInteractedWithCartRef.current || userClearedDraftRef.current) ? prev : normalizedCart)
                 } else {
+                  if (userInteractedWithCartRef.current || userClearedDraftRef.current) return
+
                   const localUnits = autoParsedCartRef.current ? cartUnits(autoParsedCartRef.current) : 0
                   const remoteUnits = cartUnits(normalizedCart)
                   // Gemini puede responder con solo una línea mientras termina
@@ -2091,14 +2150,14 @@ export default function NewOrderPage({
                   // detectadas de forma local.
                   if (localUnits > remoteUnits) return
 
-                  // Si lo detectado por Gemini es idéntico a lo que ya reconoció el lector local,
+                  // Si el lector local ya reconoció productos válidos y coincide en unidades,
                   // NO re-ejecutar setCart para evitar el refresco/reinicio visual de los productos.
-                  if (autoParsedCartRef.current && isEquivalentCart(autoParsedCartRef.current, normalizedCart)) {
+                  if (autoParsedCartRef.current && (isEquivalentCart(autoParsedCartRef.current, normalizedCart) || (localUnits > 0 && localUnits === remoteUnits))) {
                     return
                   }
 
                   autoParsedCartRef.current = normalizedCart
-                  setCart(normalizedCart)
+                  setCart(prev => (userInteractedWithCartRef.current || userClearedDraftRef.current) ? prev : normalizedCart)
                 }
                 if (embedded) setStep('delivery')
               }
@@ -2179,6 +2238,8 @@ export default function NewOrderPage({
 
   const addToCart = (item: MenuItem) => {
     if (!item) return
+    userInteractedWithCartRef.current = true
+    userClearedDraftRef.current = false
     // Verificar si el ítem pertenece a una categoría de adiciones o tipo ADICION
     const itemCat = (item as any)?.category || (categories || []).find(c => (c?.items || []).some(i => i && i.id === item.id))
     const itemCatName = itemCat?.name || ''
@@ -2207,34 +2268,43 @@ export default function NewOrderPage({
     setTimeout(() => setAddedItemId(null), 400)
   }
 
-  const removeFromCart = (lineId: string, name?: string) => setCart(prev => consolidateCart(prev.filter(i => {
-    if (!i || i.lineId === lineId) return false
-    if (i.notes && i.notes.startsWith('Adición para:') && i.notes.includes(`(#${lineId})`)) return false
-    return true
-  })))
+  const removeFromCart = (lineId: string, name?: string) => {
+    userInteractedWithCartRef.current = true
+    if (!lineId) return
+    setCart(prev => consolidateCart(prev.filter(i => {
+      if (!i || i.lineId === lineId) return false
+      if (i.notes && i.notes.startsWith('Adición para:') && i.notes.includes(`(#${lineId})`)) return false
+      return true
+    })))
+  }
 
-  const updateQuantity = (lineId: string, delta: number) => setCart(prev => {
-    const parent = prev.find(i => i && i.lineId === lineId)
-    if (!parent) return prev
+  const updateQuantity = (lineId: string, delta: number) => {
+    userInteractedWithCartRef.current = true
+    if (!lineId) return
+    setCart(prev => {
+      const parent = prev.find(i => i && i.lineId === lineId)
+      if (!parent) return prev
 
-    return consolidateCart(prev.map(i => {
-      if (!i) return i
-      if (i.lineId === lineId) {
-        return { ...i, quantity: Math.max(1, i.quantity + delta) }
-      }
-      if (i.notes && i.notes.startsWith('Adición para:') && i.notes.includes(`(#${lineId})`)) {
-        const oldParentQty = parent.quantity
-        const newParentQty = Math.max(1, oldParentQty + delta)
-        const ratio = newParentQty / oldParentQty
-        const newQty = Math.round(i.quantity * ratio)
-        return { ...i, quantity: Math.max(1, newQty) }
-      }
-      return i
-    }))
-  })
+      return consolidateCart(prev.map(i => {
+        if (!i) return i
+        if (i.lineId === lineId) {
+          return { ...i, quantity: Math.max(1, i.quantity + delta) }
+        }
+        if (i.notes && i.notes.startsWith('Adición para:') && i.notes.includes(`(#${lineId})`)) {
+          const oldParentQty = parent.quantity
+          const newParentQty = Math.max(1, oldParentQty + delta)
+          const ratio = newParentQty / oldParentQty
+          const newQty = Math.round(i.quantity * ratio)
+          return { ...i, quantity: Math.max(1, newQty) }
+        }
+        return i
+      }))
+    })
+  }
 
 
   const saveItemNote = (lineId: string, rawInput: string) => {
+    userInteractedWithCartRef.current = true
     const trimmed = rawInput.trim();
     setShowNotes(prev => ({ ...prev, [lineId]: false }));
 
@@ -2312,6 +2382,7 @@ export default function NewOrderPage({
   };
 
   const clearItemNotes = (lineId: string) => {
+    userInteractedWithCartRef.current = true
     setShowNotes(prev => {
       const next = { ...prev };
       delete next[lineId];
@@ -2331,9 +2402,15 @@ export default function NewOrderPage({
     })));
   };
 
-  const removeAddition = (add: CartItem) => setCart(prev => consolidateCart(prev.filter(i => i && !(i.menuItemId === add.menuItemId && i.notes === add.notes))))
+  const removeAddition = (add: CartItem) => {
+    userInteractedWithCartRef.current = true
+    setCart(prev => consolidateCart(prev.filter(i => i && !(i.menuItemId === add.menuItemId && i.notes === add.notes))))
+  }
 
-  const updateAdditionQuantity = (add: CartItem, delta: number) => setCart(prev => consolidateCart(prev.map(i => (i && i.menuItemId === add.menuItemId && i.notes === add.notes) ? { ...i, quantity: Math.max(1, i.quantity + delta) } : i)))
+  const updateAdditionQuantity = (add: CartItem, delta: number) => {
+    userInteractedWithCartRef.current = true
+    setCart(prev => consolidateCart(prev.map(i => (i && i.menuItemId === add.menuItemId && i.notes === add.notes) ? { ...i, quantity: Math.max(1, i.quantity + delta) } : i)))
+  }
 
   const startEditNote = (item: CartItem) => {
     if (!item) return;
@@ -2367,6 +2444,7 @@ export default function NewOrderPage({
 
   const handleAddAddition = (item: CartItem, additionId: string) => {
     if (!item || !additionId) return
+    userInteractedWithCartRef.current = true
     const allItemsList = (categories || []).flatMap(c => c?.items || [])
     const selectedAdd = (additionItems || []).find(ai => ai && ai.id === additionId) || allItemsList.find(i => i && i.id === additionId)
     if (!selectedAdd) return
@@ -3017,6 +3095,12 @@ export default function NewOrderPage({
   }
 
   const clearDraft = () => {
+    userInteractedWithCartRef.current = true
+    userClearedDraftRef.current = true
+    autoParsedCartRef.current = null
+    setShowNotes({})
+    setDraftNotes({})
+    setSuggestedProducts([])
     if (editOrderId) {
       closeOrderPanel()
       return
@@ -3773,7 +3857,7 @@ export default function NewOrderPage({
           </div>
         ) : (
           <div className="px-2.5 py-2 max-h-[190px] sm:max-h-[220px] overflow-y-auto scrollbar-thin scrollbar-thumb-zinc-300 dark:scrollbar-thumb-zinc-700">
-            {cart.length === 0 && (
+            {cart.length === 0 ? (
               <div className={cn("text-center space-y-2", embedded ? "py-3" : "py-8")}>
                 <Sparkles className="mx-auto h-6 w-6 text-[var(--accent)]/30 animate-pulse" />
                 <div>
@@ -3785,15 +3869,15 @@ export default function NewOrderPage({
                   )}
                 </div>
               </div>
-            )}
-            <div className={cn(
-              "grid gap-2",
-              groupedCart.length > 1 ? "grid-cols-1 min-[420px]:grid-cols-2" : "grid-cols-1"
-            )}>
-              <AnimatePresence>
-                {groupedCart.map(item => {
-                  const keyId = item.lineId || item.menuItemId;
-                  const visibleKitchenNote = keepKitchenInstruction(getItemRawNote(item.notes), item.name)
+            ) : (
+              <div className={cn(
+                "grid gap-2",
+                groupedCart.length > 1 ? "grid-cols-1 min-[420px]:grid-cols-2" : "grid-cols-1"
+              )}>
+                <AnimatePresence mode="popLayout">
+                  {groupedCart.map((item, idx) => {
+                    const keyId = item.lineId || `${item.menuItemId || 'item'}-${idx}`;
+                    const visibleKitchenNote = keepKitchenInstruction(getItemRawNote(item.notes), item.name)
                   return (
                     <motion.div
                       key={keyId}
@@ -3929,8 +4013,8 @@ export default function NewOrderPage({
                       {/* Additions list nested under parent */}
                       {item.additions && item.additions.length > 0 && (
                         <div className="mt-1 pl-2 border-l-2 border-[var(--accent)]/30 space-y-1">
-                          {item.additions.map(add => (
-                            <div key={`${add.menuItemId}-${add.notes}`} className="flex items-center justify-between text-xs bg-[var(--bg-elevated)]/60 rounded-md py-0.5 px-1.5 border border-[var(--border-subtle)]/50">
+                          {item.additions.map((add, addIdx) => (
+                            <div key={add.lineId || `${add.menuItemId}-${add.notes}-${addIdx}`} className="flex items-center justify-between text-xs bg-[var(--bg-elevated)]/60 rounded-md py-0.5 px-1.5 border border-[var(--border-subtle)]/50">
                               <div className="min-w-0 flex-1 flex items-center gap-1.5">
                                 <p className="text-[10px] font-bold text-[var(--text-primary)] truncate">{add.name}</p>
                                 <p className="text-[10px] text-[var(--accent)] font-semibold shrink-0">+{formatCurrency(add.price * add.quantity)}</p>
@@ -3971,8 +4055,9 @@ export default function NewOrderPage({
                 })}
               </AnimatePresence>
             </div>
-          </div>
-        )}
+          )}
+        </div>
+      )}
         
         {cart.length > 0 && !hideSubmitButton && (
           <div className="shrink-0 space-y-2.5 border-t border-[var(--border-subtle)] p-4 bg-[var(--bg-panel)]">
