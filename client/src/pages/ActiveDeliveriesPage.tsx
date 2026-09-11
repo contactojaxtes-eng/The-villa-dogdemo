@@ -1376,12 +1376,14 @@ export default function ActiveDeliveriesPage() {
                               </span>
                               <button
                                 type="button"
-                                onClick={() => setChatModalOrder(order)}
+                                onClick={() => isDeliveryStaff ? setDetailOrder(order) : setChatModalOrder(order)}
                                 className="font-black text-[var(--accent)] hover:underline text-sm cursor-pointer bg-transparent border-0 inline-flex items-center gap-1 group"
-                                title={`Abrir WhatsApp de pedido #${order.orderNumber} para ver chat real, comprobantes y rectificar pago`}
+                                title={isDeliveryStaff ? `Ver detalle de pedido #${order.orderNumber}` : `Abrir WhatsApp de pedido #${order.orderNumber} para ver chat real, comprobantes y rectificar pago`}
                               >
                                 <span>#{order.orderNumber}</span>
-                                <MessageSquare className="h-3.5 w-3.5 text-emerald-500 opacity-85 group-hover:opacity-100 group-hover:scale-115 transition-all shrink-0" />
+                                {!isDeliveryStaff && (
+                                  <MessageSquare className="h-3.5 w-3.5 text-emerald-500 opacity-85 group-hover:opacity-100 group-hover:scale-115 transition-all shrink-0" />
+                                )}
                               </button>
                             </div>
                           </td>
@@ -1630,12 +1632,15 @@ export default function ActiveDeliveriesPage() {
                                   <Edit className="h-3.5 w-3.5" />
                                 </Button>
                               )}
-                              {!isDeliveryStaff && (
-                                <Button size="sm" variant="ghost" className="h-7 w-7 p-0 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-primary)] cursor-pointer"
-                                  onClick={() => setDetailOrder(order)}>
-                                  <Eye className="h-3.5 w-3.5" />
-                                </Button>
-                              )}
+                              <Button 
+                                size="sm" 
+                                variant="ghost" 
+                                className="h-7 w-7 p-0 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-primary)] cursor-pointer"
+                                title="Ver detalle del pedido"
+                                onClick={() => setDetailOrder(order)}
+                              >
+                                <Eye className="h-3.5 w-3.5" />
+                              </Button>
                               {!isDeliveryStaff && activeStatuses.includes(order.status) && ['SUPERADMIN', 'ADMIN', 'CASHIER', 'WAITER'].includes(user?.role || '') && (
                                 <Button size="sm" variant="ghost" className="h-7 w-7 p-0 rounded-lg text-red-400 hover:bg-red-500/10 cursor-pointer" title="Cancelar Pedido"
                                   onClick={() => { setCancelDialog({ id: order.id, orderNumber: order.orderNumber }); setCancelConfirmStep(false); setCancelReason('') }}>
@@ -2695,18 +2700,20 @@ export default function ActiveDeliveriesPage() {
                         <Edit className="h-3.5 w-3.5" /> Editar Pedido
                       </Button>
                     )}
-                    <Button 
-                      size="sm" 
-                      variant="outline" 
-                      className="h-9 px-4 text-xs font-bold rounded-xl gap-1.5 cursor-pointer border-emerald-500/30 text-emerald-600 hover:bg-emerald-500/10"
-                      onClick={() => {
-                        setDetailOrder(null)
-                        setChatModalOrder(o)
-                      }}
-                      title="Abrir chat real de WhatsApp para verificar pago y mensajes"
-                    >
-                      <MessageSquare className="h-3.5 w-3.5" /> Chat WhatsApp
-                    </Button>
+                    {!isDeliveryStaff && (
+                      <Button 
+                        size="sm" 
+                        variant="outline" 
+                        className="h-9 px-4 text-xs font-bold rounded-xl gap-1.5 cursor-pointer border-emerald-500/30 text-emerald-600 hover:bg-emerald-500/10"
+                        onClick={() => {
+                          setDetailOrder(null)
+                          setChatModalOrder(o)
+                        }}
+                        title="Abrir chat real de WhatsApp para verificar pago y mensajes"
+                      >
+                        <MessageSquare className="h-3.5 w-3.5" /> Chat WhatsApp
+                      </Button>
+                    )}
                     {activeStatuses.includes(o.status) && ['SUPERADMIN', 'ADMIN'].includes(user?.role || '') && (
                       <Button size="sm" variant="outline" className="h-9 px-4 text-xs font-bold rounded-xl gap-1.5 cursor-pointer border-red-500/30 text-red-500 hover:bg-red-500/10"
                         onClick={() => { setDetailOrder(null); setCancelDialog({ id: o.id, orderNumber: o.orderNumber }); setCancelConfirmStep(false); setCancelReason(''); }}>
