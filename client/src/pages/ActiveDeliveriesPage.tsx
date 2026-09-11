@@ -142,17 +142,20 @@ const stagger = {
 
 function getOrderBreakdown(order: Order) {
   const method = (order.paymentMethod || 'CASH').toUpperCase()
+  const total = Number(order.total) || 0
   let cash = 0
   let transfer = 0
-  const total = Number(order.total) || 0
 
   if (method === 'CASH') {
-    cash = typeof order.cashAmount === 'number' ? order.cashAmount : total
+    cash = total
+    transfer = 0
   } else if (['TRANSFER', 'NEQUI', 'BANCOLOMBIA', 'DAVIPLATA'].includes(method)) {
-    transfer = typeof order.transferAmount === 'number' ? order.transferAmount : total
+    transfer = total
+    cash = 0
   } else if (method === 'MIXED') {
-    cash = typeof order.cashAmount === 'number' ? order.cashAmount : 0
-    transfer = typeof order.transferAmount === 'number'
+    const rawCash = typeof order.cashAmount === 'number' && order.cashAmount > 0 ? order.cashAmount : Math.round(total / 2)
+    cash = Math.min(total, Math.max(0, rawCash))
+    transfer = typeof order.transferAmount === 'number' && order.transferAmount > 0
       ? order.transferAmount
       : Math.max(0, total - cash)
   }
@@ -791,12 +794,15 @@ export default function ActiveDeliveriesPage() {
             : batchCollectMode === 'MANUAL'
               ? (custom?.method || ord.paymentMethod || 'CASH')
               : (ord.paymentMethod || 'CASH')
+        const ordTotal = Number(ord.total) || 0
+        const isCash = method === 'CASH'
+        const isTransfer = ['TRANSFER', 'NEQUI', 'BANCOLOMBIA', 'DAVIPLATA'].includes(method)
         return {
           id: ord.id,
           method,
           reference: batchCollectReference || undefined,
-          cashAmount: method === 'CASH' ? ord.total : method === 'MIXED' ? (custom?.cashAmount ?? ord.cashAmount) : 0,
-          transferAmount: method === 'TRANSFER' ? ord.total : method === 'MIXED' ? (custom?.transferAmount ?? ord.transferAmount) : 0,
+          cashAmount: isCash ? ordTotal : method === 'MIXED' ? (custom?.cashAmount ?? ord.cashAmount ?? Math.round(ordTotal / 2)) : 0,
+          transferAmount: isTransfer ? ordTotal : method === 'MIXED' ? (custom?.transferAmount ?? ord.transferAmount ?? Math.round(ordTotal / 2)) : 0,
         }
       })
 
@@ -2187,6 +2193,34 @@ export default function ActiveDeliveriesPage() {
               </div>
             </div>
 
+            {/* Resumen en Vivo de Efectivo vs Transferencia en el Modal */}
+            <div className="grid grid-cols-3 gap-2 p-2.5 rounded-2xl bg-[var(--bg-elevated)] border border-[var(--border-subtle)] shadow-xs">
+              <div className="flex flex-col items-center justify-center p-2 rounded-xl bg-emerald-500/10 border border-emerald-500/25 text-center">
+                <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 uppercase tracking-wider">
+                  💵 Efectivo
+                </span>
+                <span className="text-sm sm:text-base font-black text-emerald-700 dark:text-emerald-300 tabular-nums">
+                  {formatCurrency(batchCollectTotals.cash)}
+                </span>
+              </div>
+              <div className="flex flex-col items-center justify-center p-2 rounded-xl bg-blue-500/10 border border-blue-500/25 text-center">
+                <span className="text-[10px] font-bold text-blue-600 dark:text-blue-400 uppercase tracking-wider">
+                  📱 Transferencia
+                </span>
+                <span className="text-sm sm:text-base font-black text-blue-700 dark:text-blue-300 tabular-nums">
+                  {formatCurrency(batchCollectTotals.transfer)}
+                </span>
+              </div>
+              <div className="flex flex-col items-center justify-center p-2 rounded-xl bg-purple-500/10 border border-purple-500/25 text-center">
+                <span className="text-[10px] font-bold text-purple-600 dark:text-purple-400 uppercase tracking-wider">
+                  💰 Gran Total
+                </span>
+                <span className="text-sm sm:text-base font-black text-purple-700 dark:text-purple-300 tabular-nums">
+                  {formatCurrency(batchCollectTotals.total)}
+                </span>
+              </div>
+            </div>
+
             {/* Referencia si es Transferencia */}
             {batchCollectMode === 'TRANSFER' && (
               <div className="space-y-1.5 p-3 rounded-2xl bg-[var(--bg-subtle)] border border-[var(--border-subtle)]">
@@ -2221,7 +2255,15 @@ export default function ActiveDeliveriesPage() {
                         className="flex items-center justify-between gap-2 p-2 rounded-xl bg-[var(--bg-panel)] border border-[var(--border-subtle)] text-xs"
                       >
                         <div className="flex items-center gap-2 min-w-0">
-                          <span className="font-black text-[var(--accent)]">#{ord.orderNumber}</span>
+                          <button
+                            type="button"
+                            onClick={() => setChatModalOrder(ord)}
+                            className="font-black text-[var(--accent)] hover:underline inline-flex items-center gap-1 cursor-pointer bg-transparent border-0 p-0 group shrink-0"
+                            title={`Abrir WhatsApp real para verificar pago de pedido #${ord.orderNumber}`}
+                          >
+                            <span>#{ord.orderNumber}</span>
+                            <MessageSquare className="w-3.5 h-3.5 text-emerald-500 opacity-80 group-hover:opacity-100 group-hover:scale-115 transition-all" />
+                          </button>
                           <span className="font-bold text-[var(--text-primary)] truncate max-w-[140px] sm:max-w-[200px]">
                             {ord.customerName}
                           </span>
@@ -2278,9 +2320,17 @@ export default function ActiveDeliveriesPage() {
                 </span>
                 <div className="flex flex-wrap gap-1.5 max-h-24 overflow-y-auto scrollbar-thin">
                   {selectedOrdersList.map(o => (
-                    <span key={o.id} className="bg-[var(--bg-panel)] px-2 py-0.5 rounded-lg border border-[var(--border-subtle)] text-xs font-black">
-                      #{o.orderNumber} <span className="text-[10px] text-[var(--text-muted)] font-medium">({formatCurrency(o.total)})</span>
-                    </span>
+                    <button
+                      key={o.id}
+                      type="button"
+                      onClick={() => setChatModalOrder(o)}
+                      className="bg-[var(--bg-panel)] hover:bg-emerald-500/10 px-2 py-0.5 rounded-lg border border-[var(--border-subtle)] hover:border-emerald-500/40 text-xs font-black cursor-pointer inline-flex items-center gap-1 transition-all group"
+                      title={`Abrir WhatsApp real de #${o.orderNumber}`}
+                    >
+                      <span className="text-[var(--accent)]">#{o.orderNumber}</span>
+                      <MessageSquare className="w-3 h-3 text-emerald-500 opacity-80 group-hover:opacity-100 shrink-0" />
+                      <span className="text-[10px] text-[var(--text-muted)] font-medium">({formatCurrency(o.total)})</span>
+                    </button>
                   ))}
                 </div>
               </div>
@@ -2317,7 +2367,7 @@ export default function ActiveDeliveriesPage() {
                 Cancelar
               </Button>
               <Button
-                className="flex-[2] h-12 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-black text-sm shadow-xl border-0 cursor-pointer flex items-center justify-center gap-2"
+                className="flex-[2] h-12 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-black text-xs sm:text-sm shadow-xl border-0 cursor-pointer flex items-center justify-center gap-2"
                 onClick={handleConfirmBatchCollect}
                 disabled={isSubmittingBatchCollect || selectedOrdersList.length === 0}
               >
@@ -2328,8 +2378,10 @@ export default function ActiveDeliveriesPage() {
                   </>
                 ) : (
                   <>
-                    <DollarSign className="h-4 w-4" />
-                    <span>Confirmar Cobro ({formatCurrency(batchCollectTotals.total)})</span>
+                    <DollarSign className="h-4 w-4 shrink-0" />
+                    <span className="truncate">
+                      Confirmar Cobro ({formatCurrency(batchCollectTotals.total)}) — 💵 {formatCurrency(batchCollectTotals.cash)} | 📱 {formatCurrency(batchCollectTotals.transfer)}
+                    </span>
                   </>
                 )}
               </Button>
@@ -2674,7 +2726,22 @@ export default function ActiveDeliveriesPage() {
           order={chatModalOrder}
           isOpen={Boolean(chatModalOrder)}
           onClose={() => setChatModalOrder(null)}
-          onPaymentUpdated={() => loadOrders(true, true)}
+          onPaymentUpdated={(newMethod) => {
+            if (newMethod && chatModalOrder) {
+              const tot = Number(chatModalOrder.total) || 0
+              const isCash = newMethod === 'CASH'
+              const isTransfer = ['TRANSFER', 'NEQUI', 'BANCOLOMBIA', 'DAVIPLATA'].includes(newMethod)
+              setManualItemMethods(prev => ({
+                ...prev,
+                [chatModalOrder.id]: {
+                  method: newMethod,
+                  cashAmount: isCash ? tot : 0,
+                  transferAmount: isTransfer ? tot : 0,
+                }
+              }))
+            }
+            loadOrders(true, true)
+          }}
         />
       )}
     </motion.div>

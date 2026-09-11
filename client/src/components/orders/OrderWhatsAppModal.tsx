@@ -28,7 +28,7 @@ interface OrderWhatsAppModalProps {
   order: any
   isOpen: boolean
   onClose: () => void
-  onPaymentUpdated?: () => void
+  onPaymentUpdated?: (newMethod?: string) => void
 }
 
 interface ChatMessage {
@@ -215,7 +215,7 @@ export default function OrderWhatsAppModal({
         'Método de Pago Rectificado',
         `El pedido #${currentOrder.orderNumber} se actualizó a ${getPaymentMethodLabel(newMethod)}.`
       )
-      onPaymentUpdated?.()
+      onPaymentUpdated?.(newMethod)
     } catch (err: any) {
       alerts.error('Error al cambiar método de pago', err.message || 'No se pudo actualizar el método de pago.')
     } finally {
@@ -230,7 +230,7 @@ export default function OrderWhatsAppModal({
   const isCashMethod = paymentMethod === 'CASH'
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/70 backdrop-blur-sm animate-in fade-in duration-200">
+    <div className="fixed inset-0 z-[100] flex items-center justify-center p-2 sm:p-4 bg-black/75 backdrop-blur-sm animate-in fade-in duration-200">
       <div 
         className="relative w-full max-w-3xl h-[92vh] sm:h-[88vh] bg-[var(--bg-surface)] border border-[var(--border-subtle)] rounded-2xl shadow-2xl flex flex-col overflow-hidden animate-in zoom-in-95 duration-200"
         onClick={(e) => e.stopPropagation()}
