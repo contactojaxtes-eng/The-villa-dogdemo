@@ -37,7 +37,8 @@ import {
   ClipboardList,
   AlertTriangle,
   Send,
-  Store
+  Store,
+  MessageSquare
 } from 'lucide-react'
 import { type Socket } from 'socket.io-client'
 import { io } from '@/lib/socket'
@@ -46,6 +47,7 @@ import { alerts } from '@/lib/alerts'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Textarea } from '@/components/ui/textarea'
 import { Label } from '@/components/ui/label'
+import OrderWhatsAppModal from '@/components/orders/OrderWhatsAppModal'
 
 interface Order {
   id: string
@@ -231,6 +233,7 @@ export default function ActiveDeliveriesPage() {
   }, [driverSearch, drivers])
 
   const [detailOrder, setDetailOrder] = useState<Order | null>(null)
+  const [chatModalOrder, setChatModalOrder] = useState<Order | null>(null)
   const [markingPickupReadyId, setMarkingPickupReadyId] = useState<string | null>(null)
   const [paymentEditDialog, setPaymentEditDialog] = useState<Order | null>(null)
   const [editMethod, setEditMethod] = useState<string>('CASH')
@@ -455,12 +458,18 @@ export default function ActiveDeliveriesPage() {
     if (submittedSearch) params.set('search', submittedSearch)
     api.get<Order[]>(`/orders/active?${params.toString()}`, { force })
       .then(data => {
-        const deliveryOnly = (data || []).filter(o => !o.tableId && o.orderType !== 'LOCAL' && o.source !== 'TABLE' && o.source !== 'OFFLINE_TABLE')
+        const deliveryOnly = (data || []).filter(o => 
+          !o.tableId && 
+          o.orderType !== 'LOCAL' && 
+          o.source !== 'TABLE' && 
+          o.source !== 'OFFLINE_TABLE' &&
+          (!isDeliveryStaff || o.orderType !== 'PICKUP')
+        )
         setOrders(deliveryOnly)
       })
       .catch(console.error)
       .finally(() => setLoading(false))
-  }, [submittedSearch])
+  }, [submittedSearch, isDeliveryStaff])
 
   useEffect(() => {
     const socketUrl = import.meta.env.VITE_API_URL || window.location.origin
@@ -504,7 +513,13 @@ export default function ActiveDeliveriesPage() {
     })
     socket.on('orderStatusChanged', (data: { orderId: string; status: string; order?: any }) => {
       if (data && data.orderId) {
-        if (data.order?.tableId || data.order?.orderType === 'LOCAL' || data.order?.source === 'TABLE' || data.order?.source === 'OFFLINE_TABLE') {
+        if (
+          data.order?.tableId || 
+          data.order?.orderType === 'LOCAL' || 
+          data.order?.source === 'TABLE' || 
+          data.order?.source === 'OFFLINE_TABLE' ||
+          (isDeliveryStaff && data.order?.orderType === 'PICKUP')
+        ) {
           setOrders(prev => prev.filter(o => o.id !== data.orderId))
         } else {
           setOrders(prev => prev.map(o => o.id === data.orderId ? {
@@ -532,7 +547,13 @@ export default function ActiveDeliveriesPage() {
 
     socket.on('orderUpdated', (updatedOrder: any) => {
       if (updatedOrder && updatedOrder.id) {
-        if (updatedOrder.tableId || updatedOrder.orderType === 'LOCAL' || updatedOrder.source === 'TABLE' || updatedOrder.source === 'OFFLINE_TABLE') {
+        if (
+          updatedOrder.tableId || 
+          updatedOrder.orderType === 'LOCAL' || 
+          updatedOrder.source === 'TABLE' || 
+          updatedOrder.source === 'OFFLINE_TABLE' ||
+          (isDeliveryStaff && updatedOrder.orderType === 'PICKUP')
+        ) {
           setOrders(prev => prev.filter(o => o.id !== updatedOrder.id))
         } else {
           setOrders(prev => prev.map(o => o.id === updatedOrder.id ? { ...o, ...updatedOrder } : o))
@@ -583,6 +604,9 @@ export default function ActiveDeliveriesPage() {
   const visibleOrders = useMemo(() => {
     const query = searchQuery.trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
     const matchingOrders = orders.filter(order => {
+      // 0. Si es personal de domicilio, ocultar SIEMPRE pasar a recoger (solo admin)
+      if (isDeliveryStaff && order.orderType === 'PICKUP') return false
+
       // 1. Filtro por dropdown de repartidor
       if (selectedDriverFilter === 'UNASSIGNED') {
         if (order.deliveryDriverId || order.deliveryDriver) return false
@@ -617,7 +641,7 @@ export default function ActiveDeliveriesPage() {
       const byTime = new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
       return byTime || a.orderNumber - b.orderNumber
     })
-  }, [orders, searchQuery, selectedDriverFilter])
+  }, [orders, searchQuery, selectedDriverFilter, isDeliveryStaff])
 
   const statusVisibleOrders = useMemo(() => {
     if (statusFilter === 'PENDING') return visibleOrders.filter(o => o.status === 'RECEIVED' || o.status === 'PENDING')
@@ -1344,7 +1368,15 @@ export default function ActiveDeliveriesPage() {
                               }`} title={`Posición ${queuePosition || queueIndex + 1} en la cola`}>
                                 {queuePosition || queueIndex + 1}º
                               </span>
-                              <button onClick={() => setDetailOrder(order)} className="font-black text-[var(--accent)] hover:underline text-sm cursor-pointer bg-transparent border-0">#{order.orderNumber}</button>
+                              <button
+                                type="button"
+                                onClick={() => setChatModalOrder(order)}
+                                className="font-black text-[var(--accent)] hover:underline text-sm cursor-pointer bg-transparent border-0 inline-flex items-center gap-1 group"
+                                title={`Abrir WhatsApp de pedido #${order.orderNumber} para ver chat real, comprobantes y rectificar pago`}
+                              >
+                                <span>#{order.orderNumber}</span>
+                                <MessageSquare className="h-3.5 w-3.5 text-emerald-500 opacity-85 group-hover:opacity-100 group-hover:scale-115 transition-all shrink-0" />
+                              </button>
                             </div>
                           </td>
                           <td className="px-3 py-2.5">
@@ -2611,13 +2643,18 @@ export default function ActiveDeliveriesPage() {
                         <Edit className="h-3.5 w-3.5" /> Editar Pedido
                       </Button>
                     )}
-                    {hasPermission('whatsapp.reply') && (
-                      <a href={whatsapp} target="_blank" rel="noreferrer">
-                        <Button size="sm" variant="outline" className="h-9 px-4 text-xs font-bold rounded-xl gap-1.5 cursor-pointer border-emerald-500/30 text-emerald-600 hover:bg-emerald-500/10">
-                          <MessageCircle className="h-3.5 w-3.5" /> WhatsApp
-                        </Button>
-                      </a>
-                    )}
+                    <Button 
+                      size="sm" 
+                      variant="outline" 
+                      className="h-9 px-4 text-xs font-bold rounded-xl gap-1.5 cursor-pointer border-emerald-500/30 text-emerald-600 hover:bg-emerald-500/10"
+                      onClick={() => {
+                        setDetailOrder(null)
+                        setChatModalOrder(o)
+                      }}
+                      title="Abrir chat real de WhatsApp para verificar pago y mensajes"
+                    >
+                      <MessageSquare className="h-3.5 w-3.5" /> Chat WhatsApp
+                    </Button>
                     {activeStatuses.includes(o.status) && ['SUPERADMIN', 'ADMIN'].includes(user?.role || '') && (
                       <Button size="sm" variant="outline" className="h-9 px-4 text-xs font-bold rounded-xl gap-1.5 cursor-pointer border-red-500/30 text-red-500 hover:bg-red-500/10"
                         onClick={() => { setDetailOrder(null); setCancelDialog({ id: o.id, orderNumber: o.orderNumber }); setCancelConfirmStep(false); setCancelReason(''); }}>
@@ -2631,6 +2668,15 @@ export default function ActiveDeliveriesPage() {
           })()}
         </DialogContent>
       </Dialog>
+
+      {chatModalOrder && (
+        <OrderWhatsAppModal
+          order={chatModalOrder}
+          isOpen={Boolean(chatModalOrder)}
+          onClose={() => setChatModalOrder(null)}
+          onPaymentUpdated={() => loadOrders(true, true)}
+        />
+      )}
     </motion.div>
   )
 }

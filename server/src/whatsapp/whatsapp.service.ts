@@ -5652,4 +5652,96 @@ ${menuSummary}
       return true;
     }
   }
+
+  async getOrderChat(orderId: string) {
+    const order = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      include: {
+        items: { include: { menuItem: true } },
+        deliveryDriver: true,
+        zone: true,
+        transferProofs: {
+          orderBy: { createdAt: 'desc' },
+        },
+      },
+    });
+
+    if (!order) {
+      throw new BadRequestException('Pedido no encontrado');
+    }
+
+    let session: any = null;
+
+    if (order.chatSessionId) {
+      session = await this.prisma.whatsAppSession.findUnique({
+        where: { id: order.chatSessionId },
+      });
+    }
+
+    if (!session && order.customerPhone) {
+      const cleanP = order.customerPhone.replace(/\D/g, '');
+      const p10 = (cleanP.length === 12 && cleanP.startsWith('57')) ? cleanP.slice(2) : cleanP;
+      if (p10 && p10 !== '3000000000' && p10 !== '0000000000') {
+        session = await this.prisma.whatsAppSession.findFirst({
+          where: {
+            OR: [
+              { customerPhone: p10 },
+              { customerPhone: `57${p10}` },
+              { customerPhone: `+57${p10}` },
+              { phone: order.customerPhone },
+              { phone: p10 },
+              { phone: `57${p10}` },
+              { phone: `+57${p10}` },
+              ...(order.customerName && !order.customerName.startsWith('@') && order.customerName !== 'Cliente Mostrador' && order.customerName !== 'Cliente Recoger' ? [{ customerName: { equals: order.customerName.trim(), mode: 'insensitive' as any } }] : [])
+            ]
+          },
+          orderBy: { lastMessageAt: 'desc' }
+        });
+
+        if (session && !order.chatSessionId) {
+          await this.prisma.order.update({
+            where: { id: order.id },
+            data: { chatSessionId: session.id },
+          }).catch(() => {});
+        }
+      }
+    }
+
+    let messages: any[] = [];
+    if (session) {
+      messages = await this.getSessionMessages(session.id, undefined, 100);
+    }
+
+    return {
+      order,
+      session,
+      messages,
+      transferProofs: order.transferProofs || [],
+    };
+  }
+
+  async sendOrderChatMessage(orderId: string, text: string) {
+    const order = await this.prisma.order.findUnique({
+      where: { id: orderId },
+    });
+    if (!order) {
+      throw new BadRequestException('Pedido no encontrado');
+    }
+
+    let sessionId = order.chatSessionId;
+    if (!sessionId && order.customerPhone) {
+      const chatInfo = await this.getOrderChat(orderId);
+      sessionId = chatInfo.session?.id || null;
+    }
+
+    if (sessionId) {
+      return this.sendDirectToSession(sessionId, text);
+    }
+
+    if (order.customerPhone) {
+      return this.sendMessage(order.customerPhone, text);
+    }
+
+    throw new BadRequestException('El pedido no cuenta con un número de teléfono o sesión de chat válida.');
+  }
 }

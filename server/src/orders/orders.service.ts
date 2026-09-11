@@ -1998,12 +1998,18 @@ export class OrdersService implements OnModuleInit {
     return updated;
   }
 
-  async getActiveOrders(search?: string) {
+  async getActiveOrders(search?: string, userRole?: string) {
     const cleanSearch = (search || '').trim();
+    const isDeliveryStaff = Boolean(
+      userRole &&
+      !['ADMIN', 'SUPERADMIN'].includes(userRole) &&
+      (['DELIVERY_MANAGER', 'DISPATCHER'].includes(userRole) || /dispatch|domicil/i.test(userRole))
+    );
+
     const where: any = {
       status: { notIn: ['DELIVERED', 'CANCELLED'] },
       tableId: null,
-      orderType: { in: ['DELIVERY', 'PICKUP'] },
+      orderType: isDeliveryStaff ? 'DELIVERY' : { in: ['DELIVERY', 'PICKUP'] },
     };
     if (cleanSearch) {
       const digitsOnly = cleanSearch.replace(/\D/g, '');

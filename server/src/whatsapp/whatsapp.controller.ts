@@ -35,7 +35,7 @@ export class WhatsappController {
 
   @Get('media/:mediaId')
   @UseGuards(JwtAuthGuard, PermissionsGuard)
-  @Permissions('whatsapp.view')
+  @Permissions('whatsapp.view', 'dispatch.view', 'orders.view')
   @ApiOperation({ summary: 'Proxy de archivos multimedia de WhatsApp Meta' })
   async streamMedia(@Param('mediaId') mediaId: string, @Res() res: express.Response) {
     return this.whatsappService.streamMedia(mediaId, res);
@@ -419,5 +419,27 @@ export class WhatsappController {
       throw new BadRequestException('Texto del chat no provisto');
     }
     return this.whatsappService.parseOrderWithGemini(text);
+  }
+
+  @Get('order-chat/:orderId')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @Permissions('whatsapp.view', 'dispatch.view', 'orders.view')
+  @ApiOperation({ summary: 'Obtener el chat real de WhatsApp asociado a un pedido' })
+  async getOrderChat(@Param('orderId') orderId: string) {
+    return this.whatsappService.getOrderChat(orderId);
+  }
+
+  @Post('order-chat/:orderId/send')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @Permissions('whatsapp.reply', 'dispatch.view', 'orders.view')
+  @ApiOperation({ summary: 'Enviar mensaje de WhatsApp al cliente de un pedido' })
+  async sendOrderChatMessage(
+    @Param('orderId') orderId: string,
+    @Body('text') text: string,
+  ) {
+    if (!text || !text.trim()) {
+      throw new BadRequestException('El mensaje no puede estar vacío');
+    }
+    return this.whatsappService.sendOrderChatMessage(orderId, text.trim());
   }
 }
