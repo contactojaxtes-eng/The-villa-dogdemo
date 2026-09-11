@@ -270,9 +270,18 @@ export class OrdersService implements OnModuleInit {
       }
     }
     if (params.search) {
-      const cleanSearch = params.search.trim();
+      const rawSearch = params.search.trim();
+      const cleanSearch = rawSearch.replace(/^#\s*/, '').replace(/^pedido\s+/i, '').trim();
       const digitsOnly = cleanSearch.replace(/\D/g, '');
       const searchNum = digitsOnly ? parseInt(digitsOnly, 10) : NaN;
+
+      const isExplicitOrderNumber = rawSearch.startsWith('#') || /^pedido\s+\d+/i.test(rawSearch);
+
+      // Si el usuario busca explícitamente un número de pedido (ej: "#7" o "pedido 12"),
+      // no limitar por fechas para que pueda encontrarlo en todo el historial
+      if (isExplicitOrderNumber) {
+        delete where.createdAt;
+      }
 
       const searchConditions: any[] = [
         { customerName: { contains: cleanSearch, mode: 'insensitive' } },
@@ -285,6 +294,21 @@ export class OrdersService implements OnModuleInit {
         { waiter: { name: { contains: cleanSearch, mode: 'insensitive' } } },
         { items: { some: { menuItem: { name: { contains: cleanSearch, mode: 'insensitive' } } } } },
       ];
+
+      if (rawSearch !== cleanSearch) {
+        searchConditions.push(
+          { customerName: { contains: rawSearch, mode: 'insensitive' } },
+          { notes: { contains: rawSearch, mode: 'insensitive' } }
+        );
+      }
+
+      if (digitsOnly && digitsOnly.length >= 4) {
+        searchConditions.push({ customerPhone: { contains: digitsOnly } });
+        if (digitsOnly.length === 10) {
+          searchConditions.push({ customerPhone: { contains: `57${digitsOnly}` } });
+          searchConditions.push({ customerPhone: { contains: `+57${digitsOnly}` } });
+        }
+      }
 
       // PostgreSQL `Int` es de 32 bits; un teléfono colombiano de 10 dígitos
       // no debe terminar como filtro de número de pedido fuera de rango.

@@ -602,15 +602,21 @@ export class PrintService {
       `Fecha: ${new Date(order.createdAt).toLocaleString('es-CO', { timeZone: 'America/Bogota', hour12: true })}`,
       divider,
       isTableOrder
-        ? `MESA: ${tableLabel.toUpperCase()}`
-        : `TIPO: ${order.orderType === 'DELIVERY' ? 'DOMICILIO 🛵' : 'PASAR A RECOGER 🏠'}`,
-      `Cliente: ${order.customerName.toUpperCase()}`,
-      `Teléfono: ${this.formatDisplayPhone(order.customerPhone, order.orderType, order.customer?.phone)}`,
+        ? `[BIG][BOLD]MESA: ${tableLabel.toUpperCase()}[/BOLD][/BIG]`
+        : `[BIG][BOLD]ENTREGA: ${order.orderType === 'DELIVERY' ? 'DOMICILIO 🛵' : 'PASAR A RECOGER 🏠'}[/BOLD][/BIG]`,
+      lineDivider,
+      `Cliente: [BOLD]${order.customerName.toUpperCase()}[/BOLD]`,
+      `[BIG][BOLD]TEL: ${this.formatDisplayPhone(order.customerPhone, order.orderType, order.customer?.phone)}[/BOLD][/BIG]`,
       ...(!isTableOrder ? [
-        `Dirección: ${fullAddress ? fullAddress.toUpperCase() : 'N/A'}`,
-        ...(barrio ? [`Barrio: ${barrio.toUpperCase()}`] : []),
-        ...(order.orderType === 'DELIVERY' ? [`Repartidor: ${(driverName || 'SIN ASIGNAR').toUpperCase()}`] : []),
+        ...(order.orderType === 'DELIVERY' ? [
+          `[BIG][BOLD]DIR: ${fullAddress ? fullAddress.toUpperCase() : 'N/A'}[/BOLD][/BIG]`,
+          ...(barrio ? [`[BOLD]BARRIO: ${barrio.toUpperCase()}[/BOLD]`] : []),
+          `Repartidor: [BOLD]${(driverName || 'SIN ASIGNAR').toUpperCase()}[/BOLD]`,
+        ] : [
+          `[BIG][BOLD]RETIRO: PASAR A RECOGER EN LOCAL[/BOLD][/BIG]`,
+        ]),
       ] : []),
+      lineDivider,
       `Medio de pago: ${this.formatPaymentMethodLabel(order)}`,
       `Estado: ${order.paymentStatus === 'CONFIRMED' ? 'PAGADO' : 'PENDIENTE DE PAGO'}`,
       `Atendido Por: ${(order.assignee?.name || order.waiter?.name || 'CAJERO').toUpperCase()}`,
@@ -804,11 +810,11 @@ export class PrintService {
       ...(isEdited ? [`Fecha Editado: ${new Date(order.updatedAt).toLocaleString('es-CO', { timeZone: 'America/Bogota', hour12: true })}`] : []),
       ...(order.diningTable?.label || order.tableId || order.orderType === 'LOCAL'
         ? [`[CENTER][BIG][BOLD]MESA: ${(order.diningTable?.label || order.tableName || (order.tableId ? 'MESA' : 'SALÓN')).toUpperCase()}[/BOLD][/BIG][/CENTER]`]
-        : [`[CENTER][BOLD]TIPO: ${order.orderType === 'DELIVERY' ? 'DOMICILIO' : 'RECOGER EN LOCAL'}[/BOLD][/CENTER]`]),
-      ...(order.customerName ? [`Cliente: ${order.customerName.toUpperCase()}`] : []),
-      ...(order.customerPhone ? [`Teléfono: ${this.formatDisplayPhone(order.customerPhone, order.orderType, order.customer?.phone)}`] : []),
-      ...(order.orderType === 'DELIVERY' && fullAddress ? [`Dirección: ${fullAddress.toUpperCase()}`] : []),
-      ...(order.orderType === 'DELIVERY' && barrio ? [`Barrio: ${barrio.toUpperCase()}`] : []),
+        : [`[CENTER][BIG][BOLD]ENTREGA: ${order.orderType === 'DELIVERY' ? '🛵 DOMICILIO' : '🏠 RECOGER EN LOCAL'}[/BOLD][/BIG][/CENTER]`]),
+      ...(order.customerName ? [`Cliente: [BOLD]${order.customerName.toUpperCase()}[/BOLD]`] : []),
+      ...(order.customerPhone ? [`[BIG][BOLD]TEL: ${this.formatDisplayPhone(order.customerPhone, order.orderType, order.customer?.phone)}[/BOLD][/BIG]`] : []),
+      ...(order.orderType === 'DELIVERY' && fullAddress ? [`[BIG][BOLD]DIR: ${fullAddress.toUpperCase()}[/BOLD][/BIG]`] : []),
+      ...(order.orderType === 'DELIVERY' && barrio ? [`[BOLD]BARRIO: ${barrio.toUpperCase()}[/BOLD]`] : []),
       `Atiende: ${waiterName}`,
       divider,
       isEdited ? '[BIG][BOLD]⚠️ PRODUCTOS EDITADOS (REVISAR):[/BOLD][/BIG]' : '[BIG][BOLD]PRODUCTOS A PREPARAR:[/BOLD][/BIG]',

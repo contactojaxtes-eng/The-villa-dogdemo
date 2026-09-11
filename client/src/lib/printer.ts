@@ -359,11 +359,11 @@ export function buildComandaText(
       `Fecha: ${new Date(order.createdAt).toLocaleString('es-CO', { timeZone: 'America/Bogota', hour12: true })}`,
       ...(order.diningTable?.label || order.tableId || order.orderType === 'LOCAL'
         ? [`[CENTER][HEIGHT][BOLD]MESA: ${(order.diningTable?.label || (order as any).tableName || (order.tableId ? 'MESA' : 'SALÓN')).toUpperCase()}[/BOLD][/HEIGHT][/CENTER]`]
-        : [`[CENTER][BOLD]TIPO: ${order.orderType === 'DELIVERY' ? 'DOMICILIO' : 'RECOGER EN LOCAL'}[/BOLD][/CENTER]`]),
-      ...(order.customerName ? [`Cliente: ${order.customerName.toUpperCase()}`] : []),
-      ...(order.customerPhone ? [`Teléfono: ${formatDisplayPhone(order.customerPhone, (order as any).customer?.phone)}`] : []),
-      ...(!(order.tableId || order.orderType === 'LOCAL') && fullAddress ? [`Dirección: ${fullAddress.toUpperCase()}`] : []),
-      ...(!(order.tableId || order.orderType === 'LOCAL') && barrio ? [`Barrio: ${barrio.toUpperCase()}`] : []),
+        : [`[CENTER][HEIGHT][BOLD]ENTREGA: ${order.orderType === 'DELIVERY' ? '🛵 DOMICILIO' : '🏠 RECOGER EN LOCAL'}[/BOLD][/HEIGHT][/CENTER]`]),
+      ...(order.customerName ? [`Cliente: [BOLD]${order.customerName.toUpperCase()}[/BOLD]`] : []),
+      ...(order.customerPhone ? [`[HEIGHT][BOLD]TEL: ${formatDisplayPhone(order.customerPhone, (order as any).customer?.phone)}[/BOLD][/HEIGHT]`] : []),
+      ...(!(order.tableId || order.orderType === 'LOCAL') && fullAddress ? [`[HEIGHT][BOLD]DIR: ${fullAddress.toUpperCase()}[/BOLD][/HEIGHT]`] : []),
+      ...(!(order.tableId || order.orderType === 'LOCAL') && barrio ? [`[BOLD]BARRIO: ${barrio.toUpperCase()}[/BOLD]`] : []),
       `Atiende: ${waiterName}`,
       divider,
       '[HEIGHT][BOLD]PRODUCTOS A PREPARAR:[/BOLD][/HEIGHT]',
@@ -464,15 +464,21 @@ export function buildComandaText(
       `Fecha: ${new Date(order.createdAt).toLocaleString('es-CO', { timeZone: 'America/Bogota', hour12: true })}`,
       divider,
       (order.tableId || order.orderType === 'LOCAL' || order.diningTable)
-        ? `MESA: ${(order.diningTable?.label || (order as any).tableName || (order.tableId ? 'MESA' : 'SALÓN')).toUpperCase()}`
-        : `TIPO: ${order.orderType === 'DELIVERY' ? 'DOMICILIO 🛵' : 'PASAR A RECOGER 🏠'}`,
-      `Cliente: ${order.customerName.toUpperCase()}`,
-      `Teléfono: ${formatDisplayPhone(order.customerPhone, (order as any).customer?.phone)}`,
+        ? `[BIG][BOLD]MESA: ${(order.diningTable?.label || (order as any).tableName || (order.tableId ? 'MESA' : 'SALÓN')).toUpperCase()}[/BOLD][/BIG]`
+        : `[BIG][BOLD]ENTREGA: ${order.orderType === 'DELIVERY' ? 'DOMICILIO 🛵' : 'PASAR A RECOGER 🏠'}[/BOLD][/BIG]`,
+      lineDivider,
+      `Cliente: [BOLD]${order.customerName.toUpperCase()}[/BOLD]`,
+      `[BIG][BOLD]TEL: ${formatDisplayPhone(order.customerPhone, (order as any).customer?.phone)}[/BOLD][/BIG]`,
       ...(!(order.tableId || order.orderType === 'LOCAL') ? [
-        `Dirección: ${fullAddress ? fullAddress.toUpperCase() : 'N/A'}`,
-        ...(barrio ? [`Barrio: ${barrio.toUpperCase()}`] : []),
-        ...(order.orderType === 'DELIVERY' ? [`Repartidor: ${(driverName || 'SIN ASIGNAR').toUpperCase()}`] : []),
+        ...(order.orderType === 'DELIVERY' ? [
+          `[BIG][BOLD]DIR: ${fullAddress ? fullAddress.toUpperCase() : 'N/A'}[/BOLD][/BIG]`,
+          ...(barrio ? [`[BOLD]BARRIO: ${barrio.toUpperCase()}`] : []),
+          `Repartidor: [BOLD]${(driverName || 'SIN ASIGNAR').toUpperCase()}[/BOLD]`,
+        ] : [
+          `[BIG][BOLD]RETIRO: PASAR A RECOGER EN LOCAL[/BOLD][/BIG]`,
+        ]),
       ] : []),
+      lineDivider,
       `Medio de pago: ${formatPaymentMethodLabel(order)}`,
       `Estado: ${order.paymentStatus === 'CONFIRMED' ? 'PAGADO' : 'PENDIENTE DE PAGO'}`,
       `Atendido Por: ${(order.assignee?.name || order.waiter?.name || 'CAJERO').toUpperCase()}`,

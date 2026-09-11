@@ -96,13 +96,15 @@ export function printComanda(order: ComandaOrder) {
       </div>
     ` : `<div class="order-num">#${order.orderNumber}</div>`)}
     <div style="text-align:center;margin-bottom:8px;">
+      <span class="badge" style="font-size:13px; font-weight:900; padding:4px 8px; background:#000; color:#fff;">${order.orderType === 'PICKUP' ? '🏠 PASAR A RECOGER' : '🛵 DOMICILIO'}</span>
       <span class="badge">${getStatusLabel(order.status)}</span>
       <span class="badge">${paymentLabels[order.paymentMethod] || order.paymentMethod}</span>
     </div>
     <div class="section">
       <div class="label">Cliente</div>
-      <div class="value">${order.customerName}</div>
-      <div class="value">${(() => {
+      <div class="value" style="font-size:15px; font-weight:800;">${order.customerName}</div>
+      <div class="label" style="margin-top:6px;">Teléfono</div>
+      <div class="value" style="font-size:17px; font-weight:900; color:#000; letter-spacing:0.5px;">${(() => {
         const raw = (order.customerPhone || '').trim();
         const digits = raw.replace(/\D/g, '');
         if (digits === '3000000000' || raw.toLowerCase().includes('mostrador')) return 'Consumo en restaurante / Mostrador';
@@ -115,13 +117,13 @@ export function printComanda(order: ComandaOrder) {
     ${((order as any).tableId || order.orderType === 'LOCAL' || (order as any).diningTable) ? `
     <div class="section">
       <div class="label">Mesa / Salón</div>
-      <div class="address">${(((order as any).diningTable?.label || (order as any).tableName || 'Mesa / Salón')).toUpperCase()}</div>
+      <div class="address" style="font-size:17px; font-weight:900;">${(((order as any).diningTable?.label || (order as any).tableName || 'Mesa / Salón')).toUpperCase()}</div>
     </div>
     ` : `
     <div class="section">
       <div class="label">Dirección de entrega</div>
-      <div class="address">${fullAddress || 'N/A'}</div>
-      ${order.zone ? `<div class="value" style="margin-top:4px;">Barrio: ${order.zone.name}${order.zone.zoneGroup ? ` (${order.zone.zoneGroup})` : ''}</div>` : ''}
+      <div class="address" style="font-size:17px; font-weight:900; color:#000; line-height:1.3;">${fullAddress || 'N/A'}</div>
+      ${order.zone ? `<div class="value" style="margin-top:4px; font-size:14px; font-weight:800;">Barrio: ${order.zone.name}${order.zone.zoneGroup ? ` (${order.zone.zoneGroup})` : ''}</div>` : ''}
     </div>
     `}
     <div class="section">

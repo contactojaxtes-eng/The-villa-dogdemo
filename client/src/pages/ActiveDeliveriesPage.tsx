@@ -9,7 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { api } from '@/lib/api'
 import { useAuth } from '@/hooks/useAuth'
 import { statusAccent, statusOrder } from '@/lib/brand'
-import { formatCurrency, formatDate, getStatusColor, getStatusLabel, cleanNotes, groupOrderItems, formatThousandsInput, parseThousandsInput, cn } from '@/lib/utils'
+import { formatCurrency, formatDate, formatTimeOnly, getStatusColor, getStatusLabel, cleanNotes, groupOrderItems, formatThousandsInput, parseThousandsInput, cn } from '@/lib/utils'
 import { 
   Search, 
   RefreshCw, 
@@ -35,7 +35,9 @@ import {
   DollarSign, 
   Edit,
   ClipboardList,
-  AlertTriangle
+  AlertTriangle,
+  Send,
+  Store
 } from 'lucide-react'
 import { type Socket } from 'socket.io-client'
 import { io } from '@/lib/socket'
@@ -811,6 +813,7 @@ export default function ActiveDeliveriesPage() {
                       const whatsapp = phoneDigits ? `https://wa.me/57${phoneDigits}?text=${whatsappMsg}` : '#'
                       const elapsed = getElapsedTime(order.createdAt)
                       const elapsedMinutes = getElapsedMinutes(order.createdAt)
+                      const routeElapsed = getElapsedTime(order.updatedAt || order.createdAt)
                       const waitingForDispatch = isWaitingForDispatch(order)
                       const isUrgent = waitingForDispatch && elapsedMinutes >= DISPATCH_ALERT_MINUTES
                       const isWarning = waitingForDispatch && !isUrgent && elapsedMinutes >= DISPATCH_WARNING_MINUTES
@@ -835,23 +838,56 @@ export default function ActiveDeliveriesPage() {
                             </div>
                           </td>
                           <td className="px-3 py-2.5">
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold uppercase"
-                              style={{ color: getStatusColor(order.status), backgroundColor: `${getStatusColor(order.status)}15`, border: `1px solid ${getStatusColor(order.status)}25` }}>
-                              {getStatusLabel(order.status)}
-                            </span>
+                            <div className="flex flex-col gap-1 items-start">
+                              <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-black uppercase tracking-wide ${
+                                order.orderType === 'PICKUP'
+                                  ? 'bg-purple-600 text-white shadow-sm'
+                                  : 'bg-blue-600 text-white shadow-sm'
+                              }`}>
+                                {order.orderType === 'PICKUP' ? '🏠 Recoger' : '🛵 Domicilio'}
+                              </span>
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-extrabold uppercase"
+                                style={{ color: getStatusColor(order.status), backgroundColor: `${getStatusColor(order.status)}15`, border: `1px solid ${getStatusColor(order.status)}25` }}>
+                                {getStatusLabel(order.status)}
+                              </span>
+                            </div>
                           </td>
                           <td className="px-3 py-2.5">
-                            <div className="font-bold text-[var(--text-primary)] text-xs truncate max-w-[140px]">{order.customerName}</div>
-                            <div className="text-[10px] text-[var(--text-muted)]">{order.customerPhone}</div>
+                            <div className="font-black text-[var(--text-primary)] text-sm tracking-tight truncate max-w-[160px]">{order.customerName}</div>
+                            <a href={`tel:${order.customerPhone}`} className="text-sm font-black text-[var(--accent)] hover:underline inline-flex items-center gap-1.5 mt-0.5 tracking-wider bg-[var(--accent)]/10 px-2 py-0.5 rounded-md">
+                              <Phone className="h-3.5 w-3.5 shrink-0" />
+                              <span>{order.customerPhone}</span>
+                            </a>
                           </td>
                           <td className="px-3 py-2.5">
-                            <div className="text-[11px] text-[var(--text-secondary)] truncate max-w-[160px]" title={order.zone?.name || order.customerAddress}>{order.zone ? order.zone.name : order.customerAddress}</div>
-                            {order.zone && order.customerAddress && <span className="text-[9px] text-[var(--text-muted)] font-semibold truncate max-w-[160px] block" title={order.customerAddress}>{order.customerAddress}</span>}
+                            {order.orderType === 'PICKUP' ? (
+                              <div className="inline-flex items-center gap-1.5 text-xs font-black text-purple-700 dark:text-purple-300 bg-purple-500/15 px-2.5 py-1 rounded-lg border border-purple-500/30 uppercase">
+                                <Store className="h-4 w-4 shrink-0" />
+                                <span>Retira en restaurante</span>
+                              </div>
+                            ) : (
+                              <div className="flex flex-col gap-1 max-w-[210px]">
+                                {order.zone && (
+                                  <span className="text-xs font-black text-[var(--accent)] uppercase flex items-center gap-1">
+                                    <MapPin className="h-3.5 w-3.5 text-[var(--accent)] shrink-0" />
+                                    <span className="truncate">{order.zone.name}</span>
+                                  </span>
+                                )}
+                                <span className="text-sm font-extrabold text-[var(--text-primary)] leading-tight break-words" title={order.customerAddress}>
+                                  {order.customerAddress || 'Sin dirección'}
+                                </span>
+                                {order.addressReference && (
+                                  <span className="text-xs font-semibold text-[var(--text-muted)] italic truncate" title={order.addressReference}>
+                                    Ref: {order.addressReference}
+                                  </span>
+                                )}
+                              </div>
+                            )}
                           </td>
                           <td className="px-3 py-2.5">
                             {order.orderType === 'PICKUP' || order.orderType === 'LOCAL' ? (
                               <div className="flex items-center gap-1.5 flex-wrap">
-                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg border text-[10px] font-bold text-blue-600 bg-blue-500/10 border-blue-500/30">
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg border text-[10px] font-bold text-purple-700 bg-purple-500/10 border-purple-500/30">
                                   {order.orderType === 'PICKUP' ? 'Pasar a Recoger' : 'Mostrador'}
                                 </span>
                                 {hasPermission('dispatch.change_status') && order.orderType === 'PICKUP' && order.status !== 'READY' && order.status !== 'DELIVERED' && order.status !== 'CANCELLED' && (
@@ -872,56 +908,103 @@ export default function ActiveDeliveriesPage() {
                                 )}
                               </div>
                             ) : ['DELIVERED', 'CANCELLED'].includes(order.status) ? (
-                              <span
-                                className="text-[10px] font-bold px-2 py-0.5 rounded-lg border text-emerald-600 bg-emerald-500/10 border-emerald-500/30 cursor-default inline-flex items-center gap-1 opacity-85"
-                                title="Pedido finalizado"
-                              >
-                                <Bike className="h-3 w-3" />
-                                <span>{order.deliveryDriver ? order.deliveryDriver.name : 'Sin Repartidor'}</span>
-                              </span>
+                              <div className="flex flex-col gap-0.5">
+                                <span
+                                  className="text-[10px] font-bold px-2 py-0.5 rounded-lg border text-emerald-600 bg-emerald-500/10 border-emerald-500/30 cursor-default inline-flex items-center gap-1 opacity-85"
+                                  title="Pedido finalizado"
+                                >
+                                  <Bike className="h-3 w-3" />
+                                  <span>{order.deliveryDriver ? order.deliveryDriver.name : 'Sin Repartidor'}</span>
+                                </span>
+                                {order.deliveryDriver && order.updatedAt && (
+                                  <span className="text-[9px] font-semibold text-[var(--text-muted)] pl-1">
+                                    Salió: {formatTimeOnly(order.updatedAt)}
+                                  </span>
+                                )}
+                              </div>
                             ) : hasPermission('dispatch.change_status') ? (
-                              <button
-                                onClick={() => {
-                                  setSelectedDriverId(order.deliveryDriverId || '')
-                                  setRegisteringDriverInline(false)
-                                  setInlineDriverName('')
-                                  setInlineDriverPhone('')
-                                  setDispatchError('')
-                                  setDispatchDialog({ order, shouldKick: false })
-                                }}
-                                className={`text-[10px] font-bold px-2 py-0.5 rounded-lg border transition-colors cursor-pointer inline-flex items-center gap-1 ${
-                                  order.deliveryDriver
-                                    ? 'text-emerald-600 bg-emerald-500/10 border-emerald-500/30 hover:bg-emerald-500/20'
-                                    : 'text-amber-600 bg-amber-500/10 border-amber-500/20 hover:bg-amber-500/20'
-                                }`}
-                                title={order.deliveryDriver ? 'Hacer clic para cambiar repartidor' : 'Hacer clic para asignar repartidor'}
-                              >
-                                <Bike className="h-3 w-3" />
-                                <span>{order.deliveryDriver ? order.deliveryDriver.name : '⚠ Asignar'}</span>
-                              </button>
+                              <div className="flex flex-col gap-1 items-start">
+                                <button
+                                  onClick={() => {
+                                    setSelectedDriverId(order.deliveryDriverId || '')
+                                    setRegisteringDriverInline(false)
+                                    setInlineDriverName('')
+                                    setInlineDriverPhone('')
+                                    setDispatchError('')
+                                    setDispatchDialog({ order, shouldKick: false })
+                                  }}
+                                  className={`text-[11px] font-black px-2 py-0.5 rounded-lg border transition-colors cursor-pointer inline-flex items-center gap-1 ${
+                                    order.deliveryDriver
+                                      ? 'text-emerald-700 dark:text-emerald-300 bg-emerald-500/15 border-emerald-500/30 hover:bg-emerald-500/25'
+                                      : 'text-amber-700 bg-amber-500/15 border-amber-500/30 hover:bg-amber-500/25 animate-pulse'
+                                  }`}
+                                  title={order.deliveryDriver ? 'Hacer clic para cambiar repartidor' : 'Hacer clic para asignar repartidor'}
+                                >
+                                  <Bike className="h-3.5 w-3.5" />
+                                  <span>{order.deliveryDriver ? order.deliveryDriver.name : '⚠ Asignar'}</span>
+                                </button>
+                                {order.deliveryDriver && order.updatedAt && (
+                                  <span className="text-[9px] font-black text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 px-1.5 py-0.5 rounded flex items-center gap-1" title={`Despachado a las ${formatTimeOnly(order.updatedAt)}`}>
+                                    <Send className="h-2.5 w-2.5 shrink-0" />
+                                    <span>Salió: {formatTimeOnly(order.updatedAt)}</span>
+                                  </span>
+                                )}
+                              </div>
                             ) : (
-                              <span className="text-[10px] font-bold px-2 py-0.5 rounded-lg border text-[var(--text-muted)] bg-[var(--bg-subtle)] border-[var(--border-subtle)] inline-flex items-center gap-1">
-                                <Bike className="h-3 w-3" />
-                                <span>{order.deliveryDriver?.name || 'Sin repartidor'}</span>
-                              </span>
+                              <div className="flex flex-col gap-0.5">
+                                <span className="text-[10px] font-bold px-2 py-0.5 rounded-lg border text-[var(--text-muted)] bg-[var(--bg-subtle)] border-[var(--border-subtle)] inline-flex items-center gap-1">
+                                  <Bike className="h-3 w-3" />
+                                  <span>{order.deliveryDriver?.name || 'Sin repartidor'}</span>
+                                </span>
+                                {order.deliveryDriver && order.updatedAt && (
+                                  <span className="text-[9px] font-semibold text-[var(--text-muted)] pl-1">
+                                    Salió: {formatTimeOnly(order.updatedAt)}
+                                  </span>
+                                )}
+                              </div>
                             )}
                           </td>
                           <td className="px-3 py-2.5 text-right">
                             <span className="font-black text-sm text-[var(--text-primary)]">{formatCurrency(order.total)}</span>
                           </td>
                           <td className="px-3 py-2.5">
-                            <span className={`inline-flex items-center gap-1 rounded-lg px-2 py-1 text-[10px] font-black ${
-                              isUrgent
-                                ? 'bg-red-600 text-white shadow-sm shadow-red-500/20'
-                                : isWarning
-                                  ? 'bg-amber-500/15 text-amber-600'
-                                  : waitingForDispatch
-                                    ? 'bg-emerald-500/10 text-emerald-600'
-                                    : 'bg-blue-500/10 text-blue-600'
-                            }`}>
-                              {isUrgent ? <AlertTriangle className="h-3 w-3" /> : <Clock className="h-3 w-3" />}
-                              {isUrgent ? `Debe salir · ${elapsed}` : isWarning ? `Por salir · ${elapsed}` : waitingForDispatch ? elapsed : `En ruta · ${elapsed}`}
-                            </span>
+                            {order.status === 'IN_ROUTE' || order.deliveryDriver ? (
+                              <div className="flex flex-col gap-0.5">
+                                <span className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] font-black bg-blue-500/15 text-blue-700 dark:text-blue-300 border border-blue-500/25">
+                                  <Clock className="h-3 w-3 text-blue-600" />
+                                  En ruta · {routeElapsed}
+                                </span>
+                                <span className="text-[9px] font-bold text-[var(--text-muted)] pl-0.5">
+                                  Salió {formatTimeOnly(order.updatedAt)}
+                                </span>
+                              </div>
+                            ) : order.orderType === 'PICKUP' ? (
+                              <div className="flex flex-col gap-0.5">
+                                <span className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] font-black bg-purple-500/15 text-purple-700 dark:text-purple-300 border border-purple-500/25">
+                                  <Clock className="h-3 w-3 text-purple-600" />
+                                  {order.status === 'READY' ? 'Listo' : `Espera · ${elapsed}`}
+                                </span>
+                                <span className="text-[9px] font-bold text-[var(--text-muted)] pl-0.5">
+                                  Pedido {formatTimeOnly(order.createdAt)}
+                                </span>
+                              </div>
+                            ) : (
+                              <div className="flex flex-col gap-0.5">
+                                <span className={`inline-flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] font-black ${
+                                  isUrgent
+                                    ? 'bg-red-600 text-white shadow-sm shadow-red-500/20'
+                                    : isWarning
+                                      ? 'bg-amber-500/15 text-amber-600'
+                                      : 'bg-emerald-500/10 text-emerald-600'
+                                }`}>
+                                  {isUrgent ? <AlertTriangle className="h-3 w-3" /> : <Clock className="h-3 w-3" />}
+                                  {isUrgent ? `Debe salir · ${elapsed}` : isWarning ? `Por salir · ${elapsed}` : `Espera · ${elapsed}`}
+                                </span>
+                                <span className="text-[9px] font-bold text-[var(--text-muted)] pl-0.5">
+                                  Pedido {formatTimeOnly(order.createdAt)}
+                                </span>
+                              </div>
+                            )}
                           </td>
                           <td className="px-3 py-2.5">
                             <div className="flex flex-col gap-1 items-start">

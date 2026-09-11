@@ -36,7 +36,8 @@ import {
   DollarSign, 
   Edit,
   ClipboardList,
-  AlertTriangle
+  AlertTriangle,
+  Store
 } from 'lucide-react'
 import { type Socket } from 'socket.io-client'
 import { io } from '@/lib/socket'
@@ -160,8 +161,16 @@ export default function OrdersPage() {
 
   const handleSearch = () => {
     setCurrentPage(1)
-    setSubmittedSearch(search)
+    setSubmittedSearch(search.trim())
   }
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setSubmittedSearch(search.trim())
+      setCurrentPage(1)
+    }, 300)
+    return () => clearTimeout(timer)
+  }, [search])
   const todayStr = useMemo(() => getLocalDateString(), [])
   const [startDate, setStartDate] = useState(todayStr)
   const [endDate, setEndDate] = useState(todayStr)
@@ -826,6 +835,17 @@ export default function OrdersPage() {
               <Package className="mx-auto h-12 w-12 text-[var(--text-muted)] animate-pulse" />
               <p className="text-[var(--text-primary)] font-bold text-sm">No se encontraron pedidos</p>
               <p className="text-xs text-[var(--text-secondary)] max-w-sm mx-auto">Intenta ajustar los filtros de búsqueda, cambiar la fecha del filtro o refrescar el listado.</p>
+              {datePreset !== 'all' && (
+                <div className="pt-2">
+                  <Button 
+                    variant="outline"
+                    onClick={() => applyDatePreset('all')}
+                    className="text-xs font-black border-[var(--accent)]/40 text-[var(--accent)] hover:bg-[var(--accent)]/10 rounded-xl cursor-pointer"
+                  >
+                    🔍 Buscar en todo el historial sin límite de fecha
+                  </Button>
+                </div>
+              )}
             </CardContent>
           </Card>
         )}
@@ -880,12 +900,12 @@ export default function OrdersPage() {
                           {getStatusLabel(order.status)}
                         </Badge>
                         {isPickup ? (
-                          <Badge className="bg-[var(--purple)] text-white text-[10px] rounded-full px-2 py-0.5 font-bold shadow-sm flex items-center gap-1">
-                            <Package className="h-3 w-3" /> Recoger
+                          <Badge className="bg-purple-600 text-white text-xs px-2.5 py-1 font-black rounded-lg shadow-sm flex items-center gap-1.5 uppercase tracking-wide">
+                            <Store className="h-3.5 w-3.5" /> PASAR A RECOGER
                           </Badge>
                         ) : (
-                          <Badge className="bg-blue-600 text-white text-[10px] rounded-full px-2 py-0.5 font-bold shadow-sm flex items-center gap-1">
-                            <Bike className="h-3 w-3" /> Domicilio
+                          <Badge className="bg-blue-600 text-white text-xs px-2.5 py-1 font-black rounded-lg shadow-sm flex items-center gap-1.5 uppercase tracking-wide">
+                            <Bike className="h-3.5 w-3.5" /> DOMICILIO
                           </Badge>
                         )}
                         <Badge variant="secondary" className="bg-[var(--bg-elevated)] text-[var(--text-secondary)] border border-[var(--border-default)] px-2.5 py-0.5 rounded-full text-[10px] font-bold">
@@ -914,29 +934,42 @@ export default function OrdersPage() {
                     {/* Middle Section: Customer info & Items Grid */}
                     <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
                       {/* Left: Customer Info */}
-                      <div className="lg:col-span-7 space-y-2 min-w-0">
+                      <div className="lg:col-span-7 space-y-2.5 min-w-0">
                         <div>
-                          <p className="font-extrabold text-[var(--text-primary)] text-base leading-snug">{order.customerName}</p>
+                          <p className="font-black text-[var(--text-primary)] text-lg leading-snug">{order.customerName}</p>
                         </div>
                         
-                        <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs font-semibold">
-                          <a className="flex items-center gap-1 hover:text-[var(--text-primary)] transition-colors text-[var(--accent)]" href={`tel:${order.customerPhone}`}>
-                            <Phone className="h-3.5 w-3.5" />{order.customerPhone}
-                          </a>
-                          <span className="flex min-w-0 items-center gap-1 text-[var(--text-secondary)]">
-                            <MapPin className="h-3.5 w-3.5 text-[var(--text-muted)] shrink-0" />
-                            <span className="truncate">{order.zone ? order.zone.name : order.customerAddress}</span>
-                          </span>
-                          {order.zone && order.customerAddress && (
-                            <Badge variant="outline" className="text-[10px] py-0 rounded-md border-[var(--border-default)] font-bold text-[var(--text-muted)] truncate max-w-full block">
-                              {order.customerAddress}
-                            </Badge>
+                        <div className="flex flex-wrap items-center gap-2.5">
+                          {order.customerPhone && (
+                            <a 
+                              className="inline-flex items-center gap-1.5 text-sm font-black text-[var(--accent)] bg-[var(--accent)]/10 hover:bg-[var(--accent)]/20 px-3 py-1 rounded-lg transition-colors border border-[var(--accent)]/20 shadow-sm" 
+                              href={`tel:${order.customerPhone}`}
+                              title="Llamar al cliente"
+                            >
+                              <Phone className="h-4 w-4 shrink-0 text-[var(--accent)]" />
+                              <span>{order.customerPhone}</span>
+                            </a>
                           )}
+                          <div className="inline-flex items-center gap-1.5 text-sm font-extrabold text-[var(--text-primary)] bg-[var(--bg-elevated)] px-3 py-1 rounded-lg border border-[var(--border-default)] shadow-sm max-w-full flex-wrap">
+                            <MapPin className="h-4 w-4 text-[var(--accent)] shrink-0" />
+                            {isPickup ? (
+                              <span className="text-purple-600 dark:text-purple-400 font-black uppercase">Retira en restaurante</span>
+                            ) : (
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className="font-extrabold text-sm">{order.customerAddress || 'Sin dirección registrada'}</span>
+                                {order.zone && (
+                                  <Badge variant="secondary" className="bg-[var(--accent)]/15 text-[var(--accent)] text-xs font-black uppercase px-2 py-0.5 border border-[var(--accent)]/30">
+                                    {order.zone.name}
+                                  </Badge>
+                                )}
+                              </div>
+                            )}
+                          </div>
                         </div>
 
                         {order.addressReference && (
-                          <p className="text-[11px] text-[var(--text-muted)] italic leading-relaxed truncate">
-                            Ref: {order.addressReference}
+                          <p className="text-xs text-[var(--text-secondary)] font-semibold italic flex items-center gap-1">
+                            <span>📍 Ref:</span> {order.addressReference}
                           </p>
                         )}
 
@@ -1573,31 +1606,51 @@ export default function OrdersPage() {
             return (
               <div className="space-y-4">
                 <DialogHeader className="pb-2 border-b border-[var(--border-subtle)]">
-                  <DialogTitle className="flex items-center justify-between">
+                  <DialogTitle className="flex items-center justify-between flex-wrap gap-2">
                     <div>
                       <span className="text-2xl font-black text-[var(--text-primary)]">Factura #{o.invoiceNumber || o.orderNumber}</span>
                       <span className="text-xs text-[var(--text-muted)] font-bold ml-2">(Turno #{o.orderNumber})</span>
                     </div>
-                    <Badge className="px-3 py-1 rounded-full text-[11px] font-bold uppercase tracking-wider"
-                      style={{ color: getStatusColor(o.status), backgroundColor: `${getStatusColor(o.status)}15`, border: `1px solid ${getStatusColor(o.status)}25` }}>
-                      {getStatusLabel(o.status)}
-                    </Badge>
+                    <div className="flex items-center gap-2">
+                      {o.orderType === 'PICKUP' ? (
+                        <Badge className="bg-purple-600 text-white text-xs px-2.5 py-1 font-black rounded-lg uppercase tracking-wide flex items-center gap-1">
+                          <Store className="h-3.5 w-3.5" /> PASAR A RECOGER
+                        </Badge>
+                      ) : (
+                        <Badge className="bg-blue-600 text-white text-xs px-2.5 py-1 font-black rounded-lg uppercase tracking-wide flex items-center gap-1">
+                          <Bike className="h-3.5 w-3.5" /> DOMICILIO
+                        </Badge>
+                      )}
+                      <Badge className="px-3 py-1 rounded-full text-[11px] font-bold uppercase tracking-wider"
+                        style={{ color: getStatusColor(o.status), backgroundColor: `${getStatusColor(o.status)}15`, border: `1px solid ${getStatusColor(o.status)}25` }}>
+                        {getStatusLabel(o.status)}
+                      </Badge>
+                    </div>
                   </DialogTitle>
                 </DialogHeader>
 
                 {/* Info Grid */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <div className="p-3 rounded-xl bg-[var(--bg-subtle)] border border-[var(--border-subtle)] space-y-1.5">
-                    <p className="text-[10px] font-extrabold text-[var(--text-muted)] uppercase tracking-wider flex items-center gap-1"><User className="h-3 w-3" /> Cliente</p>
-                    <p className="text-sm font-bold text-[var(--text-primary)]">{o.customerName}</p>
-                    <a href={`tel:${o.customerPhone}`} className="text-xs text-[var(--accent)] font-semibold flex items-center gap-1 hover:underline">
-                      <Phone className="h-3 w-3" /> {o.customerPhone}
+                  <div className="p-3.5 rounded-xl bg-[var(--bg-subtle)] border border-[var(--border-subtle)] space-y-2">
+                    <p className="text-[10px] font-extrabold text-[var(--text-muted)] uppercase tracking-wider flex items-center gap-1"><User className="h-3 w-3" /> Datos del Cliente</p>
+                    <p className="text-base font-black text-[var(--text-primary)]">{o.customerName}</p>
+                    <a href={`tel:${o.customerPhone}`} className="text-sm font-black text-[var(--accent)] flex items-center gap-1.5 hover:underline bg-[var(--accent)]/10 px-2.5 py-1 rounded-lg w-fit">
+                      <Phone className="h-4 w-4" /> {o.customerPhone}
                     </a>
-                    <p className="text-xs text-[var(--text-secondary)] flex items-start gap-1">
-                      <MapPin className="h-3 w-3 shrink-0 mt-0.5" /> {o.zone ? o.zone.name : o.customerAddress}
-                    </p>
-                    {o.zone && o.customerAddress && <p className="text-[10px] text-[var(--text-muted)] font-bold">{o.customerAddress}</p>}
-                    {o.addressReference && <p className="text-[10px] text-[var(--text-muted)] italic">Ref: {o.addressReference}</p>}
+                    <div className="text-sm font-extrabold text-[var(--text-primary)] flex items-start gap-1.5 pt-0.5">
+                      <MapPin className="h-4 w-4 text-[var(--accent)] shrink-0 mt-0.5" /> 
+                      <div>
+                        {o.orderType === 'PICKUP' ? (
+                          <span className="text-purple-600 dark:text-purple-400 font-black">Retira en restaurante</span>
+                        ) : (
+                          <>
+                            <span>{o.customerAddress || 'Sin dirección'}</span>
+                            {o.zone && <span className="text-xs font-black text-[var(--accent)] ml-1">({o.zone.name})</span>}
+                          </>
+                        )}
+                      </div>
+                    </div>
+                    {o.addressReference && <p className="text-xs text-[var(--text-secondary)] font-medium italic">Ref: {o.addressReference}</p>}
                   </div>
 
                   <div className="p-3 rounded-xl bg-[var(--bg-subtle)] border border-[var(--border-subtle)] space-y-1.5">
