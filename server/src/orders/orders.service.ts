@@ -1445,7 +1445,9 @@ export class OrdersService implements OnModuleInit {
           const driverPhoneInfo = driver?.phone ? ` (${driver.phone})` : '';
           text = `¡Hola ${updated.customerName}! Tu pedido ya va en camino ${driverInfo}${driverPhoneInfo}. ¡Gracias por tu compra en The Villa Dog!`;
         } else if (status === 'DELIVERED') {
-          text = `¡Hola ${updated.customerName}! Tu pedido ha sido entregado con éxito. ¡Gracias por tu compra y buen provecho!`;
+          if (updated.orderType !== 'PICKUP') {
+            text = `¡Hola ${updated.customerName}! Tu pedido ha sido entregado con éxito. ¡Gracias por tu compra y buen provecho!`;
+          }
         }
 
         if (text) {

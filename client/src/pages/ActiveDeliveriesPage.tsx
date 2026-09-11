@@ -77,6 +77,8 @@ interface Order {
   source?: string | null
   deliveryDriverId?: string | null
   deliveryDriver?: { id: string; name: string; phone: string } | null
+  cashAmount?: number | null
+  transferAmount?: number | null
 }
 
 const IMPOCONSUMO_RATE = 0.08
@@ -136,6 +138,25 @@ const stagger = {
   visible: { transition: { staggerChildren: 0.04 } },
 }
 
+function getOrderBreakdown(order: Order) {
+  const method = (order.paymentMethod || 'CASH').toUpperCase()
+  let cash = 0
+  let transfer = 0
+  const total = Number(order.total) || 0
+
+  if (method === 'CASH') {
+    cash = typeof order.cashAmount === 'number' ? order.cashAmount : total
+  } else if (['TRANSFER', 'NEQUI', 'BANCOLOMBIA', 'DAVIPLATA'].includes(method)) {
+    transfer = typeof order.transferAmount === 'number' ? order.transferAmount : total
+  } else if (method === 'MIXED') {
+    cash = typeof order.cashAmount === 'number' ? order.cashAmount : 0
+    transfer = typeof order.transferAmount === 'number'
+      ? order.transferAmount
+      : Math.max(0, total - cash)
+  }
+  return { cash, transfer, total }
+}
+
 export default function ActiveDeliveriesPage() {
   const { user, hasPermission } = useAuth()
   const isAdmin = ['SUPERADMIN', 'ADMIN'].includes(user?.role || '')
@@ -167,11 +188,22 @@ export default function ActiveDeliveriesPage() {
   const [dispatchDialog, setDispatchDialog] = useState<{ order: any; shouldKick: boolean } | null>(null)
   const [drivers, setDrivers] = useState<any[]>([])
   const [selectedDriverId, setSelectedDriverId] = useState<string>('')
+  const [selectedDriverFilter, setSelectedDriverFilter] = useState<string>('ALL')
   const [driverSearch, setDriverSearch] = useState<string>('')
   const [inlineDriverName, setInlineDriverName] = useState('')
   const [inlineDriverPhone, setInlineDriverPhone] = useState('')
   const [registeringDriverInline, setRegisteringDriverInline] = useState(false)
   const [dispatchError, setDispatchError] = useState('')
+
+  const allAvailableDrivers = useMemo(() => {
+    const list = [...drivers]
+    for (const ord of orders) {
+      if (ord.deliveryDriver && !list.some(d => d.id === ord.deliveryDriver!.id)) {
+        list.push(ord.deliveryDriver)
+      }
+    }
+    return list.sort((a, b) => (a.name || '').localeCompare(b.name || ''))
+  }, [drivers, orders])
 
   const [selectedOrderIds, setSelectedOrderIds] = useState<string[]>([])
   const [batchDispatchOpen, setBatchDispatchOpen] = useState(false)
@@ -516,6 +548,13 @@ export default function ActiveDeliveriesPage() {
   }, [user, loadOrders, loadDrivers])
 
   useEffect(() => {
+    const timer = setTimeout(() => {
+      setSubmittedSearch(searchQuery.trim())
+    }, 350)
+    return () => clearTimeout(timer)
+  }, [searchQuery])
+
+  useEffect(() => {
     const params = new URLSearchParams()
     if (submittedSearch) params.set('search', submittedSearch)
     setSearchParams(params, { replace: true })
@@ -531,24 +570,37 @@ export default function ActiveDeliveriesPage() {
     setSubmittedSearch(searchQuery.trim())
   }
 
-  // La API entrega todos los pedidos activos y la búsqueda se completa aquí
-  // para incluir también teléfono, barrio, dirección y productos de la comanda.
-  // Así el filtro sigue funcionando aunque el servidor aún tenga una versión
-  // antigua del parámetro `search`.
+  // Búsqueda instantánea y filtro por repartidor en tiempo real.
+  // Incluye nombre de cliente, teléfono, barrio, dirección, domiciliario y productos.
   const visibleOrders = useMemo(() => {
-    const query = submittedSearch.trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-    const matchingOrders = !query ? [...orders] : orders.filter(order => {
-      const itemText = (order.items || []).map(item => item.menuItem?.name || '').join(' ')
-      const haystack = [
-        order.orderNumber,
-        order.customerName,
-        order.customerPhone,
-        order.customerAddress,
-        order.zone?.name,
-        order.deliveryDriver?.name,
-        itemText,
-      ].filter(Boolean).join(' ').toString().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-      return haystack.includes(query)
+    const query = searchQuery.trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    const matchingOrders = orders.filter(order => {
+      // 1. Filtro por dropdown de repartidor
+      if (selectedDriverFilter === 'UNASSIGNED') {
+        if (order.deliveryDriverId || order.deliveryDriver) return false
+      } else if (selectedDriverFilter !== 'ALL') {
+        const dId = order.deliveryDriverId || order.deliveryDriver?.id
+        if (dId !== selectedDriverFilter) return false
+      }
+
+      // 2. Buscador en tiempo real por texto (cliente, teléfono, dirección, barrio, domiciliario, producto)
+      if (query) {
+        const itemText = (order.items || []).map(item => item.menuItem?.name || '').join(' ')
+        const haystack = [
+          order.orderNumber,
+          order.customerName,
+          order.customerPhone,
+          order.customerAddress,
+          order.addressReference,
+          order.zone?.name,
+          order.deliveryDriver?.name,
+          order.deliveryDriver?.phone,
+          itemText,
+        ].filter(Boolean).join(' ').toString().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+        if (!haystack.includes(query)) return false
+      }
+
+      return true
     })
 
     // Cola FIFO: el pedido que entró primero permanece arriba y cada pedido
@@ -557,7 +609,7 @@ export default function ActiveDeliveriesPage() {
       const byTime = new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
       return byTime || a.orderNumber - b.orderNumber
     })
-  }, [orders, submittedSearch])
+  }, [orders, searchQuery, selectedDriverFilter])
 
   const statusVisibleOrders = useMemo(() => {
     if (statusFilter === 'PENDING') return visibleOrders.filter(o => o.status === 'RECEIVED' || o.status === 'PENDING')
@@ -726,15 +778,26 @@ export default function ActiveDeliveriesPage() {
   }
 
   const summary = useMemo(() => {
-    const total = orders.reduce((sum, order) => sum + order.total, 0)
+    let cash = 0
+    let transfer = 0
+    let total = 0
+
+    for (const order of visibleOrders) {
+      const breakdown = getOrderBreakdown(order)
+      cash += breakdown.cash
+      transfer += breakdown.transfer
+      total += breakdown.total
+    }
+
     return {
       total,
-      active: orders.filter(order => activeStatuses.includes(order.status)).length,
-      delivered: orders.filter(order => order.status === 'DELIVERED').length,
-      transfer: orders.filter(order => order.paymentMethod === 'TRANSFER').length,
-      urgent: orders.filter(order => isWaitingForDispatch(order) && getElapsedMinutes(order.createdAt) >= DISPATCH_ALERT_MINUTES).length,
+      cash,
+      transfer,
+      active: visibleOrders.filter(order => activeStatuses.includes(order.status)).length,
+      delivered: visibleOrders.filter(order => order.status === 'DELIVERED').length,
+      urgent: visibleOrders.filter(order => isWaitingForDispatch(order) && getElapsedMinutes(order.createdAt) >= DISPATCH_ALERT_MINUTES).length,
     }
-  }, [orders, clockTick])
+  }, [visibleOrders, clockTick])
 
   const statusCounts = useMemo(() => {
     return statusOrder.reduce<Record<string, number>>((acc, status) => {
@@ -796,35 +859,125 @@ export default function ActiveDeliveriesPage() {
                 </div>
               </>
             )}
-            {user?.role !== 'DELIVERY_MANAGER' && (
+            {user?.role !== 'DELIVERY_MANAGER' && !isDeliveryStaff && (
               <>
                 <div className="h-4 w-px bg-[var(--border-subtle)]" />
-                <div className="flex items-center gap-1.5 text-xs font-bold">
-                  <DollarSign className="h-3.5 w-3.5 text-blue-500" />
-                  <span className="text-blue-500">{formatCurrency(summary.total)}</span>
+                <div className="flex items-center gap-1.5">
+                  <div
+                    className="flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-emerald-500/10 border border-emerald-500/25 text-emerald-600 dark:text-emerald-400 font-extrabold text-xs shadow-sm"
+                    title="Total en Efectivo de las comandas filtradas"
+                  >
+                    <span>💵</span>
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] hidden xl:inline">Efectivo:</span>
+                    <span className="tabular-nums">{formatCurrency(summary.cash)}</span>
+                  </div>
+                  <div
+                    className="flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-blue-500/10 border border-blue-500/25 text-blue-600 dark:text-blue-400 font-extrabold text-xs shadow-sm"
+                    title="Total en Transferencia de las comandas filtradas"
+                  >
+                    <span>📱</span>
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] hidden xl:inline">Transf:</span>
+                    <span className="tabular-nums">{formatCurrency(summary.transfer)}</span>
+                  </div>
+                  <div
+                    className="flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-[var(--accent)]/10 border border-[var(--accent)]/30 text-[var(--accent)] font-black text-xs shadow-sm"
+                    title="Total de todo en las comandas filtradas"
+                  >
+                    <DollarSign className="h-3.5 w-3.5" />
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] hidden xl:inline">Total:</span>
+                    <span className="tabular-nums">{formatCurrency(summary.total)}</span>
+                  </div>
                 </div>
               </>
             )}
           </div>
-          <Button size="sm" variant="outline" onClick={() => { setSearchQuery(''); setSubmittedSearch(''); }}
-            title="Limpiar búsqueda"
-            aria-label="Limpiar búsqueda"
+          <Button size="sm" variant="outline" onClick={() => { setSearchQuery(''); setSubmittedSearch(''); setSelectedDriverFilter('ALL'); setStatusFilter('ALL'); }}
+            title="Limpiar búsqueda y filtros"
+            aria-label="Limpiar búsqueda y filtros"
             className="rounded-xl h-9 px-2 border-[var(--border-subtle)] text-[var(--text-muted)] hover:text-[var(--text-primary)]">
             <RefreshCw className="h-3.5 w-3.5" />
           </Button>
         </div>
       </motion.div>
 
-      {/* ── Compact Search & Status Filter Tabs ── */}
-      <motion.div variants={fadeUp} className="flex flex-col md:flex-row gap-3 items-stretch md:items-center justify-between">
-        <div className="relative flex-1 max-w-md">
-          <Search className="absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-[var(--text-muted)]" />
-          <Input placeholder="Buscar cliente, teléfono..." className="pl-9 h-9 bg-[var(--bg-panel)] border-[var(--border-subtle)] text-xs rounded-xl"
-            value={searchQuery} onChange={e => setSearchQuery(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleSearch()} />
+      {/* ── Mobile Financial Metrics Bar (Admin) ── */}
+      {user?.role !== 'DELIVERY_MANAGER' && !isDeliveryStaff && (
+        <motion.div variants={fadeUp} className="flex md:hidden items-center justify-between gap-2 p-2 bg-[var(--bg-panel)] border border-[var(--border-subtle)] rounded-2xl shadow-sm">
+          <div className="flex flex-col items-center flex-1 py-1 px-1 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-600 dark:text-emerald-400">
+            <span className="text-[9px] font-black uppercase tracking-wider flex items-center gap-0.5">💵 Efectivo</span>
+            <span className="font-black text-xs tabular-nums">{formatCurrency(summary.cash)}</span>
+          </div>
+          <div className="flex flex-col items-center flex-1 py-1 px-1 rounded-xl bg-blue-500/10 border border-blue-500/20 text-blue-600 dark:text-blue-400">
+            <span className="text-[9px] font-black uppercase tracking-wider flex items-center gap-0.5">📱 Transf</span>
+            <span className="font-black text-xs tabular-nums">{formatCurrency(summary.transfer)}</span>
+          </div>
+          <div className="flex flex-col items-center flex-1 py-1 px-1 rounded-xl bg-[var(--accent)]/10 border border-[var(--accent)]/30 text-[var(--accent)]">
+            <span className="text-[9px] font-black uppercase tracking-wider flex items-center gap-0.5">💰 Total</span>
+            <span className="font-black text-xs tabular-nums">{formatCurrency(summary.total)}</span>
+          </div>
+        </motion.div>
+      )}
+
+      {/* ── Compact Search, Driver Filter & Status Filter Tabs ── */}
+      <motion.div variants={fadeUp} className="flex flex-col lg:flex-row gap-3 items-stretch lg:items-center justify-between">
+        <div className="flex flex-col sm:flex-row gap-2 flex-1 max-w-2xl">
+          <div className="relative flex-1">
+            <Search className="absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-[var(--text-muted)]" />
+            <Input
+              placeholder="Buscar cliente, teléfono, domiciliario..."
+              className="pl-9 pr-7 h-9 bg-[var(--bg-panel)] border-[var(--border-subtle)] text-xs rounded-xl"
+              value={searchQuery}
+              onChange={e => setSearchQuery(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && setSubmittedSearch(searchQuery.trim())}
+            />
+            {searchQuery && (
+              <button
+                type="button"
+                onClick={() => { setSearchQuery(''); setSubmittedSearch(''); }}
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[var(--text-muted)] hover:text-[var(--text-primary)] cursor-pointer"
+                title="Borrar búsqueda"
+              >
+                <XCircle className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </div>
+
+          <div className="w-full sm:w-56 shrink-0">
+            <Select value={selectedDriverFilter} onValueChange={setSelectedDriverFilter}>
+              <SelectTrigger className="h-9 text-xs bg-[var(--bg-panel)] border-[var(--border-subtle)] rounded-xl font-bold">
+                <div className="flex items-center gap-1.5 truncate">
+                  <Bike className="h-3.5 w-3.5 text-[var(--accent)] shrink-0" />
+                  <span className="truncate">
+                    {selectedDriverFilter === 'ALL'
+                      ? 'Todos los repartidores'
+                      : selectedDriverFilter === 'UNASSIGNED'
+                        ? '⚠️ Sin repartidor'
+                        : allAvailableDrivers.find(d => d.id === selectedDriverFilter)?.name || 'Repartidor'}
+                  </span>
+                </div>
+              </SelectTrigger>
+              <SelectContent className="max-h-64">
+                <SelectItem value="ALL" className="text-xs font-bold">
+                  🛵 Todos los repartidores ({orders.length})
+                </SelectItem>
+                <SelectItem value="UNASSIGNED" className="text-xs font-bold text-amber-600">
+                  ⚠️ Sin repartidor ({orders.filter(o => !o.deliveryDriver && !o.deliveryDriverId).length})
+                </SelectItem>
+                {allAvailableDrivers.map(d => {
+                  const count = orders.filter(o => (o.deliveryDriverId || o.deliveryDriver?.id) === d.id).length
+                  return (
+                    <SelectItem key={d.id} value={d.id} className="text-xs font-medium">
+                      🛵 {d.name} {d.phone ? `(${d.phone})` : ''} · {count} {count === 1 ? 'ped' : 'peds'}
+                    </SelectItem>
+                  )
+                })}
+              </SelectContent>
+            </Select>
+          </div>
         </div>
 
         {/* Status Filter Pills */}
-        <div className="flex items-center gap-1.5 overflow-x-auto pb-1 md:pb-0 scrollbar-none">
+        <div className="flex items-center gap-1.5 overflow-x-auto pb-1 lg:pb-0 scrollbar-none">
           {[
             { id: 'ALL', label: 'Todos', count: visibleOrders.length },
             { id: 'PENDING', label: 'En cocina', count: visibleOrders.filter(o => o.status === 'RECEIVED' || o.status === 'PENDING').length },
@@ -851,6 +1004,51 @@ export default function ActiveDeliveriesPage() {
           ))}
         </div>
       </motion.div>
+
+      {/* Active Driver Filter Indicator Banner */}
+      {selectedDriverFilter !== 'ALL' && (
+        <motion.div
+          initial={{ opacity: 0, y: -5 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="flex flex-wrap items-center justify-between gap-2 px-3.5 py-2.5 bg-gradient-to-r from-emerald-500/10 via-blue-500/10 to-purple-500/10 border border-[var(--border-subtle)] rounded-2xl text-xs shadow-sm"
+        >
+          <div className="flex items-center gap-2">
+            <div className="p-1.5 rounded-xl bg-emerald-500/20 text-emerald-600">
+              <Bike className="h-4 w-4" />
+            </div>
+            <span className="text-[var(--text-secondary)]">
+              Viendo comandas de:{' '}
+              <strong className="text-[var(--text-primary)] text-sm font-black">
+                {selectedDriverFilter === 'UNASSIGNED'
+                  ? 'Sin repartidor asignado'
+                  : allAvailableDrivers.find(d => d.id === selectedDriverFilter)?.name || 'Repartidor'}
+              </strong>
+            </span>
+            <Badge variant="outline" className="text-[10px] font-extrabold border-[var(--border-subtle)] bg-[var(--bg-elevated)]">
+              {visibleOrders.length} {visibleOrders.length === 1 ? 'pedido' : 'pedidos'}
+            </Badge>
+          </div>
+
+          <div className="flex items-center gap-3">
+            {user?.role !== 'DELIVERY_MANAGER' && !isDeliveryStaff && (
+              <div className="hidden sm:flex items-center gap-2 text-xs font-bold">
+                <span className="text-emerald-600 font-black">💵 Efectivo: {formatCurrency(summary.cash)}</span>
+                <span className="text-[var(--border-subtle)]">·</span>
+                <span className="text-blue-600 font-black">📱 Transf: {formatCurrency(summary.transfer)}</span>
+                <span className="text-[var(--border-subtle)]">·</span>
+                <span className="text-[var(--accent)] font-black">💰 Total: {formatCurrency(summary.total)}</span>
+              </div>
+            )}
+            <button
+              type="button"
+              onClick={() => setSelectedDriverFilter('ALL')}
+              className="px-2.5 py-1 rounded-xl bg-[var(--bg-elevated)] hover:bg-[var(--bg-hover)] border border-[var(--border-subtle)] text-[11px] font-bold text-[var(--text-muted)] hover:text-[var(--text-primary)] cursor-pointer flex items-center gap-1 transition-all"
+            >
+              <XCircle className="h-3.5 w-3.5" /> Ver todos
+            </button>
+          </div>
+        </motion.div>
+      )}
 
       <motion.div
         variants={fadeUp}
