@@ -929,9 +929,12 @@ export class OrdersService implements OnModuleInit {
           },
         });
         if (fullOrder) {
+          const sentPrinters = new Set<string>();
           for (const p of printerSettings.printers || []) {
             if (p.enabled === false || p.type === 'caja') continue;
             if (!this.printerAcceptsOrder(p, fullOrder)) continue;
+            const targetKey = (p.ip || p.id || p.name || '').trim().toLowerCase();
+            if (sentPrinters.has(targetKey)) continue;
             const ticketText = this.printService.formatCocinaTicketText(
               fullOrder,
               p.name,
@@ -942,6 +945,7 @@ export class OrdersService implements OnModuleInit {
             const targetIp = (p.ip || '').trim();
             if (!targetIp) continue;
             if (ticketText) {
+              sentPrinters.add(targetKey);
               const buffer = this.printService.buildEscPos(ticketText, p.paper);
               const payload = buffer.toString('base64');
               await this.prisma.printJob.create({
@@ -1276,9 +1280,12 @@ export class OrdersService implements OnModuleInit {
           });
           if (fullOrder) {
             (fullOrder as any).isEdited = true;
+            const sentPrinters = new Set<string>();
             for (const p of printerSettings.printers || []) {
               if (p.enabled === false || p.type === 'caja') continue;
               if (!this.printerAcceptsOrder(p, fullOrder)) continue;
+              const targetKey = (p.ip || p.id || p.name || '').trim().toLowerCase();
+              if (sentPrinters.has(targetKey)) continue;
               const ticketText = this.printService.formatCocinaTicketText(
                 fullOrder,
                 p.name,
@@ -1289,6 +1296,7 @@ export class OrdersService implements OnModuleInit {
               const targetIp = (p.ip || '').trim();
               if (!targetIp) continue;
               if (ticketText) {
+                sentPrinters.add(targetKey);
                 const buffer = this.printService.buildEscPos(ticketText, p.paper);
                 const payload = buffer.toString('base64');
                 await this.prisma.printJob.create({

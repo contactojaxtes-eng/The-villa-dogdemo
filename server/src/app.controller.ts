@@ -93,7 +93,26 @@ export class AppController {
     const validEnabledPrinters = customPrinters.filter(p => p && p.enabled !== false && isValidAddress(p.ip));
     const defaultDeliveryPrinter = validEnabledPrinters.find(p => p.channel === 'DELIVERY' || p.channel === 'BOTH') || validEnabledPrinters[0];
 
-    return jobs.map(j => {
+    // Deduplicar trabajos idénticos en la cola para que nunca salga doble la misma impresión
+    const seenPayloads = new Set<string>();
+    const duplicateIds: number[] = [];
+    const uniqueJobs = jobs.filter(j => {
+      const key = `${j.impresoraIp || ''}_${j.tipo}_${j.payload}`;
+      if (seenPayloads.has(key)) {
+        duplicateIds.push(j.id);
+        return false;
+      }
+      seenPayloads.add(key);
+      return true;
+    });
+
+    if (duplicateIds.length > 0) {
+      this.prisma.printJob.deleteMany({
+        where: { id: { in: duplicateIds } }
+      }).catch(() => {});
+    }
+
+    return uniqueJobs.map(j => {
       const storedTarget = (j.impresoraIp || '').trim();
       const targetKeys = new Set([normalize(storedTarget), normalize(j.tipo)]);
       let configuredPrinter = customPrinters.find(printer =>

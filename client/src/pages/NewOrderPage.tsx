@@ -2999,9 +2999,9 @@ export default function NewOrderPage({
       }
 
       if (editOrderId) {
-        await alerts.success('Pedido Actualizado', `Pedido #${savedOrder.orderNumber || ''} modificado exitosamente.`)
+        alerts.toast(`Pedido #${savedOrder.orderNumber || ''} actualizado`)
       } else {
-        await alerts.success('Pedido Creado', `Pedido #${savedOrder.orderNumber || ''} registrado exitosamente.`)
+        alerts.toast(`Pedido #${savedOrder.orderNumber || ''} registrado exitosamente`)
       }
 
       localStorage.removeItem(activeDraftKey)
@@ -3584,12 +3584,14 @@ export default function NewOrderPage({
                     )}
                   </div>
                   <Input
-                    type="number"
-                    min={500}
-                    step={500}
-                    value={zoneRateEdit}
-                    onChange={e => setZoneRateEdit(e.target.value)}
-                    placeholder="Ej: 4000"
+                    type="text"
+                    inputMode="numeric"
+                    value={formatThousandsInput(zoneRateEdit)}
+                    onChange={e => {
+                      const num = parseThousandsInput(e.target.value)
+                      setZoneRateEdit(num > 0 ? String(num) : (e.target.value.trim() === '' ? '' : '0'))
+                    }}
+                    placeholder="Ej: 4.000"
                     className="bg-[var(--bg-input)] border-[var(--border-default)] rounded-xl h-8 text-xs focus:border-[var(--accent)] font-bold"
                   />
                 </div>

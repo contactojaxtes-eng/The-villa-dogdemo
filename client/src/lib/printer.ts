@@ -721,16 +721,17 @@ export async function printComandaSmart(
   target?: 'caja' | 'cocina',
   userRole?: string,
   isAutoPrint = false,
-  kickDrawer = false // added!
+  kickDrawer = false
 ): Promise<{ method: 'usb' | 'network' | 'browser' | 'local_bridge'; silent: boolean; error?: string }> {
   const settings = await getPrinterSettings()
-  const actualTarget = target || (order.orderType === 'DELIVERY' ? 'cocina' : 'caja')
+  const isDeliveryOrder = !order.tableId && ['DELIVERY', 'PICKUP'].includes(order.orderType)
 
-  if (actualTarget === 'caja') {
+  // En pedidos de domicilio o para llevar (o cuando se solicita factura de caja), se imprime UNA SOLA factura/comanda completa
+  if (target === 'caja' || isDeliveryOrder) {
     return printSinglePrinter(order, settings.caja, 'caja', userRole, isAutoPrint, undefined, undefined, settings.restaurant, kickDrawer)
   }
 
-  // If actualTarget is 'cocina' (prep stations), print to all configured prep printers!
+  // Estaciones de preparación (Cocina/Pizzas/Bar para mesas de salón):
   const allDynamicPrinters = settings.printers && settings.printers.length > 0
     ? settings.printers
     : [
@@ -738,33 +739,26 @@ export async function printComandaSmart(
       { id: 'bar', name: 'Bar / Bebidas', mode: settings.bar?.mode || 'network', ip: settings.bar?.ip || '', port: settings.bar?.port || 9100, paper: settings.bar?.paper || '80', categories: settings.bar?.categories || [] }
     ]
 
-  // Separate caja-type printers from estacion-type printers
-  const cajaPrinters = allDynamicPrinters.filter(p => p.type === 'caja')
   const prepPrinters = allDynamicPrinters.filter(p => p.type !== 'caja')
 
   let overallMethod: any = 'browser'
   let overallSilent = true
   let overallError: string | undefined
 
-  // Print invoice on any additional caja-type printers
-  for (const printer of cajaPrinters) {
-    const res = await printSinglePrinter(order, printer, printer.id || 'caja', userRole, isAutoPrint, undefined, undefined, settings.restaurant, kickDrawer)
-    overallMethod = res.method
-    if (!res.silent) overallSilent = false
-    if (res.error) overallError = res.error
-  }
-
-  // Print comandas on estacion-type printers with category filtering
-  const isDeliveryOrder = !order.tableId && ['DELIVERY', 'PICKUP'].includes(order.orderType)
-  const orderChannel = isDeliveryOrder ? 'DELIVERY' : 'DINING'
+  const orderChannel = 'DINING'
+  const printedDestinations = new Set<string>()
 
   for (const printer of prepPrinters) {
     if (printer.enabled === false) continue
 
-    const printerChannel = String((printer as any).channel || (isDeliveryOrder ? 'DELIVERY' : 'DINING')).toUpperCase()
+    const printerChannel = String((printer as any).channel || 'DINING').toUpperCase()
     if ((printer as any).channel && printerChannel !== 'BOTH' && printerChannel !== orderChannel) {
       continue
     }
+
+    // Evitar mandar doble al mismo destino físico
+    const destKey = (printer.ip || printer.name || printer.id || '').trim().toLowerCase()
+    if (printedDestinations.has(destKey)) continue
 
     // Group items first so additions are linked to parent items!
     const grouped = groupOrderItems(order.items || [])
@@ -797,7 +791,7 @@ export async function printComandaSmart(
       continue // Skip if no items for this station
     }
 
-    // Call print for this specific station printer!
+    printedDestinations.add(destKey)
     const res = await printSinglePrinter(order, printer, printer.id || 'cocina', userRole, isAutoPrint, printer.categories, prepPrinters, settings.restaurant)
     overallMethod = res.method
     if (!res.silent) overallSilent = false

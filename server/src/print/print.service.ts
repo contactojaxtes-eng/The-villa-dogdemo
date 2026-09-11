@@ -1100,25 +1100,46 @@ export class PrintService {
     results.push(resCaja);
 
     const isDeliveryOrder = !order.tableId && ['DELIVERY', 'PICKUP'].includes(order.orderType);
-    const orderChannel = isDeliveryOrder ? 'DELIVERY' : 'DINING';
+    if (isDeliveryOrder) {
+      // Para pedidos de domicilio o para recoger, la factura de entrega es única y contiene todo.
+      // NO enviar comandas duplicadas a la misma impresora.
+      return {
+        ok: true,
+        message: 'Factura de entrega transmitida exitosamente',
+        text: cajaText,
+        paper: settings.caja?.paper || '80',
+        orderId: order.id,
+        orderNumber: order.orderNumber,
+        results,
+      };
+    }
+
+    const orderChannel = 'DINING';
+    const dispatchedDestinations = new Set<string>();
 
     for (const printer of settings.printers) {
       if (printer.enabled === false) continue; // Si la estación está desactivada, no imprime nada directamente en ella
 
-      const printerChannel = String(printer.channel || (isDeliveryOrder ? 'DELIVERY' : 'DINING')).toUpperCase();
+      const printerChannel = String(printer.channel || 'DINING').toUpperCase();
       if (printer.channel && printerChannel !== 'BOTH' && printerChannel !== orderChannel) {
         continue;
       }
 
+      // Evitar mandar doble al mismo destino físico o IP
+      const destKey = (printer.ip || printer.name || printer.id || '').trim().toLowerCase();
+      if (dispatchedDestinations.has(destKey)) continue;
+
       if (printer.type === 'caja') {
         // Impresoras adicionales tipo Caja: imprimen factura completa
         const text = this.formatCajaInvoiceText(order, settings);
+        dispatchedDestinations.add(destKey);
         const res = await this.dispatchPrintJob(printer.id || printer.name.toLowerCase(), text, printer, kickDrawer);
         results.push(res);
       } else {
         // Estaciones de preparación: imprimen comanda filtrada por categorías
         const text = this.formatCocinaTicketText(order, printer.name, printer.categories, settings.printers, printer.paper);
         if (text) {
+          dispatchedDestinations.add(destKey);
           const res = await this.dispatchPrintJob(printer.id || printer.name.toLowerCase(), text, printer, false);
           results.push(res);
         }
