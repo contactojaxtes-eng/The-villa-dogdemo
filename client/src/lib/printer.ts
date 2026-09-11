@@ -160,11 +160,11 @@ h1 { font-size:22px; text-align:center; font-weight:900; letter-spacing:1px; }
 .lbl { font-size:13px; font-weight:900; text-transform:uppercase; letter-spacing:1px; }
 .info { font-size:16px; font-weight:normal; line-height:1.3; margin:2px 0; }
 .item { display:flex; gap:6px; margin:6px 0 2px 0; line-height:1.3; align-items:baseline; }
-.item .qty { font-weight:bold; min-width:28px; font-size:19px; }
-.item .item-name { font-weight:normal; font-size:19px; word-break: break-word; }
-.addition { display:flex; gap:6px; margin:2px 0 2px 14px; font-size:15px; font-weight:normal; }
-.addition .qty { font-weight:bold; min-width:24px; }
-.note { font-size:15px; font-weight:normal; margin:2px 0 4px 14px; font-style:italic; border-left:3px solid #000; padding-left:6px; }
+.item .qty { font-weight:900; min-width:28px; font-size:19px; }
+.item .item-name { font-weight:900; font-size:19px; word-break: break-word; }
+.addition { display:flex; gap:6px; margin:2px 0 2px 14px; font-size:15px; font-weight:bold; }
+.addition .qty { font-weight:900; min-width:24px; }
+.note { font-size:15px; font-weight:bold; margin:2px 0 4px 14px; font-style:italic; border-left:3px solid #000; padding-left:6px; }
 .footer { text-align:center; font-size:13px; margin-top:10px; font-weight:900; letter-spacing:1px; }
 </style></head><body>
 ${order.status === 'CANCELLED' ? `
@@ -372,19 +372,42 @@ export function buildComandaText(
 
     for (const item of grouped) {
       const uPrice = Number(item.price || item.unitPrice || item.menuItem?.price || 0)
-      const sub = uPrice * Number(item.quantity || 1)
-      const priceTag = uPrice > 0 ? ` ($ ${Math.round(uPrice).toLocaleString('es-CO')} c/u = $ ${Math.round(sub).toLocaleString('es-CO')})` : ''
-      lines.push(`[HEIGHT]${item.quantity} x ${item.menuItem?.name || 'Item'}${priceTag}[/HEIGHT]`)
       const cleaned = cleanNotesForPrint(item.notes, item.menuItem?.name)
-      if (item.notes && cleaned && !item.notes.startsWith('Adición para:')) {
-        lines.push(`[HEIGHT]  ↳ NOTA: ${cleaned.toUpperCase()}[/HEIGHT]`)
+
+      // Si el item viene con cantidad > 1 pero la nota original pedía una porción parcial (ej: "1 sin cebolla" en 2 perros)
+      const rawNotesStr = String(item.notes || '')
+      const wordToNum: Record<string, number> = { 'un': 1, 'una': 1, 'uno': 1, 'dos': 2, 'tres': 3, 'cuatro': 4, 'cinco': 5 }
+      const partialMatch = rawNotesStr.match(/(?:^|\s)(\d+|un|una|uno|dos|tres|cuatro|cinco)\s+(?:sin|con|solo\s+con)\s+([a-záéíóúñ\s]+)/i)
+      let partialQty = 0
+      if (partialMatch) {
+        const rawPart = partialMatch[1].toLowerCase()
+        partialQty = parseInt(rawPart, 10) || wordToNum[rawPart] || 0
+      }
+
+      if (cleaned && partialQty > 0 && partialQty < item.quantity) {
+        const pSub = uPrice * partialQty
+        const pTag = uPrice > 0 ? ` ($ ${Math.round(uPrice).toLocaleString('es-CO')} c/u = $ ${Math.round(pSub).toLocaleString('es-CO')})` : ''
+        lines.push(`[BOLD][HEIGHT]${partialQty} x ${item.menuItem?.name || 'Item'}${pTag}[/HEIGHT][/BOLD]`)
+        lines.push(`[BOLD][HEIGHT]  ↳ NOTA: ${cleaned.toUpperCase()}[/HEIGHT][/BOLD]`)
+
+        const remQty = item.quantity - partialQty
+        const remSub = uPrice * remQty
+        const remTag = uPrice > 0 ? ` ($ ${Math.round(uPrice).toLocaleString('es-CO')} c/u = $ ${Math.round(remSub).toLocaleString('es-CO')})` : ''
+        lines.push(`[BOLD][HEIGHT]${remQty} x ${item.menuItem?.name || 'Item'}${remTag}[/HEIGHT][/BOLD]`)
+      } else {
+        const sub = uPrice * Number(item.quantity || 1)
+        const priceTag = uPrice > 0 ? ` ($ ${Math.round(uPrice).toLocaleString('es-CO')} c/u = $ ${Math.round(sub).toLocaleString('es-CO')})` : ''
+        lines.push(`[BOLD][HEIGHT]${item.quantity} x ${item.menuItem?.name || 'Item'}${priceTag}[/HEIGHT][/BOLD]`)
+        if (item.notes && cleaned && !item.notes.startsWith('Adición para:')) {
+          lines.push(`[BOLD][HEIGHT]  ↳ NOTA: ${cleaned.toUpperCase()}[/HEIGHT][/BOLD]`)
+        }
       }
       if (item.additions && item.additions.length > 0) {
         for (const a of item.additions) {
           const aPrice = Number(a.price || a.unitPrice || a.menuItem?.price || 0)
           const aSub = aPrice * Number(a.quantity || 1)
           const aPriceTag = aPrice > 0 ? ` ($ ${Math.round(aPrice).toLocaleString('es-CO')} c/u = $ ${Math.round(aSub).toLocaleString('es-CO')})` : ''
-          lines.push(`[HEIGHT]  + ${a.quantity} x ${a.menuItem?.name || 'Item'}${aPriceTag}[/HEIGHT]`)
+          lines.push(`[BOLD][HEIGHT]  + ${a.quantity} x ${a.menuItem?.name || 'Item'}${aPriceTag}[/HEIGHT][/BOLD]`)
         }
       }
       lines.push('') // Línea en blanco para separar productos

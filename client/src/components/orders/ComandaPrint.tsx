@@ -74,9 +74,9 @@ export function printComanda(order: ComandaOrder) {
       .label { font-weight: bold; font-size: 10px; text-transform: uppercase; color: #555; }
       .value { font-size: 13px; margin-top: 2px; }
       .address { font-size: 14px; font-weight: bold; line-height: 1.4; }
-      .item { display: flex; justify-content: space-between; align-items: baseline; margin: 4px 0; }
-      .item-name { flex: 1; }
-      .item-qty { font-weight: bold; margin-right: 8px; }
+      .item { display: flex; justify-content: space-between; align-items: baseline; margin: 4px 0; font-weight: bold; }
+      .item-name { flex: 1; font-weight: bold; }
+      .item-qty { font-weight: 900; margin-right: 8px; }
       .total { font-size: 16px; font-weight: bold; text-align: right; margin-top: 8px; }
       .footer { text-align: center; margin-top: 12px; font-size: 10px; border-top: 2px dashed #000; padding-top: 8px; }
       .badge { display: inline-block; background: #000; color: #fff; padding: 2px 6px; font-size: 10px; margin: 2px; }
@@ -128,20 +128,44 @@ export function printComanda(order: ComandaOrder) {
       <div class="label">Productos</div>
       ${groupOrderItems(order.items || []).map(i => {
         const uPrice = Number(i.unitPrice || i.price || 0)
-        const sub = uPrice * Number(i.quantity || 1)
-        const priceTag = uPrice > 0 ? ` ($ ${Math.round(uPrice).toLocaleString('es-CO')} c/u = $ ${Math.round(sub).toLocaleString('es-CO')})` : ''
+        const cleaned = i.notes ? cleanNotes(i.notes, i.menuItem?.name) : ''
+
+        // Chequear cantidad parcial en notas (ej: "1 sin cebolla" en 2 perros)
+        const rawNotesStr = String(i.notes || '')
+        const wordToNum: Record<string, number> = { 'un': 1, 'una': 1, 'uno': 1, 'dos': 2, 'tres': 3, 'cuatro': 4, 'cinco': 5 }
+        const partialMatch = rawNotesStr.match(/(?:^|\s)(\d+|un|una|uno|dos|tres|cuatro|cinco)\s+(?:sin|con|solo\s+con)\s+([a-záéíóúñ\s]+)/i)
+        let partialQty = 0
+        if (partialMatch) {
+          const rawPart = partialMatch[1].toLowerCase()
+          partialQty = parseInt(rawPart, 10) || wordToNum[rawPart] || 0
+        }
+
+        const renderRow = (qty: number, noteText?: string) => {
+          const rowSub = uPrice * qty
+          const priceTag = uPrice > 0 ? ` ($ ${Math.round(uPrice).toLocaleString('es-CO')} c/u = $ ${Math.round(rowSub).toLocaleString('es-CO')})` : ''
+          return `
+          <div class="item">
+            <span class="item-qty">${qty}x</span>
+            <span class="item-name" style="font-weight: bold;">${i.menuItem.code ? `[${i.menuItem.code}] ` : ''}${i.menuItem.name}${priceTag}${noteText ? ` (${noteText})` : ''}</span>
+            ${rowSub > 0 ? `<span style="font-weight: bold; margin-left: 8px;">${formatCurrency(rowSub)}</span>` : ''}
+          </div>`
+        }
+
+        let productHtml = ''
+        if (cleaned && partialQty > 0 && partialQty < i.quantity) {
+          productHtml = renderRow(partialQty, cleaned) + renderRow(i.quantity - partialQty, '')
+        } else {
+          productHtml = renderRow(i.quantity, cleaned && !i.notes?.startsWith('Adición para:') ? cleaned : '')
+        }
+
         return `
-        <div class="item">
-          <span class="item-qty">${i.quantity}x</span>
-          <span class="item-name" style="font-weight: bold;">${i.menuItem.code ? `[${i.menuItem.code}] ` : ''}${i.menuItem.name}${priceTag}${i.notes && cleanNotes(i.notes) && !i.notes.startsWith('Adición para:') ? ` (${cleanNotes(i.notes)})` : ''}</span>
-          ${sub > 0 ? `<span style="font-weight: bold; margin-left: 8px;">${formatCurrency(sub)}</span>` : ''}
-        </div>
+        ${productHtml}
         ${i.additions && i.additions.map(a => {
           const aPrice = Number(a.unitPrice || a.price || 0)
           const aSub = aPrice * Number(a.quantity || 1)
           const aPriceTag = aPrice > 0 ? ` ($ ${Math.round(aPrice).toLocaleString('es-CO')} c/u = $ ${Math.round(aSub).toLocaleString('es-CO')})` : ''
           return `
-          <div class="item" style="margin-left: 15px; font-size: 11px; color: #333;">
+          <div class="item" style="margin-left: 15px; font-size: 11px; color: #000; font-weight: bold;">
             <span class="item-qty">+ ${a.quantity}x</span>
             <span class="item-name">${a.menuItem.code ? `[${a.menuItem.code}] ` : ''}${a.menuItem.name} [Adición]${aPriceTag}</span>
             ${aSub > 0 ? `<span style="margin-left: 8px;">${formatCurrency(aSub)}</span>` : ''}

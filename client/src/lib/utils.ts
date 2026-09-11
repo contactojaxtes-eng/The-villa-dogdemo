@@ -100,6 +100,18 @@ export function cleanNotes(notes?: string | null, productName?: string): string 
     let cleaned = notes.replace(/\s?\(#[\w-]+\)/g, '').trim()
     if (!cleaned) return ''
 
+    // 0. Eliminar frases afectivas, saludos, despedidas o palabras de chat que nada tienen que ver con la cocina
+    const chatFluff = /\b(te\s+amo|te\s+quiero|te\s+adoro|bebe|bebecito|bebesito|bebesita|mi\s+amor|mi\s+vida|mi\s+cielo|mi\s+rey|mi\s+reina|amor|reina|rey|princesa|cariño|linda|lindo|hermoso|hermosa|corazon|vida|parce|parcero|hermano|amigo|amiga|vecino|vecina|por\s*fa(?:vor)?|porfa|por\s+fa|muchas\s+gracias|gracias|buen\s+dia|buenas\s+tardes|buenas\s+noches|buenas|hola|saludos|atentamente|chao|adios)\b/gi
+    cleaned = cleaned.replace(chatFluff, ' ')
+
+    // Eliminar verbos y peticiones conversacionales ("me regala", "me da", "deme", "regalame", etc.)
+    const orderVerbs = /\b(me\s+regala[sn]?|me\s+da[sn]?|regalame|deme|mande(?:me)?|envie(?:me)?|traiga(?:me)?|quiero|quisiera|haga(?:me)?\s+el\s+favor|favor)\b/gi
+    cleaned = cleaned.replace(orderVerbs, ' ')
+
+    // Quitar repeticiones de cantidades y nombres de producto dentro de la nota (ej: "2 perro sencillos 1 sin cebolla" -> "sin cebolla")
+    cleaned = cleaned.replace(/\b\d+\s+(?:perro|hamburguesa|pizza|salchipapa|desgranado|suizo)s?\s*(?:sencill[oa]s?|especial(?:es)?|gratina[do]s?|mixt[oa]s?|personal(?:es)?|familiar(?:es)?)?/gi, ' ')
+    cleaned = cleaned.replace(/\b\d+\s+(sin|con)\b/gi, '$1')
+
     // 1. Quitar precios, signos de pesos y valores monetarios (ej: "$ 17.300", "($ 17.300)", "$34.600", "$ 4.000")
     cleaned = cleaned
       .replace(/\(\s*\$\s*[\d.,]+\s*\)/gi, '')
@@ -210,6 +222,12 @@ export function cleanNotesForPrint(notes?: string | null, productName?: string):
       const match = cleaned.match(/\b(sin\s+[\w\s]+|con\s+papas\s+[\w\s]+|salsa\s+[\w\s]+|bien\s+asada|termino\s+medio|jugo\s+en\s+[\w]+)\b/i)
       if (match) return match[0].trim()
       return ''
+    }
+
+    // 3. Si contiene una instrucción explícita de cocina (sin cebolla, sin salsa, con tártara, etc.), extraerla directamente
+    const specificInstruction = cleaned.match(/\b(sin\s+[\w\s]+|con\s+[\w\s]+|aparte|bien\s+asada|bien\s+cocid[oa]|termino\s+medio|papas?\s+[\w\s]+|salsa\s+[\w\s]+)\b/i)
+    if (specificInstruction) {
+      return specificInstruction[0].trim()
     }
 
     return cleaned

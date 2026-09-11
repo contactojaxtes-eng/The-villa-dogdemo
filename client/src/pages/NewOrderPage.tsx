@@ -1491,13 +1491,40 @@ export default function NewOrderPage({
             }
           }
 
-          parsedCartItems.push({
-            menuItem: matchedItem,
-            quantity: parsedQuantity,
-            preference: (clauseLower.includes('llevar') || clauseLower.includes('domicilio')) ? 'Para llevar' : '',
-            additions: matchedAdditions,
-            notes: cleanClauseNotes || undefined
-          })
+          // Verificar si la nota especifica una cantidad parcial (ej: "2 perros, 1 sin cebolla" -> 1 sin cebolla, 1 normal)
+          const wordToNum: Record<string, number> = { 'un': 1, 'una': 1, 'uno': 1, 'dos': 2, 'tres': 3, 'cuatro': 4, 'cinco': 5, 'seis': 6 }
+          const partialNoteQtyMatch = clause.match(/(?:^|\s)(\d+|un|una|uno|dos|tres|cuatro|cinco)\s+(?:sin|con|solo\s+con)\s+([a-záéíóúñ\s]+)/i)
+          let partialQty = 0
+          if (partialNoteQtyMatch) {
+            const rawPart = partialNoteQtyMatch[1].toLowerCase()
+            partialQty = parseInt(rawPart, 10) || wordToNum[rawPart] || 0
+          }
+
+          if (cleanClauseNotes && partialQty > 0 && partialQty < parsedQuantity) {
+            // Dividir en 2 líneas separadas para cocina: los que llevan la nota y los que van normales
+            parsedCartItems.push({
+              menuItem: matchedItem,
+              quantity: partialQty,
+              preference: (clauseLower.includes('llevar') || clauseLower.includes('domicilio')) ? 'Para llevar' : '',
+              additions: matchedAdditions,
+              notes: cleanClauseNotes
+            })
+            parsedCartItems.push({
+              menuItem: matchedItem,
+              quantity: parsedQuantity - partialQty,
+              preference: (clauseLower.includes('llevar') || clauseLower.includes('domicilio')) ? 'Para llevar' : '',
+              additions: [],
+              notes: undefined
+            })
+          } else {
+            parsedCartItems.push({
+              menuItem: matchedItem,
+              quantity: parsedQuantity,
+              preference: (clauseLower.includes('llevar') || clauseLower.includes('domicilio')) ? 'Para llevar' : '',
+              additions: matchedAdditions,
+              notes: cleanClauseNotes || undefined
+            })
+          }
         }
       }
     }
@@ -2975,16 +3002,6 @@ export default function NewOrderPage({
         await alerts.success('Pedido Actualizado', `Pedido #${savedOrder.orderNumber || ''} modificado exitosamente.`)
       } else {
         await alerts.success('Pedido Creado', `Pedido #${savedOrder.orderNumber || ''} registrado exitosamente.`)
-      }
-
-      // Enviar orden de impresión al servidor para la impresora física configurada (sin abrir ventana de PDF)
-      try {
-        const orderIdToPrint = savedOrder.id || editOrderId
-        if (orderIdToPrint) {
-          await api.post(`/print/order/${orderIdToPrint}`).catch(() => null)
-        }
-      } catch (printErr) {
-        console.warn('Error en auto-impresión:', printErr)
       }
 
       localStorage.removeItem(activeDraftKey)

@@ -317,6 +317,18 @@ export class PrintService {
     if (!cleaned) return '';
     if (cleaned.startsWith('Adición para:')) return '';
 
+    // 0. Eliminar frases afectivas, saludos, despedidas o palabras de chat que nada tienen que ver con la cocina
+    const chatFluff = /\b(te\s+amo|te\s+quiero|te\s+adoro|bebe|bebecito|bebesito|bebesita|mi\s+amor|mi\s+vida|mi\s+cielo|mi\s+rey|mi\s+reina|amor|reina|rey|princesa|cariño|linda|lindo|hermoso|hermosa|corazon|vida|parce|parcero|hermano|amigo|amiga|vecino|vecina|por\s*fa(?:vor)?|porfa|por\s+fa|muchas\s+gracias|gracias|buen\s+dia|buenas\s+tardes|buenas\s+noches|buenas|hola|saludos|atentamente|chao|adios)\b/gi;
+    cleaned = cleaned.replace(chatFluff, ' ');
+
+    // Eliminar verbos y peticiones conversacionales ("me regala", "me da", "deme", "regalame", etc.)
+    const orderVerbs = /\b(me\s+regala[sn]?|me\s+da[sn]?|regalame|deme|mande(?:me)?|envie(?:me)?|traiga(?:me)?|quiero|quisiera|haga(?:me)?\s+el\s+favor|favor)\b/gi;
+    cleaned = cleaned.replace(orderVerbs, ' ');
+
+    // Quitar repeticiones de cantidades y nombres de producto dentro de la nota (ej: "2 perro sencillos 1 sin cebolla" -> "sin cebolla")
+    cleaned = cleaned.replace(/\b\d+\s+(?:perro|hamburguesa|pizza|salchipapa|desgranado|suizo)s?\s*(?:sencill[oa]s?|especial(?:es)?|gratina[do]s?|mixt[oa]s?|personal(?:es)?|familiar(?:es)?)?/gi, ' ');
+    cleaned = cleaned.replace(/\b\d+\s+(sin|con)\b/gi, '$1');
+
     // 1. Quitar precios, signos de pesos y valores monetarios (ej: "$ 17.300", "($ 17.300)", "$34.600", "$ 4.000")
     cleaned = cleaned
       .replace(/\(\s*\$\s*[\d.,]+\s*\)/gi, '')
@@ -416,6 +428,12 @@ export class PrintService {
       const match = cleaned.match(/\b(sin\s+[\w\s]+|con\s+papas\s+[\w\s]+|salsa\s+[\w\s]+|bien\s+asada|termino\s+medio|jugo\s+en\s+[\w]+)\b/i);
       if (match) return match[0].trim();
       return '';
+    }
+
+    // 6. Si contiene una instrucción explícita de cocina (sin cebolla, sin salsa, con tártara, etc.), extraerla directamente
+    const specificInstruction = cleaned.match(/\b(sin\s+[\w\s]+|con\s+[\w\s]+|aparte|bien\s+asada|bien\s+cocid[oa]|termino\s+medio|papas?\s+[\w\s]+|salsa\s+[\w\s]+)\b/i);
+    if (specificInstruction) {
+      return specificInstruction[0].trim();
     }
 
     return cleaned;
@@ -773,19 +791,42 @@ export class PrintService {
     
     for (const item of grouped) {
       const uPrice = Number(item.unitPrice || item.price || item.menuItem?.price || 0);
-      const sub = uPrice * Number(item.quantity || 1);
-      const priceTag = uPrice > 0 ? ` ($ ${Math.round(uPrice).toLocaleString('es-CO')} c/u = $ ${Math.round(sub).toLocaleString('es-CO')})` : '';
-      lines.push(`[HEIGHT]${item.quantity} x ${item.menuItem?.name || 'Item'}${priceTag}[/HEIGHT]`);
       const cleaned = this.cleanNotesForPrint(item.notes, item.menuItem?.name);
-      if (item.notes && cleaned && !item.notes.startsWith('Adición para:')) {
-        lines.push(`[HEIGHT]  ↳ NOTA: ${cleaned.toUpperCase()}[/HEIGHT]`);
+
+      // Si el item viene con cantidad > 1 pero la nota original pedía una porción parcial (ej: "1 sin cebolla" en 2 perros)
+      const rawNotesStr = String(item.notes || '');
+      const wordToNum: Record<string, number> = { 'un': 1, 'una': 1, 'uno': 1, 'dos': 2, 'tres': 3, 'cuatro': 4, 'cinco': 5 };
+      const partialMatch = rawNotesStr.match(/(?:^|\s)(\d+|un|una|uno|dos|tres|cuatro|cinco)\s+(?:sin|con|solo\s+con)\s+([a-záéíóúñ\s]+)/i);
+      let partialQty = 0;
+      if (partialMatch) {
+        const rawPart = partialMatch[1].toLowerCase();
+        partialQty = parseInt(rawPart, 10) || wordToNum[rawPart] || 0;
+      }
+
+      if (cleaned && partialQty > 0 && partialQty < item.quantity) {
+        const pSub = uPrice * partialQty;
+        const pTag = uPrice > 0 ? ` ($ ${Math.round(uPrice).toLocaleString('es-CO')} c/u = $ ${Math.round(pSub).toLocaleString('es-CO')})` : '';
+        lines.push(`[BOLD][HEIGHT]${partialQty} x ${item.menuItem?.name || 'Item'}${pTag}[/HEIGHT][/BOLD]`);
+        lines.push(`[BOLD][HEIGHT]  ↳ NOTA: ${cleaned.toUpperCase()}[/HEIGHT][/BOLD]`);
+
+        const remQty = item.quantity - partialQty;
+        const remSub = uPrice * remQty;
+        const remTag = uPrice > 0 ? ` ($ ${Math.round(uPrice).toLocaleString('es-CO')} c/u = $ ${Math.round(remSub).toLocaleString('es-CO')})` : '';
+        lines.push(`[BOLD][HEIGHT]${remQty} x ${item.menuItem?.name || 'Item'}${remTag}[/HEIGHT][/BOLD]`);
+      } else {
+        const sub = uPrice * Number(item.quantity || 1);
+        const priceTag = uPrice > 0 ? ` ($ ${Math.round(uPrice).toLocaleString('es-CO')} c/u = $ ${Math.round(sub).toLocaleString('es-CO')})` : '';
+        lines.push(`[BOLD][HEIGHT]${item.quantity} x ${item.menuItem?.name || 'Item'}${priceTag}[/HEIGHT][/BOLD]`);
+        if (item.notes && cleaned && !item.notes.startsWith('Adición para:')) {
+          lines.push(`[BOLD][HEIGHT]  ↳ NOTA: ${cleaned.toUpperCase()}[/HEIGHT][/BOLD]`);
+        }
       }
       if (item.additions && item.additions.length > 0) {
         for (const a of item.additions) {
           const aPrice = Number(a.unitPrice || a.price || a.menuItem?.price || 0);
           const aSub = aPrice * Number(a.quantity || 1);
           const aPriceTag = aPrice > 0 ? ` ($ ${Math.round(aPrice).toLocaleString('es-CO')} c/u = $ ${Math.round(aSub).toLocaleString('es-CO')})` : '';
-          lines.push(`[HEIGHT]  + ${a.quantity} x ${a.menuItem?.name || 'Item'}${aPriceTag}[/HEIGHT]`);
+          lines.push(`[BOLD][HEIGHT]  + ${a.quantity} x ${a.menuItem?.name || 'Item'}${aPriceTag}[/HEIGHT][/BOLD]`);
         }
       }
       lines.push(''); // Línea en blanco para separar productos

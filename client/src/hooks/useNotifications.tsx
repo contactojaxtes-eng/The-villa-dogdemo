@@ -251,10 +251,10 @@ export function useNotifications() {
       // Cocineros y meseros NO deben recibir la alerta general
       if (['KITCHEN', 'WAITER'].includes(user.role || '')) return
 
-      const isTableOrder = Boolean(order?.tableId || order?.orderType === 'LOCAL' || order?.source === 'TABLE' || order?.source === 'OFFLINE_TABLE')
+      const isTableOrder = Boolean(order?.tableId || order?.orderType === 'LOCAL' || order?.orderType === 'DINE_IN' || order?.source === 'TABLE' || order?.source === 'OFFLINE_TABLE')
 
-      // Las gestoras de WhatsApp (DELIVERY_MANAGER) NO deben recibir ninguna alerta de pedidos de mesas ni de meseras
-      if (user.role === 'DELIVERY_MANAGER' && isTableOrder) return
+      // Los gestores de domicilios y despachadores NO deben recibir ninguna alerta de mesas ni de meseras
+      if (['DELIVERY_MANAGER', 'DISPATCHER'].includes(user.role || '') && isTableOrder) return
 
       if (isTableOrder) {
         // Alerta exclusiva de salón para Administrador o Cajero
@@ -281,10 +281,10 @@ export function useNotifications() {
       // Cocineros NO deben recibir alertas de cambio de estado de pedidos ni domicilios
       if (user.role === 'KITCHEN') return
 
-      const isTableOrder = Boolean(data.order?.tableId || data.order?.orderType === 'LOCAL' || data.order?.source === 'TABLE' || data.order?.source === 'OFFLINE_TABLE')
+      const isTableOrder = Boolean(data.order?.tableId || data.order?.orderType === 'LOCAL' || data.order?.orderType === 'DINE_IN' || data.order?.source === 'TABLE' || data.order?.source === 'OFFLINE_TABLE')
 
-      // Las gestoras de WhatsApp NO reciben cambios de estado de mesas ni de pedidos de meseras
-      if (user.role === 'DELIVERY_MANAGER' && isTableOrder) return
+      // Los gestores de domicilios y despachadores NO reciben cambios de estado de mesas ni de salón
+      if (['DELIVERY_MANAGER', 'DISPATCHER'].includes(user.role || '') && isTableOrder) return
 
       const labels: Record<string, string> = {
         READY: 'Listo para despacho',
@@ -588,8 +588,8 @@ export function useNotifications() {
       assignedToId?: string | null
       assignedTo?: { id: string; name: string } | null
     }) => {
-      // Cocineros y meseros NO atienden WhatsApp ni deben recibir alertas sonoras ni emergentes de chat
-      if (['KITCHEN', 'WAITER'].includes(user.role || '')) return
+      // Cocineros, meseros y gestores de domicilios/despachadores NO reciben alertas emergentes ni sonoras de mensajes de WhatsApp
+      if (['KITCHEN', 'WAITER', 'DELIVERY_MANAGER', 'DISPATCHER'].includes(user.role || '')) return
       if (!hasUserPermission(user, 'whatsapp.view')) return
 
       // Mantiene la bandeja y los mensajes calientes incluso mientras el usuario
@@ -631,8 +631,8 @@ export function useNotifications() {
       customerName: string
       sessionId: string
     }) => {
-      // Cocineros y meseros NO gestionan asesores de WhatsApp ni deben recibir alertas
-      if (['KITCHEN', 'WAITER'].includes(user.role || '')) return
+      // Cocineros, meseros y gestores de domicilios NO gestionan solicitudes de asesor
+      if (['KITCHEN', 'WAITER', 'DELIVERY_MANAGER', 'DISPATCHER'].includes(user.role || '')) return
       if (!hasUserPermission(user, 'whatsapp.view')) return
 
       toast.warning('🙋 Cliente solicita asesor', {

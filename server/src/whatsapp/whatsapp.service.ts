@@ -4804,8 +4804,13 @@ REGLAS DE RECONOCIMIENTO Y RELACIÓN DE PRODUCTOS (THE VILLA DOG):
   * Si no menciona tamaño familiar (1.5L o 3L), asume la presentación personal PET 400ml / 500ml.
 - ADICIONES:
   * Si el cliente pide queso extra, tocineta extra, salchicha extra, piña extra, etc., busca y asigna el ID exacto en "additions".
-- INSTRUCCIONES DE PREPARACIÓN:
-  * Si el cliente escribe "sin cebolla", "sin salsas", "con tártara aparte", "sin ripio", "bien cocido", etc., colócalo en "preference" o "notes" del producto correspondiente.
+- INSTRUCCIONES DE PREPARACIÓN Y NOTAS:
+  * Si el cliente escribe "sin cebolla", "sin salsas", "con tártara aparte", "sin ripio", "bien cocido", etc., colócalo en "notes" del producto correspondiente.
+  * PROHIBIDO INCLUIR CHARLA, SALUDOS O AFECTO: JAMÁS incluyas saludos ("hola", "buenas"), expresiones de cortesía ("por favor", "me regala", "me da"), ni frases afectivas ("te amo", "bebé", "mi amor", "linda", etc.) en las notas. En "notes" SOLO deben ir instrucciones directas y concisas de cocina (ej: "Sin cebolla").
+  * SEPARACIÓN DE PRODUCTOS CON DIFERENTE PREPARACIÓN (MUY IMPORTANTE): Si el cliente pide por ejemplo "2 perros sencillos 1 sin cebolla", NO los agrupes en un solo ítem de 2. Debes separarlos en dos ítems independientes en el array "items":
+    - Ítem 1: menuItemId del Perro Sencillo, quantity: 1, notes: "Sin cebolla"
+    - Ítem 2: menuItemId del Perro Sencillo, quantity: 1, notes: ""
+    Si pide "5 perros sencillos 2 sin cebolla", crea un ítem con quantity: 2 y notes: "Sin cebolla", y otro ítem con quantity: 3 y notes: "".
 - CANTIDADES:
   * Detecta cantidades explícitas al inicio o al final (ej: "2 perros sencillos", "perro sencillo x2", "tres hamburguesas"). quantity debe ser entero entre 1 y 99.
 - TIPO DE ENTREGA Y PAGO:
@@ -5069,7 +5074,21 @@ Responde solo con JSON válido.`;
         }
 
         let cleanItemNotes = typeof rawItem.notes === 'string' ? rawItem.notes.trim() : '';
+        const parsedItemQty = Math.min(99, Math.max(1, Math.trunc(Number(rawItem.quantity) || 1)));
+
         if (cleanItemNotes) {
+          // 0. Eliminar frases afectivas, saludos, despedidas o palabras de chat que nada tienen que ver con la cocina
+          const chatFluff = /\b(te\s+amo|te\s+quiero|te\s+adoro|bebe|bebecito|bebesito|bebesita|mi\s+amor|mi\s+vida|mi\s+cielo|mi\s+rey|mi\s+reina|amor|reina|rey|princesa|cariño|linda|lindo|hermoso|hermosa|corazon|vida|parce|parcero|hermano|amigo|amiga|vecino|vecina|por\s*fa(?:vor)?|porfa|por\s+fa|muchas\s+gracias|gracias|buen\s+dia|buenas\s+tardes|buenas\s+noches|buenas|hola|saludos|atentamente|chao|adios)\b/gi;
+          cleanItemNotes = cleanItemNotes.replace(chatFluff, ' ');
+
+          // Eliminar verbos y peticiones conversacionales ("me regala", "me da", "deme", "regalame", etc.)
+          const orderVerbs = /\b(me\s+regala[sn]?|me\s+da[sn]?|regalame|deme|mande(?:me)?|envie(?:me)?|traiga(?:me)?|quiero|quisiera|haga(?:me)?\s+el\s+favor|favor)\b/gi;
+          cleanItemNotes = cleanItemNotes.replace(orderVerbs, ' ');
+
+          // Quitar repeticiones de cantidades y nombres de producto dentro de la nota (ej: "2 perro sencillos 1 sin cebolla" -> "sin cebolla")
+          cleanItemNotes = cleanItemNotes.replace(/\b\d+\s+(?:perro|hamburguesa|pizza|salchipapa|desgranado|suizo)s?\s*(?:sencill[oa]s?|especial(?:es)?|gratina[do]s?|mixt[oa]s?|personal(?:es)?|familiar(?:es)?)?/gi, ' ');
+          cleanItemNotes = cleanItemNotes.replace(/\b\d+\s+(sin|con)\b/gi, '$1');
+
           cleanItemNotes = cleanItemNotes
             .replace(/\(\s*\$\s*[\d.,]+\s*\)/gi, '')
             .replace(/\[\s*\$\s*[\d.,]+\s*\]/gi, '')
@@ -5087,26 +5106,59 @@ Responde solo con JSON válido.`;
             }
           }
 
-          cleanItemNotes = cleanItemNotes
-            .split(/\s*[—–\-|,]\s*/)
-            .map((chunk: string) => chunk.trim())
-            .filter((chunk: string) => {
-              if (!chunk || chunk.length < 2) return false;
-              if (/^[\d\s.,$()\-—]+$/.test(chunk)) return false;
-              if (/^(valor|total|precio|domicilio|subtotal|papas francesa|papas francesas|papas vapor|papas al vapor)$/i.test(chunk)) return false;
-              return true;
-            })
-            .join(' — ')
-            .trim();
+          // Si contiene una instrucción explícita de cocina (sin cebolla, sin salsa, con tártara, etc.), extraerla directamente
+          const specificInstruction = cleanItemNotes.match(/\b(sin\s+[\w\s]+|con\s+[\w\s]+|aparte|bien\s+asada|bien\s+cocid[oa]|termino\s+medio|papas?\s+[\w\s]+|salsa\s+[\w\s]+)\b/i);
+          if (specificInstruction) {
+            cleanItemNotes = specificInstruction[0].trim();
+          } else {
+            cleanItemNotes = cleanItemNotes
+              .split(/\s*[—–\-|,]\s*/)
+              .map((chunk: string) => chunk.trim())
+              .filter((chunk: string) => {
+                if (!chunk || chunk.length < 2) return false;
+                if (/^[\d\s.,$()\-—]+$/.test(chunk)) return false;
+                if (/^(valor|total|precio|domicilio|subtotal|papas francesa|papas francesas|papas vapor|papas al vapor)$/i.test(chunk)) return false;
+                return true;
+              })
+              .join(' — ')
+              .trim();
+          }
         }
 
-        parsedCartItems.push({
-          menuItem,
-          quantity: Math.min(99, Math.max(1, Math.trunc(Number(rawItem.quantity) || 1))),
-          preference: typeof rawItem.preference === 'string' ? rawItem.preference.trim().slice(0, 300) : '',
-          notes: cleanItemNotes,
-          additions
-        });
+        // Si la nota original especificaba una cantidad parcial (ej: "1 sin cebolla" cuando quantity es 2)
+        const rawNoteStr = String(rawItem.notes || '');
+        const wordToNum: Record<string, number> = { 'un': 1, 'una': 1, 'uno': 1, 'dos': 2, 'tres': 3, 'cuatro': 4, 'cinco': 5 };
+        const partialMatch = rawNoteStr.match(/(?:^|\s)(\d+|un|una|uno|dos|tres|cuatro|cinco)\s+(?:sin|con|solo\s+con)\s+([a-záéíóúñ\s]+)/i);
+        let partialQty = 0;
+        if (partialMatch) {
+          const rawPart = partialMatch[1].toLowerCase();
+          partialQty = parseInt(rawPart, 10) || wordToNum[rawPart] || 0;
+        }
+
+        if (cleanItemNotes && partialQty > 0 && partialQty < parsedItemQty) {
+          parsedCartItems.push({
+            menuItem,
+            quantity: partialQty,
+            preference: typeof rawItem.preference === 'string' ? rawItem.preference.trim().slice(0, 300) : '',
+            notes: cleanItemNotes,
+            additions
+          });
+          parsedCartItems.push({
+            menuItem,
+            quantity: parsedItemQty - partialQty,
+            preference: typeof rawItem.preference === 'string' ? rawItem.preference.trim().slice(0, 300) : '',
+            notes: '',
+            additions: []
+          });
+        } else {
+          parsedCartItems.push({
+            menuItem,
+            quantity: parsedItemQty,
+            preference: typeof rawItem.preference === 'string' ? rawItem.preference.trim().slice(0, 300) : '',
+            notes: cleanItemNotes,
+            additions
+          });
+        }
       }
 
       const paymentMethod = rawJson.paymentMethod === 'CASH' || rawJson.paymentMethod === 'TRANSFER'

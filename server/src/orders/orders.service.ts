@@ -976,13 +976,6 @@ export class OrdersService implements OnModuleInit {
     }, operationTransaction);
     await this.notifyUpdated(id, result.updated, result.existing, data, user);
 
-    // Auto-reimpresión en todas las estaciones y caja al editar pedido
-    try {
-      await this.printService.printOrder(id);
-    } catch (printErr) {
-      this.logger.warn(`Error en auto-reimpresión de pedido editado #${id}:`, printErr);
-    }
-
     return result.updated;
   }
 
