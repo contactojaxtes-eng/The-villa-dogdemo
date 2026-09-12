@@ -1444,10 +1444,6 @@ export class OrdersService implements OnModuleInit {
           const driverInfo = driver?.name ? `con tu domiciliario ${driver.name}` : 'con el domiciliario';
           const driverPhoneInfo = driver?.phone ? ` (${driver.phone})` : '';
           text = `¡Hola ${updated.customerName}! Tu pedido ya va en camino ${driverInfo}${driverPhoneInfo}. ¡Gracias por tu compra en The Villa Dog!`;
-        } else if (status === 'DELIVERED') {
-          if (updated.orderType !== 'PICKUP') {
-            text = `¡Hola ${updated.customerName}! Tu pedido ha sido entregado con éxito. ¡Gracias por tu compra y buen provecho!`;
-          }
         }
 
         if (text) {
@@ -1681,15 +1677,6 @@ export class OrdersService implements OnModuleInit {
     }
 
     this.socketGateway.emitOrderStatusChange(id, 'CANCELLED', updated);
-
-    try {
-      if (this.canSendWhatsApp(updated)) {
-        const text = `Hola ${updated.customerName}. Te informamos que tu pedido #${updated.orderNumber} ha sido cancelado.\nMotivo: ${reason || 'No especificado'}.`;
-        await this.sendOrderWhatsAppNotification(updated, text);
-      }
-    } catch (waErr) {
-      this.logger.error(`Error enviando WhatsApp de cancelación para pedido #${updated.orderNumber}`, waErr);
-    }
 
     if (order.status !== 'IN_ROUTE' && order.status !== 'DELIVERED') {
       try {
