@@ -2452,6 +2452,7 @@ function ChatPage() {
       }>('/whatsapp/send', {
         phone: activeSession.phone,
         text: cleanText,
+        sessionId: activeSession.id,
         ...(replyWaId ? { replyToWaMessageId: replyWaId, replyToContent: replyContent } : {})
       })
 
@@ -2510,6 +2511,7 @@ function ChatPage() {
         }>('/whatsapp/send', {
           phone: activeSession.phone,
           text: text,
+          sessionId: activeSession.id,
         })
         if (result.message) {
           const persisted = result.message

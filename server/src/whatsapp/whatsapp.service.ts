@@ -32,8 +32,37 @@ export class WhatsappService implements OnModuleInit {
   async onModuleInit() {
     try {
       await this.purgeLegacyMenuFile();
+      await this.cleanupCrossedSessions();
     } catch (error) {
       this.logger.warn('No se pudo limpiar la carta estática anterior al iniciar', error);
+    }
+  }
+
+  private async cleanupCrossedSessions() {
+    try {
+      const sessions = await this.prisma.whatsAppSession.findMany({
+        where: { customerPhone: { not: null } },
+        select: { id: true, phone: true, customerPhone: true, customerName: true },
+      });
+
+      for (const s of sessions) {
+        const cleanP = (s.phone || '').replace(/\D/g, '');
+        const p10 = cleanP.length === 12 && cleanP.startsWith('57') ? cleanP.slice(2) : cleanP;
+        const cleanCP = (s.customerPhone || '').replace(/\D/g, '');
+        const cp10 = cleanCP.length === 12 && cleanCP.startsWith('57') ? cleanCP.slice(2) : cleanCP;
+
+        if (cp10.length === 10 && p10.length === 10 && cp10 !== p10) {
+          this.logger.log(`🧹 Desvinculando sesión cruzada ${s.id} (${s.customerName}): phone=${s.phone}, customerPhone=${s.customerPhone}`);
+          await this.prisma.whatsAppSession.update({
+            where: { id: s.id },
+            data: {
+              customerPhone: p10.startsWith('3') ? p10 : s.phone,
+            },
+          });
+        }
+      }
+    } catch (e) {
+      this.logger.warn('Error en limpieza de sesiones cruzadas:', e);
     }
   }
 
@@ -412,13 +441,10 @@ export class WhatsappService implements OnModuleInit {
       orConditions.push(
         { phone: cleanDigits },
         { phone: phone10 },
-        { phone: phone12 },
-        { customerPhone: cleanDigits },
-        { customerPhone: phone10 },
-        { customerPhone: phone12 }
+        { phone: phone12 }
       );
     } else if (cleanDigits.length > 0 && !this.isDummyPhoneNumber(cleanDigits)) {
-      orConditions.push({ phone: cleanDigits }, { customerPhone: cleanDigits });
+      orConditions.push({ phone: cleanDigits });
     }
 
     return this.prisma.whatsAppSession.findFirst({
@@ -441,13 +467,6 @@ export class WhatsappService implements OnModuleInit {
     const orConditions: any[] = [{ id: raw }, { phone: raw }, { phone: primaryKey }];
     if (isStandardPhone) {
       orConditions.push({ phone: cleanDigits }, { phone: phone10 }, { phone: phone12 });
-      orConditions.push({ customerPhone: cleanDigits }, { customerPhone: phone10 }, { customerPhone: phone12 });
-    }
-    if (callablePhone) {
-      const cClean = callablePhone.replace(/\D/g, '');
-      const c10 = (cClean.length === 12 && cClean.startsWith('57')) ? cClean.slice(2) : cClean;
-      orConditions.push({ customerPhone: callablePhone }, { customerPhone: cClean });
-      if (c10) orConditions.push({ customerPhone: c10 });
     }
 
     let session = await this.prisma.whatsAppSession.findFirst({
@@ -463,7 +482,7 @@ export class WhatsappService implements OnModuleInit {
       session = await this.prisma.whatsAppSession.create({
         data: {
           phone: primaryKey,
-          customerPhone: resolvedCallable,
+          customerPhone: resolvedCallable || primaryKey,
           customerName: fallbackName
         },
         include: { assignedTo: { select: { id: true, name: true } } }
@@ -1284,25 +1303,13 @@ export class WhatsappService implements OnModuleInit {
       : (cleanDigits || phone || `wa_lead_${msg.id || Date.now()}`);
 
     const orConditions: any[] = [];
-    if (phone && phone !== 'cliente_wa') orConditions.push({ phone: phone });
-    if (primaryPhoneKey && primaryPhoneKey !== 'cliente_wa' && primaryPhoneKey !== phone) orConditions.push({ phone: primaryPhoneKey });
+    if (primaryPhoneKey && primaryPhoneKey !== 'cliente_wa') orConditions.push({ phone: primaryPhoneKey });
+    if (phone && phone !== 'cliente_wa' && phone !== primaryPhoneKey) orConditions.push({ phone: phone });
     if (isStandardPhone) {
       orConditions.push({ phone: cleanDigits }, { phone: phone10 }, { phone: phone12 });
-      orConditions.push({ customerPhone: cleanDigits }, { customerPhone: phone10 }, { customerPhone: phone12 });
     }
-    if (detectedCallablePhone) {
-      const dClean = detectedCallablePhone.replace(/\D/g, '');
-      const d10 = (dClean.length === 12 && dClean.startsWith('57')) ? dClean.slice(2) : dClean;
-      orConditions.push({ customerPhone: detectedCallablePhone }, { phone: detectedCallablePhone });
-      if (dClean) orConditions.push({ customerPhone: dClean }, { phone: dClean });
-      if (d10 && d10.length === 10) {
-        orConditions.push(
-          { customerPhone: d10 },
-          { customerPhone: `57${d10}` },
-          { phone: d10 },
-          { phone: `57${d10}` }
-        );
-      }
+    if (rawPhone && rawPhone !== 'cliente_wa' && rawPhone !== primaryPhoneKey && rawPhone !== phone) {
+      orConditions.push({ phone: rawPhone });
     }
     if (orConditions.length === 0) {
       orConditions.push({ phone: primaryPhoneKey });
@@ -1319,12 +1326,13 @@ export class WhatsappService implements OnModuleInit {
     }
 
     const previousLastMessageAt = session?.lastMessageAt || null;
+    const callablePhone = (phone10.length === 10 && phone10.startsWith('3')) ? phone10 : (cleanDigits || null);
 
     if (!session) {
       session = await this.prisma.whatsAppSession.create({
         data: { 
           phone: primaryPhoneKey, 
-          customerPhone: detectedCallablePhone,
+          customerPhone: callablePhone,
           customerName: finalCustomerName, 
           active: true, 
           lastMessageAt: new Date() 
@@ -1354,15 +1362,13 @@ export class WhatsappService implements OnModuleInit {
         updateData.waitingForAdvisor = false;
       }
 
-      if (detectedCallablePhone) {
-        if (!session.customerPhone || (session.customerPhone.length > 12 && detectedCallablePhone.length === 10)) {
-          updateData.customerPhone = detectedCallablePhone;
-        }
-        const cleanSessionPhone = (session.phone || '').replace(/\D/g, '');
-        const cleanMsgFrom = (primaryPhoneKey || '').replace(/\D/g, '');
-        if ((cleanSessionPhone.length >= 13 && !cleanSessionPhone.startsWith('573')) && (cleanMsgFrom.length === 10 || (cleanMsgFrom.length === 12 && cleanMsgFrom.startsWith('57')))) {
-          updateData.phone = primaryPhoneKey;
-        }
+      if (!session.customerPhone && callablePhone) {
+        updateData.customerPhone = callablePhone;
+      }
+      const cleanSessionPhone = (session.phone || '').replace(/\D/g, '');
+      if ((cleanSessionPhone.length >= 13 && !cleanSessionPhone.startsWith('573')) && callablePhone) {
+        updateData.phone = primaryPhoneKey;
+        updateData.customerPhone = callablePhone;
       }
 
       session = await this.prisma.whatsAppSession.update({
@@ -2895,7 +2901,7 @@ export class WhatsappService implements OnModuleInit {
     }
   }
 
-  async sendMessage(phone: string, text: string, replyToWaMessageId?: string, replyToContent?: string) {
+  async sendMessage(phone: string, text: string, replyToWaMessageId?: string, replyToContent?: string, sessionId?: string) {
     const phoneId = await this.getSetting('whatsapp_phone_id');
     const token = await this.getSetting('whatsapp_token');
     if (!phoneId || !token) {
@@ -2908,7 +2914,10 @@ export class WhatsappService implements OnModuleInit {
       return { sent: false, reason: 'dummy_phone' };
     }
 
-    const targetSession = await this.resolveSessionForDispatch(phone);
+    const targetSession = sessionId
+      ? await this.prisma.whatsAppSession.findUnique({ where: { id: sessionId }, include: { assignedTo: { select: { id: true, name: true } } } })
+      : await this.resolveSessionForDispatch(phone);
+
     const { recipientPhone, lastInWaId, isId } = await this.resolveActiveRecipient(targetSession, phone);
     const formattedPhone = this.formatRecipient(recipientPhone);
 

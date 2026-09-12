@@ -275,8 +275,8 @@ export class WhatsappController {
   @Post('send')
   @UseGuards(JwtAuthGuard, PermissionsGuard)
   @Permissions('whatsapp.reply')
-  async sendMessage(@Body() body: { phone: string; text: string; replyToWaMessageId?: string; replyToContent?: string }) {
-    const result = await this.whatsappService.sendMessage(body.phone, body.text, body.replyToWaMessageId, body.replyToContent);
+  async sendMessage(@Body() body: { phone: string; text: string; replyToWaMessageId?: string; replyToContent?: string; sessionId?: string }) {
+    const result = await this.whatsappService.sendMessage(body.phone, body.text, body.replyToWaMessageId, body.replyToContent, body.sessionId);
     if (!result.sent) {
       const resAny = result as any;
       const errorMsg = resAny.error?.message 
