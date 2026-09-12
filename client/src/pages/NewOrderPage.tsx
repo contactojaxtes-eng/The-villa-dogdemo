@@ -559,7 +559,7 @@ export default function NewOrderPage({
 
   const [zoneId, setZoneId] = useState('')
   const [zoneSearch, setZoneSearch] = useState('')
-  const [zoneRateEdit, setZoneRateEdit] = useState('0')
+  const [zoneRateEdit, setZoneRateEdit] = useState('')
   const [zoneResultsOpen, setZoneResultsOpen] = useState(false)
   const zoneContainerRef = useRef<HTMLDivElement>(null)
   const [orderReaderEnabled, setOrderReaderEnabled] = useState(false)
@@ -858,13 +858,13 @@ export default function NewOrderPage({
             setZoneId(order.zone.id)
             setZoneSearch(order.zone.name)
             setMapSearch(order.zone.name)
-            setZoneRateEdit(String(order.deliveryFee ?? order.zone.rate ?? 0))
+            setZoneRateEdit(order.deliveryFee != null ? String(order.deliveryFee) : (order.zone.rate != null ? String(order.zone.rate) : ''))
           } else {
             const fallbackZone = order.zoneName || order.customer?.barrio || (order.addressReference ? order.addressReference.split('—')[0].trim() : '') || (order.orderType === 'DELIVERY' ? 'Domicilio' : '')
             setZoneId(order.zoneId || '')
             setZoneSearch(fallbackZone)
             setMapSearch(fallbackZone)
-            setZoneRateEdit(String(order.deliveryFee ?? 0))
+            setZoneRateEdit(order.deliveryFee != null ? String(order.deliveryFee) : '')
           }
 
           const cartItems = (order.items || []).map((i: any) => {
@@ -905,7 +905,7 @@ export default function NewOrderPage({
       setAddressReference('')
       setZoneId('')
       setZoneSearch('')
-      setZoneRateEdit('0')
+      setZoneRateEdit('')
       setMapSearch('')
       setPaymentMethod('CASH')
       setPaymentReference('')
@@ -930,7 +930,7 @@ export default function NewOrderPage({
         setAddressReference(draft.addressReference || '')
         setZoneId(draft.zoneId || '')
         setZoneSearch(draft.zoneSearch || '')
-        setZoneRateEdit(draft.zoneRateEdit ?? '0')
+        setZoneRateEdit(draft.zoneRateEdit ?? '')
         setMapSearch(draft.mapSearch || '')
         setPaymentMethod(draft.paymentMethod || 'CASH')
         setPaymentReference(draft.paymentReference || '')
@@ -2770,7 +2770,7 @@ export default function NewOrderPage({
     orderType === 'delivery' && !customerPhone.trim() && 'teléfono',
     orderType === 'delivery' && !zoneSearch.trim() && 'barrio',
     orderType === 'delivery' && !exactAddress.trim() && 'dirección exacta',
-    orderType === 'delivery' && (!zoneRateEdit || !Number.isFinite(parseFloat(zoneRateEdit)) || parseFloat(zoneRateEdit) < 0) && 'tarifa confirmada',
+    orderType === 'delivery' && (!zoneRateEdit.trim() || !Number.isFinite(parseFloat(zoneRateEdit)) || parseFloat(zoneRateEdit) < 0) && 'tarifa domicilio',
   ].filter(Boolean) as string[]
   const itemCount = cart.reduce((sum, item) => sum + item.quantity, 0)
   const isCashBlocked = !canCreate?.allowed && !editOrderId
@@ -2971,9 +2971,15 @@ export default function NewOrderPage({
         submittingRef.current = false
         return
       }
-      const confirmedDeliveryFee = Number(zoneRateEdit || 0)
+      const rawRate = zoneRateEdit.trim()
+      if (!rawRate) {
+        setError('Por favor ingresa la tarifa de domicilio (obligatorio).')
+        submittingRef.current = false
+        return
+      }
+      const confirmedDeliveryFee = Number(zoneRateEdit)
       if (!Number.isFinite(confirmedDeliveryFee) || confirmedDeliveryFee < 0) {
-        setError('Ingresa una tarifa válida (o 0 si no se cobra domicilio).')
+        setError('Ingresa una tarifa válida de domicilio.')
         submittingRef.current = false
         return
       }
@@ -3108,7 +3114,7 @@ export default function NewOrderPage({
     localStorage.removeItem(activeDraftKey)
     setClientMutationId(createClientMutationId())
     setCustomerName(''); setCustomerPhone(''); setExactAddress(''); setZoneId('')
-    setZoneSearch(''); setZoneRateEdit('0')
+    setZoneSearch(''); setZoneRateEdit('')
     setPaymentMethod('CASH'); setNotes(''); setCart([]); setError(''); setOrderType('delivery'); setIsCartCollapsed(false)
   }
 
@@ -3654,7 +3660,7 @@ export default function NewOrderPage({
                 <div className="space-y-1">
                   <div className="flex items-center justify-between">
                     <Label className="text-[10px] font-bold text-[var(--text-secondary)] uppercase flex items-center gap-1">
-                      <DollarSign className="h-3 w-3 text-[var(--accent)]" /> Tarifa Domicilio
+                      <DollarSign className="h-3 w-3 text-[var(--accent)]" /> Tarifa Domicilio <span className="text-[var(--destructive)] font-black">*</span>
                     </Label>
                     {estimatedKm != null && (
                       <span className="text-[9px] font-bold text-[var(--accent)] bg-[var(--accent-muted)] px-1 rounded">
