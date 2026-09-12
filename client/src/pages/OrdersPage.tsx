@@ -255,10 +255,8 @@ export default function OrdersPage() {
         transferAmount: collectMethod === 'MIXED' ? (parseFloat(collectTransferAmount) || 0) : undefined,
       })
       const shouldKick = collectMethod === 'CASH'
-      if (printInvoiceOnCollect) {
-        await printComandaSmart(updatedOrder, 'caja', user?.role, false, shouldKick)
-      } else if (shouldKick) {
-        await openCashDrawer()
+      if (shouldKick) {
+        await openCashDrawer().catch(() => {})
       }
       setCollectDialog(null)
       setCollectMethod('CASH')
@@ -1340,19 +1338,7 @@ export default function OrdersPage() {
                 />
               </div>
 
-              {/* Checkbox to print invoice */}
-              <div className="flex items-center gap-2.5 py-1 px-1">
-                <input
-                  type="checkbox"
-                  id="printInvoiceOnCollect"
-                  checked={printInvoiceOnCollect}
-                  onChange={e => setPrintInvoiceOnCollect(e.target.checked)}
-                  className="h-4.5 w-4.5 accent-[var(--accent)] rounded cursor-pointer shrink-0"
-                />
-                <Label htmlFor="printInvoiceOnCollect" className="text-xs font-bold text-[var(--text-secondary)] cursor-pointer select-none leading-none">
-                  Imprimir factura de caja (Caja)
-                </Label>
-              </div>
+
 
               <div className="flex gap-3 mt-3">
                 <Button variant="outline" className="flex-1 h-12 rounded-xl font-bold text-sm border-[var(--border-default)] hover:bg-[var(--bg-hover)]" onClick={() => setCollectDialog(null)}>

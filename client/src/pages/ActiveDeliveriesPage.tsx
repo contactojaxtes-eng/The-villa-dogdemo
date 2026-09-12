@@ -302,10 +302,8 @@ export default function ActiveDeliveriesPage() {
         transferAmount: effectiveMethod === 'MIXED' ? (parseFloat(collectTransferAmount) || 0) : undefined,
       })
       const shouldKick = collectMethod === 'CASH'
-      if (printInvoiceOnCollect) {
-        await printComandaSmart(updatedOrder, 'caja', user?.role, false, shouldKick)
-      } else if (shouldKick) {
-        await openCashDrawer()
+      if (shouldKick) {
+        await openCashDrawer().catch(() => {})
       }
       setCollectDialog(null)
       setCollectMethod('CASH')
@@ -1831,10 +1829,6 @@ export default function ActiveDeliveriesPage() {
                 <Input value={collectReference} onChange={e => setCollectReference(e.target.value)} placeholder="# de transacción..." className="bg-[var(--bg-input)] border-[var(--border-default)] rounded-xl text-xs h-10" />
               </div>
             )}
-            <div className="flex items-center gap-3 p-2.5 rounded-xl bg-[var(--bg-subtle)] border border-[var(--border-subtle)]">
-              <input type="checkbox" checked={printInvoiceOnCollect} onChange={e => setPrintInvoiceOnCollect(e.target.checked)} className="rounded" />
-              <span className="text-[11px] font-bold text-[var(--text-secondary)]">Imprimir factura al cobrar</span>
-            </div>
             <Button className="w-full h-12 bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-fg)] font-extrabold rounded-xl text-sm shadow-md border-0 cursor-pointer"
               onClick={handleCollectPayment} disabled={isSubmittingPayment}>
               {isSubmittingPayment ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <DollarSign className="h-4 w-4 mr-2" />}

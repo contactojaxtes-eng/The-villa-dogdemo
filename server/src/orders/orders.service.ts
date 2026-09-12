@@ -1678,7 +1678,7 @@ export class OrdersService implements OnModuleInit {
 
     this.socketGateway.emitOrderStatusChange(id, 'CANCELLED', updated);
 
-    if (order.status !== 'IN_ROUTE' && order.status !== 'DELIVERED') {
+    if (!this.isDeliveryKitchenOrder(order) && order.status !== 'IN_ROUTE' && order.status !== 'DELIVERED') {
       try {
         await this.printService.printCancellation(updated);
       } catch (err) {
@@ -1757,10 +1757,12 @@ export class OrdersService implements OnModuleInit {
     this.socketGateway.emitOrderStatusChange(id, 'CANCELLED', updated);
     this.socketGateway.emitOrderCancellationResolved({ orderId: id, status: 'CANCELLED', approved: true });
 
-    try {
-      await this.printService.printCancellation(updated);
-    } catch (err) {
-      this.logger.error(`Error imprimiendo ticket de cancelación para pedido #${updated.orderNumber}`, err);
+    if (!this.isDeliveryKitchenOrder(order)) {
+      try {
+        await this.printService.printCancellation(updated);
+      } catch (err) {
+        this.logger.error(`Error imprimiendo ticket de cancelación para pedido #${updated.orderNumber}`, err);
+      }
     }
 
     return updated;
