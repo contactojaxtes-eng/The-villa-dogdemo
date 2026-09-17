@@ -1494,7 +1494,7 @@ export class OrdersService implements OnModuleInit {
   }
 
   async batchCollectPayments(
-    ordersPayload: Array<{ id: string; method?: string; cashAmount?: number; transferAmount?: number; reference?: string }>,
+    ordersPayload: Array<{ id: string; method?: string; cashAmount?: number; transferAmount?: number; reference?: string; transferReviewed?: boolean }>,
     globalMethod?: string,
     globalReference?: string,
     user?: { id: string; role: string }
@@ -1508,6 +1508,11 @@ export class OrdersService implements OnModuleInit {
       throw new BadRequestException('Debes proporcionar al menos un ID de pedido para cobrar');
     }
 
+    const uniqueIds = new Set(ordersPayload.map(item => item?.id).filter(Boolean));
+    if (uniqueIds.size !== ordersPayload.length) {
+      throw new BadRequestException('La liquidación contiene pedidos repetidos. Actualiza la pantalla e intenta de nuevo.');
+    }
+
     const activeClosing = await this.prisma.cashClosing.findFirst({
       where: { isOpen: true, cashRegister: { purpose: 'DELIVERY', active: true } },
       orderBy: { shiftStart: 'desc' },
@@ -1516,17 +1521,71 @@ export class OrdersService implements OnModuleInit {
       throw new BadRequestException('La Caja Domicilios está cerrada. Ábrela antes de confirmar el pago.');
     }
 
+    const orders = await this.prisma.order.findMany({
+      where: { id: { in: Array.from(uniqueIds) } },
+      select: {
+        id: true,
+        orderNumber: true,
+        status: true,
+        orderType: true,
+        total: true,
+        paymentMethod: true,
+        cashAmount: true,
+        transferAmount: true,
+        paymentReference: true,
+        deliveryDriverId: true,
+      },
+    });
+
+    if (orders.length !== uniqueIds.size) {
+      throw new BadRequestException('Uno o más pedidos ya no existen. Actualiza la pantalla antes de liquidar.');
+    }
+
+    const invalidOrders = orders.filter(order => order.status !== 'IN_ROUTE' || order.orderType !== 'DELIVERY' || !order.deliveryDriverId);
+    if (invalidOrders.length > 0) {
+      const labels = invalidOrders.map(order => `#${order.orderNumber}`).join(', ');
+      throw new BadRequestException(`Solo se pueden liquidar domicilios en ruta y con repartidor asignado. Revisa: ${labels}.`);
+    }
+
+    const allowedMethods = new Set(['CASH', 'TRANSFER', 'NEQUI', 'BANCOLOMBIA', 'DAVIPLATA', 'MIXED']);
+    const ordersById = new Map(orders.map(order => [order.id, order]));
+
+    for (const item of ordersPayload) {
+      const order = ordersById.get(item.id)!;
+      let method = String(item.method || order.paymentMethod || 'CASH').toUpperCase();
+      if (globalMethod === 'CASH') method = 'CASH';
+      else if (globalMethod === 'TRANSFER') method = 'TRANSFER';
+
+      if (!allowedMethods.has(method)) {
+        throw new BadRequestException(`El método de pago del pedido #${order.orderNumber} no se puede liquidar en este flujo.`);
+      }
+
+      const transferAmount = method === 'MIXED'
+        ? Number(item.transferAmount ?? order.transferAmount ?? 0)
+        : (['TRANSFER', 'NEQUI', 'BANCOLOMBIA', 'DAVIPLATA'].includes(method) ? Number(order.total || 0) : 0);
+      if (transferAmount > 0 && item.transferReviewed !== true) {
+        throw new BadRequestException(`Debes validar el chat o comprobante de transferencia del pedido #${order.orderNumber}.`);
+      }
+
+      if (method === 'MIXED') {
+        const cash = Number(item.cashAmount ?? order.cashAmount ?? 0);
+        const transfer = Number(item.transferAmount ?? order.transferAmount ?? 0);
+        const total = Number(order.total || 0);
+        if (!Number.isFinite(cash) || !Number.isFinite(transfer) || cash < 0 || transfer < 0 || Math.abs((cash + transfer) - total) > 1) {
+          throw new BadRequestException(`Los valores de efectivo y transferencia del pedido #${order.orderNumber} no suman el total.`);
+        }
+      }
+    }
+
     const results = [];
     let totalCash = 0;
     let totalTransfer = 0;
     let grandTotal = 0;
 
     for (const item of ordersPayload) {
-      try {
-        const order = await this.prisma.order.findUnique({ where: { id: item.id } });
-        if (!order || ['DELIVERED', 'CANCELLED'].includes(order.status)) continue;
+        const order = ordersById.get(item.id)!;
 
-        let effectiveMethod = item.method || order.paymentMethod || 'CASH';
+        let effectiveMethod = String(item.method || order.paymentMethod || 'CASH').toUpperCase();
         if (globalMethod === 'CASH') effectiveMethod = 'CASH';
         else if (globalMethod === 'TRANSFER') effectiveMethod = 'TRANSFER';
 
@@ -1563,14 +1622,12 @@ export class OrdersService implements OnModuleInit {
         totalTransfer += transferAmount;
         grandTotal += orderTotal;
         results.push(updated);
-      } catch (err: any) {
-        this.logger.warn(`Error al cobrar pedido ${item.id} en lote: ${err.message}`);
-      }
     }
 
     return {
       success: true,
       collectedCount: results.length,
+      failedCount: 0,
       orders: results,
       total: grandTotal,
       cash: totalCash,
@@ -1860,6 +1917,15 @@ export class OrdersService implements OnModuleInit {
 
     const order = await this.findOne(id);
 
+    if (paymentStatus === 'CONFIRMED') {
+      if (order.orderType === 'DELIVERY' && order.status !== 'IN_ROUTE') {
+        throw new BadRequestException('El domicilio debe estar en ruta antes de liquidarlo.');
+      }
+      if (order.orderType === 'PICKUP' && order.status !== 'READY') {
+        throw new BadRequestException('El pedido para recoger debe estar listo antes de cobrarlo.');
+      }
+    }
+
     // Si se especificaron productos individuales para Cortesía
     if (courtesyItemIds && courtesyItemIds.length > 0) {
       for (const itemId of courtesyItemIds) {
@@ -1978,6 +2044,27 @@ export class OrdersService implements OnModuleInit {
         deliveryDriver: { select: { id: true, name: true, phone: true } },
       },
     });
+
+    if (user?.id && (
+      order.paymentMethod !== method ||
+      Number(order.cashAmount || 0) !== Number(finalCash || 0) ||
+      Number(order.transferAmount || 0) !== Number(finalTransfer || 0) ||
+      (order.paymentReference || null) !== (reference || null)
+    )) {
+      await this.prisma.orderChangeLog.create({
+        data: {
+          orderId: id,
+          userId: user.id,
+          summary: `Método de pago actualizado de ${order.paymentMethod || 'SIN DEFINIR'} a ${method}`,
+          changes: {
+            paymentMethod: { before: order.paymentMethod, after: method },
+            cashAmount: { before: order.cashAmount || 0, after: finalCash },
+            transferAmount: { before: order.transferAmount || 0, after: finalTransfer },
+            paymentReference: { before: order.paymentReference || null, after: reference || null },
+          },
+        },
+      });
+    }
 
     if (paymentStatus === 'CONFIRMED') {
       return this.updateStatus(id, 'DELIVERED', user);
