@@ -1188,6 +1188,127 @@ export default function ActiveDeliveriesPage() {
   return (
     <motion.div className="space-y-4" initial="hidden" animate="visible" variants={stagger}>
       {/* ── Operations overview and filters ── */}
+      {isDeliveryStaff ? (
+        <>
+          <motion.div className="flex flex-wrap items-center justify-between gap-3" variants={fadeUp}>
+            <div className="flex items-center gap-3">
+              <div
+                className="flex h-10 w-10 items-center justify-center rounded-xl shadow-lg shadow-[var(--accent)]/10"
+                style={{ background: 'linear-gradient(135deg, var(--accent), var(--accent-hover))' }}
+              >
+                <Bike className="h-5 w-5 text-[var(--accent-fg)]" />
+              </div>
+              <div>
+                <h2 className="antifont text-2xl leading-none tracking-wider text-[var(--text-primary)] uppercase md:text-3xl">Despachos Activos</h2>
+                <p className="text-xs text-[var(--text-secondary)]">Cola por orden de llegada · el más antiguo se atiende primero</p>
+              </div>
+            </div>
+            <div className="flex items-center gap-3">
+              <div className="hidden items-center gap-1.5 text-xs font-bold sm:flex">
+                <span className="h-2.5 w-2.5 rounded-full bg-amber-400" />
+                <span className="text-[var(--text-muted)]">Pendientes:</span>
+                <span className="text-amber-500">{summary.active}</span>
+              </div>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => {
+                  setSearchQuery('')
+                  setSubmittedSearch('')
+                  setSelectedDriverFilter('ALL')
+                  setStatusFilter('ALL')
+                }}
+                title="Limpiar búsqueda y filtros"
+                aria-label="Limpiar búsqueda y filtros"
+                className="h-9 rounded-xl border-[var(--border-subtle)] px-2 text-[var(--text-muted)] hover:text-[var(--text-primary)]"
+              >
+                <RefreshCw className="h-3.5 w-3.5" />
+              </Button>
+            </div>
+          </motion.div>
+
+          <motion.div variants={fadeUp} className="flex flex-col items-stretch justify-between gap-3 lg:flex-row lg:items-center">
+            <div className="flex max-w-2xl flex-1 flex-col gap-2 sm:flex-row">
+              <div className="relative flex-1">
+                <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--text-muted)]" />
+                <Input
+                  placeholder="Buscar cliente, teléfono, domiciliario..."
+                  className="h-9 rounded-xl border-[var(--border-subtle)] bg-[var(--bg-panel)] pl-9 pr-7 text-xs"
+                  value={searchQuery}
+                  onChange={event => setSearchQuery(event.target.value)}
+                  onKeyDown={event => event.key === 'Enter' && setSubmittedSearch(searchQuery.trim())}
+                />
+                {searchQuery && (
+                  <button
+                    type="button"
+                    onClick={() => { setSearchQuery(''); setSubmittedSearch('') }}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 cursor-pointer text-[var(--text-muted)] hover:text-[var(--text-primary)]"
+                    title="Borrar búsqueda"
+                  >
+                    <XCircle className="h-3.5 w-3.5" />
+                  </button>
+                )}
+              </div>
+
+              <div className="w-full shrink-0 sm:w-56">
+                <Select value={selectedDriverFilter} onValueChange={setSelectedDriverFilter}>
+                  <SelectTrigger className="h-9 rounded-xl border-[var(--border-subtle)] bg-[var(--bg-panel)] text-xs font-bold">
+                    <div className="flex min-w-0 items-center gap-1.5">
+                      <Bike className="h-3.5 w-3.5 shrink-0 text-[var(--accent)]" />
+                      <span className="truncate">
+                        {selectedDriverFilter === 'ALL'
+                          ? 'Todos los repartidores'
+                          : selectedDriverFilter === 'UNASSIGNED'
+                            ? '⚠️ Sin repartidor'
+                            : selectedFilterDriver?.name || 'Repartidor'}
+                      </span>
+                    </div>
+                  </SelectTrigger>
+                  <SelectContent className="max-h-64">
+                    <SelectItem value="ALL" className="text-xs font-bold">🛵 Todos los repartidores ({orders.length})</SelectItem>
+                    <SelectItem value="UNASSIGNED" className="text-xs font-bold text-amber-600">⚠️ Sin repartidor ({unassignedOrdersCount})</SelectItem>
+                    {allAvailableDrivers.map(driver => {
+                      const count = driverOrderCounts.get(driver.id) || 0
+                      return (
+                        <SelectItem key={driver.id} value={driver.id} className="text-xs font-medium">
+                          🛵 {driver.name} {driver.phone ? `(${driver.phone})` : ''} · {count} {count === 1 ? 'ped' : 'peds'}
+                        </SelectItem>
+                      )
+                    })}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-none lg:pb-0">
+              {[
+                { id: 'ALL', label: 'Todos', count: visibleOrders.length },
+                { id: 'PENDING', label: 'En cocina', count: visibleOrders.filter(order => order.status === 'RECEIVED' || order.status === 'PENDING').length },
+                { id: 'READY', label: 'Listos', count: visibleOrders.filter(order => order.status === 'READY').length },
+                { id: 'IN_ROUTE', label: 'En ruta', count: visibleOrders.filter(order => order.status === 'IN_ROUTE').length },
+              ].map(tab => (
+                <button
+                  key={tab.id}
+                  type="button"
+                  onClick={() => setStatusFilter(tab.id as any)}
+                  className={cn(
+                    'flex shrink-0 cursor-pointer select-none items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs font-bold transition-all',
+                    statusFilter === tab.id
+                      ? 'border-[var(--accent)] bg-[var(--accent)] text-[var(--accent-fg)] shadow-sm'
+                      : 'border-[var(--border-subtle)] bg-[var(--bg-panel)] text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]'
+                  )}
+                >
+                  <span>{tab.label}</span>
+                  <span className={cn(
+                    'rounded-full px-1.5 text-[10px] font-extrabold',
+                    statusFilter === tab.id ? 'bg-black/20 text-white' : 'bg-[var(--bg-elevated)] text-[var(--text-muted)]'
+                  )}>{tab.count}</span>
+                </button>
+              ))}
+            </div>
+          </motion.div>
+        </>
+      ) : (
       <motion.section
         variants={fadeUp}
         className="relative z-20 overflow-visible rounded-[26px] border border-[var(--border-subtle)] bg-[var(--bg-panel)] shadow-sm"
@@ -1447,9 +1568,37 @@ export default function ActiveDeliveriesPage() {
           </div>
         </div>
       </motion.section>
+      )}
 
       {/* Active Driver Filter Indicator Banner */}
       {selectedDriverFilter !== 'ALL' && (
+        isDeliveryStaff ? (
+          <motion.div
+            initial={{ opacity: 0, y: -5 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-[var(--border-subtle)] bg-gradient-to-r from-emerald-500/10 via-blue-500/10 to-purple-500/10 px-3.5 py-2.5 text-xs shadow-sm"
+          >
+            <div className="flex items-center gap-2">
+              <div className="rounded-xl bg-emerald-500/20 p-1.5 text-emerald-600"><Bike className="h-4 w-4" /></div>
+              <span className="text-[var(--text-secondary)]">
+                Viendo comandas de:{' '}
+                <strong className="text-sm font-black text-[var(--text-primary)]">
+                  {selectedDriverFilter === 'UNASSIGNED' ? 'Sin repartidor asignado' : selectedFilterDriver?.name || 'Repartidor'}
+                </strong>
+              </span>
+              <Badge variant="outline" className="border-[var(--border-subtle)] bg-[var(--bg-elevated)] text-[10px] font-extrabold">
+                {visibleOrders.length} {visibleOrders.length === 1 ? 'pedido' : 'pedidos'}
+              </Badge>
+            </div>
+            <button
+              type="button"
+              onClick={() => setSelectedDriverFilter('ALL')}
+              className="flex cursor-pointer items-center gap-1 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] px-2.5 py-1 text-[11px] font-bold text-[var(--text-muted)] transition-all hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]"
+            >
+              <XCircle className="h-3.5 w-3.5" /> Ver todos
+            </button>
+          </motion.div>
+        ) : (
         <motion.div
           initial={{ opacity: 0, y: -5 }}
           animate={{ opacity: 1, y: 0 }}
@@ -1500,6 +1649,7 @@ export default function ActiveDeliveriesPage() {
             </button>
           </div>
         </motion.div>
+        )
       )}
 
       <motion.div
@@ -1511,8 +1661,12 @@ export default function ActiveDeliveriesPage() {
             <Timer className="h-4 w-4" />
           </div>
           <div>
-            <p className="text-xs font-black text-[var(--text-primary)]">Orden de atención</p>
-            <p className="text-[11px] text-[var(--text-muted)]">El más antiguo permanece arriba; los nuevos pedidos entran al final.</p>
+            <p className="text-xs font-black text-[var(--text-primary)]">{isDeliveryStaff ? 'Cola FIFO activa' : 'Orden de atención'}</p>
+            <p className="text-[11px] text-[var(--text-muted)]">
+              {isDeliveryStaff
+                ? 'Los nuevos pedidos aparecen abajo. Atiende siempre la primera fila.'
+                : 'El más antiguo permanece arriba; los nuevos pedidos entran al final.'}
+            </p>
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-3 text-[10px] font-bold">
@@ -1590,20 +1744,22 @@ export default function ActiveDeliveriesPage() {
       {/* ── Compact Table ── */}
       <motion.div variants={fadeUp}>
         <Card className="border border-[var(--border-subtle)] bg-[var(--bg-panel)] shadow-md rounded-2xl overflow-hidden">
-          <div className="flex flex-col gap-2 border-b border-[var(--border-subtle)] px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
-            <div className="flex items-center gap-2.5">
-              <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-[var(--accent)]/10 text-[var(--accent)]">
-                <ClipboardList className="h-4 w-4" />
+          {!isDeliveryStaff && (
+            <div className="flex flex-col gap-2 border-b border-[var(--border-subtle)] px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-[var(--accent)]/10 text-[var(--accent)]">
+                  <ClipboardList className="h-4 w-4" />
+                </div>
+                <div>
+                  <p className="text-xs font-black text-[var(--text-primary)]">Pedidos visibles</p>
+                  <p className="text-[10px] text-[var(--text-muted)]">Ordenados del más antiguo al más reciente.</p>
+                </div>
               </div>
-              <div>
-                <p className="text-xs font-black text-[var(--text-primary)]">Pedidos visibles</p>
-                <p className="text-[10px] text-[var(--text-muted)]">Ordenados del más antiguo al más reciente.</p>
-              </div>
+              <span className="inline-flex w-fit items-center rounded-full border border-[var(--border-subtle)] bg-[var(--bg-subtle)] px-2.5 py-1 text-[10px] font-black text-[var(--text-secondary)]">
+                {statusVisibleOrders.length} {statusVisibleOrders.length === 1 ? 'pedido' : 'pedidos'}
+              </span>
             </div>
-            <span className="inline-flex w-fit items-center rounded-full border border-[var(--border-subtle)] bg-[var(--bg-subtle)] px-2.5 py-1 text-[10px] font-black text-[var(--text-secondary)]">
-              {statusVisibleOrders.length} {statusVisibleOrders.length === 1 ? 'pedido' : 'pedidos'}
-            </span>
-          </div>
+          )}
           {statusVisibleOrders.length === 0 ? (
             <CardContent className="py-12 text-center space-y-2">
               <CheckCircle2 className="mx-auto h-10 w-10 text-emerald-400" />
@@ -1611,9 +1767,9 @@ export default function ActiveDeliveriesPage() {
               <p className="text-xs text-[var(--text-secondary)]">{orders.length === 0 ? 'No hay pedidos activos en este momento.' : (visibleOrders.length === 0 ? 'Prueba con otro cliente, teléfono, producto o número de pedido.' : 'Cambia el filtro para ver los demás pedidos activos.')}</p>
             </CardContent>
           ) : (
-            <div className="overflow-x-auto custom-scrollbar">
-              <table className="w-full min-w-[1180px] text-xs">
-                <thead className="sticky top-0 z-10">
+            <div className={cn('overflow-x-auto', !isDeliveryStaff && 'custom-scrollbar')}>
+              <table className={cn('w-full text-xs', !isDeliveryStaff && 'min-w-[1180px]')}>
+                <thead className={cn(!isDeliveryStaff && 'sticky top-0 z-10')}>
                   <tr className="border-b border-[var(--border-subtle)] bg-[var(--bg-subtle)]">
                     <th className="w-10 text-center px-2 py-2.5">
                       <input
