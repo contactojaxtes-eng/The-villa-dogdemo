@@ -38,7 +38,10 @@ import {
   AlertTriangle,
   Send,
   Store,
-  MessageSquare
+  MessageSquare,
+  ChevronDown,
+  Check,
+  ListFilter
 } from 'lucide-react'
 import { type Socket } from 'socket.io-client'
 import { io } from '@/lib/socket'
@@ -201,6 +204,8 @@ export default function ActiveDeliveriesPage() {
   const [drivers, setDrivers] = useState<any[]>([])
   const [selectedDriverId, setSelectedDriverId] = useState<string>('')
   const [selectedDriverFilter, setSelectedDriverFilter] = useState<string>('ALL')
+  const [driverFilterOpen, setDriverFilterOpen] = useState(false)
+  const [driverFilterQuery, setDriverFilterQuery] = useState('')
   const [driverSearch, setDriverSearch] = useState<string>('')
   const [inlineDriverName, setInlineDriverName] = useState('')
   const [inlineDriverPhone, setInlineDriverPhone] = useState('')
@@ -216,6 +221,37 @@ export default function ActiveDeliveriesPage() {
     }
     return list.sort((a, b) => (a.name || '').localeCompare(b.name || ''))
   }, [drivers, orders])
+
+  const selectedFilterDriver = useMemo(
+    () => allAvailableDrivers.find(driver => driver.id === selectedDriverFilter),
+    [allAvailableDrivers, selectedDriverFilter]
+  )
+
+  const driverOrderCounts = useMemo(() => {
+    const counts = new Map<string, number>()
+    for (const order of orders) {
+      const driverId = order.deliveryDriverId || order.deliveryDriver?.id
+      if (driverId) counts.set(driverId, (counts.get(driverId) || 0) + 1)
+    }
+    return counts
+  }, [orders])
+
+  const unassignedOrdersCount = useMemo(
+    () => orders.filter(order => !order.deliveryDriverId && !order.deliveryDriver).length,
+    [orders]
+  )
+
+  const driverFilterResults = useMemo(() => {
+    const query = driverFilterQuery.trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    if (!query) return allAvailableDrivers
+    return allAvailableDrivers.filter(driver => {
+      const haystack = `${driver.name || ''} ${driver.phone || ''}`
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+      return haystack.includes(query)
+    })
+  }, [allAvailableDrivers, driverFilterQuery])
 
   const [selectedOrderIds, setSelectedOrderIds] = useState<string[]>([])
   const [batchDispatchOpen, setBatchDispatchOpen] = useState(false)
@@ -253,6 +289,26 @@ export default function ActiveDeliveriesPage() {
   const [editReference, setEditReference] = useState<string>('')
   const [isSavingPaymentMethod, setIsSavingPaymentMethod] = useState(false)
   const socketRef = useRef<Socket | null>(null)
+  const driverFilterRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    const closeDriverFilter = (event: MouseEvent) => {
+      if (driverFilterRef.current && !driverFilterRef.current.contains(event.target as Node)) {
+        setDriverFilterOpen(false)
+      }
+    }
+
+    const closeDriverFilterWithEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setDriverFilterOpen(false)
+    }
+
+    document.addEventListener('mousedown', closeDriverFilter)
+    document.addEventListener('keydown', closeDriverFilterWithEscape)
+    return () => {
+      document.removeEventListener('mousedown', closeDriverFilter)
+      document.removeEventListener('keydown', closeDriverFilterWithEscape)
+    }
+  }, [])
 
   const loadDrivers = useCallback(async () => {
     try {
@@ -1131,214 +1187,292 @@ export default function ActiveDeliveriesPage() {
 
   return (
     <motion.div className="space-y-4" initial="hidden" animate="visible" variants={stagger}>
-      {/* ── Compact Header ── */}
-      <motion.div className="flex flex-wrap items-center justify-between gap-3" variants={fadeUp}>
-        <div className="flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-xl shadow-lg shadow-[var(--accent)]/10"
-            style={{ background: 'linear-gradient(135deg, var(--accent), var(--accent-hover))' }}>
-            <Bike className="h-5 w-5 text-[var(--accent-fg)]" />
-          </div>
-          <div>
-            <h2 className="antifont text-2xl md:text-3xl tracking-wider text-[var(--text-primary)] leading-none uppercase">Despachos Activos</h2>
-            <p className="text-xs text-[var(--text-secondary)]">Cola por orden de llegada · el más antiguo se atiende primero</p>
-          </div>
-        </div>
-        <div className="flex items-center gap-2">
-          <div className="hidden md:flex items-center gap-3 mr-3">
-            <div className="flex items-center gap-1.5 text-xs font-bold">
-              <div className="h-2.5 w-2.5 rounded-full bg-amber-400 animate-pulse" />
-              <span className="text-[var(--text-muted)]">Pendientes:</span>
-              <span className="text-amber-500">{summary.active}</span>
-            </div>
-            {summary.urgent > 0 && (
-              <>
-                <div className="h-4 w-px bg-[var(--border-subtle)]" />
-                <div className="flex items-center gap-1.5 text-xs font-black text-red-500">
-                  <AlertTriangle className="h-3.5 w-3.5" />
-                  <span>{summary.urgent} fuera de tiempo</span>
-                </div>
-              </>
-            )}
-            {user?.role !== 'DELIVERY_MANAGER' && !isDeliveryStaff && (
-              <>
-                <div className="h-4 w-px bg-[var(--border-subtle)]" />
-                <div className="flex items-center gap-1.5">
-                  <div
-                    className="flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-emerald-500/10 border border-emerald-500/25 text-emerald-600 dark:text-emerald-400 font-extrabold text-xs shadow-sm"
-                    title="Total en Efectivo de las comandas filtradas"
-                  >
-                    <span>💵</span>
-                    <span className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] hidden xl:inline">Efectivo:</span>
-                    <span className="tabular-nums">{formatCurrency(summary.cash)}</span>
-                  </div>
-                  <div
-                    className="flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-blue-500/10 border border-blue-500/25 text-blue-600 dark:text-blue-400 font-extrabold text-xs shadow-sm"
-                    title="Total en Transferencia de las comandas filtradas"
-                  >
-                    <span>📱</span>
-                    <span className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] hidden xl:inline">Transf:</span>
-                    <span className="tabular-nums">{formatCurrency(summary.transfer)}</span>
-                  </div>
-                  <div
-                    className="flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-[var(--accent)]/10 border border-[var(--accent)]/30 text-[var(--accent)] font-black text-xs shadow-sm"
-                    title="Total de todo en las comandas filtradas"
-                  >
-                    <DollarSign className="h-3.5 w-3.5" />
-                    <span className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] hidden xl:inline">Total:</span>
-                    <span className="tabular-nums">{formatCurrency(summary.total)}</span>
-                  </div>
-                </div>
-              </>
-            )}
-          </div>
-          <Button size="sm" variant="outline" onClick={() => { setSearchQuery(''); setSubmittedSearch(''); setSelectedDriverFilter('ALL'); setStatusFilter('ALL'); }}
-            title="Limpiar búsqueda y filtros"
-            aria-label="Limpiar búsqueda y filtros"
-            className="rounded-xl h-9 px-2 border-[var(--border-subtle)] text-[var(--text-muted)] hover:text-[var(--text-primary)]">
-            <RefreshCw className="h-3.5 w-3.5" />
-          </Button>
-        </div>
-      </motion.div>
-
-      {/* ── Mobile Financial Metrics Bar (Admin) ── */}
-      {user?.role !== 'DELIVERY_MANAGER' && !isDeliveryStaff && (
-        <motion.div variants={fadeUp} className="flex md:hidden items-center justify-between gap-2 p-2 bg-[var(--bg-panel)] border border-[var(--border-subtle)] rounded-2xl shadow-sm">
-          <div className="flex flex-col items-center flex-1 py-1 px-1 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-600 dark:text-emerald-400">
-            <span className="text-[9px] font-black uppercase tracking-wider flex items-center gap-0.5">💵 Efectivo</span>
-            <span className="font-black text-xs tabular-nums">{formatCurrency(summary.cash)}</span>
-          </div>
-          <div className="flex flex-col items-center flex-1 py-1 px-1 rounded-xl bg-blue-500/10 border border-blue-500/20 text-blue-600 dark:text-blue-400">
-            <span className="text-[9px] font-black uppercase tracking-wider flex items-center gap-0.5">📱 Transf</span>
-            <span className="font-black text-xs tabular-nums">{formatCurrency(summary.transfer)}</span>
-          </div>
-          <div className="flex flex-col items-center flex-1 py-1 px-1 rounded-xl bg-[var(--accent)]/10 border border-[var(--accent)]/30 text-[var(--accent)]">
-            <span className="text-[9px] font-black uppercase tracking-wider flex items-center gap-0.5">💰 Total</span>
-            <span className="font-black text-xs tabular-nums">{formatCurrency(summary.total)}</span>
-          </div>
-        </motion.div>
-      )}
-
-      {/* ── Compact Search, Driver Filter & Status Filter Tabs ── */}
-      <motion.div variants={fadeUp} className="flex flex-col lg:flex-row gap-3 items-stretch lg:items-center justify-between">
-        <div className="flex flex-col sm:flex-row gap-2 flex-1 max-w-2xl">
-          <div className="relative flex-1">
-            <Search className="absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-[var(--text-muted)]" />
-            <Input
-              placeholder="Buscar cliente, teléfono, domiciliario..."
-              className="pl-9 pr-7 h-9 bg-[var(--bg-panel)] border-[var(--border-subtle)] text-xs rounded-xl"
-              value={searchQuery}
-              onChange={e => setSearchQuery(e.target.value)}
-              onKeyDown={e => e.key === 'Enter' && setSubmittedSearch(searchQuery.trim())}
-            />
-            {searchQuery && (
-              <button
-                type="button"
-                onClick={() => { setSearchQuery(''); setSubmittedSearch(''); }}
-                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[var(--text-muted)] hover:text-[var(--text-primary)] cursor-pointer"
-                title="Borrar búsqueda"
+      {/* ── Operations overview and filters ── */}
+      <motion.section
+        variants={fadeUp}
+        className="relative z-20 overflow-visible rounded-[26px] border border-[var(--border-subtle)] bg-[var(--bg-panel)] shadow-sm"
+      >
+        <div className="p-4 sm:p-5">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+            <div className="flex min-w-0 items-center gap-3.5">
+              <div
+                className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl shadow-lg shadow-[var(--accent)]/10"
+                style={{ background: 'linear-gradient(135deg, var(--accent), var(--accent-hover))' }}
               >
-                <XCircle className="h-3.5 w-3.5" />
-              </button>
-            )}
-          </div>
-
-          <div className="w-full sm:w-56 shrink-0">
-            <Select value={selectedDriverFilter} onValueChange={setSelectedDriverFilter}>
-              <SelectTrigger className="h-9 text-xs bg-[var(--bg-panel)] border-[var(--border-subtle)] rounded-xl font-bold">
-                <div className="flex items-center gap-1.5 truncate">
-                  <Bike className="h-3.5 w-3.5 text-[var(--accent)] shrink-0" />
-                  <span className="truncate">
-                    {selectedDriverFilter === 'ALL'
-                      ? 'Todos los repartidores'
-                      : selectedDriverFilter === 'UNASSIGNED'
-                        ? '⚠️ Sin repartidor'
-                        : allAvailableDrivers.find(d => d.id === selectedDriverFilter)?.name || 'Repartidor'}
+                <Bike className="h-6 w-6 text-[var(--accent-fg)]" />
+              </div>
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  <h2 className="antifont text-2xl leading-none tracking-wider text-[var(--text-primary)] uppercase md:text-3xl">Despachos Activos</h2>
+                  <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/25 bg-emerald-500/10 px-2 py-1 text-[10px] font-black text-emerald-600">
+                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" /> En vivo
                   </span>
                 </div>
-              </SelectTrigger>
-              <SelectContent className="max-h-64">
-                <SelectItem value="ALL" className="text-xs font-bold">
-                  🛵 Todos los repartidores ({orders.length})
-                </SelectItem>
-                <SelectItem value="UNASSIGNED" className="text-xs font-bold text-amber-600">
-                  ⚠️ Sin repartidor ({orders.filter(o => !o.deliveryDriver && !o.deliveryDriverId).length})
-                </SelectItem>
-                {allAvailableDrivers.map(d => {
-                  const count = orders.filter(o => (o.deliveryDriverId || o.deliveryDriver?.id) === d.id).length
-                  return (
-                    <SelectItem key={d.id} value={d.id} className="text-xs font-medium">
-                      🛵 {d.name} {d.phone ? `(${d.phone})` : ''} · {count} {count === 1 ? 'ped' : 'peds'}
-                    </SelectItem>
-                  )
-                })}
-              </SelectContent>
-            </Select>
+                <p className="mt-1 text-xs text-[var(--text-secondary)]">Pedidos organizados por llegada, estado y domiciliario.</p>
+              </div>
+            </div>
+
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => {
+                setSearchQuery('')
+                setSubmittedSearch('')
+                setSelectedDriverFilter('ALL')
+                setStatusFilter('ALL')
+                setDriverFilterQuery('')
+                loadOrders(false, true)
+              }}
+              title="Actualizar datos y limpiar filtros"
+              className="h-10 w-full gap-2 rounded-xl border-[var(--border-subtle)] px-3 text-xs font-bold text-[var(--text-secondary)] hover:text-[var(--text-primary)] sm:w-auto"
+            >
+              <RefreshCw className="h-3.5 w-3.5" /> Actualizar
+            </Button>
+          </div>
+
+          <div className={cn(
+            'mt-5 grid gap-2.5',
+            user?.role !== 'DELIVERY_MANAGER' && !isDeliveryStaff ? 'grid-cols-2 xl:grid-cols-4' : 'grid-cols-1'
+          )}>
+            <div className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-subtle)] px-3.5 py-3">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-[10px] font-black uppercase tracking-[0.12em] text-[var(--text-muted)]">Pedidos activos</span>
+                <span className="h-2 w-2 rounded-full bg-amber-400" />
+              </div>
+              <div className="mt-1 flex items-end gap-2">
+                <span className="text-2xl font-black tabular-nums text-[var(--text-primary)]">{summary.active}</span>
+                {summary.urgent > 0 && <span className="mb-1 text-[10px] font-black text-red-500">{summary.urgent} retrasados</span>}
+              </div>
+            </div>
+
+            {user?.role !== 'DELIVERY_MANAGER' && !isDeliveryStaff && (
+              <>
+                <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/[0.06] px-3.5 py-3">
+                  <span className="text-[10px] font-black uppercase tracking-[0.12em] text-emerald-700 dark:text-emerald-400">Efectivo</span>
+                  <p className="mt-1 text-xl font-black tabular-nums text-emerald-600">{formatCurrency(summary.cash)}</p>
+                </div>
+                <div className="rounded-2xl border border-blue-500/20 bg-blue-500/[0.06] px-3.5 py-3">
+                  <span className="text-[10px] font-black uppercase tracking-[0.12em] text-blue-700 dark:text-blue-400">Transferencias</span>
+                  <p className="mt-1 text-xl font-black tabular-nums text-blue-600">{formatCurrency(summary.transfer)}</p>
+                </div>
+                <div className="rounded-2xl border border-[var(--accent)]/20 bg-[var(--accent)]/[0.06] px-3.5 py-3">
+                  <span className="text-[10px] font-black uppercase tracking-[0.12em] text-[var(--accent)]">Total pendiente</span>
+                  <p className="mt-1 text-xl font-black tabular-nums text-[var(--text-primary)]">{formatCurrency(summary.total)}</p>
+                </div>
+              </>
+            )}
           </div>
         </div>
 
-        {/* Status Filter Pills */}
-        <div className="flex items-center gap-1.5 overflow-x-auto pb-1 lg:pb-0 scrollbar-none">
-          {[
-            { id: 'ALL', label: 'Todos', count: visibleOrders.length },
-            { id: 'PENDING', label: 'En cocina', count: visibleOrders.filter(o => o.status === 'RECEIVED' || o.status === 'PENDING').length },
-            { id: 'READY', label: 'Listos', count: visibleOrders.filter(o => o.status === 'READY').length },
-            { id: 'IN_ROUTE', label: 'En ruta', count: visibleOrders.filter(o => o.status === 'IN_ROUTE').length },
-          ].map(tab => (
-            <button
-              key={tab.id}
-              type="button"
-              onClick={() => setStatusFilter(tab.id as any)}
-              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 shrink-0 border cursor-pointer select-none ${
-                statusFilter === tab.id
-                  ? 'bg-[var(--accent)] text-[var(--accent-fg)] border-[var(--accent)] shadow-sm'
-                  : 'bg-[var(--bg-panel)] text-[var(--text-secondary)] border-[var(--border-subtle)] hover:bg-[var(--bg-hover)]'
-              }`}
-            >
-              <span>{tab.label}</span>
-              <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-extrabold ${
-                statusFilter === tab.id ? 'bg-black/20 text-white' : 'bg-[var(--bg-elevated)] text-[var(--text-muted)]'
-              }`}>
-                {tab.count}
-              </span>
-            </button>
-          ))}
+        <div className="border-t border-[var(--border-subtle)] bg-[var(--bg-subtle)]/35 p-3 sm:p-4">
+          <div className="grid gap-2.5 lg:grid-cols-[minmax(260px,1fr)_minmax(260px,360px)]">
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--text-muted)]" />
+              <Input
+                placeholder="Buscar cliente, teléfono, dirección o domiciliario..."
+                className="h-11 rounded-xl border-[var(--border-subtle)] bg-[var(--bg-panel)] pl-10 pr-9 text-sm shadow-none"
+                value={searchQuery}
+                onChange={event => setSearchQuery(event.target.value)}
+                onKeyDown={event => event.key === 'Enter' && setSubmittedSearch(searchQuery.trim())}
+              />
+              {searchQuery && (
+                <button
+                  type="button"
+                  onClick={() => { setSearchQuery(''); setSubmittedSearch('') }}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 cursor-pointer text-[var(--text-muted)] hover:text-[var(--text-primary)]"
+                  title="Borrar búsqueda"
+                >
+                  <XCircle className="h-4 w-4" />
+                </button>
+              )}
+            </div>
+
+            <div ref={driverFilterRef} className={cn('relative', driverFilterOpen && 'z-[90]')}>
+              <button
+                type="button"
+                onClick={() => {
+                  setDriverFilterQuery('')
+                  setDriverFilterOpen(open => !open)
+                }}
+                aria-haspopup="listbox"
+                aria-expanded={driverFilterOpen}
+                className={cn(
+                  'flex h-11 w-full items-center justify-between gap-3 rounded-xl border bg-[var(--bg-panel)] px-3.5 text-left transition-all cursor-pointer',
+                  driverFilterOpen
+                    ? 'border-[var(--accent)] ring-2 ring-[var(--accent)]/10'
+                    : 'border-[var(--border-subtle)] hover:border-[var(--border-default)]'
+                )}
+              >
+                <span className="flex min-w-0 items-center gap-2.5">
+                  <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-[var(--accent)]/10 text-[var(--accent)]">
+                    <Bike className="h-3.5 w-3.5" />
+                  </span>
+                  <span className="min-w-0">
+                    <span className="block text-[9px] font-black uppercase tracking-wider text-[var(--text-muted)]">Domiciliario</span>
+                    <span className="block truncate text-xs font-black text-[var(--text-primary)]">
+                      {selectedDriverFilter === 'ALL'
+                        ? 'Todos los domiciliarios'
+                        : selectedDriverFilter === 'UNASSIGNED'
+                          ? 'Sin domiciliario asignado'
+                          : selectedFilterDriver?.name || 'Domiciliario'}
+                    </span>
+                  </span>
+                </span>
+                <ChevronDown className={cn('h-4 w-4 shrink-0 text-[var(--text-muted)] transition-transform', driverFilterOpen && 'rotate-180')} />
+              </button>
+
+              {driverFilterOpen && (
+                <div className="absolute left-0 right-0 top-[calc(100%+0.5rem)] z-[100] overflow-hidden rounded-2xl border border-[var(--border-default)] bg-[var(--bg-panel)] shadow-2xl sm:right-auto sm:w-[380px]">
+                  <div className="border-b border-[var(--border-subtle)] p-2.5">
+                    <div className="relative">
+                      <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--text-muted)]" />
+                      <input
+                        value={driverFilterQuery}
+                        onChange={event => setDriverFilterQuery(event.target.value)}
+                        placeholder="Buscar por nombre o celular..."
+                        autoFocus
+                        className="h-9 w-full rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-input)] pl-9 pr-3 text-xs font-semibold text-[var(--text-primary)] outline-none focus:border-[var(--accent)]"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="max-h-72 space-y-1 overflow-y-auto p-2 custom-scrollbar" role="listbox" aria-label="Filtrar por domiciliario">
+                    {[
+                      { id: 'ALL', name: 'Todos los domiciliarios', detail: `${orders.length} pedidos`, tone: 'default' },
+                      { id: 'UNASSIGNED', name: 'Sin domiciliario asignado', detail: `${unassignedOrdersCount} pedidos`, tone: 'warning' },
+                    ].map(option => {
+                      const selected = selectedDriverFilter === option.id
+                      return (
+                        <button
+                          key={option.id}
+                          type="button"
+                          role="option"
+                          aria-selected={selected}
+                          onClick={() => {
+                            setSelectedDriverFilter(option.id)
+                            setDriverFilterOpen(false)
+                            setDriverFilterQuery('')
+                          }}
+                          className={cn(
+                            'flex w-full items-center justify-between gap-3 rounded-xl border px-3 py-2.5 text-left transition-colors cursor-pointer',
+                            selected
+                              ? 'border-[var(--accent)] bg-[var(--accent)] text-[var(--accent-fg)]'
+                              : option.tone === 'warning'
+                                ? 'border-transparent text-amber-700 hover:bg-amber-500/10'
+                                : 'border-transparent text-[var(--text-primary)] hover:bg-[var(--bg-hover)]'
+                          )}
+                        >
+                          <span className="min-w-0">
+                            <span className="block truncate text-xs font-black">{option.name}</span>
+                            <span className={cn('text-[10px] font-semibold', selected ? 'text-white/75' : 'text-[var(--text-muted)]')}>{option.detail}</span>
+                          </span>
+                          {selected && <Check className="h-4 w-4 shrink-0" />}
+                        </button>
+                      )
+                    })}
+
+                    <div className="my-1 border-t border-[var(--border-subtle)]" />
+
+                    {driverFilterResults.map(driver => {
+                      const selected = selectedDriverFilter === driver.id
+                      const count = driverOrderCounts.get(driver.id) || 0
+                      return (
+                        <button
+                          key={driver.id}
+                          type="button"
+                          role="option"
+                          aria-selected={selected}
+                          onClick={() => {
+                            setSelectedDriverFilter(driver.id)
+                            setDriverFilterOpen(false)
+                            setDriverFilterQuery('')
+                          }}
+                          className={cn(
+                            'flex w-full items-center justify-between gap-3 rounded-xl border px-3 py-2.5 text-left transition-colors cursor-pointer',
+                            selected
+                              ? 'border-[var(--accent)] bg-[var(--accent)] text-[var(--accent-fg)]'
+                              : 'border-transparent text-[var(--text-primary)] hover:bg-[var(--bg-hover)]'
+                          )}
+                        >
+                          <span className="min-w-0">
+                            <span className="block truncate text-xs font-black">{driver.name}</span>
+                            <span className={cn('block truncate text-[10px] font-semibold', selected ? 'text-white/75' : 'text-[var(--text-muted)]')}>
+                              {driver.phone || 'Sin celular registrado'}
+                            </span>
+                          </span>
+                          <span className={cn(
+                            'inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-1 text-[10px] font-black',
+                            selected ? 'bg-black/15 text-white' : count > 0 ? 'bg-amber-500/10 text-amber-700' : 'bg-emerald-500/10 text-emerald-700'
+                          )}>
+                            {count > 0 ? `${count} activos` : 'Libre'}
+                          </span>
+                        </button>
+                      )
+                    })}
+
+                    {driverFilterResults.length === 0 && (
+                      <div className="px-3 py-6 text-center text-xs font-semibold text-[var(--text-muted)]">No encontramos ese domiciliario.</div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="mt-3 flex items-center gap-2 overflow-x-auto pb-0.5 scrollbar-none sm:grid sm:grid-cols-4">
+            {[
+              { id: 'ALL', label: 'Todos', count: visibleOrders.length },
+              { id: 'PENDING', label: 'En cocina', count: visibleOrders.filter(order => order.status === 'RECEIVED' || order.status === 'PENDING').length },
+              { id: 'READY', label: 'Listos', count: visibleOrders.filter(order => order.status === 'READY').length },
+              { id: 'IN_ROUTE', label: 'En ruta', count: visibleOrders.filter(order => order.status === 'IN_ROUTE').length },
+            ].map(tab => (
+              <button
+                key={tab.id}
+                type="button"
+                onClick={() => setStatusFilter(tab.id as any)}
+                className={cn(
+                  'flex h-10 min-w-[112px] flex-1 items-center justify-center gap-2 rounded-xl border px-3 text-xs font-black transition-all cursor-pointer select-none sm:min-w-0',
+                  statusFilter === tab.id
+                    ? 'border-[var(--accent)] bg-[var(--accent)] text-[var(--accent-fg)] shadow-sm'
+                    : 'border-[var(--border-subtle)] bg-[var(--bg-panel)] text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]'
+                )}
+              >
+                <span>{tab.label}</span>
+                <span className={cn(
+                  'rounded-full px-1.5 py-0.5 text-[10px] font-black tabular-nums',
+                  statusFilter === tab.id ? 'bg-black/20 text-white' : 'bg-[var(--bg-elevated)] text-[var(--text-muted)]'
+                )}>{tab.count}</span>
+              </button>
+            ))}
+          </div>
         </div>
-      </motion.div>
+      </motion.section>
 
       {/* Active Driver Filter Indicator Banner */}
       {selectedDriverFilter !== 'ALL' && (
         <motion.div
           initial={{ opacity: 0, y: -5 }}
           animate={{ opacity: 1, y: 0 }}
-          className="flex flex-wrap items-center justify-between gap-2 px-3.5 py-2.5 bg-gradient-to-r from-emerald-500/10 via-blue-500/10 to-purple-500/10 border border-[var(--border-subtle)] rounded-2xl text-xs shadow-sm"
+          className="flex flex-col gap-3 rounded-2xl border border-[var(--accent)]/20 bg-[var(--bg-panel)] px-4 py-3 shadow-sm sm:flex-row sm:items-center sm:justify-between"
         >
-          <div className="flex items-center gap-2">
-            <div className="p-1.5 rounded-xl bg-emerald-500/20 text-emerald-600">
-              <Bike className="h-4 w-4" />
+          <div className="flex min-w-0 items-center gap-3">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[var(--accent)]/10 text-[var(--accent)]">
+              <ListFilter className="h-4 w-4" />
             </div>
-            <span className="text-[var(--text-secondary)]">
-              Viendo comandas de:{' '}
-              <strong className="text-[var(--text-primary)] text-sm font-black">
+            <div className="min-w-0">
+              <p className="text-[10px] font-black uppercase tracking-wider text-[var(--text-muted)]">Filtro activo</p>
+              <p className="truncate text-sm font-black text-[var(--text-primary)]">
                 {selectedDriverFilter === 'UNASSIGNED'
-                  ? 'Sin repartidor asignado'
-                  : allAvailableDrivers.find(d => d.id === selectedDriverFilter)?.name || 'Repartidor'}
-              </strong>
-            </span>
-            <Badge variant="outline" className="text-[10px] font-extrabold border-[var(--border-subtle)] bg-[var(--bg-elevated)]">
+                  ? 'Pedidos sin domiciliario asignado'
+                  : `Pedidos de ${selectedFilterDriver?.name || 'domiciliario'}`}
+              </p>
+            </div>
+            <Badge variant="outline" className="shrink-0 border-[var(--border-subtle)] bg-[var(--bg-subtle)] text-[10px] font-black">
               {visibleOrders.length} {visibleOrders.length === 1 ? 'pedido' : 'pedidos'}
             </Badge>
           </div>
 
-          <div className="flex items-center gap-2.5 flex-wrap">
-            {user?.role !== 'DELIVERY_MANAGER' && !isDeliveryStaff && (
-              <div className="hidden sm:flex items-center gap-2 text-xs font-bold">
-                <span className="text-emerald-600 font-black">💵 Efectivo: {formatCurrency(summary.cash)}</span>
-                <span className="text-[var(--border-subtle)]">·</span>
-                <span className="text-blue-600 font-black">📱 Transf: {formatCurrency(summary.transfer)}</span>
-                <span className="text-[var(--border-subtle)]">·</span>
-                <span className="text-[var(--accent)] font-black">💰 Total: {formatCurrency(summary.total)}</span>
-              </div>
-            )}
+          <div className="flex flex-wrap items-center gap-2">
             {user?.role !== 'DELIVERY_MANAGER' && !isDeliveryStaff && visibleOrders.some(order => order.status === 'IN_ROUTE') && (
               <Button
                 size="sm"
@@ -1351,16 +1485,16 @@ export default function ActiveDeliveriesPage() {
                   setReviewedTransferIds([])
                   setBatchCollectOpen(true)
                 }}
-                className="h-7.5 px-3 text-[11px] font-black rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white shadow-md flex items-center gap-1.5 cursor-pointer border border-emerald-400/30"
+                className="h-9 flex-1 gap-1.5 rounded-xl border-0 bg-emerald-600 px-3 text-[11px] font-black text-white shadow-sm hover:bg-emerald-700 sm:flex-none"
               >
                 <DollarSign className="h-3.5 w-3.5" />
-                <span>Cobrar pedidos en ruta</span>
+                <span>Liquidar en ruta</span>
               </Button>
             )}
             <button
               type="button"
               onClick={() => setSelectedDriverFilter('ALL')}
-              className="px-2.5 py-1 rounded-xl bg-[var(--bg-elevated)] hover:bg-[var(--bg-hover)] border border-[var(--border-subtle)] text-[11px] font-bold text-[var(--text-muted)] hover:text-[var(--text-primary)] cursor-pointer flex items-center gap-1 transition-all"
+              className="flex h-9 flex-1 cursor-pointer items-center justify-center gap-1 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-subtle)] px-3 text-[11px] font-bold text-[var(--text-secondary)] transition-colors hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] sm:flex-none"
             >
               <XCircle className="h-3.5 w-3.5" /> Ver todos
             </button>
@@ -1377,8 +1511,8 @@ export default function ActiveDeliveriesPage() {
             <Timer className="h-4 w-4" />
           </div>
           <div>
-            <p className="text-xs font-black text-[var(--text-primary)]">Cola FIFO activa</p>
-            <p className="text-[11px] text-[var(--text-muted)]">Los nuevos pedidos aparecen abajo. Atiende siempre la primera fila.</p>
+            <p className="text-xs font-black text-[var(--text-primary)]">Orden de atención</p>
+            <p className="text-[11px] text-[var(--text-muted)]">El más antiguo permanece arriba; los nuevos pedidos entran al final.</p>
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-3 text-[10px] font-bold">
@@ -1456,6 +1590,20 @@ export default function ActiveDeliveriesPage() {
       {/* ── Compact Table ── */}
       <motion.div variants={fadeUp}>
         <Card className="border border-[var(--border-subtle)] bg-[var(--bg-panel)] shadow-md rounded-2xl overflow-hidden">
+          <div className="flex flex-col gap-2 border-b border-[var(--border-subtle)] px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex items-center gap-2.5">
+              <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-[var(--accent)]/10 text-[var(--accent)]">
+                <ClipboardList className="h-4 w-4" />
+              </div>
+              <div>
+                <p className="text-xs font-black text-[var(--text-primary)]">Pedidos visibles</p>
+                <p className="text-[10px] text-[var(--text-muted)]">Ordenados del más antiguo al más reciente.</p>
+              </div>
+            </div>
+            <span className="inline-flex w-fit items-center rounded-full border border-[var(--border-subtle)] bg-[var(--bg-subtle)] px-2.5 py-1 text-[10px] font-black text-[var(--text-secondary)]">
+              {statusVisibleOrders.length} {statusVisibleOrders.length === 1 ? 'pedido' : 'pedidos'}
+            </span>
+          </div>
           {statusVisibleOrders.length === 0 ? (
             <CardContent className="py-12 text-center space-y-2">
               <CheckCircle2 className="mx-auto h-10 w-10 text-emerald-400" />
@@ -1463,9 +1611,9 @@ export default function ActiveDeliveriesPage() {
               <p className="text-xs text-[var(--text-secondary)]">{orders.length === 0 ? 'No hay pedidos activos en este momento.' : (visibleOrders.length === 0 ? 'Prueba con otro cliente, teléfono, producto o número de pedido.' : 'Cambia el filtro para ver los demás pedidos activos.')}</p>
             </CardContent>
           ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-xs">
-                <thead>
+            <div className="overflow-x-auto custom-scrollbar">
+              <table className="w-full min-w-[1180px] text-xs">
+                <thead className="sticky top-0 z-10">
                   <tr className="border-b border-[var(--border-subtle)] bg-[var(--bg-subtle)]">
                     <th className="w-10 text-center px-2 py-2.5">
                       <input
