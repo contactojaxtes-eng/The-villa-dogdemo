@@ -64,6 +64,7 @@ interface Order {
   paymentStatus: string
   notes: string | null
   createdAt: string
+  updatedAt?: string
   waiter: { id: string; name: string }
   assignee: { id: string; name: string } | null
   zone: { name: string; zoneGroup?: string } | null
@@ -128,6 +129,12 @@ function getElapsedMinutes(createdAt: string): number {
 
 function isWaitingForDispatch(order: Order): boolean {
   return ['RECEIVED', 'PENDING', 'READY'].includes(order.status)
+}
+
+function isReadyForCollection(order: Order): boolean {
+  if (order.orderType === 'DELIVERY') return order.status === 'IN_ROUTE'
+  if (order.orderType === 'PICKUP') return order.status === 'READY'
+  return false
 }
 
 const fadeUp = {
@@ -225,6 +232,7 @@ export default function ActiveDeliveriesPage() {
   const [isSubmittingBatchCollect, setIsSubmittingBatchCollect] = useState(false)
   const [batchCollectError, setBatchCollectError] = useState('')
   const [manualItemMethods, setManualItemMethods] = useState<Record<string, { method: string; cashAmount?: number; transferAmount?: number }>>({})
+  const [reviewedTransferIds, setReviewedTransferIds] = useState<string[]>([])
 
   const filteredDrivers = useMemo(() => {
     if (!driverSearch.trim()) return drivers
@@ -712,7 +720,11 @@ export default function ActiveDeliveriesPage() {
         for (const ord of selectedOrdersList) {
           if (ord.status === 'PENDING') {
             try {
-              await printComandaSmart({ ...ord, status: 'IN_ROUTE', deliveryDriverId: batchDriverId }, 'caja', user?.role, false, false)
+              await printComandaSmart({
+                ...ord,
+                status: 'IN_ROUTE',
+                deliveryDriver: drivers.find(driver => driver.id === batchDriverId) || ord.deliveryDriver,
+              }, 'caja', user?.role, false, false)
             } catch (pErr) {
               console.warn('Error imprimiendo comanda en lote:', pErr)
             }
@@ -742,6 +754,39 @@ export default function ActiveDeliveriesPage() {
     return orders.filter(o => selectedOrderIds.includes(o.id))
   }, [orders, selectedOrderIds])
 
+  const getBatchOrderMethod = useCallback((order: Order) => {
+    return (manualItemMethods[order.id]?.method || order.paymentMethod || 'CASH').toUpperCase()
+  }, [manualItemMethods])
+
+  const batchOrdersByPayment = useMemo(() => {
+    const cash: Order[] = []
+    const transfer: Order[] = []
+    const mixedOrOther: Order[] = []
+
+    for (const order of selectedOrdersList) {
+      const method = getBatchOrderMethod(order)
+      if (method === 'CASH') cash.push(order)
+      else if (['TRANSFER', 'NEQUI', 'BANCOLOMBIA', 'DAVIPLATA'].includes(method)) transfer.push(order)
+      else mixedOrOther.push(order)
+    }
+
+    return { cash, transfer, mixedOrOther }
+  }, [getBatchOrderMethod, selectedOrdersList])
+
+  const transferOrdersRequiringReview = useMemo(() => {
+    return selectedOrdersList.filter(order => {
+      const method = getBatchOrderMethod(order)
+      if (['TRANSFER', 'NEQUI', 'BANCOLOMBIA', 'DAVIPLATA'].includes(method)) return true
+      if (method !== 'MIXED') return false
+      const custom = manualItemMethods[order.id]
+      return Number(custom?.transferAmount ?? order.transferAmount ?? 0) > 0
+    })
+  }, [getBatchOrderMethod, manualItemMethods, selectedOrdersList])
+
+  const unreviewedTransferOrders = useMemo(() => {
+    return transferOrdersRequiringReview.filter(order => !reviewedTransferIds.includes(order.id))
+  }, [reviewedTransferIds, transferOrdersRequiringReview])
+
   const batchCollectTotals = useMemo(() => {
     let cash = 0
     let transfer = 0
@@ -751,7 +796,19 @@ export default function ActiveDeliveriesPage() {
       const ordTotal = ord.total || 0
       total += ordTotal
 
-      if (batchCollectMode === 'CASH') {
+      const custom = manualItemMethods[ord.id]
+      if (custom) {
+        const m = (custom.method || ord.paymentMethod || 'CASH').toUpperCase()
+        if (m === 'CASH') {
+          cash += ordTotal
+        } else if (['TRANSFER', 'NEQUI', 'BANCOLOMBIA', 'DAVIPLATA'].includes(m)) {
+          transfer += ordTotal
+        } else if (m === 'MIXED') {
+          const c = typeof custom.cashAmount === 'number' ? custom.cashAmount : (ord.cashAmount || Math.round(ordTotal / 2))
+          cash += c
+          transfer += typeof custom.transferAmount === 'number' ? custom.transferAmount : Math.max(0, ordTotal - c)
+        }
+      } else if (batchCollectMode === 'CASH') {
         cash += ordTotal
       } else if (batchCollectMode === 'TRANSFER') {
         transfer += ordTotal
@@ -780,47 +837,46 @@ export default function ActiveDeliveriesPage() {
 
   const handleConfirmBatchCollect = async () => {
     if (selectedOrderIds.length === 0) return
+    if (unreviewedTransferOrders.length > 0) {
+      setBatchCollectError(`Falta validar ${unreviewedTransferOrders.length} transferencia${unreviewedTransferOrders.length === 1 ? '' : 's'}. Abre el chat/comprobante y marca cada una como revisada.`)
+      return
+    }
     setIsSubmittingBatchCollect(true)
     setBatchCollectError('')
 
     try {
       const itemsPayload = selectedOrdersList.map(ord => {
         const custom = manualItemMethods[ord.id]
-        const method = batchCollectMode === 'CASH'
+        const method = custom?.method || (batchCollectMode === 'CASH'
           ? 'CASH'
           : batchCollectMode === 'TRANSFER'
             ? 'TRANSFER'
-            : batchCollectMode === 'MANUAL'
-              ? (custom?.method || ord.paymentMethod || 'CASH')
-              : (ord.paymentMethod || 'CASH')
+            : (ord.paymentMethod || 'CASH'))
         const ordTotal = Number(ord.total) || 0
         const isCash = method === 'CASH'
         const isTransfer = ['TRANSFER', 'NEQUI', 'BANCOLOMBIA', 'DAVIPLATA'].includes(method)
+        const hasTransferPart = isTransfer || (method === 'MIXED' && Number(custom?.transferAmount ?? ord.transferAmount ?? 0) > 0)
         return {
           id: ord.id,
           method,
           reference: batchCollectReference || undefined,
           cashAmount: isCash ? ordTotal : method === 'MIXED' ? (custom?.cashAmount ?? ord.cashAmount ?? Math.round(ordTotal / 2)) : 0,
           transferAmount: isTransfer ? ordTotal : method === 'MIXED' ? (custom?.transferAmount ?? ord.transferAmount ?? Math.round(ordTotal / 2)) : 0,
+          transferReviewed: !hasTransferPart || reviewedTransferIds.includes(ord.id),
         }
       })
 
-      try {
-        await api.put<any>('/orders/batch-collect', {
-          orders: itemsPayload,
-          globalMethod: batchCollectMode,
-          globalReference: batchCollectReference || undefined,
-        })
-      } catch (endpointErr) {
-        for (const item of itemsPayload) {
-          await api.put(`/orders/${item.id}/payment`, {
-            method: item.method,
-            paymentStatus: 'CONFIRMED',
-            reference: item.reference || null,
-            cashAmount: item.cashAmount,
-            transferAmount: item.transferAmount,
-          })
-        }
+      const batchResult = await api.put<any>('/orders/batch-collect', {
+        orders: itemsPayload,
+        globalMethod: 'AS_IS',
+        globalReference: batchCollectReference || undefined,
+      })
+
+      if (batchResult && Number(batchResult?.collectedCount ?? itemsPayload.length) !== itemsPayload.length) {
+        const collectedCount = Number(batchResult?.collectedCount || 0)
+        const failedCount = Number(batchResult?.failedCount ?? (itemsPayload.length - collectedCount))
+        loadOrders(false, true)
+        throw new Error(`Se cobraron ${collectedCount} pedidos, pero ${failedCount} no pudieron liquidarse. Revisa la lista actualizada antes de reintentar.`)
       }
 
       const hadCash = batchCollectTotals.cash > 0
@@ -842,10 +898,12 @@ export default function ActiveDeliveriesPage() {
       setBatchCollectMode('AS_IS')
       setBatchCollectReference('')
       setManualItemMethods({})
+      setReviewedTransferIds([])
       loadOrders(false, true)
     } catch (err: any) {
       console.error('Error en cobro masivo:', err)
       setBatchCollectError(err.message || 'Error al procesar el cobro masivo.')
+      loadOrders(false, true)
     } finally {
       setIsSubmittingBatchCollect(false)
     }
@@ -966,6 +1024,101 @@ export default function ActiveDeliveriesPage() {
     d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
     return d.toISOString().split('T')[0];
   })();
+
+  const setBatchPaymentMethod = (order: Order, method: 'CASH' | 'TRANSFER') => {
+    const total = Number(order.total) || 0
+    setManualItemMethods(previous => ({
+      ...previous,
+      [order.id]: {
+        method,
+        cashAmount: method === 'CASH' ? total : 0,
+        transferAmount: method === 'TRANSFER' ? total : 0,
+      },
+    }))
+    if (method === 'CASH') {
+      setReviewedTransferIds(previous => previous.filter(id => id !== order.id))
+    }
+    setBatchCollectError('')
+  }
+
+  const renderBatchPaymentRow = (order: Order, requiresTransferReview = false) => {
+    const method = getBatchOrderMethod(order)
+    const reviewed = reviewedTransferIds.includes(order.id)
+    return (
+      <div key={order.id} className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-3 shadow-xs">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="font-black text-[var(--accent)]">#{order.orderNumber}</span>
+              <span className="truncate text-xs font-bold text-[var(--text-primary)]">{order.customerName || 'Cliente'}</span>
+            </div>
+            <p className="mt-0.5 truncate text-[10px] font-semibold text-[var(--text-muted)]">
+              {order.deliveryDriver?.name ? `Domiciliario: ${order.deliveryDriver.name}` : 'Sin domiciliario asignado'}
+            </p>
+          </div>
+          <span className="shrink-0 text-sm font-black tabular-nums text-[var(--text-primary)]">{formatCurrency(order.total)}</span>
+        </div>
+
+        <div className="mt-2.5 grid grid-cols-2 gap-1.5">
+          <button
+            type="button"
+            onClick={() => setBatchPaymentMethod(order, 'CASH')}
+            className={cn(
+              'h-8 rounded-lg border text-[10px] font-black transition-all cursor-pointer',
+              method === 'CASH'
+                ? 'border-emerald-600 bg-emerald-600 text-white'
+                : 'border-[var(--border-subtle)] bg-[var(--bg-subtle)] text-[var(--text-muted)] hover:border-emerald-500/50'
+            )}
+          >
+            💵 Efectivo
+          </button>
+          <button
+            type="button"
+            onClick={() => setBatchPaymentMethod(order, 'TRANSFER')}
+            className={cn(
+              'h-8 rounded-lg border text-[10px] font-black transition-all cursor-pointer',
+              ['TRANSFER', 'NEQUI', 'BANCOLOMBIA', 'DAVIPLATA'].includes(method)
+                ? 'border-blue-600 bg-blue-600 text-white'
+                : 'border-[var(--border-subtle)] bg-[var(--bg-subtle)] text-[var(--text-muted)] hover:border-blue-500/50'
+            )}
+          >
+            📱 Transferencia
+          </button>
+        </div>
+
+        <div className="mt-2 flex items-center justify-between gap-2 border-t border-[var(--border-subtle)] pt-2">
+          <button
+            type="button"
+            onClick={() => setChatModalOrder(order)}
+            className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-emerald-500/30 px-2.5 text-[10px] font-black text-emerald-600 transition-colors hover:bg-emerald-500/10 cursor-pointer"
+          >
+            <MessageSquare className="h-3.5 w-3.5" /> Ver chat y comprobante
+          </button>
+          {requiresTransferReview && (
+            <label className={cn(
+              'inline-flex h-8 shrink-0 cursor-pointer items-center gap-1.5 rounded-lg border px-2.5 text-[10px] font-black transition-colors',
+              reviewed
+                ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-700'
+                : 'border-amber-500/40 bg-amber-500/10 text-amber-700'
+            )}>
+              <input
+                type="checkbox"
+                checked={reviewed}
+                onChange={event => {
+                  setReviewedTransferIds(previous => event.target.checked
+                    ? Array.from(new Set([...previous, order.id]))
+                    : previous.filter(id => id !== order.id))
+                  setBatchCollectError('')
+                }}
+                className="h-3.5 w-3.5 accent-emerald-600"
+              />
+              {reviewed ? 'Validada' : 'Validar'}
+            </label>
+          )}
+        </div>
+      </div>
+    )
+  }
 
   if (loading && orders.length === 0) return (
     <div className="flex flex-col items-center justify-center py-40 gap-4">
@@ -1186,21 +1339,22 @@ export default function ActiveDeliveriesPage() {
                 <span className="text-[var(--accent)] font-black">💰 Total: {formatCurrency(summary.total)}</span>
               </div>
             )}
-            {user?.role !== 'DELIVERY_MANAGER' && !isDeliveryStaff && visibleOrders.length > 0 && (
+            {user?.role !== 'DELIVERY_MANAGER' && !isDeliveryStaff && visibleOrders.some(order => order.status === 'IN_ROUTE') && (
               <Button
                 size="sm"
                 type="button"
                 onClick={() => {
-                  const driverOrderIds = visibleOrders.filter(o => !['DELIVERED', 'CANCELLED'].includes(o.status)).map(o => o.id)
+                  const driverOrderIds = visibleOrders.filter(order => order.status === 'IN_ROUTE').map(order => order.id)
                   setSelectedOrderIds(driverOrderIds)
                   setBatchCollectError('')
                   setBatchCollectMode('AS_IS')
+                  setReviewedTransferIds([])
                   setBatchCollectOpen(true)
                 }}
                 className="h-7.5 px-3 text-[11px] font-black rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white shadow-md flex items-center gap-1.5 cursor-pointer border border-emerald-400/30"
               >
                 <DollarSign className="h-3.5 w-3.5" />
-                <span>Cobrar todo ({formatCurrency(summary.total)})</span>
+                <span>Cobrar pedidos en ruta</span>
               </Button>
             )}
             <button
@@ -1263,14 +1417,21 @@ export default function ActiveDeliveriesPage() {
               <Button
                 size="sm"
                 onClick={() => {
+                  const inRouteIds = selectedOrdersList.filter(order => order.status === 'IN_ROUTE').map(order => order.id)
+                  if (inRouteIds.length === 0) {
+                    alerts.warning('Sin pedidos en ruta', 'Solo se pueden liquidar pedidos que ya salieron con el domiciliario.')
+                    return
+                  }
+                  setSelectedOrderIds(inRouteIds)
                   setBatchCollectError('')
                   setBatchCollectMode('AS_IS')
+                  setReviewedTransferIds([])
                   setBatchCollectOpen(true)
                 }}
                 className="h-9 px-4 text-xs font-black rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white shadow-lg flex items-center gap-2 cursor-pointer border border-emerald-400/40"
               >
                 <DollarSign className="h-4 w-4" />
-                <span>Cobrar los {selectedOrderIds.length} pedidos ({formatCurrency(batchCollectTotals.total)})</span>
+                <span>Liquidar pedidos en ruta</span>
               </Button>
             )}
             {hasPermission('dispatch.change_status') && (
@@ -1591,7 +1752,7 @@ export default function ActiveDeliveriesPage() {
                           </td>
                           <td className="px-3 py-2.5">
                             <div className="flex items-center justify-center gap-1">
-                              {!isDeliveryStaff && order.paymentStatus !== 'CONFIRMED' && order.status !== 'CANCELLED' && (
+                              {!isDeliveryStaff && order.paymentStatus !== 'CONFIRMED' && isReadyForCollection(order) && (
                                 <Button size="sm" className="h-7 px-2 text-[10px] font-extrabold bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-fg)] rounded-lg gap-1 border-0 cursor-pointer shadow-xs active:scale-95 transition-all"
                                   onClick={() => setCollectDialog(order)}
                                   title="Cobrar pedido"
@@ -1609,12 +1770,12 @@ export default function ActiveDeliveriesPage() {
                                     ...order,
                                     deliveryDriver: order.deliveryDriver || (order.deliveryDriverId ? drivers.find(d => d.id === order.deliveryDriverId) : undefined)
                                   };
-                                  alerts.toast(`Enviando pedido #${order.orderNumber} a impresión...`, 'info');
+                                  alerts.toast(`Enviando pedido #${order.orderNumber} a impresión...`);
                                   const res = await printComandaSmart(orderWithDriver, 'caja', user?.role, false, false);
                                   if (res?.error) {
                                     alerts.error('Error al imprimir', res.error);
                                   } else {
-                                    alerts.toast(`Pedido #${order.orderNumber} enviado a la impresora`, 'success');
+                                    alerts.toast(`Pedido #${order.orderNumber} enviado a la impresora`);
                                   }
                                 }}
                               >
@@ -2128,15 +2289,15 @@ export default function ActiveDeliveriesPage() {
           onEscapeKeyDown={(e) => {
             if (chatModalOrder) e.preventDefault()
           }}
-          className="bg-[var(--bg-panel)] border-[var(--border-default)] rounded-3xl max-w-xl p-6 max-h-[90vh] overflow-y-auto"
+          className="bg-[var(--bg-panel)] border-[var(--border-default)] rounded-3xl max-w-5xl p-6 max-h-[92vh] overflow-y-auto"
         >
           <DialogHeader>
             <DialogTitle className="text-xl font-black text-[var(--text-primary)] flex items-center gap-2">
               <DollarSign className="h-6 w-6 text-emerald-500" />
-              Cobro Masivo y Liquidación de Pedidos
+              Liquidación de pedidos en ruta
             </DialogTitle>
             <p className="text-xs text-[var(--text-secondary)]">
-              Vas a cobrar y finalizar <strong className="text-[var(--text-primary)]">{selectedOrdersList.length} pedidos</strong> seleccionados.
+              Revisa efectivo y transferencias por separado antes de finalizar <strong className="text-[var(--text-primary)]">{selectedOrdersList.length} pedidos</strong>.
             </p>
           </DialogHeader>
 
@@ -2163,194 +2324,69 @@ export default function ActiveDeliveriesPage() {
               </div>
             </div>
 
-            {/* Selector de Modo de Cobro */}
-            <div className="space-y-2">
-              <Label className="text-[10px] font-bold text-[var(--text-secondary)] uppercase tracking-wider">
-                ¿Cómo deseas liquidar estos {selectedOrdersList.length} pedidos?
-              </Label>
-              <div className="grid grid-cols-2 gap-2">
-                {[
-                  {
-                    id: 'AS_IS',
-                    title: '⚡ Respetar cada pedido',
-                    desc: 'Usa el método ya asignado en cada comanda (Recomendado)',
-                  },
-                  {
-                    id: 'CASH',
-                    title: '💵 Todo en Efectivo',
-                    desc: 'El repartidor entregó todo el total en efectivo',
-                  },
-                  {
-                    id: 'TRANSFER',
-                    title: '📱 Todo en Transferencia',
-                    desc: 'Se canceló el monto completo por transferencia',
-                  },
-                  {
-                    id: 'MANUAL',
-                    title: '📝 Ajuste Manual',
-                    desc: 'Cambiar método de pago pedido por pedido',
-                  },
-                ].map(mode => (
-                  <button
-                    key={mode.id}
-                    type="button"
-                    onClick={() => setBatchCollectMode(mode.id as any)}
-                    className={`p-3 rounded-2xl border text-left transition-all cursor-pointer flex flex-col gap-0.5 ${
-                      batchCollectMode === mode.id
-                        ? 'bg-[var(--accent)] text-[var(--accent-fg)] border-[var(--accent)] shadow-md scale-[1.01]'
-                        : 'bg-[var(--bg-subtle)] text-[var(--text-primary)] border-[var(--border-subtle)] hover:border-[var(--accent)]/40'
-                    }`}
-                  >
-                    <span className="text-xs font-black">{mode.title}</span>
-                    <span className={`text-[10px] ${batchCollectMode === mode.id ? 'text-white/80' : 'text-[var(--text-muted)]'}`}>
-                      {mode.desc}
-                    </span>
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* Resumen en Vivo de Efectivo vs Transferencia en el Modal */}
-            <div className="grid grid-cols-3 gap-2 p-2.5 rounded-2xl bg-[var(--bg-elevated)] border border-[var(--border-subtle)] shadow-xs">
-              <div className="flex flex-col items-center justify-center p-2 rounded-xl bg-emerald-500/10 border border-emerald-500/25 text-center">
-                <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 uppercase tracking-wider">
-                  💵 Efectivo
-                </span>
-                <span className="text-sm sm:text-base font-black text-emerald-700 dark:text-emerald-300 tabular-nums">
-                  {formatCurrency(batchCollectTotals.cash)}
-                </span>
-              </div>
-              <div className="flex flex-col items-center justify-center p-2 rounded-xl bg-blue-500/10 border border-blue-500/25 text-center">
-                <span className="text-[10px] font-bold text-blue-600 dark:text-blue-400 uppercase tracking-wider">
-                  📱 Transferencia
-                </span>
-                <span className="text-sm sm:text-base font-black text-blue-700 dark:text-blue-300 tabular-nums">
-                  {formatCurrency(batchCollectTotals.transfer)}
-                </span>
-              </div>
-              <div className="flex flex-col items-center justify-center p-2 rounded-xl bg-purple-500/10 border border-purple-500/25 text-center">
-                <span className="text-[10px] font-bold text-purple-600 dark:text-purple-400 uppercase tracking-wider">
-                  💰 Gran Total
-                </span>
-                <span className="text-sm sm:text-base font-black text-purple-700 dark:text-purple-300 tabular-nums">
-                  {formatCurrency(batchCollectTotals.total)}
-                </span>
-              </div>
-            </div>
-
-            {/* Referencia si es Transferencia */}
-            {batchCollectMode === 'TRANSFER' && (
-              <div className="space-y-1.5 p-3 rounded-2xl bg-[var(--bg-subtle)] border border-[var(--border-subtle)]">
-                <Label className="text-xs font-bold text-[var(--text-secondary)] uppercase">
-                  Referencia o Comprobante General (opcional)
-                </Label>
-                <Input
-                  value={batchCollectReference}
-                  onChange={e => setBatchCollectReference(e.target.value)}
-                  placeholder="Ej: Nequi / Bancolombia #123456..."
-                  className="bg-[var(--bg-input)] border-[var(--border-default)] rounded-xl text-xs h-9.5"
-                />
-              </div>
-            )}
-
-            {/* Ajuste Manual Comanda por Comanda */}
-            {batchCollectMode === 'MANUAL' && (
-              <div className="space-y-2 border rounded-2xl p-3 bg-[var(--bg-subtle)] border-[var(--border-subtle)]">
-                <div className="flex items-center justify-between pb-1 border-b border-[var(--border-subtle)]">
-                  <span className="text-[11px] font-black text-[var(--text-secondary)] uppercase">
-                    Comandas Seleccionadas ({selectedOrdersList.length})
+            <div className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-subtle)] p-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <p className="text-xs font-black text-[var(--text-primary)]">Revisa cada pedido antes de liquidar</p>
+                  <p className="text-[10px] font-medium text-[var(--text-muted)]">El método se puede corregir en la misma fila. Las transferencias requieren validación.</p>
+                </div>
+                {unreviewedTransferOrders.length > 0 ? (
+                  <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-2.5 py-1 text-[10px] font-black text-amber-700">
+                    {unreviewedTransferOrders.length} transferencia{unreviewedTransferOrders.length === 1 ? '' : 's'} por validar
                   </span>
-                  <span className="text-[10px] text-[var(--text-muted)] font-bold">Haz clic en el método para alternar</span>
-                </div>
-                <div className="space-y-1.5 max-h-52 overflow-y-auto pr-1 scrollbar-thin">
-                  {selectedOrdersList.map(ord => {
-                    const custom = manualItemMethods[ord.id]
-                    const currentM = (custom?.method || ord.paymentMethod || 'CASH').toUpperCase()
-                    return (
-                      <div
-                        key={ord.id}
-                        className="flex items-center justify-between gap-2 p-2 rounded-xl bg-[var(--bg-panel)] border border-[var(--border-subtle)] text-xs"
-                      >
-                        <div className="flex items-center gap-2 min-w-0">
-                          <button
-                            type="button"
-                            onClick={() => setChatModalOrder(ord)}
-                            className="font-black text-[var(--accent)] hover:underline inline-flex items-center gap-1 cursor-pointer bg-transparent border-0 p-0 group shrink-0"
-                            aria-label={`Ver chat WhatsApp pedido #${ord.orderNumber}`}
-                          >
-                            <span>#{ord.orderNumber}</span>
-                            <MessageSquare className="w-3.5 h-3.5 text-emerald-500 opacity-80 group-hover:opacity-100 group-hover:scale-115 transition-all" />
-                          </button>
-                          <span className="font-bold text-[var(--text-primary)] truncate max-w-[140px] sm:max-w-[200px]">
-                            {ord.customerName}
-                          </span>
-                        </div>
-                        <div className="flex items-center gap-2 shrink-0">
-                          <span className="font-black tabular-nums">{formatCurrency(ord.total)}</span>
-                          <div className="flex items-center gap-1">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setManualItemMethods(prev => ({
-                                  ...prev,
-                                  [ord.id]: { method: 'CASH', cashAmount: ord.total, transferAmount: 0 }
-                                }))
-                              }}
-                              className={`px-2 py-0.5 rounded-lg text-[10px] font-black border transition-all cursor-pointer ${
-                                currentM === 'CASH'
-                                  ? 'bg-emerald-500 text-white border-emerald-600 shadow-sm'
-                                  : 'bg-[var(--bg-subtle)] text-[var(--text-muted)] border-[var(--border-subtle)] hover:text-[var(--text-primary)]'
-                              }`}
-                            >
-                              💵 Efec
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setManualItemMethods(prev => ({
-                                  ...prev,
-                                  [ord.id]: { method: 'TRANSFER', cashAmount: 0, transferAmount: ord.total }
-                                }))
-                              }}
-                              className={`px-2 py-0.5 rounded-lg text-[10px] font-black border transition-all cursor-pointer ${
-                                ['TRANSFER', 'NEQUI', 'BANCOLOMBIA', 'DAVIPLATA'].includes(currentM)
-                                  ? 'bg-blue-500 text-white border-blue-600 shadow-sm'
-                                  : 'bg-[var(--bg-subtle)] text-[var(--text-muted)] border-[var(--border-subtle)] hover:text-[var(--text-primary)]'
-                              }`}
-                            >
-                              📱 Transf
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-                    )
-                  })}
-                </div>
+                ) : transferOrdersRequiringReview.length > 0 ? (
+                  <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 text-[10px] font-black text-emerald-700">
+                    <CheckCircle2 className="h-3.5 w-3.5" /> Transferencias validadas
+                  </span>
+                ) : null}
               </div>
-            )}
+            </div>
 
-            {/* Listado resumido de pedidos incluidos */}
-            {batchCollectMode !== 'MANUAL' && (
-              <div className="p-3 rounded-2xl bg-[var(--bg-subtle)] border border-[var(--border-subtle)] space-y-1.5">
-                <span className="text-[10px] font-bold text-[var(--text-secondary)] uppercase tracking-wider block">
-                  Pedidos que se cobrarán ({selectedOrdersList.length}):
-                </span>
-                <div className="flex flex-wrap gap-1.5 max-h-24 overflow-y-auto scrollbar-thin">
-                  {selectedOrdersList.map(o => (
-                    <button
-                      key={o.id}
-                      type="button"
-                      onClick={() => setChatModalOrder(o)}
-                      className="bg-[var(--bg-panel)] hover:bg-emerald-500/10 px-2.5 py-1 rounded-lg border border-[var(--border-subtle)] hover:border-emerald-500/40 text-xs font-black cursor-pointer inline-flex items-center gap-1.5 transition-all group"
-                      aria-label={`Ver chat WhatsApp pedido #${o.orderNumber}`}
-                    >
-                      <span className="text-[var(--accent)]">#{o.orderNumber}</span>
-                      <MessageSquare className="w-3 h-3 text-emerald-500 opacity-80 group-hover:opacity-100 shrink-0" />
-                      <span className="text-[10px] text-[var(--text-muted)] font-medium">({formatCurrency(o.total)})</span>
-                    </button>
+            <div className="grid gap-3 lg:grid-cols-2">
+              <section className="overflow-hidden rounded-2xl border border-emerald-500/25 bg-emerald-500/5">
+                <header className="flex items-center justify-between border-b border-emerald-500/20 px-3 py-2.5">
+                  <div>
+                    <p className="text-xs font-black text-emerald-700">💵 Efectivo · {batchOrdersByPayment.cash.length}</p>
+                    <p className="text-[10px] font-semibold text-emerald-700/70">Dinero que debe entregar el domiciliario</p>
+                  </div>
+                  <span className="text-sm font-black tabular-nums text-emerald-700">{formatCurrency(batchCollectTotals.cash)}</span>
+                </header>
+                <div className="max-h-[320px] space-y-2 overflow-y-auto p-2 scrollbar-thin">
+                  {batchOrdersByPayment.cash.length > 0
+                    ? batchOrdersByPayment.cash.map(order => renderBatchPaymentRow(order))
+                    : <p className="py-6 text-center text-xs font-semibold text-[var(--text-muted)]">No hay pedidos en efectivo.</p>}
+                </div>
+              </section>
+
+              <section className="overflow-hidden rounded-2xl border border-blue-500/25 bg-blue-500/5">
+                <header className="flex items-center justify-between border-b border-blue-500/20 px-3 py-2.5">
+                  <div>
+                    <p className="text-xs font-black text-blue-700">📱 Transferencia · {batchOrdersByPayment.transfer.length}</p>
+                    <p className="text-[10px] font-semibold text-blue-700/70">Verifica chat o comprobante antes de marcar</p>
+                  </div>
+                  <span className="text-sm font-black tabular-nums text-blue-700">{formatCurrency(batchCollectTotals.transfer)}</span>
+                </header>
+                <div className="max-h-[320px] space-y-2 overflow-y-auto p-2 scrollbar-thin">
+                  {batchOrdersByPayment.transfer.length > 0
+                    ? batchOrdersByPayment.transfer.map(order => renderBatchPaymentRow(order, true))
+                    : <p className="py-6 text-center text-xs font-semibold text-[var(--text-muted)]">No hay pedidos por transferencia.</p>}
+                </div>
+              </section>
+            </div>
+
+            {batchOrdersByPayment.mixedOrOther.length > 0 && (
+              <section className="overflow-hidden rounded-2xl border border-amber-500/25 bg-amber-500/5">
+                <header className="border-b border-amber-500/20 px-3 py-2.5">
+                  <p className="text-xs font-black text-amber-700">Revisión especial · {batchOrdersByPayment.mixedOrOther.length}</p>
+                  <p className="text-[10px] font-semibold text-amber-700/70">Pedidos mixtos, crédito o cortesía. Confirma su forma final de pago.</p>
+                </header>
+                <div className="grid gap-2 p-2 lg:grid-cols-2">
+                  {batchOrdersByPayment.mixedOrOther.map(order => renderBatchPaymentRow(
+                    order,
+                    getBatchOrderMethod(order) === 'MIXED' && Number(manualItemMethods[order.id]?.transferAmount ?? order.transferAmount ?? 0) > 0
                   ))}
                 </div>
-              </div>
+              </section>
             )}
 
             {/* Opción Abrir Cajón */}
@@ -2386,7 +2422,7 @@ export default function ActiveDeliveriesPage() {
               <Button
                 className="flex-[2] h-12 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-black text-xs sm:text-sm shadow-xl border-0 cursor-pointer flex items-center justify-center gap-2"
                 onClick={handleConfirmBatchCollect}
-                disabled={isSubmittingBatchCollect || selectedOrdersList.length === 0}
+                disabled={isSubmittingBatchCollect || selectedOrdersList.length === 0 || unreviewedTransferOrders.length > 0}
               >
                 {isSubmittingBatchCollect ? (
                   <>
@@ -2397,7 +2433,9 @@ export default function ActiveDeliveriesPage() {
                   <>
                     <DollarSign className="h-4 w-4 shrink-0" />
                     <span className="truncate">
-                      Confirmar Cobro ({formatCurrency(batchCollectTotals.total)}) — 💵 {formatCurrency(batchCollectTotals.cash)} | 📱 {formatCurrency(batchCollectTotals.transfer)}
+                      {unreviewedTransferOrders.length > 0
+                        ? `Valida ${unreviewedTransferOrders.length} transferencia${unreviewedTransferOrders.length === 1 ? '' : 's'}`
+                        : `Confirmar liquidación · ${formatCurrency(batchCollectTotals.total)}`}
                     </span>
                   </>
                 )}
@@ -2677,19 +2715,19 @@ export default function ActiveDeliveriesPage() {
                           ...o,
                           deliveryDriver: o.deliveryDriver || (o.deliveryDriverId ? drivers.find(d => d.id === o.deliveryDriverId) : undefined)
                         };
-                        alerts.toast(`Enviando pedido #${o.orderNumber} a impresión...`, 'info');
+                        alerts.toast(`Enviando pedido #${o.orderNumber} a impresión...`);
                         const res = await printComandaSmart(orderWithDriver, 'caja', user?.role, false, false);
                         if (res?.error) {
                           alerts.error('Error al imprimir', res.error);
                         } else {
-                          alerts.toast(`Pedido #${o.orderNumber} enviado a la impresora`, 'success');
+                          alerts.toast(`Pedido #${o.orderNumber} enviado a la impresora`);
                         }
                       }}
                       title="Imprimir Factura"
                     >
                       <Printer className="h-3.5 w-3.5 text-blue-500" /> Imprimir Ticket
                     </Button>
-                    {!isDeliveryStaff && o.paymentStatus !== 'CONFIRMED' && o.status !== 'CANCELLED' && (
+                    {!isDeliveryStaff && o.paymentStatus !== 'CONFIRMED' && isReadyForCollection(o) && (
                       <Button size="sm" className="h-9 px-4 text-xs font-extrabold bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-fg)] rounded-xl gap-1.5 border-0 cursor-pointer shadow-xs active:scale-95 transition-all"
                         onClick={() => { setDetailOrder(null); setCollectDialog(o); }}
                         title="Cobrar pedido"
@@ -2758,6 +2796,9 @@ export default function ActiveDeliveriesPage() {
                   transferAmount: isTransfer ? tot : 0,
                 }
               }))
+              if (isCash) {
+                setReviewedTransferIds(previous => previous.filter(id => id !== chatModalOrder.id))
+              }
             }
             loadOrders(true, true)
           }}
