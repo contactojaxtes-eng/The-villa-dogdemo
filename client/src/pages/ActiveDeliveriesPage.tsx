@@ -1781,20 +1781,20 @@ export default function ActiveDeliveriesPage() {
             <div className={cn('overflow-x-auto', !isDeliveryStaff && 'custom-scrollbar pb-1')}>
               <table className={cn(
                 'w-full text-xs',
-                !isDeliveryStaff && 'min-w-[1480px] table-fixed [&_th]:px-4 [&_th]:py-3.5 [&_td]:px-4 [&_td]:py-3.5 [&_td]:align-middle'
+                !isDeliveryStaff && 'table-fixed [&_th]:px-1.5 [&_th]:py-3 sm:[&_th]:px-2 [&_td]:px-1.5 [&_td]:py-3 sm:[&_td]:px-2 [&_td]:align-middle'
               )}>
                 {!isDeliveryStaff && (
                   <colgroup>
-                    <col className="w-[48px]" />
-                    <col className="w-[122px]" />
-                    <col className="w-[136px]" />
-                    <col className="w-[205px]" />
-                    <col className="w-[280px]" />
-                    <col className="w-[150px]" />
-                    <col className="w-[100px]" />
-                    <col className="w-[130px]" />
-                    <col className="w-[145px]" />
-                    <col className="w-[184px]" />
+                    <col className="w-[3%]" />
+                    <col className="w-[8%]" />
+                    <col className="w-[9%]" />
+                    <col className="w-[14%]" />
+                    <col className="w-[19%]" />
+                    <col className="w-[10%]" />
+                    <col className="w-[7%]" />
+                    <col className="w-[9%]" />
+                    <col className="w-[8%]" />
+                    <col className="w-[13%]" />
                   </colgroup>
                 )}
                 <thead className={cn(!isDeliveryStaff && 'sticky top-0 z-10')}>
@@ -2044,7 +2044,7 @@ export default function ActiveDeliveriesPage() {
                               <div className={cn('flex flex-col', isDeliveryStaff ? 'gap-0.5' : 'items-start gap-1')}>
                                 <span className={cn(
                                   'inline-flex items-center gap-1 rounded-lg border border-blue-500/25 px-2 py-1 text-[11px] font-black text-blue-700 dark:text-blue-300',
-                                  isDeliveryStaff ? 'bg-blue-500/15' : 'whitespace-nowrap bg-blue-500/10'
+                                  isDeliveryStaff ? 'bg-blue-500/15' : 'bg-blue-500/10'
                                 )}>
                                   <Clock className="h-3 w-3 text-blue-600" />
                                   En ruta · {routeElapsed}
@@ -2057,7 +2057,7 @@ export default function ActiveDeliveriesPage() {
                               <div className={cn('flex flex-col', isDeliveryStaff ? 'gap-0.5' : 'items-start gap-1')}>
                                 <span className={cn(
                                   'inline-flex items-center gap-1 rounded-lg border border-purple-500/25 px-2 py-1 text-[11px] font-black text-purple-700 dark:text-purple-300',
-                                  isDeliveryStaff ? 'bg-purple-500/15' : 'whitespace-nowrap bg-purple-500/10'
+                                  isDeliveryStaff ? 'bg-purple-500/15' : 'bg-purple-500/10'
                                 )}>
                                   <Clock className="h-3 w-3 text-purple-600" />
                                   {order.status === 'READY' ? 'Listo' : `Espera · ${elapsed}`}
@@ -2119,11 +2119,11 @@ export default function ActiveDeliveriesPage() {
                             </div>
                           </td>
                           <td className="px-3 py-2.5">
-                            <div className={cn('flex items-center justify-center', isDeliveryStaff ? 'gap-1' : 'gap-1.5')}>
+                            <div className={cn('flex items-center justify-center', isDeliveryStaff ? 'gap-1' : 'flex-wrap gap-1')}>
                               {!isDeliveryStaff && order.paymentStatus !== 'CONFIRMED' && isReadyForCollection(order) && (
                                 <Button size="sm" className={cn(
                                   'gap-1 border-0 bg-[var(--accent)] text-[10px] font-extrabold text-[var(--accent-fg)] shadow-xs transition-all hover:bg-[var(--accent-hover)] active:scale-95 cursor-pointer',
-                                  isDeliveryStaff ? 'h-7 rounded-lg px-2' : 'h-8 rounded-xl px-2.5'
+                                  'h-7 rounded-lg px-2'
                                 )}
                                   onClick={() => setCollectDialog(order)}
                                   title="Cobrar pedido"
@@ -2135,7 +2135,7 @@ export default function ActiveDeliveriesPage() {
                                 size="sm" 
                                 variant="ghost" 
                                 title="Reimprimir Comanda / Factura"
-                                className={cn('p-0 text-blue-500 hover:bg-blue-500/10 cursor-pointer', isDeliveryStaff ? 'h-7 w-7 rounded-lg' : 'h-8 w-8 rounded-xl')}
+                                className="h-7 w-7 rounded-lg p-0 text-blue-500 hover:bg-blue-500/10 cursor-pointer"
                                 onClick={async () => {
                                   const orderWithDriver = {
                                     ...order,
@@ -2157,7 +2157,7 @@ export default function ActiveDeliveriesPage() {
                                   size="sm" 
                                   variant="ghost" 
                                   title="Editar Pedido"
-                                  className={cn('p-0 text-amber-500 hover:bg-amber-500/10 cursor-pointer', isDeliveryStaff ? 'h-7 w-7 rounded-lg' : 'h-8 w-8 rounded-xl')}
+                                  className="h-7 w-7 rounded-lg p-0 text-amber-500 hover:bg-amber-500/10 cursor-pointer"
                                   onClick={() => navigate(order.tableId ? `/tables/new?tableId=${order.tableId}&editOrderId=${order.id}` : `/orders/new?edit=${order.id}`)}
                                 >
                                   <Edit className="h-3.5 w-3.5" />
@@ -2166,14 +2166,14 @@ export default function ActiveDeliveriesPage() {
                               <Button 
                                 size="sm" 
                                 variant="ghost" 
-                                className={cn('p-0 text-[var(--text-muted)] hover:text-[var(--text-primary)] cursor-pointer', isDeliveryStaff ? 'h-7 w-7 rounded-lg' : 'h-8 w-8 rounded-xl')}
+                                className="h-7 w-7 rounded-lg p-0 text-[var(--text-muted)] hover:text-[var(--text-primary)] cursor-pointer"
                                 title="Ver detalle del pedido"
                                 onClick={() => setDetailOrder(order)}
                               >
                                 <Eye className="h-3.5 w-3.5" />
                               </Button>
                               {!isDeliveryStaff && activeStatuses.includes(order.status) && ['SUPERADMIN', 'ADMIN', 'CASHIER', 'WAITER'].includes(user?.role || '') && (
-                                <Button size="sm" variant="ghost" className={cn('p-0 text-red-400 hover:bg-red-500/10 cursor-pointer', isDeliveryStaff ? 'h-7 w-7 rounded-lg' : 'h-8 w-8 rounded-xl')} title="Cancelar Pedido"
+                                <Button size="sm" variant="ghost" className="h-7 w-7 rounded-lg p-0 text-red-400 hover:bg-red-500/10 cursor-pointer" title="Cancelar Pedido"
                                   onClick={() => { setCancelDialog({ id: order.id, orderNumber: order.orderNumber }); setCancelConfirmStep(false); setCancelReason('') }}>
                                   <XCircle className="h-3.5 w-3.5" />
                                 </Button>
