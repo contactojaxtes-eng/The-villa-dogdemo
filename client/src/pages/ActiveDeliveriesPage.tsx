@@ -283,6 +283,7 @@ export default function ActiveDeliveriesPage() {
   const [detailOrder, setDetailOrder] = useState<Order | null>(null)
   const [chatModalOrder, setChatModalOrder] = useState<Order | null>(null)
   const [markingPickupReadyId, setMarkingPickupReadyId] = useState<string | null>(null)
+  const [notifyOnPickupReady, setNotifyOnPickupReady] = useState<Record<string, boolean>>({})
   const [paymentEditDialog, setPaymentEditDialog] = useState<Order | null>(null)
   const [editMethod, setEditMethod] = useState<string>('CASH')
   const [editCashAmount, setEditCashAmount] = useState<string>('')
@@ -429,13 +430,19 @@ export default function ActiveDeliveriesPage() {
     }
   }
 
-  // Marcar pedido Pasar a Recoger como LISTO, imprimir factura de entrega y notificar por WhatsApp
+  // Marcar pedido Pasar a Recoger como LISTO, imprimir factura de entrega y notificar por WhatsApp si el checkbox está activo
   const handleMarkPickupReady = async (order: Order) => {
     if (markingPickupReadyId) return
 
+    const shouldNotify = notifyOnPickupReady[order.id] ?? true
+
     const confirm = await alerts.confirm(
       `¿Marcar Pedido #${order.orderNumber} como LISTO?`,
-      `Al confirmar:\n1. El pedido pasará al estado LISTO para recoger.\n2. Se imprimirá la factura de entrega en caja.\n3. Se enviará automáticamente la notificación por WhatsApp al cliente.`,
+      `Al confirmar:\n1. El pedido pasará al estado LISTO para recoger.\n2. Se imprimirá la factura de entrega en caja.${
+        shouldNotify
+          ? '\n3. Se enviará automáticamente la notificación por WhatsApp al cliente.'
+          : '\n(Notificación por WhatsApp desactivada: NO se enviará mensaje al cliente).'
+      }`,
       'Sí, Marcar Listo e Imprimir',
       'Cancelar'
     )
@@ -443,8 +450,11 @@ export default function ActiveDeliveriesPage() {
 
     setMarkingPickupReadyId(order.id)
     try {
-      // 1. Actualizar estado a READY (el backend envía automáticamente el WhatsApp de pedido listo)
-      const updatedOrder = await api.put<any>(`/orders/${order.id}/status`, { status: 'READY' })
+      // 1. Actualizar estado a READY (el backend respeta notifyCustomer)
+      const updatedOrder = await api.put<any>(`/orders/${order.id}/status`, { 
+        status: 'READY',
+        notifyCustomer: shouldNotify,
+      })
 
       // 2. Imprimir factura en caja inmediatamente
       try {
@@ -453,7 +463,10 @@ export default function ActiveDeliveriesPage() {
         console.error('Error al imprimir factura de pedido listo:', printErr)
       }
 
-      alerts.success('Pedido Listo', `El pedido #${order.orderNumber} se marcó como LISTO, se envió la notificación a WhatsApp y se imprimió la factura.`)
+      alerts.success(
+        'Pedido Listo',
+        `El pedido #${order.orderNumber} se marcó como LISTO, ${shouldNotify ? 'se envió la notificación a WhatsApp y ' : ''}se imprimió la factura.`
+      )
       loadOrders(false, true)
     } catch (err: any) {
       console.error('Error al marcar pedido listo:', err)
@@ -1959,20 +1972,45 @@ export default function ActiveDeliveriesPage() {
                                   {order.orderType === 'PICKUP' ? 'Pasar a Recoger' : 'Mostrador'}
                                 </span>
                                 {hasPermission('dispatch.change_status') && order.orderType === 'PICKUP' && order.status !== 'READY' && order.status !== 'DELIVERED' && order.status !== 'CANCELLED' && (
-                                  <Button
-                                    size="sm"
-                                    onClick={() => handleMarkPickupReady(order)}
-                                    disabled={markingPickupReadyId === order.id}
-                                    className="h-6 px-2 text-[10px] font-extrabold bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg gap-1 border-0 cursor-pointer shadow-sm animate-pulse"
-                                    title="Marcar pedido listo, imprimir factura y notificar por WhatsApp al cliente"
-                                  >
-                                    {markingPickupReadyId === order.id ? (
-                                      <Loader2 className="h-3 w-3 animate-spin" />
-                                    ) : (
-                                      <CheckCircle2 className="h-3 w-3" />
-                                    )}
-                                    <span>Listo</span>
-                                  </Button>
+                                  <div className="inline-flex items-center gap-1.5">
+                                    <Button
+                                      size="sm"
+                                      onClick={() => handleMarkPickupReady(order)}
+                                      disabled={markingPickupReadyId === order.id}
+                                      className="h-6 px-2 text-[10px] font-extrabold bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg gap-1 border-0 cursor-pointer shadow-sm animate-pulse"
+                                      title={
+                                        (notifyOnPickupReady[order.id] ?? true)
+                                          ? "Marcar pedido listo, imprimir factura y notificar por WhatsApp al cliente"
+                                          : "Marcar pedido listo e imprimir factura (sin notificar por WhatsApp)"
+                                      }
+                                    >
+                                      {markingPickupReadyId === order.id ? (
+                                        <Loader2 className="h-3 w-3 animate-spin" />
+                                      ) : (
+                                        <CheckCircle2 className="h-3 w-3" />
+                                      )}
+                                      <span>Listo</span>
+                                    </Button>
+                                    <label
+                                      className="inline-flex items-center cursor-pointer select-none"
+                                      title={
+                                        (notifyOnPickupReady[order.id] ?? true)
+                                          ? "Notificación por WhatsApp activada (marcado por defecto)"
+                                          : "Notificación por WhatsApp desactivada (no se enviará mensaje al cliente)"
+                                      }
+                                      onClick={e => e.stopPropagation()}
+                                    >
+                                      <input
+                                        type="checkbox"
+                                        checked={notifyOnPickupReady[order.id] ?? true}
+                                        onChange={e => {
+                                          e.stopPropagation()
+                                          setNotifyOnPickupReady(prev => ({ ...prev, [order.id]: e.target.checked }))
+                                        }}
+                                        className="h-4 w-4 rounded accent-emerald-600 cursor-pointer"
+                                      />
+                                    </label>
+                                  </div>
                                 )}
                               </div>
                             ) : ['DELIVERED', 'CANCELLED'].includes(order.status) ? (

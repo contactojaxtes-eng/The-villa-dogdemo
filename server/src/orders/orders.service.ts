@@ -1359,7 +1359,7 @@ export class OrdersService implements OnModuleInit {
     return updated;
   }
 
-  async updateStatus(id: string, status: string, user?: { id: string; role: string }, deliveryDriverId?: string) {
+  async updateStatus(id: string, status: string, user?: { id: string; role: string }, deliveryDriverId?: string, notifyCustomer?: boolean) {
     const validStatuses = ['PENDING', 'READY', 'IN_ROUTE', 'DELIVERED', 'CANCELLED'];
     if (!validStatuses.includes(status)) throw new BadRequestException('Estado inválido');
 
@@ -1450,7 +1450,8 @@ export class OrdersService implements OnModuleInit {
     this.socketGateway.emitWhatsApp('whatsappSessionUpdated', { orderUpdated: true, phone: updated.customerPhone, orderNumber: updated.orderNumber, status: updated.status });
 
     try {
-      if (this.canSendWhatsApp(updated)) {
+      const shouldNotify = notifyCustomer !== false;
+      if (shouldNotify && this.canSendWhatsApp(updated)) {
         let text = '';
         if (status === 'READY' && updated.orderType === 'PICKUP') {
           text = `¡Tu pedido ya está listo!\n\nPuedes pasar a recogerlo en nuestro restaurante. 🏠\n¡Te esperamos!`;
@@ -2095,7 +2096,7 @@ export class OrdersService implements OnModuleInit {
     }
 
     if (paymentStatus === 'CONFIRMED') {
-      return this.updateStatus(id, 'DELIVERED', user);
+      return this.updateStatus(id, 'DELIVERED', user, undefined, false);
     }
 
     this.socketGateway.emitOrderStatusChange(id, updated.status, updated);

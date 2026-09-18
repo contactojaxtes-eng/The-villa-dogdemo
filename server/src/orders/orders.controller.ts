@@ -184,8 +184,9 @@ export class OrdersController {
     @Body('status') status: string,
     @Body('deliveryDriverId') deliveryDriverId: string,
     @Request() req: any,
+    @Body('notifyCustomer') notifyCustomer?: boolean,
   ) {
-    return this.ordersService.updateStatus(id, status, req.user, deliveryDriverId);
+    return this.ordersService.updateStatus(id, status, req.user, deliveryDriverId, notifyCustomer);
   }
 
   @Put(':id/cancel')
