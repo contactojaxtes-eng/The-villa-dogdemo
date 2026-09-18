@@ -430,7 +430,7 @@ export default function ActiveDeliveriesPage() {
     }
   }
 
-  // Marcar pedido Pasar a Recoger como LISTO, imprimir factura de entrega y notificar por WhatsApp si el checkbox está activo
+  // Marcar pedido Pasar a Recoger como LISTO y notificar por WhatsApp si el checkbox está activo
   const handleMarkPickupReady = async (order: Order) => {
     if (markingPickupReadyId) return
 
@@ -438,12 +438,12 @@ export default function ActiveDeliveriesPage() {
 
     const confirm = await alerts.confirm(
       `¿Marcar Pedido #${order.orderNumber} como LISTO?`,
-      `Al confirmar:\n1. El pedido pasará al estado LISTO para recoger.\n2. Se imprimirá la factura de entrega en caja.${
+      `Al confirmar:\n1. El pedido pasará al estado LISTO para recoger.${
         shouldNotify
-          ? '\n3. Se enviará automáticamente la notificación por WhatsApp al cliente.'
+          ? '\n2. Se enviará automáticamente la notificación por WhatsApp al cliente.'
           : '\n(Notificación por WhatsApp desactivada: NO se enviará mensaje al cliente).'
       }`,
-      'Sí, Marcar Listo e Imprimir',
+      'Sí, Marcar Listo',
       'Cancelar'
     )
     if (!confirm) return
@@ -451,21 +451,14 @@ export default function ActiveDeliveriesPage() {
     setMarkingPickupReadyId(order.id)
     try {
       // 1. Actualizar estado a READY (el backend respeta notifyCustomer)
-      const updatedOrder = await api.put<any>(`/orders/${order.id}/status`, { 
+      await api.put<any>(`/orders/${order.id}/status`, { 
         status: 'READY',
         notifyCustomer: shouldNotify,
       })
 
-      // 2. Imprimir factura en caja inmediatamente
-      try {
-        await printComandaSmart(updatedOrder || order, 'caja', user?.role, false, false)
-      } catch (printErr) {
-        console.error('Error al imprimir factura de pedido listo:', printErr)
-      }
-
       alerts.success(
         'Pedido Listo',
-        `El pedido #${order.orderNumber} se marcó como LISTO, ${shouldNotify ? 'se envió la notificación a WhatsApp y ' : ''}se imprimió la factura.`
+        `El pedido #${order.orderNumber} se marcó como LISTO${shouldNotify ? ' y se envió la notificación a WhatsApp al cliente.' : '.'}`
       )
       loadOrders(false, true)
     } catch (err: any) {
@@ -1980,8 +1973,8 @@ export default function ActiveDeliveriesPage() {
                                       className="h-6 px-2 text-[10px] font-extrabold bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg gap-1 border-0 cursor-pointer shadow-sm animate-pulse"
                                       title={
                                         (notifyOnPickupReady[order.id] ?? true)
-                                          ? "Marcar pedido listo, imprimir factura y notificar por WhatsApp al cliente"
-                                          : "Marcar pedido listo e imprimir factura (sin notificar por WhatsApp)"
+                                          ? "Marcar pedido listo y notificar por WhatsApp al cliente"
+                                          : "Marcar pedido listo (sin notificar por WhatsApp)"
                                       }
                                     >
                                       {markingPickupReadyId === order.id ? (
