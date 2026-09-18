@@ -1203,11 +1203,22 @@ export default function ActiveDeliveriesPage() {
                 <p className="text-xs text-[var(--text-secondary)]">Cola por orden de llegada · el más antiguo se atiende primero</p>
               </div>
             </div>
-            <div className="flex items-center gap-3">
-              <div className="hidden items-center gap-1.5 text-xs font-bold sm:flex">
-                <span className="h-2.5 w-2.5 rounded-full bg-amber-400" />
-                <span className="text-[var(--text-muted)]">Pendientes:</span>
-                <span className="text-amber-500">{summary.active}</span>
+            <div className="flex items-center gap-2">
+              <div className="mr-3 hidden items-center gap-3 md:flex">
+                <div className="flex items-center gap-1.5 text-xs font-bold">
+                  <span className="h-2.5 w-2.5 animate-pulse rounded-full bg-amber-400" />
+                  <span className="text-[var(--text-muted)]">Pendientes:</span>
+                  <span className="text-amber-500">{summary.active}</span>
+                </div>
+                {summary.urgent > 0 && (
+                  <>
+                    <div className="h-4 w-px bg-[var(--border-subtle)]" />
+                    <div className="flex items-center gap-1.5 text-xs font-black text-red-500">
+                      <AlertTriangle className="h-3.5 w-3.5" />
+                      <span>{summary.urgent} fuera de tiempo</span>
+                    </div>
+                  </>
+                )}
               </div>
               <Button
                 size="sm"
