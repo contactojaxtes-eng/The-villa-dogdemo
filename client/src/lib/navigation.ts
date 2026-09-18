@@ -47,6 +47,7 @@ export const allNavItems: NavItem[] = [
   { href: '/kitchen', label: 'Cocina', icon: ChefHat, roles: ['ADMIN', 'CASHIER', 'KITCHEN'], permission: 'kitchen.view', section: 'Principal', module: 'kitchen' },
   { href: '/payment-validation', label: 'Validar Pagos', icon: BadgeCheck, roles: ['ADMIN', 'CASHIER'], permission: 'payment_validation.view', section: 'Principal', module: 'payment_validation' },
   { href: '/chat', label: 'WhatsApp Chat', icon: MessageCircle, roles: ['ADMIN', 'DELIVERY_MANAGER', 'CASHIER'], permission: 'whatsapp.view', section: 'Principal', module: 'whatsapp' },
+  { href: '/my-deliveries', label: 'Mis entregas', icon: Bike, roles: ['DELIVERY_DRIVER'], section: 'Principal', module: 'my_deliveries' },
 
   // SECCIÓN GESTIÓN
   { href: '/orders', label: 'Historial Domicilios', icon: ScrollText, roles: ['ADMIN', 'CASHIER', 'DELIVERY_MANAGER', 'DISPATCHER'], permission: 'orders.view', section: 'Gestion', module: 'orders_history' },
@@ -99,11 +100,18 @@ export function hasNavItemAccess(user: NavUser | null | undefined, item: NavItem
     return ['/kitchen'].includes(item.href)
   }
 
+  // Los domiciliarios no navegan módulos operativos generales. El servidor
+  // también verifica que cada pedido mostrado y cobrado les pertenezca.
+  if (user.role === 'DELIVERY_DRIVER') {
+    return item.href === '/my-deliveries'
+  }
+
   if (item.permission) return hasUserPermission(user, item.permission)
   return item.roles.includes(user.role || '')
 }
 
 export function getFirstAllowedPath(user: NavUser | null | undefined) {
+  if (user?.role === 'DELIVERY_DRIVER') return '/my-deliveries'
   const hiddenModules = getHiddenModules()
   return allNavItems.find(item => hasNavItemAccess(user, item) && !hiddenModules.includes(item.module))?.href
 }

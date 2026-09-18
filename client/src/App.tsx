@@ -32,6 +32,7 @@ const ModuleSettingsPage = lazy(() => import('./pages/ModuleSettingsPage'))
 const ChatPage = lazy(() => import('./pages/ChatPage'))
 const CustomersPage = lazy(() => import('./pages/CustomersPage'))
 const DriversPage = lazy(() => import('./pages/DriversPage'))
+const DriverPortalPage = lazy(() => import('./pages/DriverPortalPage'))
 const SuperAdminOverviewPage = lazy(() => import('./pages/superadmin/SuperAdminOverviewPage'))
 const SuperAdminConfigPage = lazy(() => import('./pages/superadmin/SuperAdminConfigPage'))
 const AuditLogsPage = lazy(() => import('./pages/superadmin/AuditLogsPage'))
@@ -164,6 +165,9 @@ function App() {
         } />
         <Route path="drivers" element={
           <ProtectedRoute requiredPermission="drivers.view" allowedRoles={['SUPERADMIN', 'ADMIN', 'CASHIER', 'DISPATCHER']}><DriversPage /></ProtectedRoute>
+        } />
+        <Route path="my-deliveries" element={
+          <ProtectedRoute allowedRoles={['DELIVERY_DRIVER']}><DriverPortalPage /></ProtectedRoute>
         } />
         <Route path="payments" element={
           <ProtectedRoute requiredPermission="cash.view" allowedRoles={['SUPERADMIN', 'ADMIN', 'CASHIER']}><PaymentsPage /></ProtectedRoute>

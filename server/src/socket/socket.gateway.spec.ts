@@ -36,6 +36,12 @@ describe('Authenticated real-time connections', () => {
     await middleware({ handshake: { auth: { token: 'refresh' } }, data: {} }, next);
     expect(next.mock.calls[0][0].message).toBe('UNAUTHORIZED');
   });
+  it('rejects delivery drivers from the global operations socket', async () => {
+    db.user.findUnique.mockResolvedValue({ id: 'driver', name: 'Domiciliario', role: 'DELIVERY_DRIVER', active: true });
+    const next = jest.fn();
+    await middleware({ handshake: { auth: { token: 'access' } }, data: {} }, next);
+    expect(next.mock.calls[0][0].message).toBe('SOCKET_NOT_AVAILABLE');
+  });
   it('does not release presence while another tab is still connected', () => {
     const make = (id: string): any => ({ id, data: { user: { id: 'staff', name: 'Equipo', role: 'WAITER' }, expiresAt: Date.now() + 60000 }, join: jest.fn(), disconnect: jest.fn() });
     const first = make('first'); const second = make('second');

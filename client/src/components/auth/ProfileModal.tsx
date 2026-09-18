@@ -37,6 +37,7 @@ const roleLabels: Record<string, string> = {
   DISPATCHER: 'Despachador de Domicilios',
   WAITER: 'Mesero',
   KITCHEN: 'Cocinero',
+  DELIVERY_DRIVER: 'Domiciliario',
   ACCOUNTANT: 'Contador',
   ACCOUNTING_ASSISTANT: 'Auxiliar Contable',
 }

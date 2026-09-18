@@ -204,6 +204,7 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
     'kitchen.ready',
     'kitchen.history',
   ],
+  DELIVERY_DRIVER: [],
 };
 
 export function getDefaultPermissionsForRole(role: string): string[] {
@@ -239,6 +240,7 @@ export const SYSTEM_ROLE_LABELS: Record<string, string> = {
   DISPATCHER: 'Despachador de Domicilios',
   WAITER: 'Mesero',
   KITCHEN: 'Cocinero',
+  DELIVERY_DRIVER: 'Domiciliario',
   ACCOUNTANT: 'Contador',
   ACCOUNTING_ASSISTANT: 'Auxiliar Contable',
 };

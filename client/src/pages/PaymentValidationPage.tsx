@@ -148,6 +148,7 @@ export default function PaymentValidationPage() {
           payment.order?.customerName,
           payment.order?.orderNumber,
           payment.order?.waiter?.name,
+          payment.order?.deliveryDriver?.name,
           methodLabels[payment.method] || payment.method,
           payment.paymentReference,
         ].filter(Boolean).join(' ').toLowerCase()
@@ -250,7 +251,7 @@ export default function PaymentValidationPage() {
 
     try {
       await api.put(`/payment-validation/${payment.id}/${action}`, action === 'reject' ? { reason: reasonText } : {})
-      alerts.toast(action === 'validate' ? `✅ Pago validado (${payment.order?.diningTable?.label || payment.order?.customerName || 'Mesa'})` : `❌ Pago rechazado`)
+      alerts.toast(action === 'validate' ? `✅ Pago validado (${payment.order?.diningTable?.label || payment.order?.customerName || 'Pedido'})` : `❌ Pago rechazado`)
       load()
     } catch (err: any) {
       alerts.error('No se pudo procesar', err?.response?.data?.message || err.message)
@@ -484,7 +485,8 @@ export default function PaymentValidationPage() {
           {filteredPayments.map(payment => {
             const proof = payment.transferProofs?.[0]
             const isCash = payment.method === 'CASH'
-            const label = payment.order?.diningTable?.label || payment.order?.customerName || 'Mesa'
+            const isDelivery = payment.order?.orderType === 'DELIVERY' && !payment.order?.diningTable
+            const label = payment.order?.diningTable?.label || payment.order?.customerName || (isDelivery ? 'Domicilio' : 'Mesa')
             const imageProofs = !isCash ? (payment.transferProofs || []).filter(isRealImageProof) : []
             const hasImageProofs = imageProofs.length > 0
 
@@ -577,9 +579,9 @@ export default function PaymentValidationPage() {
                     )}
 
                     <div className="flex items-center gap-2 text-xs text-[var(--text-secondary)] mt-0.5 flex-wrap">
-                      <span>Mesera: <strong>{payment.order?.waiter?.name || 'Sin asignar'}</strong></span>
+                      <span>{isDelivery ? 'Domiciliario' : 'Mesera'}: <strong>{isDelivery ? payment.order?.deliveryDriver?.name || 'Sin asignar' : payment.order?.waiter?.name || 'Sin asignar'}</strong></span>
                       <span>•</span>
-                      <span>Cobrado por: <strong className="text-[var(--text-primary)]">{proof?.submittedBy?.name || payment.order?.diningTable?.openedBy?.name || payment.order?.waiter?.name || 'Sin asignar'}</strong></span>
+                      <span>Cobrado por: <strong className="text-[var(--text-primary)]">{proof?.submittedBy?.name || payment.order?.deliveryDriver?.name || payment.order?.diningTable?.openedBy?.name || payment.order?.waiter?.name || 'Sin asignar'}</strong></span>
                       {proof?.createdAt && (
                         <>
                           <span>•</span>
@@ -617,7 +619,12 @@ export default function PaymentValidationPage() {
                             🔀 Pago mixto
                           </span>
                         </>
-                      ) : null}
+                      ) : (
+                        <>
+                          <span>•</span>
+                          <span className="font-bold text-amber-700 dark:text-amber-300">Sin foto; el domiciliario puede adjuntarla después.</span>
+                        </>
+                      )}
                     </div>
                   </div>
                 </div>

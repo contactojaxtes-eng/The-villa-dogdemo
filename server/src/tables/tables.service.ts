@@ -1,7 +1,7 @@
 import { receiptSummary, validateReceipt } from './receipt';
 import { Prisma } from '@prisma/client';
 import { lockOperation, operationTransaction } from '../common/operation-lock';
-import { BadRequestException, Injectable, NotFoundException, OnModuleInit, OnModuleDestroy, Inject, forwardRef } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException, OnModuleInit, OnModuleDestroy, Inject, forwardRef } from '@nestjs/common';
 import { existsSync } from 'fs';
 import { randomUUID } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
@@ -1690,21 +1690,55 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
   }
 
   async listPaymentValidation(status = 'PENDING_REVIEW', method = 'ALL', allHistory = false) {
-    const activeClosing = await this.prisma.cashClosing.findFirst({
+    const activeClosings = await this.prisma.cashClosing.findMany({
       where: { isOpen: true },
+      select: {
+        shiftStart: true,
+        cashRegister: { select: { purpose: true } },
+      },
       orderBy: { shiftStart: 'desc' },
     });
 
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
-    const shiftStart = activeClosing?.shiftStart || today;
+    // Las dos cajas pueden estar abiertas a la vez. Cada canal conserva su
+    // propia ventana de turno para que el historial de domicilios no dependa
+    // de la hora de apertura de Caja Principal.
+    const salonShiftStart = activeClosings.find(item => item.cashRegister?.purpose !== 'DELIVERY')?.shiftStart || today;
+    const deliveryShiftStart = activeClosings.find(item => item.cashRegister?.purpose === 'DELIVERY')?.shiftStart || today;
 
     const methodFilter = method === 'CASH' ? { method: 'CASH' } : method === 'TRANSFER' ? { method: 'TRANSFER' } : method === 'MIXED' ? { method: 'MIXED' } : {};
 
     const whereClause: any = {
-      order: { tableId: { not: null } },
+      // Caja valida tanto las cuentas de salón como las transferencias que el
+      // domiciliario registró desde su portal privado.
+      order: {
+        OR: [
+          { tableId: { not: null } },
+          { orderType: 'DELIVERY', deliveryDriverId: { not: null } },
+        ],
+      },
       ...methodFilter,
+    };
+
+    const validatedDuringCurrentShift = {
+      OR: [
+        {
+          order: { tableId: { not: null } },
+          OR: [
+            { confirmedAt: { gte: salonShiftStart } },
+            { createdAt: { gte: salonShiftStart } },
+          ],
+        },
+        {
+          order: { orderType: 'DELIVERY', deliveryDriverId: { not: null } },
+          OR: [
+            { confirmedAt: { gte: deliveryShiftStart } },
+            { createdAt: { gte: deliveryShiftStart } },
+          ],
+        },
+      ],
     };
 
     if (allHistory) {
@@ -1716,23 +1750,19 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
         whereClause.status = 'PENDING_REVIEW';
       } else if (status === 'CONFIRMED' || status === 'REJECTED') {
         whereClause.status = status;
-        whereClause.OR = [
-          { confirmedAt: { gte: shiftStart } },
-          { createdAt: { gte: shiftStart } },
-        ];
+        whereClause.AND = [validatedDuringCurrentShift];
       } else {
         // status === 'ALL':
         // Todos los pendientes por revisar (sin importar fecha) + los validados/rechazados del turno/día actual
-        whereClause.OR = [
-          { status: 'PENDING_REVIEW' },
-          {
-            status: { in: ['CONFIRMED', 'REJECTED'] },
-            OR: [
-              { confirmedAt: { gte: shiftStart } },
-              { createdAt: { gte: shiftStart } },
-            ],
-          },
-        ];
+        whereClause.AND = [{
+          OR: [
+            { status: 'PENDING_REVIEW' },
+            {
+              status: { in: ['CONFIRMED', 'REJECTED'] },
+              AND: [validatedDuringCurrentShift],
+            },
+          ],
+        }];
       }
     }
 
@@ -1743,6 +1773,7 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
           include: {
             diningTable: { include: { openedBy: { select: { id: true, name: true } } } },
             waiter: { select: { id: true, name: true } },
+            deliveryDriver: { select: { id: true, name: true, phone: true, userId: true } },
           },
         },
         transferProofs: {
@@ -1786,19 +1817,99 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
     return [...grouped.values()];
   }
 
-  async proofImage(proofId: string) {
-    const proof = await this.prisma.transferProof.findUnique({ where: { id: proofId } });
+  async proofImage(proofId: string, user?: any) {
+    const proof = await this.prisma.transferProof.findUnique({
+      where: { id: proofId },
+      include: {
+        order: {
+          select: {
+            waiterId: true,
+            diningTable: { select: { openedById: true } },
+            deliveryDriver: { select: { userId: true } },
+          },
+        },
+      },
+    });
     if (!proof) throw new NotFoundException('Comprobante no encontrado');
+    const canReviewAny = ['ADMIN', 'SUPERADMIN', 'CASHIER'].includes(user?.role);
+    const canViewOwnTableProof = user?.role === 'WAITER' && (
+      proof.order?.waiterId === user.id || proof.order?.diningTable?.openedById === user.id
+    );
+    const canViewOwnDeliveryProof = user?.role === 'DELIVERY_DRIVER' && proof.order?.deliveryDriver?.userId === user.id;
+    if (!canReviewAny && !canViewOwnTableProof && !canViewOwnDeliveryProof) {
+      throw new ForbiddenException('No tienes permiso para ver este comprobante.');
+    }
     return proof;
   }
 
   async reviewPayment(paymentId: string, action: 'CONFIRMED' | 'REJECTED', user: any, reason?: string) {
     if (!['CONFIRMED', 'REJECTED'].includes(action)) throw new BadRequestException('Acción inválida');
-    const result = await this.prisma.$transaction(async tx => {
+    const result: any = await this.prisma.$transaction(async tx => {
       await lockOperation(tx);
-      const payment = await tx.payment.findUnique({ where: { id: paymentId }, include: { order: true } });
-      if (!payment?.order.tableId) throw new NotFoundException('Cobro de cuenta no encontrado');
-      if (payment.status === action) return { payment, table: await this.findTable(payment.order.tableId, tx), replay: true };
+      const payment = await tx.payment.findUnique({
+        where: { id: paymentId },
+        include: {
+          order: {
+            include: {
+              deliveryDriver: { select: { id: true, name: true, userId: true } },
+            },
+          },
+        },
+      });
+      const isDeliveryPayment = Boolean(payment?.order?.orderType === 'DELIVERY' && payment?.order?.deliveryDriverId && !payment?.order?.tableId);
+      if (!payment || (!payment.order.tableId && !isDeliveryPayment)) throw new NotFoundException('Cobro no encontrado');
+
+      if (isDeliveryPayment) {
+        if (payment.status === action) return { payment, order: payment.order, delivery: true, replay: true };
+        const allowedFrom = ['PENDING_REVIEW'];
+        if (action === 'CONFIRMED') allowedFrom.push('REJECTED');
+        if (!allowedFrom.includes(payment.status)) throw new BadRequestException('Este pago ya fue procesado.');
+
+        const closing = payment.order.cashClosingId
+          ? await tx.cashClosing.findFirst({
+              where: {
+                id: payment.order.cashClosingId,
+                isOpen: true,
+                cashRegister: { purpose: 'DELIVERY', active: true },
+              },
+            })
+          : null;
+        if (!closing) throw new BadRequestException('El turno de Caja Domicilios de este pago ya cerró o no está disponible.');
+
+        const updatedPayment = await tx.payment.update({
+          where: { id: payment.id },
+          data: {
+            status: action,
+            confirmedBy: user.id,
+            confirmedAt: action === 'CONFIRMED' ? new Date() : null,
+          },
+        });
+        const updatedOrder = await tx.order.update({
+          where: { id: payment.orderId },
+          data: {
+            paymentStatus: action,
+          },
+          include: { deliveryDriver: { select: { id: true, name: true, userId: true } } },
+        });
+        await tx.transferProof.updateMany({
+          // Una foto sustituida queda en auditoría. Solo la foto vigente se
+          // revisa con este pago; si Caja decide confirmar una foto rechazada
+          // sin reemplazo, conserva la compatibilidad del flujo anterior.
+          where: {
+            paymentId: payment.id,
+            status: action === 'CONFIRMED' ? { in: ['PENDING', 'REJECTED'] } : 'PENDING',
+          },
+          data: {
+            status: action,
+            reviewedById: user.id,
+            reviewedAt: new Date(),
+            rejectionReason: action === 'REJECTED' ? String(reason || 'Rechazado por caja').slice(0, 500) : null,
+          },
+        });
+        return { payment: updatedPayment, order: updatedOrder, delivery: true, replay: false };
+      }
+
+      if (payment.status === action) return { payment, table: await this.findTable(payment.order.tableId, tx), delivery: false, replay: true };
 
       // Permitir confirmar pagos en PENDING_REVIEW o validar/aceptar pagos previamente REJECTED
       const allowedFrom = ['PENDING_REVIEW'];
@@ -1833,13 +1944,15 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
         } });
       }
 
-      return { payment: { ...payment, status: action }, table: await this.finishPaidTable(payment.order.tableId, tx), replay: false };
+      return { payment: { ...payment, status: action }, table: await this.finishPaidTable(payment.order.tableId, tx), delivery: false, replay: false };
     }, operationTransaction);
     if (!result.replay) {
       if (action === 'CONFIRMED') this.socketGateway.emitPaymentValidated(result);
+      else if (result.delivery) this.socketGateway.emitPaymentRejected(result.order?.deliveryDriver?.userId || '', { ...result, reason });
       else this.socketGateway.emitPaymentRejected(result.table.openedById, { ...result, reason });
       this.socketGateway.server.emit('cashRegistersChanged');
-      this.emitAccount(result.table);
+      this.socketGateway.server.emit('driversChanged');
+      if (!result.delivery) this.emitAccount(result.table);
     }
     return result;
   }

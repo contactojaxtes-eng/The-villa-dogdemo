@@ -47,6 +47,7 @@ interface Driver {
   pendingCash?: number
   pendingCashOrders?: { id: string; orderNumber: number; amount: number }[]
   orders?: DriverOrder[]
+  portalUser?: { id: string; name: string; email: string; phone?: string | null; active: boolean } | null
 }
 
 interface DriverDetail {
@@ -101,6 +102,15 @@ export default function DriversPage() {
   const [settlementAmount, setSettlementAmount] = useState('')
   const [settlementNotes, setSettlementNotes] = useState('')
   const [settling, setSettling] = useState(false)
+  const [accessDriver, setAccessDriver] = useState<Driver | null>(null)
+  const [accessMode, setAccessMode] = useState<'CREATE' | 'LINK'>('CREATE')
+  const [accessLogin, setAccessLogin] = useState('')
+  const [accessPassword, setAccessPassword] = useState('')
+  const [accessUserId, setAccessUserId] = useState('')
+  const [accessCandidates, setAccessCandidates] = useState<Array<{ id: string; name: string; email: string; role?: string }>>([])
+  const [loadingAccessCandidates, setLoadingAccessCandidates] = useState(false)
+  const [savingAccess, setSavingAccess] = useState(false)
+  const [accessError, setAccessError] = useState('')
 
   // Details Modal
   const [detailDriver, setDetailDriver] = useState<DriverDetail | null>(null)
@@ -281,7 +291,7 @@ export default function DriversPage() {
   }
 
   const handleDeleteDriver = async (driver: Driver) => {
-    const confirm = window.confirm(`🗑️ ¿Estás seguro de que deseas eliminar permanentemente al domiciliario "${driver.name}"?`)
+    const confirm = window.confirm(`¿Deseas desactivar al domiciliario "${driver.name}"? Su historial y liquidaciones se conservarán.`)
     if (!confirm) return
     try {
       await api.delete(`/delivery-drivers/${driver.id}`)
@@ -289,6 +299,54 @@ export default function DriversPage() {
     } catch (err: any) {
       console.error('Error al eliminar domiciliario:', err)
       alert(err.response?.data?.message || err.message || 'Error al eliminar domiciliario')
+    }
+  }
+
+  const openAccessDialog = async (driver: Driver) => {
+    setAccessDriver(driver)
+    setAccessMode('CREATE')
+    setAccessLogin(driver.portalUser?.email?.replace(/@thevilladog\.local$/i, '') || driver.phone)
+    setAccessPassword('')
+    setAccessUserId('')
+    setAccessError('')
+    if (driver.portalUser) return
+    setLoadingAccessCandidates(true)
+    try {
+      const candidates = await api.get<Array<{ id: string; name: string; email: string; role?: string }>>('/delivery-drivers/access/candidates')
+      setAccessCandidates(Array.isArray(candidates) ? candidates : [])
+    } catch (err: any) {
+      setAccessCandidates([])
+      setAccessError(err?.message || 'No se pudieron cargar los usuarios disponibles.')
+    } finally {
+      setLoadingAccessCandidates(false)
+    }
+  }
+
+  const closeAccessDialog = () => {
+    if (!savingAccess) setAccessDriver(null)
+  }
+
+  const handleSaveAccess = async () => {
+    if (!accessDriver) return
+    if (accessMode === 'CREATE') {
+      if (!accessLogin.trim()) { setAccessError('Escribe el usuario o correo para entrar.'); return }
+      if (accessPassword.trim().length < 4) { setAccessError('La contraseña debe tener al menos 4 caracteres.'); return }
+    } else if (!accessUserId) {
+      setAccessError('Selecciona el usuario existente que vas a vincular.');
+      return
+    }
+    setSavingAccess(true)
+    setAccessError('')
+    try {
+      await api.put(`/delivery-drivers/${accessDriver.id}/access`, accessMode === 'CREATE'
+        ? { mode: 'CREATE', login: accessLogin.trim(), password: accessPassword.trim() }
+        : { mode: 'LINK', userId: accessUserId })
+      setAccessDriver(null)
+      await loadDrivers()
+    } catch (err: any) {
+      setAccessError(err?.message || 'No se pudo guardar el acceso del domiciliario.')
+    } finally {
+      setSavingAccess(false)
     }
   }
 
@@ -833,6 +891,13 @@ export default function DriversPage() {
                           </div>
                         )}
 
+                        {hasRole('ADMIN', 'SUPERADMIN') && (
+                          <div className={`flex items-center justify-between gap-2 rounded-xl border px-3 py-2 text-[10px] font-bold ${d.portalUser ? 'border-emerald-500/20 bg-emerald-500/5 text-emerald-700 dark:text-emerald-300' : 'border-[var(--border-subtle)] bg-[var(--bg-elevated)] text-[var(--text-secondary)]'}`}>
+                            <span className="flex min-w-0 items-center gap-1.5"><User className="h-3.5 w-3.5 shrink-0" />{d.portalUser ? <span className="truncate">Acceso listo: {d.portalUser.email}</span> : 'Sin acceso individual'}</span>
+                            {d.portalUser && <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />}
+                          </div>
+                        )}
+
                         <div className="flex items-center justify-between gap-2 pt-1.5">
                           <Button
                             size="sm"
@@ -843,6 +908,17 @@ export default function DriversPage() {
                             <History className="h-3.5 w-3.5" /> Ver entregas
                           </Button>
                           <div className="flex items-center gap-1">
+                            {hasRole('ADMIN', 'SUPERADMIN') && (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => void openAccessDialog(d)}
+                              className={`h-8 rounded-xl px-2.5 text-[10px] font-black ${d.portalUser ? 'border-emerald-500/25 text-emerald-700 hover:bg-emerald-500/10 dark:text-emerald-300' : 'border-blue-500/25 text-blue-700 hover:bg-blue-500/10 dark:text-blue-300'}`}
+                              title={d.portalUser ? 'Restablecer acceso' : 'Crear acceso individual'}
+                            >
+                              <User className="mr-1 h-3.5 w-3.5" /> {d.portalUser ? 'Acceso' : 'Crear acceso'}
+                            </Button>
+                            )}
                             {hasPermission('drivers.manage') && (
                             <Button
                               size="icon"
@@ -938,6 +1014,47 @@ export default function DriversPage() {
           </Card>
         </div>
       </div>
+
+      <Dialog open={!!accessDriver} onOpenChange={open => { if (!open) closeAccessDialog() }}>
+        <DialogContent className="max-h-[92vh] max-w-md overflow-y-auto rounded-3xl border-[var(--border-subtle)] bg-[var(--bg-panel)] p-0">
+          <div className="border-b border-[var(--border-subtle)] p-5">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2 text-lg font-black text-[var(--text-primary)]"><User className="h-5 w-5 text-[var(--accent)]" /> {accessDriver?.portalUser ? 'Restablecer acceso' : 'Acceso del domiciliario'}</DialogTitle>
+              <DialogDescription>
+                {accessDriver?.portalUser
+                  ? `Actualiza el usuario o contraseña de ${accessDriver.name} sin ir al módulo de Usuarios.`
+                  : `Configura el ingreso de ${accessDriver?.name || 'este domiciliario'} a su portal privado de entregas.`}
+              </DialogDescription>
+            </DialogHeader>
+          </div>
+          <div className="space-y-4 p-5">
+            <div className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-3.5">
+              <p className="font-black text-[var(--text-primary)]">{accessDriver?.name}</p>
+              <p className="mt-0.5 text-xs font-medium text-[var(--text-secondary)]">{accessDriver?.phone}</p>
+              <p className="mt-2 text-[11px] leading-4 text-[var(--text-secondary)]">Solo verá sus propios pedidos, sus cobros y el historial del turno activo.</p>
+            </div>
+
+            {!accessDriver?.portalUser && (
+              <div className="grid grid-cols-2 gap-2 rounded-2xl bg-[var(--bg-elevated)] p-1.5">
+                <button type="button" onClick={() => { setAccessMode('CREATE'); setAccessError('') }} className={`h-9 rounded-xl text-xs font-black transition ${accessMode === 'CREATE' ? 'bg-[var(--accent)] text-[var(--accent-fg)] shadow-sm' : 'text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]'}`}>Crear cuenta</button>
+                <button type="button" onClick={() => { setAccessMode('LINK'); setAccessError('') }} className={`h-9 rounded-xl text-xs font-black transition ${accessMode === 'LINK' ? 'bg-[var(--accent)] text-[var(--accent-fg)] shadow-sm' : 'text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]'}`}>Vincular usuario</button>
+              </div>
+            )}
+
+            {accessMode === 'CREATE' ? (
+              <>
+                <div className="space-y-1.5"><Label className="text-[10px] font-black uppercase tracking-wider text-[var(--text-secondary)]">Usuario o correo</Label><Input value={accessLogin} onChange={event => setAccessLogin(event.target.value)} placeholder="Ej: juan.domicilios" className="h-11 rounded-xl" /><p className="text-[10px] leading-4 text-[var(--text-muted)]">Si escribes solo un usuario, el sistema completa el correo interno automáticamente.</p></div>
+                <div className="space-y-1.5"><Label className="text-[10px] font-black uppercase tracking-wider text-[var(--text-secondary)]">{accessDriver?.portalUser ? 'Nueva contraseña' : 'Contraseña inicial'}</Label><Input type="password" value={accessPassword} onChange={event => setAccessPassword(event.target.value)} placeholder="Mínimo 4 caracteres" className="h-11 rounded-xl" autoComplete="new-password" /></div>
+              </>
+            ) : (
+              <div className="space-y-1.5"><Label className="text-[10px] font-black uppercase tracking-wider text-[var(--text-secondary)]">Cuenta de domiciliario existente</Label><select value={accessUserId} onChange={event => setAccessUserId(event.target.value)} disabled={loadingAccessCandidates} className="flex h-11 w-full rounded-xl border border-[var(--border-default)] bg-[var(--bg-input)] px-3 text-sm font-semibold text-[var(--text-primary)]"><option value="">{loadingAccessCandidates ? 'Cargando cuentas...' : 'Selecciona una cuenta'}</option>{accessCandidates.map(candidate => <option key={candidate.id} value={candidate.id}>{candidate.name} · {candidate.email}</option>)}</select><p className="text-[10px] leading-4 text-[var(--text-muted)]">Solo aparecen cuentas ya creadas para domiciliarios; ningún perfil de asignación, caja o salón se modifica.</p></div>
+            )}
+
+            {accessError && <div className="rounded-xl border border-rose-500/25 bg-rose-500/10 px-3 py-2 text-xs font-bold text-rose-700 dark:text-rose-300">{accessError}</div>}
+            <Button onClick={() => void handleSaveAccess()} disabled={savingAccess || (accessMode === 'LINK' && loadingAccessCandidates)} className="h-11 w-full rounded-xl bg-[var(--accent)] font-black text-white"><>{savingAccess ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle2 className="mr-2 h-4 w-4" />}{accessDriver?.portalUser ? 'Guardar nuevo acceso' : accessMode === 'CREATE' ? 'Crear acceso' : 'Vincular acceso'}</></Button>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={!!settlementDriver} onOpenChange={open => { if (!open && !settling) setSettlementDriver(null) }}>
         <DialogContent className="border-[var(--border-subtle)] bg-[var(--bg-panel)] rounded-3xl max-w-md">

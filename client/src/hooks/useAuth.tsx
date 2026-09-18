@@ -83,7 +83,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   // Escuchar cambios solo con una sesión autenticada.
   useEffect(() => {
-    if (!user?.id) return
+    // El portal del domiciliario consulta únicamente sus pedidos privados.
+    // No abre el canal global de operaciones para no recibir eventos ajenos.
+    if (!user?.id || user.role === 'DELIVERY_DRIVER') return
     const socketUrl = import.meta.env.VITE_API_URL || window.location.origin
     const socket = io(`${socketUrl}/the-villa-dog`, {
       transports: ['websocket', 'polling'],
@@ -96,7 +98,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => {
       socket.disconnect()
     }
-  }, [refreshProfile, user?.id])
+  }, [refreshProfile, user?.id, user?.role])
 
   const login = async (email: string, password: string) => {
     const data = await api.post<{ accessToken: string; refreshToken: string; user: User }>('/auth/login', { email, password })

@@ -43,6 +43,7 @@ model User {
   transferProofs  TransferProof[] @relation("TransferProofSubmittedBy")
   reviewedProofs  TransferProof[] @relation("TransferProofReviewedBy")
   receivedDriverSettlements DriverSettlement[] @relation("DriverSettlementReceiver")
+  deliveryDriverProfile DeliveryDriver? @relation("DeliveryDriverAccount")
 
   @@map("users")
 }
@@ -634,8 +635,10 @@ model DeliveryDriver {
   name      String
   phone     String
   active    Boolean  @default(true)
+  userId    String?  @unique
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+  user      User?    @relation("DeliveryDriverAccount", fields: [userId], references: [id], onDelete: SetNull)
   orders    Order[]
   settlements DriverSettlement[]
 

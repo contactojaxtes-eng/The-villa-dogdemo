@@ -1,7 +1,8 @@
-import { Controller, Get, Post, Put, Delete, Body, Param, Query, UseGuards, Request } from '@nestjs/common';
+import { Controller, Get, Post, Put, Delete, Body, Param, Query, UseGuards, Request, UploadedFiles, UseInterceptors } from '@nestjs/common';
+import { AnyFilesInterceptor } from '@nestjs/platform-express';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { DeliveryDriversService } from './delivery-drivers.service';
-import { CreateDriverDto, UpdateDriverDto } from './dto';
+import { CompleteDriverDeliveryDto, ConfigureDriverAccessDto, CreateDriverDto, UpdateDriverDto } from './dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard, Roles } from '../auth/guards/roles.guard';
 import { PermissionsGuard, Permissions } from '../auth/guards/permissions.guard';
@@ -30,9 +31,11 @@ export class DeliveryDriversController {
     @Query('filterType') filterType?: string,
     @Query('cashClosingId') cashClosingId?: string,
     @Query('selectedDate') selectedDate?: string,
+    @Request() req?: any,
   ) {
     const active = activeOnly === 'true';
-    return this.deliveryDriversService.findAll(active, filterType || 'CURRENT', cashClosingId, selectedDate);
+    const includePortalAccount = ['ADMIN', 'SUPERADMIN'].includes(req?.user?.role);
+    return this.deliveryDriversService.findAll(active, filterType || 'CURRENT', cashClosingId, selectedDate, includePortalAccount);
   }
 
   @Get('settlements/pending')
@@ -41,6 +44,78 @@ export class DeliveryDriversController {
   @ApiOperation({ summary: 'Efectivo pendiente por entregar de los domiciliarios' })
   getPendingSettlements() {
     return this.deliveryDriversService.getPendingSettlements();
+  }
+
+  @Get('access/candidates')
+  @Roles('ADMIN', 'SUPERADMIN')
+  @UseGuards(RolesGuard)
+  @ApiOperation({ summary: 'Usuarios disponibles para vincular a un domiciliario' })
+  getAccessCandidates() {
+    return this.deliveryDriversService.getAccessCandidates();
+  }
+
+  @Get('me')
+  @Roles('DELIVERY_DRIVER')
+  @UseGuards(RolesGuard)
+  @ApiOperation({ summary: 'Portal privado del domiciliario autenticado' })
+  getMyPortal(@Request() req: any) {
+    return this.deliveryDriversService.getMyPortal(req.user.id);
+  }
+
+  @Post('me/orders/:orderId/complete')
+  @Roles('DELIVERY_DRIVER')
+  @UseGuards(RolesGuard)
+  @UseInterceptors(AnyFilesInterceptor({
+    limits: {
+      fileSize: 8 * 1024 * 1024,
+      files: 1,
+      fieldSize: 2 * 1024 * 1024,
+    },
+  }))
+  @ApiOperation({ summary: 'Marcar como entregado un pedido propio y registrar el cobro final' })
+  completeMyOrder(
+    @Param('orderId') orderId: string,
+    @Body() body: CompleteDriverDeliveryDto,
+    @Request() req: any,
+    @UploadedFiles() files?: any[],
+  ) {
+    return this.deliveryDriversService.completeMyOrder(req.user.id, orderId, body, files);
+  }
+
+  @Post('me/orders/:orderId/proof')
+  @Roles('DELIVERY_DRIVER')
+  @UseGuards(RolesGuard)
+  @UseInterceptors(AnyFilesInterceptor({
+    limits: {
+      fileSize: 8 * 1024 * 1024,
+      files: 1,
+      fieldSize: 2 * 1024 * 1024,
+    },
+  }))
+  @ApiOperation({ summary: 'Adjuntar o reemplazar el comprobante de un pedido propio ya entregado' })
+  uploadMyProof(
+    @Param('orderId') orderId: string,
+    @Body() body: CompleteDriverDeliveryDto,
+    @Request() req: any,
+    @UploadedFiles() files?: any[],
+  ) {
+    return this.deliveryDriversService.uploadMyProof(req.user.id, orderId, body, files);
+  }
+
+  @Get(':id/access')
+  @Roles('ADMIN', 'SUPERADMIN')
+  @UseGuards(RolesGuard)
+  @ApiOperation({ summary: 'Consultar acceso individual de un domiciliario' })
+  getAccess(@Param('id') id: string) {
+    return this.deliveryDriversService.getAccess(id);
+  }
+
+  @Put(':id/access')
+  @Roles('ADMIN', 'SUPERADMIN')
+  @UseGuards(RolesGuard)
+  @ApiOperation({ summary: 'Crear o vincular acceso individual para un domiciliario' })
+  configureAccess(@Param('id') id: string, @Body() body: ConfigureDriverAccessDto) {
+    return this.deliveryDriversService.configureAccess(id, body);
   }
 
   @Post(':id/settlements')

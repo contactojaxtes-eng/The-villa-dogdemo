@@ -1,10 +1,11 @@
 import { Body, Controller, Get, Param, Put, Query, Request, Res, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Response } from 'express';
-import { createReadStream, existsSync } from 'fs';
+import { existsSync, readFileSync } from 'fs';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { Roles, RolesGuard } from '../auth/guards/roles.guard';
 import { TablesService } from './tables.service';
+import { detectReceiptMime } from './receipt';
 
 @ApiTags('Payment Validation')
 @ApiBearerAuth()
@@ -15,7 +16,7 @@ export class PaymentValidationController {
   @Get()
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('ADMIN', 'SUPERADMIN', 'CASHIER')
-  @ApiOperation({ summary: 'Cola de pagos de mesas por validar' })
+  @ApiOperation({ summary: 'Cola de pagos de mesas y domicilios por validar' })
   list(@Query('status') status?: string, @Query('method') method?: string, @Query('allHistory') allHistory?: string) {
     return this.tablesService.listPaymentValidation(status || 'PENDING_REVIEW', method || 'ALL', allHistory === 'true');
   }
@@ -23,22 +24,26 @@ export class PaymentValidationController {
   @Get('proofs/:id/image')
   @UseGuards(JwtAuthGuard)
   @ApiOperation({ summary: 'Ver imagen temporal de comprobante' })
-  async image(@Param('id') id: string, @Res() res: Response) {
-    const proof = await this.tablesService.proofImage(id);
+  async image(@Param('id') id: string, @Request() req: any, @Res() res: Response) {
+    const proof = await this.tablesService.proofImage(id, req.user);
+    const applyPrivateHeaders = () => {
+      res.setHeader('Cache-Control', 'private, no-store, max-age=0');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+    };
     if (proof.fileBase64) {
-      let mime = proof.mimeType || 'image/jpeg';
       let rawBase64 = proof.fileBase64.trim();
       if (rawBase64.startsWith('data:')) {
         const parts = rawBase64.split(',');
-        mime = parts[0].split(';')[0].replace('data:', '') || mime;
         rawBase64 = parts[1] || '';
       }
       try {
         const buffer = Buffer.from(rawBase64, 'base64');
-        if (buffer.length > 0) {
+        const mime = detectReceiptMime(buffer);
+        if (buffer.length > 0 && mime) {
+          applyPrivateHeaders();
           res.setHeader('Content-Type', mime);
           res.setHeader('Content-Length', buffer.length);
-          res.setHeader('Cache-Control', 'public, max-age=86400');
           return res.end(buffer);
         }
       } catch (err) {
@@ -46,8 +51,14 @@ export class PaymentValidationController {
       }
     }
     if (proof.filePath && existsSync(proof.filePath)) {
-      res.setHeader('Content-Type', proof.mimeType || 'image/jpeg');
-      return createReadStream(proof.filePath).pipe(res);
+      const buffer = readFileSync(proof.filePath);
+      const mime = detectReceiptMime(buffer);
+      if (mime) {
+        applyPrivateHeaders();
+        res.setHeader('Content-Type', mime);
+        res.setHeader('Content-Length', buffer.length);
+        return res.end(buffer);
+      }
     }
     const isCash = proof.method === 'CASH';
     const placeholderSvg = Buffer.from(
@@ -63,14 +74,14 @@ export class PaymentValidationController {
     );
     res.setHeader('Content-Type', 'image/svg+xml; charset=utf-8');
     res.setHeader('Content-Length', placeholderSvg.length);
-    res.setHeader('Cache-Control', 'public, max-age=3600');
+    applyPrivateHeaders();
     return res.end(placeholderSvg);
   }
 
   @Put(':id/validate')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('ADMIN', 'SUPERADMIN', 'CASHIER')
-  @ApiOperation({ summary: 'Validar pago de mesa' })
+  @ApiOperation({ summary: 'Validar pago de mesa o domicilio' })
   validate(@Param('id') id: string, @Request() req: any) {
     return this.tablesService.reviewPayment(id, 'CONFIRMED', req.user);
   }
@@ -78,7 +89,7 @@ export class PaymentValidationController {
   @Put(':id/reject')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('ADMIN', 'SUPERADMIN', 'CASHIER')
-  @ApiOperation({ summary: 'Rechazar pago de mesa' })
+  @ApiOperation({ summary: 'Rechazar pago de mesa o domicilio' })
   reject(@Param('id') id: string, @Body('reason') reason: string, @Request() req: any) {
     return this.tablesService.reviewPayment(id, 'REJECTED', req.user, reason);
   }

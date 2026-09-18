@@ -115,6 +115,10 @@ export function useNotifications() {
   useEffect(() => {
     if (!isAuthenticated || !user) return
 
+    // El portal del domiciliario mantiene su propia sincronización y no debe
+    // recibir alertas globales de pedidos, chats, caja o impresión ajenos.
+    if (user.role === 'DELIVERY_DRIVER') return
+
     // Request permission once
     if (!permissionRequested.current) {
       requestNotificationPermission()

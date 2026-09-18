@@ -37,6 +37,10 @@ export class SocketGateway implements OnGatewayConnection, OnGatewayDisconnect, 
         if (!payload.sub || payload.type === 'refresh' || !payload.exp) return next(new Error('UNAUTHORIZED'));
         const user = await this.prisma.user.findUnique({ where: { id: payload.sub }, select: { id: true, name: true, role: true, permissions: true, active: true } });
         if (!user?.active) return next(new Error('UNAUTHORIZED'));
+        // El portal del domiciliario consulta únicamente su API privada. No
+        // puede conectarse al canal global, donde otros módulos difunden datos
+        // operativos completos de pedidos y mesas.
+        if (user.role === 'DELIVERY_DRIVER') return next(new Error('SOCKET_NOT_AVAILABLE'));
         client.data.user = user;
         client.data.expiresAt = payload.exp * 1000;
         next();

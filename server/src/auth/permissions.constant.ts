@@ -208,4 +208,7 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
     'kitchen.ready',
     'kitchen.history',
   ],
+  // El domiciliario usa únicamente su portal privado. Sus rutas se protegen
+  // por rol y validan en servidor que cada pedido sea suyo.
+  DELIVERY_DRIVER: [],
 };

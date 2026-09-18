@@ -13,7 +13,7 @@ export class UsersService {
   async assertValidRole(role?: string) {
     if (!role) return 'CASHIER';
     const normalized = String(role).trim().toUpperCase();
-    const systemRoles = ['SUPERADMIN', 'ADMIN', 'CASHIER', 'DELIVERY_MANAGER', 'DISPATCHER', 'WAITER', 'KITCHEN'];
+    const systemRoles = ['SUPERADMIN', 'ADMIN', 'CASHIER', 'DELIVERY_MANAGER', 'DISPATCHER', 'WAITER', 'KITCHEN', 'DELIVERY_DRIVER'];
     if (systemRoles.includes(normalized)) return normalized;
     const customRole = await this.prisma.customRole.findFirst({
       where: { code: normalized, active: true },
