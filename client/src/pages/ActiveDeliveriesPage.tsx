@@ -1176,6 +1176,222 @@ export default function ActiveDeliveriesPage() {
     )
   }
 
+  const renderAdminOrderCard = (order: Order, queueIndex: number) => {
+    const elapsed = getElapsedTime(order.createdAt)
+    const elapsedMinutes = getElapsedMinutes(order.createdAt)
+    const routeElapsed = getElapsedTime(order.updatedAt || order.createdAt)
+    const waitingForDispatch = isWaitingForDispatch(order)
+    const isUrgent = waitingForDispatch && elapsedMinutes >= DISPATCH_ALERT_MINUTES
+    const isWarning = waitingForDispatch && !isUrgent && elapsedMinutes >= DISPATCH_WARNING_MINUTES
+    const queuePosition = visibleOrders.findIndex(item => item.id === order.id) + 1
+    const isSelected = selectedOrderIds.includes(order.id)
+    const isSelectable = order.orderType === 'DELIVERY' && !['DELIVERED', 'CANCELLED'].includes(order.status)
+    const paymentLabel = order.paymentMethod === 'CASH' ? '💵 Efectivo' :
+      order.paymentMethod === 'TRANSFER' ? '📱 Transferencia' :
+      order.paymentMethod === 'NEQUI' ? '💜 Nequi' :
+      order.paymentMethod === 'BANCOLOMBIA' ? '💛 Bancolombia' :
+      order.paymentMethod === 'DAVIPLATA' ? '❤️ Daviplata' :
+      order.paymentMethod === 'MIXED' ? '🔀 Mixto' :
+      order.paymentMethod === 'CREDIT' ? '💳 Crédito' :
+      order.paymentMethod === 'CORTESIA' ? '🎁 Cortesía' :
+      getStatusLabel(order.paymentMethod)
+
+    const openDriverAssignment = () => {
+      setSelectedDriverId(order.deliveryDriverId || '')
+      setRegisteringDriverInline(false)
+      setInlineDriverName('')
+      setInlineDriverPhone('')
+      setDispatchError('')
+      setDispatchDialog({ order, shouldKick: false })
+    }
+
+    const printOrder = async () => {
+      const orderWithDriver = {
+        ...order,
+        deliveryDriver: order.deliveryDriver || (order.deliveryDriverId ? drivers.find(driver => driver.id === order.deliveryDriverId) : undefined),
+      }
+      alerts.toast(`Enviando pedido #${order.orderNumber} a impresión...`)
+      const result = await printComandaSmart(orderWithDriver, 'caja', user?.role, false, false)
+      if (result?.error) alerts.error('Error al imprimir', result.error)
+      else alerts.toast(`Pedido #${order.orderNumber} enviado a la impresora`)
+    }
+
+    return (
+      <motion.article
+        key={order.id}
+        layout
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0 }}
+        className={cn(
+          'overflow-hidden rounded-2xl border bg-[var(--bg-panel)] shadow-sm',
+          isSelected
+            ? 'border-[var(--accent)]/45 bg-[var(--accent)]/[0.04]'
+            : isUrgent
+              ? 'border-red-500/30 bg-red-500/[0.04]'
+              : isWarning
+                ? 'border-amber-500/25 bg-amber-500/[0.03]'
+                : 'border-[var(--border-subtle)]'
+        )}
+      >
+        <div className="flex items-start justify-between gap-3 border-b border-[var(--border-subtle)] px-3.5 py-3">
+          <div className="flex min-w-0 items-center gap-2.5">
+            {isSelectable ? (
+              <input
+                type="checkbox"
+                checked={isSelected}
+                onChange={() => handleToggleSelectOrder(order.id)}
+                className="h-4 w-4 shrink-0 cursor-pointer rounded accent-[var(--accent)]"
+                title={`Seleccionar pedido #${order.orderNumber}`}
+              />
+            ) : <span className="w-4 shrink-0 text-center text-[var(--text-muted)]">—</span>}
+            <span className={cn(
+              'flex h-8 min-w-8 shrink-0 items-center justify-center rounded-lg px-1 text-[10px] font-black',
+              isUrgent ? 'bg-red-600 text-white' : isWarning ? 'bg-amber-500 text-white' : 'bg-[var(--bg-elevated)] text-[var(--text-muted)]'
+            )}>{queuePosition || queueIndex + 1}º</span>
+            <button
+              type="button"
+              onClick={() => setChatModalOrder(order)}
+              className="inline-flex cursor-pointer items-center gap-1 border-0 bg-transparent text-sm font-black text-[var(--accent)] hover:underline"
+              title={`Abrir WhatsApp del pedido #${order.orderNumber}`}
+            >
+              #{order.orderNumber}<MessageSquare className="h-3.5 w-3.5 text-emerald-500" />
+            </button>
+          </div>
+          <div className="shrink-0 text-right">
+            <p className="whitespace-nowrap text-base font-black tabular-nums text-[var(--text-primary)]">{formatCurrency(order.total)}</p>
+            <p className="text-[9px] font-black uppercase tracking-wider text-[var(--text-muted)]">Total</p>
+          </div>
+        </div>
+
+        <div className="space-y-3 p-3.5">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className={cn(
+              'inline-flex items-center gap-1 rounded-lg border px-2.5 py-1 text-[10px] font-black uppercase',
+              order.orderType === 'PICKUP'
+                ? 'border-purple-500/25 bg-purple-500/10 text-purple-700 dark:text-purple-300'
+                : 'border-blue-500/25 bg-blue-500/10 text-blue-700 dark:text-blue-300'
+            )}>{order.orderType === 'PICKUP' ? '🏠 Recoger' : '🛵 Domicilio'}</span>
+            <span
+              className="inline-flex items-center rounded-full border px-2 py-1 text-[9px] font-extrabold uppercase"
+              style={{ color: getStatusColor(order.status), backgroundColor: `${getStatusColor(order.status)}15`, borderColor: `${getStatusColor(order.status)}25` }}
+            >{getStatusLabel(order.status)}</span>
+          </div>
+
+          <div className="grid gap-3 sm:grid-cols-2">
+            <section className="rounded-xl bg-[var(--bg-subtle)] p-3">
+              <p className="text-[9px] font-black uppercase tracking-wider text-[var(--text-muted)]">Cliente</p>
+              <p className="mt-1 truncate text-sm font-black text-[var(--text-primary)]">{order.customerName}</p>
+              <a href={`tel:${order.customerPhone}`} className="mt-1.5 inline-flex max-w-full items-center gap-1.5 rounded-lg border border-[var(--accent)]/15 bg-[var(--accent)]/[0.06] px-2 py-1 text-xs font-black tracking-wide text-[var(--accent)] hover:underline">
+                <Phone className="h-3.5 w-3.5 shrink-0" /><span className="truncate">{order.customerPhone}</span>
+              </a>
+            </section>
+
+            <section className="rounded-xl bg-[var(--bg-subtle)] p-3">
+              <p className="text-[9px] font-black uppercase tracking-wider text-[var(--text-muted)]">Entrega</p>
+              {order.orderType === 'PICKUP' ? (
+                <p className="mt-1 inline-flex items-center gap-1.5 text-xs font-black uppercase text-purple-700 dark:text-purple-300">
+                  <Store className="h-4 w-4" /> Retira en restaurante
+                </p>
+              ) : (
+                <div className="mt-1 space-y-1">
+                  {order.zone && <p className="flex items-center gap-1 text-[10px] font-black uppercase text-[var(--accent)]"><MapPin className="h-3.5 w-3.5" />{order.zone.name}</p>}
+                  <p className="text-[13px] font-extrabold leading-snug text-[var(--text-primary)]">{order.customerAddress || 'Sin dirección'}</p>
+                  {order.addressReference && <p className="truncate text-[11px] font-semibold italic text-[var(--text-muted)]">Ref: {order.addressReference}</p>}
+                </div>
+              )}
+            </section>
+          </div>
+
+          <div className="grid gap-2 sm:grid-cols-3">
+            <section className="rounded-xl border border-[var(--border-subtle)] p-2.5">
+              <p className="text-[9px] font-black uppercase tracking-wider text-[var(--text-muted)]">Domiciliario</p>
+              <div className="mt-1.5">
+                {order.orderType === 'PICKUP' || order.orderType === 'LOCAL' ? (
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="rounded-lg border border-purple-500/30 bg-purple-500/10 px-2 py-1 text-[10px] font-bold text-purple-700">{order.orderType === 'PICKUP' ? 'Pasar a recoger' : 'Mostrador'}</span>
+                    {hasPermission('dispatch.change_status') && order.orderType === 'PICKUP' && !['READY', 'DELIVERED', 'CANCELLED'].includes(order.status) && (
+                      <Button size="sm" onClick={() => handleMarkPickupReady(order)} disabled={markingPickupReadyId === order.id} className="h-7 gap-1 rounded-lg border-0 bg-emerald-600 px-2 text-[10px] font-extrabold text-white hover:bg-emerald-700">
+                        {markingPickupReadyId === order.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <CheckCircle2 className="h-3 w-3" />} Listo
+                      </Button>
+                    )}
+                  </div>
+                ) : hasPermission('dispatch.change_status') ? (
+                  <button
+                    type="button"
+                    onClick={openDriverAssignment}
+                    className={cn(
+                      'inline-flex max-w-full cursor-pointer items-center gap-1 rounded-lg border px-2 py-1 text-[10px] font-black',
+                      order.deliveryDriver
+                        ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700'
+                        : 'border-amber-500/30 bg-amber-500/10 text-amber-700'
+                    )}
+                  ><Bike className="h-3.5 w-3.5" /><span className="truncate">{order.deliveryDriver?.name || 'Asignar'}</span></button>
+                ) : <span className="text-xs font-bold text-[var(--text-secondary)]">{order.deliveryDriver?.name || 'Sin domiciliario'}</span>}
+                {order.deliveryDriver && order.updatedAt && <p className="mt-1 text-[9px] font-bold text-emerald-600">Salió: {formatTimeOnly(order.updatedAt)}</p>}
+              </div>
+            </section>
+
+            <section className="rounded-xl border border-[var(--border-subtle)] p-2.5">
+              <p className="text-[9px] font-black uppercase tracking-wider text-[var(--text-muted)]">Tiempo</p>
+              <div className="mt-1.5">
+                <span className={cn(
+                  'inline-flex items-center gap-1 rounded-lg border px-2 py-1 text-[10px] font-black',
+                  order.status === 'IN_ROUTE' || order.deliveryDriver
+                    ? 'border-blue-500/25 bg-blue-500/10 text-blue-700'
+                    : order.orderType === 'PICKUP'
+                      ? 'border-purple-500/25 bg-purple-500/10 text-purple-700'
+                      : isUrgent
+                        ? 'border-red-600 bg-red-600 text-white'
+                        : isWarning ? 'border-amber-500/25 bg-amber-500/10 text-amber-700' : 'border-emerald-500/25 bg-emerald-500/10 text-emerald-700'
+                )}>
+                  <Clock className="h-3 w-3" />
+                  {order.status === 'IN_ROUTE' || order.deliveryDriver
+                    ? `En ruta · ${routeElapsed}`
+                    : order.orderType === 'PICKUP'
+                      ? order.status === 'READY' ? 'Listo' : `Espera · ${elapsed}`
+                      : isUrgent ? `Debe salir · ${elapsed}` : isWarning ? `Por salir · ${elapsed}` : `Espera · ${elapsed}`}
+                </span>
+                <p className="mt-1 text-[9px] font-semibold text-[var(--text-muted)]">{order.status === 'IN_ROUTE' || order.deliveryDriver ? `Salió ${formatTimeOnly(order.updatedAt)}` : `Pedido ${formatTimeOnly(order.createdAt)}`}</p>
+              </div>
+            </section>
+
+            <section className="rounded-xl border border-[var(--border-subtle)] p-2.5">
+              <p className="text-[9px] font-black uppercase tracking-wider text-[var(--text-muted)]">Pago</p>
+              <button type="button" onClick={() => setPaymentEditDialog(order)} className="mt-1.5 inline-flex max-w-full items-center gap-1 rounded-lg border border-[var(--border-default)] bg-[var(--bg-elevated)] px-2 py-1 text-[10px] font-extrabold text-[var(--text-primary)]">
+                <span className="truncate">{paymentLabel}</span><Edit className="h-2.5 w-2.5 shrink-0 text-[var(--accent)]" />
+              </button>
+              <p className={cn(
+                'mt-1 w-fit rounded-md px-1.5 py-0.5 text-[9px] font-bold',
+                order.paymentStatus === 'CONFIRMED'
+                  ? 'bg-emerald-500/10 text-emerald-600'
+                  : order.paymentStatus === 'DRIVER_CASH_PENDING'
+                    ? 'bg-purple-500/10 text-purple-600'
+                    : 'bg-amber-500/10 text-amber-600'
+              )}>{order.paymentStatus === 'CONFIRMED' ? '✓ Cobrado' : order.paymentStatus === 'DRIVER_CASH_PENDING' ? 'Con domiciliario' : 'Pendiente'}</p>
+            </section>
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2 border-t border-[var(--border-subtle)] bg-[var(--bg-subtle)]/45 px-3.5 py-3">
+          {order.paymentStatus !== 'CONFIRMED' && isReadyForCollection(order) && (
+            <Button size="sm" onClick={() => setCollectDialog(order)} className="h-9 gap-1 rounded-xl border-0 bg-[var(--accent)] px-3 text-[11px] font-black text-[var(--accent-fg)] hover:bg-[var(--accent-hover)]">
+              <DollarSign className="h-3.5 w-3.5" /> Cobrar
+            </Button>
+          )}
+          <Button size="sm" variant="outline" onClick={printOrder} className="h-9 gap-1 rounded-xl px-3 text-[11px] font-bold text-blue-600"><Printer className="h-3.5 w-3.5" /> Imprimir</Button>
+          {order.status !== 'CANCELLED' && (
+            <Button size="sm" variant="outline" onClick={() => navigate(order.tableId ? `/tables/new?tableId=${order.tableId}&editOrderId=${order.id}` : `/orders/new?edit=${order.id}`)} className="h-9 gap-1 rounded-xl px-3 text-[11px] font-bold text-amber-600"><Edit className="h-3.5 w-3.5" /> Editar</Button>
+          )}
+          <Button size="sm" variant="outline" onClick={() => setDetailOrder(order)} className="h-9 gap-1 rounded-xl px-3 text-[11px] font-bold"><Eye className="h-3.5 w-3.5" /> Detalle</Button>
+          {activeStatuses.includes(order.status) && ['SUPERADMIN', 'ADMIN', 'CASHIER', 'WAITER'].includes(user?.role || '') && (
+            <Button size="sm" variant="ghost" onClick={() => { setCancelDialog({ id: order.id, orderNumber: order.orderNumber }); setCancelConfirmStep(false); setCancelReason('') }} className="ml-auto h-9 w-9 rounded-xl p-0 text-red-500 hover:bg-red-500/10" title="Cancelar pedido"><XCircle className="h-4 w-4" /></Button>
+          )}
+        </div>
+      </motion.article>
+    )
+  }
+
   if (loading && orders.length === 0) return (
     <div className="flex flex-col items-center justify-center py-40 gap-4">
       <motion.div animate={{ rotate: 360 }} transition={{ repeat: Infinity, duration: 1.2, ease: 'linear' }}>
@@ -1778,23 +1994,31 @@ export default function ActiveDeliveriesPage() {
               <p className="text-xs text-[var(--text-secondary)]">{orders.length === 0 ? 'No hay pedidos activos en este momento.' : (visibleOrders.length === 0 ? 'Prueba con otro cliente, teléfono, producto o número de pedido.' : 'Cambia el filtro para ver los demás pedidos activos.')}</p>
             </CardContent>
           ) : (
-            <div className={cn('overflow-x-auto', !isDeliveryStaff && 'custom-scrollbar pb-1')}>
+            <>
+              {!isDeliveryStaff && (
+                <div className="grid gap-3 p-3 md:grid-cols-2 min-[1780px]:hidden">
+                  <AnimatePresence>
+                    {statusVisibleOrders.map((order, queueIndex) => renderAdminOrderCard(order, queueIndex))}
+                  </AnimatePresence>
+                </div>
+              )}
+            <div className={cn('overflow-x-auto', !isDeliveryStaff && 'hidden custom-scrollbar pb-1 min-[1780px]:block')}>
               <table className={cn(
                 'w-full text-xs',
-                !isDeliveryStaff && 'min-w-[1480px] table-fixed [&_th]:px-4 [&_th]:py-3.5 [&_td]:px-4 [&_td]:py-3.5 [&_td]:align-middle'
+                !isDeliveryStaff && 'min-w-[1240px] table-fixed [&_th]:px-2.5 [&_th]:py-3.5 [&_td]:px-2.5 [&_td]:py-3.5 [&_td]:align-middle'
               )}>
                 {!isDeliveryStaff && (
                   <colgroup>
-                    <col className="w-[48px]" />
-                    <col className="w-[122px]" />
-                    <col className="w-[136px]" />
-                    <col className="w-[205px]" />
-                    <col className="w-[280px]" />
-                    <col className="w-[150px]" />
-                    <col className="w-[100px]" />
-                    <col className="w-[130px]" />
-                    <col className="w-[145px]" />
-                    <col className="w-[184px]" />
+                    <col className="w-[32px]" />
+                    <col className="w-[92px]" />
+                    <col className="w-[105px]" />
+                    <col className="w-[160px]" />
+                    <col className="w-[230px]" />
+                    <col className="w-[125px]" />
+                    <col className="w-[78px]" />
+                    <col className="w-[105px]" />
+                    <col className="w-[105px]" />
+                    <col className="w-[190px]" />
                   </colgroup>
                 )}
                 <thead className={cn(!isDeliveryStaff && 'sticky top-0 z-10')}>
@@ -2119,7 +2343,7 @@ export default function ActiveDeliveriesPage() {
                             </div>
                           </td>
                           <td className="px-3 py-2.5">
-                            <div className={cn('flex items-center justify-center', isDeliveryStaff ? 'gap-1' : 'gap-1.5')}>
+                            <div className={cn('flex items-center justify-center', isDeliveryStaff ? 'gap-1' : 'flex-wrap gap-1.5')}>
                               {!isDeliveryStaff && order.paymentStatus !== 'CONFIRMED' && isReadyForCollection(order) && (
                                 <Button size="sm" className={cn(
                                   'gap-1 border-0 bg-[var(--accent)] text-[10px] font-extrabold text-[var(--accent-fg)] shadow-xs transition-all hover:bg-[var(--accent-hover)] active:scale-95 cursor-pointer',
@@ -2187,6 +2411,7 @@ export default function ActiveDeliveriesPage() {
                 </tbody>
               </table>
             </div>
+            </>
           )}
         </Card>
       </motion.div>
