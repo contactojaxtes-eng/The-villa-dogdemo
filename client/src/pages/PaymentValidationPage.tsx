@@ -550,6 +550,11 @@ export default function PaymentValidationPage() {
                       <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-[var(--bg-elevated)] border border-[var(--border-subtle)] text-[var(--text-primary)]">
                         {methodLabels[payment.method] || payment.method}
                       </span>
+                      {payment.order?.originalPaymentMethod && payment.order.originalPaymentMethod !== payment.method && (
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-amber-500/10 border border-amber-500/20 text-amber-700 dark:text-amber-300">
+                          Original: {methodLabels[payment.order.originalPaymentMethod] || payment.order.originalPaymentMethod}
+                        </span>
+                      )}
                       <span className={`text-[10px] font-black px-2 py-0.5 rounded-full ${
                         payment.status === 'CONFIRMED'
                           ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border border-emerald-500/30'

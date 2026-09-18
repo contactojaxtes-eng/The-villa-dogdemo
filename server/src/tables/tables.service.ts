@@ -1,11 +1,12 @@
 import { receiptSummary, validateReceipt } from './receipt';
 import { Prisma } from '@prisma/client';
 import { lockOperation, operationTransaction } from '../common/operation-lock';
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException, OnModuleInit, OnModuleDestroy, Inject, forwardRef } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException, OnModuleInit, OnModuleDestroy, Inject, forwardRef, Optional } from '@nestjs/common';
 import { existsSync } from 'fs';
 import { randomUUID } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { SocketGateway } from '../socket/socket.gateway';
+import { DeliveryDriverGateway } from '../socket/delivery-driver.gateway';
 import { OrdersService } from '../orders/orders.service';
 
 const ACTIVE_KITCHEN = ['NEW', 'PREPARING'];
@@ -23,6 +24,7 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
     private prisma: PrismaService,
     private socketGateway: SocketGateway,
     @Inject(forwardRef(() => OrdersService)) private ordersService: OrdersService,
+    @Optional() private deliveryDriverGateway?: DeliveryDriverGateway,
   ) {}
 
   onModuleInit() {
@@ -1950,6 +1952,12 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
       if (action === 'CONFIRMED') this.socketGateway.emitPaymentValidated(result);
       else if (result.delivery) this.socketGateway.emitPaymentRejected(result.order?.deliveryDriver?.userId || '', { ...result, reason });
       else this.socketGateway.emitPaymentRejected(result.table.openedById, { ...result, reason });
+      if (result.delivery) {
+        await this.deliveryDriverGateway?.emitToUser(result.order?.deliveryDriver?.userId, {
+          reason: action === 'CONFIRMED' ? 'payment_validated' : 'payment_rejected',
+          orderId: result.order?.id,
+        });
+      }
       this.socketGateway.server.emit('cashRegistersChanged');
       this.socketGateway.server.emit('driversChanged');
       if (!result.delivery) this.emitAccount(result.table);

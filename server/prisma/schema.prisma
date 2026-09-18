@@ -184,6 +184,7 @@ model Order {
   orderType         String   @default("DELIVERY")
   source            String   @default("MANUAL")
   paymentMethod     String   @default("CASH")
+  originalPaymentMethod String?
   cashAmount        Float?   @default(0)
   transferAmount    Float?   @default(0)
   paymentStatus     String   @default("PENDING")

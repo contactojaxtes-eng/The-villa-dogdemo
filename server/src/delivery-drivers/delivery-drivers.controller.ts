@@ -102,6 +102,18 @@ export class DeliveryDriversController {
     return this.deliveryDriversService.uploadMyProof(req.user.id, orderId, body, files);
   }
 
+  @Put('me/orders/:orderId/payment')
+  @Roles('DELIVERY_DRIVER')
+  @UseGuards(RolesGuard)
+  @ApiOperation({ summary: 'Corregir el método de pago de una entrega propia del turno actual' })
+  updateMyPayment(
+    @Param('orderId') orderId: string,
+    @Body() body: CompleteDriverDeliveryDto,
+    @Request() req: any,
+  ) {
+    return this.deliveryDriversService.updateMyPayment(req.user.id, orderId, body);
+  }
+
   @Get(':id/access')
   @Roles('ADMIN', 'SUPERADMIN')
   @UseGuards(RolesGuard)

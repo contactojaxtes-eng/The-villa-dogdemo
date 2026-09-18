@@ -15,6 +15,7 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
 
   async onModuleInit() {
     await this.$connect();
+    await this.ensureOriginalPaymentMethodSchema();
     // El portal del domiciliario se agregó sobre instalaciones que ya tienen
     // repartidores registrados. Garantizamos la relación de acceso antes de
     // ejecutar cualquier consulta del módulo, sin borrar ni recrear datos.
@@ -174,6 +175,22 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
       `);
     } catch (error: any) {
       console.warn('Driver portal schema note:', error?.message || error);
+    }
+  }
+
+  private async ensureOriginalPaymentMethodSchema() {
+    try {
+      await this.$executeRawUnsafe(`
+        ALTER TABLE "orders"
+        ADD COLUMN IF NOT EXISTS "originalPaymentMethod" TEXT;
+      `);
+      await this.$executeRawUnsafe(`
+        UPDATE "orders"
+        SET "originalPaymentMethod" = "paymentMethod"
+        WHERE "originalPaymentMethod" IS NULL;
+      `);
+    } catch (error: any) {
+      console.warn('Original payment method schema note:', error?.message || error);
     }
   }
 

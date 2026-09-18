@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException, BadRequestException, Inject, forwardRef, Optional } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { SocketGateway } from '../socket/socket.gateway';
+import { DeliveryDriverGateway } from '../socket/delivery-driver.gateway';
 import { WhatsappService } from '../whatsapp/whatsapp.service';
 import { TablesService } from '../tables/tables.service';
 
@@ -11,6 +12,7 @@ export class PaymentsService {
     private socketGateway: SocketGateway,
     @Inject(forwardRef(() => WhatsappService)) private whatsappService: WhatsappService,
     @Optional() @Inject(forwardRef(() => TablesService)) private tablesService?: TablesService,
+    @Optional() private deliveryDriverGateway?: DeliveryDriverGateway,
   ) {}
 
   async findAll(params: { status?: string; method?: string; date?: string }, cashierId?: string) {
@@ -105,6 +107,10 @@ export class PaymentsService {
     this.socketGateway.server.emit('paymentUpdated', updated);
     this.socketGateway.server.emit('orderUpdated', updatedOrder);
     this.socketGateway.server.emit('cashRegistersChanged');
+    await this.deliveryDriverGateway?.emitForOrder(updatedOrder, {
+      reason: 'payment_validated',
+      orderId: updatedOrder.id,
+    });
     if (updatedOrder.customerPhone) {
       await this.whatsappService.unassignSessionByPhone(updatedOrder.customerPhone).catch(() => {});
     }
@@ -135,6 +141,10 @@ export class PaymentsService {
     this.socketGateway.server.emit('paymentUpdated', updated);
     this.socketGateway.server.emit('orderUpdated', updatedOrder);
     this.socketGateway.server.emit('cashRegistersChanged');
+    await this.deliveryDriverGateway?.emitForOrder(updatedOrder, {
+      reason: 'payment_rejected',
+      orderId: updatedOrder.id,
+    });
     return updated;
   }
 
@@ -485,6 +495,9 @@ export class PaymentsService {
     });
     this.socketGateway.server.emit('cashStatusChanged', { isOpen: !!anyOpen });
     this.socketGateway.server.emit('cashRegistersChanged');
+    if (isDeliveryRegister) {
+      await this.deliveryDriverGateway?.emitForAllDrivers({ reason: 'delivery_shift_closed' });
+    }
     if (this.tablesService) {
       await this.tablesService.purgeProofsForClosing(closing.id);
     }
@@ -548,6 +561,16 @@ export class PaymentsService {
 
     this.socketGateway.server.emit('cashStatusChanged', { isOpen: true });
     this.socketGateway.server.emit('cashRegistersChanged');
+
+    if (data.cashRegisterId) {
+      const register = await this.prisma.cashRegister.findUnique({
+        where: { id: data.cashRegisterId },
+        select: { purpose: true },
+      });
+      if (register?.purpose === 'DELIVERY') {
+        await this.deliveryDriverGateway?.emitForAllDrivers({ reason: 'delivery_shift_opened' });
+      }
+    }
 
     return open;
   }
@@ -662,6 +685,10 @@ export class PaymentsService {
     this.socketGateway.server.emit('paymentUpdated', payment);
     this.socketGateway.server.emit('orderUpdated', orderId);
     this.socketGateway.server.emit('cashRegistersChanged');
+    await this.deliveryDriverGateway?.emitForOrder(orderId, {
+      reason: 'payment_changed',
+      orderId,
+    });
 
     if (order.customerPhone) {
       await this.whatsappService.unassignSessionByPhone(order.customerPhone).catch(() => {});

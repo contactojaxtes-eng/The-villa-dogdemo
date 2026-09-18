@@ -3,6 +3,7 @@ import { lockOperation, operationTransaction } from '../common/operation-lock';
 import { Injectable, NotFoundException, BadRequestException, Logger, ForbiddenException, OnModuleInit, Inject, forwardRef, Optional } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { SocketGateway } from '../socket/socket.gateway';
+import { DeliveryDriverGateway } from '../socket/delivery-driver.gateway';
 import { WhatsappService } from '../whatsapp/whatsapp.service';
 import { PrintService } from '../print/print.service';
 import { TablesService } from '../tables/tables.service';
@@ -33,6 +34,7 @@ export class OrdersService implements OnModuleInit {
     private whatsappService: WhatsappService,
     @Inject(forwardRef(() => PrintService)) private printService: PrintService,
     @Optional() @Inject(forwardRef(() => TablesService)) private tablesService?: TablesService,
+    @Optional() private deliveryDriverGateway?: DeliveryDriverGateway,
   ) {}
 
   private isDeliveryKitchenOrder(order: any) {
@@ -1224,6 +1226,10 @@ export class OrdersService implements OnModuleInit {
 
   async notifyUpdated(id: string, updated: any, existing: any, data: any, user?: any) {
     this.socketGateway.emitOrderStatusChange(id, updated.status, updated);
+    await this.deliveryDriverGateway?.emitForDrivers(
+      [existing?.deliveryDriverId, updated?.deliveryDriverId],
+      { reason: 'order_updated', orderId: id },
+    );
 
     try {
       if (this.canSendWhatsApp(updated)) {
@@ -1432,6 +1438,15 @@ export class OrdersService implements OnModuleInit {
     }
 
     this.socketGateway.emitOrderStatusChange(id, status, updated);
+    await this.deliveryDriverGateway?.emitForDrivers(
+      [order.deliveryDriverId, updated.deliveryDriverId],
+      {
+        reason: deliveryDriverId !== undefined && deliveryDriverId !== order.deliveryDriverId
+          ? 'assignment_changed'
+          : 'order_status_changed',
+        orderId: id,
+      },
+    );
     this.socketGateway.emitWhatsApp('whatsappSessionUpdated', { orderUpdated: true, phone: updated.customerPhone, orderNumber: updated.orderNumber, status: updated.status });
 
     try {
@@ -1734,6 +1749,10 @@ export class OrdersService implements OnModuleInit {
     }
 
     this.socketGateway.emitOrderStatusChange(id, 'CANCELLED', updated);
+    await this.deliveryDriverGateway?.emitForDriver(order.deliveryDriverId, {
+      reason: 'order_cancelled',
+      orderId: id,
+    });
 
     if (!this.isDeliveryKitchenOrder(order) && order.status !== 'IN_ROUTE' && order.status !== 'DELIVERED') {
       try {
@@ -1812,6 +1831,10 @@ export class OrdersService implements OnModuleInit {
     }
 
     this.socketGateway.emitOrderStatusChange(id, 'CANCELLED', updated);
+    await this.deliveryDriverGateway?.emitForDriver(order.deliveryDriverId, {
+      reason: 'order_cancelled',
+      orderId: id,
+    });
     this.socketGateway.emitOrderCancellationResolved({ orderId: id, status: 'CANCELLED', approved: true });
 
     if (!this.isDeliveryKitchenOrder(order)) {
@@ -1863,6 +1886,10 @@ export class OrdersService implements OnModuleInit {
     }
 
     this.socketGateway.emitOrderStatusChange(id, revertStatus, updated);
+    await this.deliveryDriverGateway?.emitForDriver(order.deliveryDriverId, {
+      reason: 'order_status_changed',
+      orderId: id,
+    });
     this.socketGateway.emitOrderCancellationResolved({
       orderId: id,
       status: revertStatus,
@@ -2022,8 +2049,9 @@ export class OrdersService implements OnModuleInit {
     });
     const updated = await this.prisma.order.update({
       where: { id },
-      data: { 
-        paymentMethod: method, 
+      data: {
+        paymentMethod: method,
+        originalPaymentMethod: order.originalPaymentMethod || order.paymentMethod,
         cashAmount: finalCash,
         transferAmount: finalTransfer,
         paymentStatus, 
@@ -2071,6 +2099,10 @@ export class OrdersService implements OnModuleInit {
     }
 
     this.socketGateway.emitOrderStatusChange(id, updated.status, updated);
+    await this.deliveryDriverGateway?.emitForDriver(updated.deliveryDriverId, {
+      reason: 'payment_changed',
+      orderId: id,
+    });
     return updated;
   }
 

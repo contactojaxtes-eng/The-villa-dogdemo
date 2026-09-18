@@ -1,8 +1,9 @@
-import { Injectable, NotFoundException, BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ConflictException, ForbiddenException, Optional } from '@nestjs/common';
 import * as bcrypt from 'bcryptjs';
 import { lockOperation, operationTransaction } from '../common/operation-lock';
 import { PrismaService } from '../prisma/prisma.service';
 import { SocketGateway } from '../socket/socket.gateway';
+import { DeliveryDriverGateway } from '../socket/delivery-driver.gateway';
 import { receiptSummary, validateReceipt } from '../tables/receipt';
 import { CompleteDriverDeliveryDto, ConfigureDriverAccessDto, CreateDriverDto, UpdateDriverDto } from './dto';
 
@@ -10,7 +11,8 @@ import { CompleteDriverDeliveryDto, ConfigureDriverAccessDto, CreateDriverDto, U
 export class DeliveryDriversService {
   constructor(
     private prisma: PrismaService,
-    private socketGateway: SocketGateway
+    private socketGateway: SocketGateway,
+    @Optional() private deliveryDriverGateway?: DeliveryDriverGateway,
   ) {}
 
   private readonly portalUserSelect = {
@@ -33,6 +35,45 @@ export class DeliveryDriversService {
     if (!login) throw new BadRequestException('Escribe un usuario o correo para el domiciliario.');
     if (!login.includes('@')) login = `${login}@thevilladog.local`;
     return login;
+  }
+
+  private normalizeAccessIdentity(value?: string) {
+    return String(value || '')
+      .trim()
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/@.*$/, '')
+      .replace(/[^a-z0-9]/g, '');
+  }
+
+  private async assertAccessIdentityAvailable(
+    driver: { id: string; name: string; userId?: string | null },
+    email: string,
+  ) {
+    const requestedKeys = new Set([
+      this.normalizeAccessIdentity(email),
+      this.normalizeAccessIdentity(driver.name),
+    ].filter(Boolean));
+
+    const users = await this.prisma.user.findMany({
+      select: { id: true, name: true, email: true, role: true },
+    });
+    const duplicate = users.find(user => {
+      if (user.id === driver.userId || user.email.toLowerCase().startsWith('deleted_')) return false;
+      const existingKeys = [
+        this.normalizeAccessIdentity(user.email),
+        this.normalizeAccessIdentity(user.name),
+      ].filter(Boolean);
+      return existingKeys.some(key => requestedKeys.has(key));
+    });
+
+    if (duplicate) {
+      const existingLogin = duplicate.email.replace(/@thevilladog\.local$/i, '');
+      throw new ConflictException(
+        `Ya existe un usuario con ese nombre o acceso: "${duplicate.name}" (${existingLogin}). Usa otro usuario o vincula esa cuenta si pertenece al mismo domiciliario; el perfil existente no fue modificado.`,
+      );
+    }
   }
 
   private getProofFile(files?: any[]) {
@@ -294,16 +335,22 @@ export class DeliveryDriversService {
         throw new BadRequestException('La contraseña inicial debe tener al menos 4 caracteres.');
       }
       const email = this.normalizeLogin(data.login);
-      const duplicate = await this.prisma.user.findFirst({
-        where: { email: { equals: email, mode: 'insensitive' } },
-        select: { id: true },
-      });
-      if (duplicate && duplicate.id !== driver.userId) {
-        throw new ConflictException('Ese usuario o correo ya está siendo utilizado.');
-      }
+      await this.assertAccessIdentityAvailable(driver, email);
 
       const password = await bcrypt.hash(data.password.trim(), 10);
       if (driver.userId) {
+        const currentAccount = await this.prisma.user.findUnique({
+          where: { id: driver.userId },
+          select: { id: true, role: true },
+        });
+        if (!currentAccount) {
+          throw new NotFoundException('La cuenta vinculada a este domiciliario ya no existe.');
+        }
+        if (currentAccount.role !== 'DELIVERY_DRIVER') {
+          throw new ForbiddenException(
+            'La cuenta vinculada pertenece a otro perfil de trabajo. No se modificó su rol; vincula o crea una cuenta exclusiva para domiciliario.',
+          );
+        }
         await this.prisma.user.update({
           where: { id: driver.userId },
           data: {
@@ -311,7 +358,6 @@ export class DeliveryDriversService {
             email,
             password,
             phone: driver.phone,
-            role: 'DELIVERY_DRIVER',
             permissions: [],
             active: driver.active,
             mustVerifyEmail: false,
@@ -345,6 +391,10 @@ export class DeliveryDriversService {
       if (account.role !== 'DELIVERY_DRIVER') {
         throw new ForbiddenException('Solo puedes vincular una cuenta creada previamente para domiciliario. Crea una cuenta nueva para no modificar otro perfil de trabajo.');
       }
+      await this.assertAccessIdentityAvailable(
+        { id: driver.id, name: driver.name, userId: account.id },
+        account.email,
+      );
       const linkedDriver = await this.prisma.deliveryDriver.findFirst({ where: { userId: account.id } });
       if (linkedDriver && linkedDriver.id !== driver.id) {
         throw new ConflictException('Ese usuario ya está vinculado a otro domiciliario.');
@@ -355,7 +405,6 @@ export class DeliveryDriversService {
           data: {
             name: driver.name,
             phone: driver.phone,
-            role: 'DELIVERY_DRIVER',
             permissions: [],
             active: driver.active,
           },
@@ -512,6 +561,7 @@ export class DeliveryDriversService {
         where: { id: order.id },
         data: {
           status: 'DELIVERED',
+          originalPaymentMethod: order.originalPaymentMethod || order.paymentMethod,
           paymentMethod: method,
           paymentStatus,
           paymentReference: reference,
@@ -576,6 +626,123 @@ export class DeliveryDriversService {
       this.socketGateway.emitPaymentSubmitted({ ...result, source: 'DELIVERY_DRIVER' });
     }
     this.socketGateway.server.emit('driversChanged');
+    await this.deliveryDriverGateway?.emitForOrder(result.order, {
+      reason: 'delivery_completed',
+      orderId,
+    });
+    return result;
+  }
+
+  async updateMyPayment(userId: string, orderId: string, data: CompleteDriverDeliveryDto) {
+    const method = this.getDriverPaymentMethod(data.method);
+    const isTransfer = method !== 'CASH';
+
+    const result = await this.prisma.$transaction(async tx => {
+      await lockOperation(tx);
+      const driver = await tx.deliveryDriver.findUnique({ where: { userId } });
+      if (!driver?.active) throw new ForbiddenException('Tu cuenta no tiene un domiciliario activo asociado.');
+
+      const order = await tx.order.findFirst({
+        where: {
+          id: orderId,
+          deliveryDriverId: driver.id,
+          orderType: 'DELIVERY',
+          status: 'DELIVERED',
+        },
+        include: { payment: true },
+      });
+      if (!order) throw new NotFoundException('No puedes modificar el cobro de este pedido.');
+      if (order.driverSettlementId || order.paymentStatus === 'CONFIRMED') {
+        throw new BadRequestException('Este cobro ya fue liquidado o validado y no se puede modificar.');
+      }
+
+      const closing = await tx.cashClosing.findFirst({
+        where: { isOpen: true, cashRegister: { purpose: 'DELIVERY', active: true } },
+        select: { id: true, cashRegisterId: true },
+        orderBy: { shiftStart: 'desc' },
+      });
+      if (!closing) throw new BadRequestException('La Caja Domicilios debe estar abierta para corregir el cobro.');
+      if (order.cashClosingId !== closing.id) {
+        throw new BadRequestException('Solo puedes corregir cobros del turno actual.');
+      }
+
+      const amount = Number(order.total || 0);
+      const paymentStatus = isTransfer ? 'PENDING_REVIEW' : 'DRIVER_CASH_PENDING';
+      const reference = isTransfer
+        ? (String(data.reference || '').trim().slice(0, 300) || order.paymentReference || null)
+        : null;
+      const payment = await tx.payment.upsert({
+        where: { orderId: order.id },
+        create: {
+          orderId: order.id,
+          amount,
+          method,
+          cashAmount: isTransfer ? 0 : amount,
+          transferAmount: isTransfer ? amount : 0,
+          reference,
+          status: paymentStatus,
+        },
+        update: {
+          amount,
+          method,
+          cashAmount: isTransfer ? 0 : amount,
+          transferAmount: isTransfer ? amount : 0,
+          reference,
+          status: paymentStatus,
+          confirmedAt: null,
+          confirmedBy: null,
+        },
+      });
+
+      await tx.order.update({
+        where: { id: order.id },
+        data: {
+          originalPaymentMethod: order.originalPaymentMethod || order.paymentMethod,
+          paymentMethod: method,
+          paymentStatus,
+          paymentReference: reference,
+          cashAmount: isTransfer ? 0 : amount,
+          transferAmount: isTransfer ? amount : 0,
+        },
+      });
+
+      if (order.paymentMethod !== method) {
+        await tx.transferProof.updateMany({
+          where: {
+            orderId: order.id,
+            status: { in: ['PENDING', 'REJECTED'] },
+          },
+          data: { status: 'SUPERSEDED', fileBase64: null, purgedAt: new Date() },
+        });
+      }
+
+      await tx.orderChangeLog.create({
+        data: {
+          orderId: order.id,
+          userId,
+          summary: `Domiciliario corrigió el método de pago de ${order.paymentMethod} a ${method}`,
+          changes: {
+            paymentMethod: { before: order.paymentMethod, after: method },
+            paymentStatus: { before: order.paymentStatus, after: paymentStatus },
+            originalPaymentMethod: order.originalPaymentMethod || order.paymentMethod,
+          },
+        },
+      });
+
+      const updatedOrder = await tx.order.findUnique({
+        where: { id: order.id },
+        include: this.portalOrderInclude(),
+      });
+      return { order: updatedOrder, payment };
+    }, operationTransaction);
+
+    this.socketGateway.server.emit('paymentUpdated', result.payment);
+    this.socketGateway.server.emit('orderUpdated', result.order);
+    this.socketGateway.server.emit('driversChanged');
+    await this.deliveryDriverGateway?.emitForOrder(result.order, {
+      reason: 'payment_changed',
+      orderId,
+    });
     return result;
   }
 
@@ -635,6 +802,7 @@ export class DeliveryDriversService {
       await tx.order.update({
         where: { id: order.id },
         data: {
+          originalPaymentMethod: order.originalPaymentMethod || order.paymentMethod,
           paymentMethod: method,
           paymentStatus: 'PENDING_REVIEW',
           paymentReference: reference,
@@ -698,6 +866,10 @@ export class DeliveryDriversService {
     this.socketGateway.server.emit('paymentUpdated', result.payment);
     this.socketGateway.emitPaymentSubmitted({ ...result, source: 'DELIVERY_DRIVER' });
     this.socketGateway.server.emit('driversChanged');
+    await this.deliveryDriverGateway?.emitForOrder(result.order, {
+      reason: 'proof_changed',
+      orderId,
+    });
     return result;
   }
 
@@ -839,6 +1011,9 @@ export class DeliveryDriversService {
     this.socketGateway.server.emit('driverSettlementCreated', result);
     this.socketGateway.server.emit('driversChanged');
     this.socketGateway.server.emit('cashRegistersChanged');
+    await this.deliveryDriverGateway?.emitForDriver(driverId, {
+      reason: 'settlement_changed',
+    });
     return result;
   }
 

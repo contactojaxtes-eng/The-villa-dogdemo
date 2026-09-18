@@ -69,6 +69,17 @@ interface DriverDetail {
 
 const fadeUp = { hidden: { opacity: 0, y: 15 }, visible: { opacity: 1, y: 0, transition: { duration: 0.3 } } }
 
+const suggestAccessLogin = (name: string, fallback: string) => {
+  const suggestion = String(name || '')
+    .trim()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, '.')
+    .replace(/^\.+|\.+$/g, '')
+  return suggestion || fallback
+}
+
 const PERIOD_OPTIONS: Array<{ value: string; label: string; description: string }> = [
   { value: 'CURRENT', label: 'Turno actual', description: 'Caja Domicilios abierta' },
   { value: 'WEEK', label: 'Esta semana', description: 'Lunes a domingo' },
@@ -278,11 +289,25 @@ export default function DriversPage() {
       const payload = { name: driverName.trim(), phone: phoneClean }
       if (editId) {
         await api.put(`/delivery-drivers/${editId}`, payload)
+        setDialogOpen(false)
+        void loadDrivers()
       } else {
-        await api.post('/delivery-drivers', payload)
+        const created = await api.post<Pick<Driver, 'id' | 'name' | 'phone' | 'active' | 'createdAt'>>('/delivery-drivers', payload)
+        const newDriver: Driver = {
+          ...created,
+          completedDeliveries: 0,
+          activeDeliveries: 0,
+          totalDeliveryEarnings: 0,
+          totalDeliveredSales: 0,
+          pendingCash: 0,
+          pendingCashOrders: [],
+          orders: [],
+          portalUser: null,
+        }
+        setDialogOpen(false)
+        void openAccessDialog(newDriver)
+        void loadDrivers()
       }
-      setDialogOpen(false)
-      loadDrivers()
     } catch (err: any) {
       setError(err.message || 'Ocurrió un error al guardar')
     } finally {
@@ -305,7 +330,7 @@ export default function DriversPage() {
   const openAccessDialog = async (driver: Driver) => {
     setAccessDriver(driver)
     setAccessMode('CREATE')
-    setAccessLogin(driver.portalUser?.email?.replace(/@thevilladog\.local$/i, '') || driver.phone)
+    setAccessLogin(driver.portalUser?.email?.replace(/@thevilladog\.local$/i, '') || suggestAccessLogin(driver.name, driver.phone))
     setAccessPassword('')
     setAccessUserId('')
     setAccessError('')

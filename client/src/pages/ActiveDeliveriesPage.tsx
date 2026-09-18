@@ -64,6 +64,7 @@ interface Order {
   total: number
   status: string
   paymentMethod: string
+  originalPaymentMethod?: string | null
   paymentStatus: string
   notes: string | null
   createdAt: string
@@ -2107,6 +2108,11 @@ export default function ActiveDeliveriesPage() {
                                   <Edit className="h-2.5 w-2.5 opacity-60 ml-0.5 text-[var(--accent)]" />
                                 </button>
                               )}
+                              {order.originalPaymentMethod && order.originalPaymentMethod !== order.paymentMethod && (
+                                <span className="max-w-[150px] text-[8px] font-bold leading-3 text-[var(--text-muted)]">
+                                  Original: {getStatusLabel(order.originalPaymentMethod)}
+                                </span>
+                              )}
                               <span className={`text-[9px] font-bold px-1.5 py-0.2 rounded-md ${
                                 order.paymentStatus === 'CONFIRMED'
                                   ? 'text-emerald-600 bg-emerald-500/10'
@@ -3007,7 +3013,10 @@ export default function ActiveDeliveriesPage() {
                       {o.deliveryDriver && (
                         <p className="text-xs text-[var(--text-secondary)]">Domiciliario: <span className="font-bold text-emerald-600">{o.deliveryDriver.name} ({o.deliveryDriver.phone})</span></p>
                       )}
-                      <p className="text-xs text-[var(--text-secondary)]">Método: <span className="font-bold">{getStatusLabel(o.paymentMethod)}</span></p>
+                      <p className="text-xs text-[var(--text-secondary)]">Método recibido: <span className="font-bold">{getStatusLabel(o.paymentMethod)}</span></p>
+                      {o.originalPaymentMethod && (
+                        <p className="text-xs text-[var(--text-secondary)]">Método original: <span className="font-bold">{getStatusLabel(o.originalPaymentMethod)}</span></p>
+                      )}
                       <p className="text-xs text-[var(--text-secondary)]">Pago: <span className={`font-bold ${o.paymentStatus === 'CONFIRMED' ? 'text-emerald-600' : 'text-amber-600'}`}>{o.paymentStatus === 'CONFIRMED' ? '✓ Cobrado' : o.paymentStatus === 'DRIVER_CASH_PENDING' ? 'Efectivo con domiciliario' : 'Pendiente'}</span></p>
                       <p className="text-xs text-[var(--text-secondary)]">Creado: <span className="font-semibold">{formatDate(o.createdAt)}</span></p>
                       <p className="text-xs text-[var(--text-secondary)]">Tiempo: <span className="font-bold">{getElapsedTime(o.createdAt)}</span></p>
