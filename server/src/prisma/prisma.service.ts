@@ -15,6 +15,10 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
 
   async onModuleInit() {
     await this.$connect();
+    // El portal del domiciliario se agregó sobre instalaciones que ya tienen
+    // repartidores registrados. Garantizamos la relación de acceso antes de
+    // ejecutar cualquier consulta del módulo, sin borrar ni recrear datos.
+    await this.ensureDriverPortalSchema();
     // Production schema changes must run through reviewed migrations.
     if (process.env.NODE_ENV === 'production') {
       await this.ensureDeliveryFoundation();
@@ -141,6 +145,36 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
       console.warn('Auto-migration safeguard note:', e?.message || e);
     }
     await this.ensureDeliveryFoundation();
+  }
+
+  private async ensureDriverPortalSchema() {
+    try {
+      await this.$executeRawUnsafe(`
+        ALTER TABLE "delivery_drivers"
+        ADD COLUMN IF NOT EXISTS "userId" TEXT;
+      `);
+      await this.$executeRawUnsafe(`
+        CREATE UNIQUE INDEX IF NOT EXISTS "delivery_drivers_userId_key"
+        ON "delivery_drivers"("userId");
+      `);
+      await this.$executeRawUnsafe(`
+        DO $$
+        BEGIN
+          IF NOT EXISTS (
+            SELECT 1
+            FROM pg_constraint
+            WHERE conname = 'delivery_drivers_userId_fkey'
+          ) THEN
+            ALTER TABLE "delivery_drivers"
+            ADD CONSTRAINT "delivery_drivers_userId_fkey"
+            FOREIGN KEY ("userId") REFERENCES "users"("id")
+            ON DELETE SET NULL ON UPDATE CASCADE;
+          END IF;
+        END $$;
+      `);
+    } catch (error: any) {
+      console.warn('Driver portal schema note:', error?.message || error);
+    }
   }
 
   private async ensureDeliveryFoundation() {
