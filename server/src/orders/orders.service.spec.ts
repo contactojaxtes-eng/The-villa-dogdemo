@@ -147,6 +147,40 @@ describe('Delivery order boundaries', () => {
     )).rejects.toThrow('El domicilio debe estar en ruta antes de liquidarlo');
   });
 
+  it('releases the WhatsApp chat when delivery is completed silently', async () => {
+    const order = {
+      id: 'order-delivered',
+      orderNumber: 311,
+      status: 'IN_ROUTE',
+      orderType: 'DELIVERY',
+      customerName: 'Cliente WhatsApp',
+      customerPhone: '3001234567',
+      chatSessionId: 'chat-311',
+      deliveryDriverId: 'driver-1',
+      paymentMethod: 'TRANSFER',
+      paymentStatus: 'PENDING_REVIEW',
+    };
+    const updated = { ...order, status: 'DELIVERED' };
+    const prisma: any = {
+      order: {
+        update: jest.fn()
+          .mockResolvedValueOnce(updated)
+          .mockResolvedValueOnce(updated),
+      },
+    };
+    const socket: any = {
+      emitOrderStatusChange: jest.fn(),
+      emitWhatsApp: jest.fn(),
+    };
+    const whatsapp: any = { unassignSessionByPhone: jest.fn().mockResolvedValue(undefined) };
+    const service = new OrdersService(prisma, socket, whatsapp, {} as any);
+    jest.spyOn(service, 'findOne').mockResolvedValue(order as any);
+
+    await service.updateStatus('order-delivered', 'DELIVERED', { id: 'admin-1', role: 'ADMIN' }, undefined, false);
+
+    expect(whatsapp.unassignSessionByPhone).toHaveBeenCalledWith('3001234567');
+  });
+
   it('requires transfer review before batch liquidation', async () => {
     const prisma: any = {
       cashClosing: { findFirst: jest.fn().mockResolvedValue({ id: 'closing-1' }) },

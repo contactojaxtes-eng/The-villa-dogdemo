@@ -1451,7 +1451,8 @@ export class OrdersService implements OnModuleInit {
 
     try {
       const shouldNotify = notifyCustomer !== false;
-      if (shouldNotify && this.canSendWhatsApp(updated)) {
+      const canUseWhatsApp = this.canSendWhatsApp(updated);
+      if (shouldNotify && canUseWhatsApp) {
         let text = '';
         if (status === 'READY' && updated.orderType === 'PICKUP') {
           text = `¡Tu pedido ya está listo!\n\nPuedes pasar a recogerlo en nuestro restaurante. 🏠\n¡Te esperamos!`;
@@ -1465,9 +1466,11 @@ export class OrdersService implements OnModuleInit {
         if (text) {
           await this.sendOrderWhatsAppNotification(updated, text);
         }
-        if (status === 'DELIVERED') {
-          await this.whatsappService.unassignSessionByPhone(updated.customerPhone);
-        }
+      }
+      // Cobrar desde administración puede silenciar el mensaje al cliente,
+      // pero una entrega siempre debe liberar el chat para el siguiente pedido.
+      if (status === 'DELIVERED' && canUseWhatsApp) {
+        await this.whatsappService.unassignSessionByPhone(updated.customerPhone);
       }
     } catch (waErr) {
       this.logger.error(`Error enviando WhatsApp de actualización para pedido #${updated.orderNumber}`, waErr);
