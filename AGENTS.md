@@ -1,9 +1,13 @@
 # The Villa Dog Agent Notes
 
-This repository is intentionally detached from the original THE VILLA DOG deployment.
+This repository is the current THE VILLA DOG project. It was originally copied
+from NICHE and must remain independent from NICHE.
 
-Do not use old THE VILLA DOG infrastructure, GitHub remotes, databases, WhatsApp templates, domains, Railway projects, Vercel projects, DigitalOcean droplets, or environment secrets.
+Never use NICHE infrastructure, GitHub remotes, databases, WhatsApp templates,
+domains, Railway/Vercel/DigitalOcean projects, or environment secrets.
 
-Before deploying, configure a new database, new environment variables, a new GitHub repository remote, and a new hosting target for The Villa Dog.
+The current GitHub remote `https://github.com/thevilladog/The-villa-dog.git`
+and the Railway project configured for THE VILLA DOG are the authorized targets
+for this repository. Deploy to them when the user requests it.
 
-See `DESVINCULACION_THE_VILLA_DOG.md` for the setup checklist.
+See `DESVINCULACION_THE_VILLA_DOG.md` for the separation history.

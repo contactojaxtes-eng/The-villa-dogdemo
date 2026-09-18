@@ -1,6 +1,10 @@
 # Desvinculacion de The Villa Dog
 
-Este proyecto fue copiado desde la base de THE VILLA DOG, pero queda preparado para operar independiente.
+Este proyecto fue copiado originalmente desde la base de NICHE y fue preparado
+para operar como THE VILLA DOG de forma independiente.
+
+La infraestructura actual de THE VILLA DOG (su repositorio GitHub, Railway,
+PostgreSQL y variables propias) es el destino autorizado de este proyecto.
 
 ## Ya realizado
 
@@ -13,16 +17,16 @@ Este proyecto fue copiado desde la base de THE VILLA DOG, pero queda preparado p
 - El `package.json` raiz ahora usa el nombre `the-villa-dog`.
 - Se elimino el binario `niche.exe`; el puente de impresion debe regenerarse con nombre y URL nueva.
 
-## Antes de ejecutar o desplegar
+## Configuracion inicial ya realizada
 
-1. Crea una base de datos nueva en Supabase, Neon, Railway, Aiven u otro proveedor.
-2. Copia `server/.env.example` a `server/.env` y llena valores nuevos.
-3. Copia `client/.env.example` a `client/.env.production` para produccion o `client/.env` para local.
-4. Instala dependencias con `npm run install:all`.
-5. Ejecuta `npm --prefix server run prisma:generate`.
-6. Ejecuta `npx --prefix server prisma db push` solo contra la base nueva.
-7. Crea un repo nuevo en GitHub y agrega ese remoto cuando estes listo.
+1. Se creo una base PostgreSQL propia para THE VILLA DOG.
+2. Se configuraron variables propias para servidor y cliente.
+3. Se instalaron las dependencias y se genero Prisma.
+4. Se creo el repositorio independiente de GitHub.
+5. Se configuro Railway como destino de produccion de THE VILLA DOG.
 
 ## Regla de oro
 
-No uses credenciales, tokens, dominios, base de datos, servidor, proyecto Railway/Vercel/DigitalOcean ni templates de WhatsApp del negocio anterior.
+No uses credenciales, tokens, dominios, base de datos, servidores, proyectos de
+hosting ni plantillas de WhatsApp de NICHE. Los recursos actuales de THE VILLA
+DOG si pertenecen a este proyecto y se pueden usar para sus despliegues.
