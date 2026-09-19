@@ -263,7 +263,10 @@ export function AppLayout() {
               ? "h-full w-full max-w-none" 
               : isKitchen
               ? "w-full max-w-none min-h-full"
-              : "mx-auto max-w-7xl min-h-full"
+              : cn(
+                "mx-auto max-w-7xl min-h-full",
+                isCollapsed && !isWaiter && !isDedicatedKitchen && "md:w-full md:max-w-none",
+              )
           )}>
             <ErrorBoundary key={location.pathname}>
               <Outlet />
