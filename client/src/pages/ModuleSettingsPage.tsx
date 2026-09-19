@@ -158,7 +158,7 @@ const MODULE_DEFINITIONS: ModuleDef[] = [
   { id: 'payment_validation', name: 'Validar pagos', description: 'Revisión de comprobantes de transferencia.', icon: BadgeCheck, section: 'Caja' },
   { id: 'whatsapp', name: 'WhatsApp', description: 'Atención de chats y toma de pedidos.', icon: MessageCircle, section: 'Gestión' },
   { id: 'customers', name: 'Clientes', description: 'Directorio de clientes y direcciones.', icon: Users, section: 'Gestión' },
-  { id: 'drivers', name: 'Domiciliarios', description: 'Repartidores, turnos y liquidaciones.', icon: Bike, section: 'Gestión' },
+  { id: 'drivers', name: 'Domiciliarios', description: 'Historial por repartidor, entregas y liquidaciones.', icon: Bike, section: 'Gestión' },
   { id: 'products', name: 'Productos y menú', description: 'Carta, precios, categorías y recetas.', icon: PackagePlus, section: 'Gestión' },
   { id: 'zones', name: 'Barrios y tarifas', description: 'Zonas de entrega y valor del domicilio.', icon: MapPin, section: 'Gestión' },
   { id: 'dashboard', name: 'Inicio y métricas', description: 'Resumen de ventas y operación.', icon: LayoutDashboard, section: 'Principal' },

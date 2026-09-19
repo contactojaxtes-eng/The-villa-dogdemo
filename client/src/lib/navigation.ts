@@ -88,6 +88,14 @@ export function hasNavItemAccess(user: NavUser | null | undefined, item: NavItem
   if (item.section === 'SuperAdmin' || (item.roles.length === 1 && item.roles[0] === 'SUPERADMIN')) {
     return user.role === 'SUPERADMIN'
   }
+
+  // El portal de entregas es exclusivo del domiciliario. El superadmin puede
+  // consultar y administrar el historial desde "Domiciliarios", pero no debe
+  // recibir el portal operativo que solo funciona con la sesión del repartidor.
+  if (item.href === '/my-deliveries') {
+    return user.role === 'DELIVERY_DRIVER'
+  }
+
   if (user.role === 'SUPERADMIN') return true
 
   // Meseras (WAITER): Exclusivamente mesas y ventas de salón

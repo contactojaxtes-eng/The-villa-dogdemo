@@ -72,6 +72,24 @@ interface GeminiTestResult {
   results: GeminiKeyResult[]
 }
 
+interface SandboxMessage {
+  role: 'user' | 'model'
+  text: string
+  model?: string
+  latencyMs?: number
+  key?: string
+}
+
+interface SandboxReply {
+  success: boolean
+  message: string
+  reply?: string
+  model?: string
+  key?: string
+  latencyMs?: number
+  requestsToday?: number
+}
+
 interface GeminiModel {
   name: string
   displayName: string
@@ -237,8 +255,12 @@ export default function SuperAdminConfigPage() {
   const [savingAi, setSavingAi] = useState(false)
   const [savingChatbot, setSavingChatbot] = useState(false)
   const [testingGemini, setTestingGemini] = useState(false)
-  const [testPrompt, setTestPrompt] = useState('Saluda brevemente como asesor de The Villa Dog.')
   const [testResult, setTestResult] = useState<GeminiTestResult | null>(null)
+  const [sandboxDraft, setSandboxDraft] = useState('')
+  const [sandboxRule, setSandboxRule] = useState('')
+  const [sandboxMessages, setSandboxMessages] = useState<SandboxMessage[]>([])
+  const [sandboxError, setSandboxError] = useState('')
+  const [sendingSandbox, setSendingSandbox] = useState(false)
   const [modelInfo, setModelInfo] = useState<GeminiModelInfo | null>(null)
   const [loadingModelInfo, setLoadingModelInfo] = useState(false)
   const [modelInfoError, setModelInfoError] = useState('')
@@ -346,7 +368,7 @@ export default function SuperAdminConfigPage() {
     try {
       const result = await api.post<GeminiTestResult>('/whatsapp/test-gemini', {
         key: combinedKeys,
-        prompt: testPrompt,
+        prompt: 'Responde únicamente: Conexión correcta',
         model: wa.geminiModel,
       })
       setTestResult(result)
@@ -360,6 +382,63 @@ export default function SuperAdminConfigPage() {
     } finally {
       setTestingGemini(false)
     }
+  }
+
+  const sendSandboxMessage = async () => {
+    const draft = sandboxDraft.trim()
+    if (!draft || sendingSandbox) return
+    const combinedKeys = geminiKeys.map(key => key.trim()).filter(Boolean).join(', ')
+    if (!combinedKeys) {
+      alerts.warning('Agrega al menos una llave de Gemini para probar el chat.')
+      return
+    }
+
+    const nextMessages: SandboxMessage[] = [
+      ...sandboxMessages,
+      { role: 'user' as const, text: draft },
+    ].slice(-19)
+    setSendingSandbox(true)
+    setSandboxError('')
+    setSandboxDraft('')
+    setSandboxMessages(nextMessages)
+    try {
+      const result = await api.post<SandboxReply>('/whatsapp/test-gemini-chat', {
+        key: combinedKeys,
+        model: wa.geminiModel,
+        instructions: wa.aiInstructions,
+        messages: nextMessages.map(({ role, text }) => ({ role, text })),
+      })
+      if (!result.success || !result.reply) throw new Error(result.message || 'La IA no devolvió una respuesta.')
+      setSandboxMessages(current => [...current, {
+        role: 'model',
+        text: result.reply || '',
+        model: result.model,
+        key: result.key,
+        latencyMs: result.latencyMs,
+      }])
+      if (typeof result.requestsToday === 'number') {
+        setWa(current => ({ ...current, geminiRequestsToday: result.requestsToday || 0 }))
+      }
+    } catch (error) {
+      setSandboxMessages(sandboxMessages)
+      setSandboxDraft(draft)
+      setSandboxError(getErrorMessage(error, 'No se pudo completar la prueba.'))
+    } finally {
+      setSendingSandbox(false)
+    }
+  }
+
+  const addSandboxRule = () => {
+    const rule = sandboxRule.trim()
+    if (!rule) return
+    const nextInstructions = [wa.aiInstructions.trim(), `- ${rule}`].filter(Boolean).join('\n')
+    if (nextInstructions.length > 4000) {
+      alerts.warning('Las instrucciones permiten máximo 4.000 caracteres. Resume o edita las reglas anteriores.')
+      return
+    }
+    setWa(current => ({ ...current, aiInstructions: nextInstructions }))
+    setSandboxRule('')
+    alerts.success('Regla agregada al formulario', 'Pruébala de nuevo y guarda la configuración de IA cuando estés conforme.')
   }
 
   const loadGeminiModelInfo = async (keysOverride?: string, modelOverride?: string) => {
@@ -531,8 +610,8 @@ export default function SuperAdminConfigPage() {
             </div>
 
             <div className="mt-5 space-y-5">
-              <div className="rounded-xl border border-amber-500/25 bg-amber-500/5 p-3 text-[11px] leading-5 text-[var(--text-secondary)]">
-                <strong className="text-[var(--text-primary)]">Cómo se prueba:</strong> el interruptor se guarda al instante. La IA solo responde mensajes entrantes de chats sin asignar; si una asesora tomó el chat, usa <strong className="text-[var(--text-primary)]">Soltar chat</strong> o prueba con una conversación nueva.
+              <div className="rounded-xl border border-emerald-500/25 bg-emerald-500/5 p-3 text-[11px] leading-5 text-[var(--text-secondary)]">
+                <strong className="text-[var(--text-primary)]">Prueba sin activar el bot:</strong> usa el chat de prueba de esta página. La conversación queda separada de WhatsApp y puedes ensayar pedidos, cambios y preguntas antes de activar las respuestas automáticas.
               </div>
               <label className="block">
                 <span className="mb-1.5 flex flex-wrap items-center justify-between gap-2 text-xs font-bold text-[var(--text-secondary)]">
@@ -602,24 +681,43 @@ export default function SuperAdminConfigPage() {
             </div>
           </Card>
 
-          <Card className="h-fit rounded-2xl border-[var(--border-subtle)] bg-[var(--bg-panel)] p-4 shadow-sm sm:p-5">
-            <SectionTitle icon={Sparkles} title="Prueba real" description="Envía un mensaje corto al modelo y comprueba cada llave sin activar el bot." />
-            <div className="mt-5 space-y-3">
-              <label className="block"><span className="mb-1.5 block text-xs font-bold text-[var(--text-secondary)]">Mensaje de prueba</span><textarea value={testPrompt} maxLength={500} onChange={event => { setTestPrompt(event.target.value); setTestResult(null) }} className={cn(textAreaClass, 'min-h-24')} /></label>
-              <Button type="button" onClick={testGemini} disabled={testingGemini || !testPrompt.trim()} className="h-11 w-full rounded-xl bg-[var(--accent)] font-black text-[var(--accent-fg)]">
-                {testingGemini ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Send className="mr-2 h-4 w-4" />} {testingGemini ? 'Probando conexión…' : 'Probar IA ahora'}
-              </Button>
-
-              {!testResult && <div className="rounded-2xl border border-dashed border-[var(--border-default)] p-5 text-center"><Server className="mx-auto mb-2 h-6 w-6 text-[var(--text-muted)]" /><p className="text-xs font-bold text-[var(--text-secondary)]">Aún no se ha ejecutado una prueba</p><p className="mt-1 text-[11px] text-[var(--text-muted)]">Verás aquí la respuesta, el modelo usado y el tiempo de conexión.</p></div>}
-
-              {testResult && (
-                <div className={cn('space-y-3 rounded-2xl border p-4', testResult.success ? 'border-emerald-500/30 bg-emerald-500/5' : 'border-red-500/30 bg-red-500/5')}>
-                  <div className="flex items-start gap-2">{testResult.success ? <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-emerald-500" /> : <XCircle className="mt-0.5 h-5 w-5 shrink-0 text-red-500" />}<div><p className="text-sm font-black text-[var(--text-primary)]">{testResult.success ? 'Conexión correcta' : 'La prueba falló'}</p><p className="text-[11px] text-[var(--text-muted)]">{testResult.message}</p></div></div>
-                  {testResult.reply && <div className="rounded-xl bg-[var(--bg-panel)] p-3"><p className="mb-1 text-[10px] font-bold uppercase tracking-wide text-[var(--text-muted)]">Respuesta</p><p className="text-sm text-[var(--text-primary)]">{testResult.reply}</p></div>}
-                  <div className="flex flex-wrap gap-2 text-[10px] font-bold text-[var(--text-secondary)]">{testResult.model && <span className="rounded-lg bg-[var(--bg-panel)] px-2 py-1">Modelo: {testResult.model}</span>}{typeof testResult.latencyMs === 'number' && <span className="rounded-lg bg-[var(--bg-panel)] px-2 py-1">Latencia: {testResult.latencyMs} ms</span>}<span className="rounded-lg bg-[var(--bg-panel)] px-2 py-1">Llaves: {testResult.validKeys}/{testResult.testedKeys}</span></div>
-                  {testResult.results.length > 0 && <div className="space-y-1.5 border-t border-[var(--border-subtle)] pt-3">{testResult.results.map(result => <div key={result.key} className="flex items-start justify-between gap-3 text-[11px]"><span className="font-mono font-bold text-[var(--text-secondary)]">{result.key}</span><span className={cn('text-right font-bold', result.ok ? 'text-emerald-600' : 'text-red-500')}>{result.ok ? `${result.model} · ${result.latencyMs} ms` : result.error}</span></div>)}</div>}
-                </div>
-              )}
+          <Card className="h-fit min-w-0 rounded-2xl border-[var(--border-subtle)] bg-[var(--bg-panel)] p-4 shadow-sm sm:p-5">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <SectionTitle icon={Sparkles} title="Prueba real en chat" description="Escribe como cliente y conversa con Gemini usando el menú vigente." />
+              <Button type="button" variant="outline" onClick={() => { setSandboxMessages([]); setSandboxDraft(''); setSandboxError('') }} disabled={sendingSandbox || sandboxMessages.length === 0} className="h-9 rounded-xl text-xs font-bold">Nueva conversación</Button>
+            </div>
+            <p className="mt-4 rounded-xl border border-emerald-500/25 bg-emerald-500/5 p-3 text-[11px] leading-5 text-[var(--text-secondary)]">
+              Entorno aislado: no envía WhatsApp, no crea pedidos ni afecta chats reales. Usa el modelo y las instrucciones que ves en el formulario, aunque todavía no los hayas guardado. La prueba sí consume solicitudes de Gemini.
+            </p>
+            <div className="mt-4 flex min-h-64 max-h-[34rem] flex-col gap-3 overflow-y-auto rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-3" role="log" aria-label="Conversación de prueba con la IA" aria-live="polite">
+              {sandboxMessages.length === 0 && <div className="m-auto max-w-xs text-center"><MessageCircle className="mx-auto mb-2 h-7 w-7 text-[var(--text-muted)]" /><p className="text-sm font-black text-[var(--text-primary)]">Inicia una conversación de prueba</p><p className="mt-1 text-xs text-[var(--text-muted)]">Prueba bebidas, cantidades, notas, cambios de pedido o domicilios.</p></div>}
+              {sandboxMessages.map((message, index) => <div key={`${index}-${message.role}`} className={cn('max-w-[90%] rounded-2xl px-3 py-2.5 text-sm shadow-sm', message.role === 'user' ? 'ml-auto bg-[var(--accent)] text-[var(--accent-fg)]' : 'mr-auto border border-[var(--border-subtle)] bg-[var(--bg-panel)] text-[var(--text-primary)]')}>
+                <p className="mb-1 text-[10px] font-black opacity-70">{message.role === 'user' ? 'Cliente de prueba' : 'Asesor IA'}</p>
+                <p className="whitespace-pre-wrap break-words leading-relaxed">{message.text}</p>
+                {message.role === 'model' && <p className="mt-2 text-[10px] text-[var(--text-muted)]">{message.model}{message.key ? ` · llave ${message.key}` : ''}{typeof message.latencyMs === 'number' ? ` · ${message.latencyMs} ms` : ''}</p>}
+              </div>)}
+              {sendingSandbox && <div className="mr-auto flex items-center gap-2 rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] px-3 py-2 text-xs text-[var(--text-muted)]"><Loader2 className="h-4 w-4 animate-spin" /> La IA está respondiendo…</div>}
+            </div>
+            {sandboxError && <p className="mt-3 rounded-xl border border-red-500/25 bg-red-500/5 p-3 text-xs font-bold text-red-600">{sandboxError}</p>}
+            <div className="mt-4 flex flex-wrap gap-2">
+              {[
+                ['Bebidas', 'Quiero dos perros sencillos y una gaseosa. ¿Qué bebidas tienen?'],
+                ['Cambio', 'Cámbiame la bebida por otra, pero no sé cuál tienen.'],
+                ['Notas', 'Dos perros sencillos: uno sin cebolla y el otro sin salsa.'],
+              ].map(([label, example]) => <button key={label} type="button" onClick={() => setSandboxDraft(example)} disabled={sendingSandbox} className="rounded-lg border border-[var(--border-subtle)] px-2.5 py-1.5 text-[11px] font-bold text-[var(--text-secondary)] transition hover:border-[var(--accent)] hover:text-[var(--accent)]">{label}</button>)}
+            </div>
+            <label className="mt-3 block"><span className="mb-1.5 block text-xs font-bold text-[var(--text-secondary)]">Escribe como cliente</span><textarea value={sandboxDraft} maxLength={2000} onChange={event => setSandboxDraft(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void sendSandboxMessage() } }} className={cn(textAreaClass, 'min-h-20')} placeholder="Ejemplo: quiero dos perros sencillos y una bebida…" /></label>
+            <Button type="button" onClick={() => void sendSandboxMessage()} disabled={sendingSandbox || !sandboxDraft.trim()} className="mt-3 h-11 w-full rounded-xl bg-[var(--accent)] font-black text-[var(--accent-fg)]">
+              {sendingSandbox ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Send className="mr-2 h-4 w-4" />} {sendingSandbox ? 'Respondiendo…' : 'Enviar mensaje de prueba'}
+            </Button>
+            {sandboxMessages.some(message => message.role === 'model') && <div className="mt-4 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-3">
+              <label className="block"><span className="mb-1.5 block text-xs font-black text-[var(--text-primary)]">¿Qué debería hacer mejor la IA?</span><textarea value={sandboxRule} maxLength={700} onChange={event => setSandboxRule(event.target.value)} className={cn(textAreaClass, 'min-h-20')} placeholder="Ejemplo: si el cliente pide Manzana sin tamaño, pregunta si la quiere de vidrio 250 ml o de 400 ml." /></label>
+              <Button type="button" variant="outline" onClick={addSandboxRule} disabled={!sandboxRule.trim()} className="mt-2 h-9 rounded-xl text-xs font-bold"><Plus className="mr-1.5 h-4 w-4" /> Agregar a instrucciones</Button>
+              <p className="mt-2 text-[11px] text-[var(--text-muted)]">La regla se aplica en las siguientes pruebas. Para conservarla, pulsa “Guardar configuración de IA” en el panel izquierdo. Esto no activa el bot.</p>
+            </div>}
+            <div className="mt-5 border-t border-[var(--border-subtle)] pt-4">
+              <div className="flex flex-wrap items-center justify-between gap-2"><div><p className="text-xs font-black text-[var(--text-primary)]">Comprobar llaves</p><p className="text-[11px] text-[var(--text-muted)]">Verifica cada llave por separado con una respuesta corta.</p></div><Button type="button" variant="outline" onClick={() => void testGemini()} disabled={testingGemini} className="h-9 rounded-xl text-xs font-bold">{testingGemini ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Server className="mr-2 h-4 w-4" />} Probar conexión</Button></div>
+              {testResult && <div className={cn('mt-3 rounded-xl border p-3 text-xs', testResult.success ? 'border-emerald-500/25 bg-emerald-500/5' : 'border-red-500/25 bg-red-500/5')}><p className="font-bold text-[var(--text-primary)]">{testResult.message}</p>{testResult.results.map(result => <p key={result.key} className="mt-1 text-[var(--text-secondary)]">{result.key}: {result.ok ? `${result.model} · ${result.latencyMs} ms` : result.error}</p>)}</div>}
             </div>
           </Card>
         </div>

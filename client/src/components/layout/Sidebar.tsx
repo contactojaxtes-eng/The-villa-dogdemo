@@ -68,6 +68,9 @@ export function Sidebar({ onClose, isCollapsed = false, onToggleCollapse }: Side
 
   const hasItemAccess = (item: NavItem) => {
     if (!hasNavItemAccess(user, item)) return false
+    // La entrada del portal del domiciliario es fija para ese rol. No debe
+    // desaparecer por una preferencia de módulos guardada por administración.
+    if (user?.role === 'DELIVERY_DRIVER' && item.href === '/my-deliveries') return true
     return !hiddenModules.includes(item.module)
   }
 

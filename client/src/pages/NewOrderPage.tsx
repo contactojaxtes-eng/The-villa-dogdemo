@@ -316,6 +316,47 @@ function normalizeText(text: string): string {
     .trim()
 }
 
+function isBeverageItem(item: MenuItem): boolean {
+  return /bebida|gaseosa|jugo|agua/i.test(item.category?.name || '')
+}
+
+function beverageCore(name: string): string {
+  return normalizeText(name
+    .replace(/\b\d+(?:[.,]\d+)?\s*(?:ml|mililitros?|l|litros?)\b/gi, ' ')
+    .replace(/\b(?:vidrio|pet|pl[aá]stic[ao]|postob[oó]n)\b/gi, ' '))
+    .replace(/\s+/g, ' ')
+}
+
+function beverageSizeInMl(value: string): number | null {
+  const match = value.match(/\b(\d+(?:[.,]\d+)?)\s*(ml|mililitros?|l|litros?)\b/i)
+  if (match) return Math.round(Number(match[1].replace(',', '.')) * (/^m/i.test(match[2]) ? 1 : 1000))
+  const commonSize = value.match(/\b(250|300|350|400|500|600|750)\b/)
+  return commonSize ? Number(commonSize[1]) : null
+}
+
+function isBeverageSelectionUnambiguous(selected: MenuItem, catalog: MenuItem[], clause: string): boolean {
+  if (!isBeverageItem(selected)) return true
+  const core = beverageCore(selected.name)
+  const normalizedClause = normalizeText(clause).replace(/\s+/g, ' ')
+  if (!core || !normalizedClause.includes(core)) return false
+  const selectedIsZero = /\bzero\b/.test(normalizeText(selected.name))
+  if (selectedIsZero !== /\b(?:zero|sin azucar)\b/.test(normalizedClause)) return false
+
+  const variants = catalog.filter(item => isBeverageItem(item) && beverageCore(item.name) === core)
+  const mentionedSize = beverageSizeInMl(clause)
+  if (mentionedSize !== null && mentionedSize !== beverageSizeInMl(selected.name)) return false
+  const mentionsGlass = /\bvidrio\b/.test(normalizedClause)
+  if (mentionsGlass && !/\bvidrio\b/i.test(selected.name)) return false
+  if (variants.length <= 1) return true
+  if (mentionedSize === null && !mentionsGlass) return false
+
+  const matchingVariants = variants.filter(item =>
+    (mentionedSize === null || beverageSizeInMl(item.name) === mentionedSize)
+    && (!mentionsGlass || /\bvidrio\b/i.test(item.name)),
+  )
+  return matchingVariants.length === 1 && matchingVariants[0].id === selected.id
+}
+
 function extractPaymentMethod(text: string): 'CASH' | 'TRANSFER' | null {
   const matches = Array.from(text.matchAll(/\b(efectivo|transferencia|transferir|nequi|daviplata|bancolombia)\b/gi))
   const last = matches[matches.length - 1]?.[1]?.toLowerCase()
@@ -370,6 +411,7 @@ interface ParsedOrderResponse {
   zoneId?: string | null;
   paymentMethod?: 'CASH' | 'TRANSFER' | null;
   modelUsed?: string;
+  unresolvedBeverages?: string[];
 }
 
 function AdditionDropdown({
@@ -624,6 +666,7 @@ export default function NewOrderPage({
   const [parsingQuickText, setParsingQuickText] = useState(false)
   const [parsingChatOrder, setParsingChatOrder] = useState(false)
   const [orderReaderModel, setOrderReaderModel] = useState('')
+  const [orderReaderWarning, setOrderReaderWarning] = useState('')
   const [suggestedProducts, setSuggestedProducts] = useState<MenuItem[]>([])
   const [lastOrderItems, setLastOrderItems] = useState<any[]>([])
   const [lastOrderDate, setLastOrderDate] = useState<string>('')
@@ -1313,6 +1356,7 @@ export default function NewOrderPage({
         // Buscar coincidencia de producto en catálogo
         let bestMatch: { item: MenuItem; score: number } | null = null
         for (const item of flatItems) {
+          if (!isBeverageSelectionUnambiguous(item, flatItems, clause)) continue
           const normalizedName = normalizeText(item.name)
           if (normalizedName.length < 3) continue
 
@@ -1746,6 +1790,7 @@ export default function NewOrderPage({
       }
 
       setOrderReaderModel('')
+      setOrderReaderWarning('')
 
       setParsingChatOrder(true)
       Promise.all([
@@ -2175,6 +2220,10 @@ export default function NewOrderPage({
             .then(parsed => {
               if (parsed) {
                 if (parsed.modelUsed) setOrderReaderModel(parsed.modelUsed)
+                if (parsed.unresolvedBeverages?.length) {
+                  const mentioned = parsed.unresolvedBeverages.slice(0, 3).join(', ')
+                  setOrderReaderWarning(`Bebida por confirmar (${mentioned}). Revisa la presentación y el carrito con el cliente antes de cobrar.`)
+                }
                 // Solo llamar applyData si Gemini encontró productos reales
                 if (parsed.parsedCartItems && parsed.parsedCartItems.length > 0) {
                   applyData(parsed, 'remote')
@@ -3486,6 +3535,12 @@ export default function NewOrderPage({
             <div className="flex items-center gap-2 rounded-xl border border-blue-500/25 bg-blue-500/5 px-3 py-2 text-xs text-blue-600">
               <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
               <span className="font-semibold">Completando datos desde el chat…</span>
+            </div>
+          )}
+          {orderReaderWarning && (
+            <div className="flex items-start gap-2 rounded-xl border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+              <span className="font-semibold">{orderReaderWarning}</span>
             </div>
           )}
 

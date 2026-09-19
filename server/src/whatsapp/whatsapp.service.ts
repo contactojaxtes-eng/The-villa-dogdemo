@@ -76,6 +76,91 @@ export class WhatsappService implements OnModuleInit {
       .trim();
   }
 
+  private isBeverageMenuItem(item: { category?: { name?: string | null } | null }): boolean {
+    return /bebida|gaseosa|jugo|agua/i.test(item.category?.name || '');
+  }
+
+  private beverageCore(name: string): string {
+    return this.normalizeSpanishLookup(String(name || '')
+      .replace(/\b\d+(?:[.,]\d+)?\s*(?:ml|mililitros?|l|litros?)\b/gi, ' ')
+      .replace(/\b(?:vidrio|pet|pl[aá]stic[ao]|postob[oó]n)\b/gi, ' '));
+  }
+
+  private beverageSizeInMl(value: string): number | null {
+    const match = String(value || '').match(/\b(\d+(?:[.,]\d+)?)\s*(ml|mililitros?|l|litros?)\b/i);
+    if (match) {
+      const amount = Number(match[1].replace(',', '.'));
+      return Math.round(amount * (/^m/i.test(match[2]) ? 1 : 1000));
+    }
+    // Los clientes también suelen decir solo “la 400” o “la 250”.
+    const commonSize = String(value || '').match(/\b(250|300|350|400|500|600|750)\b/);
+    return commonSize ? Number(commonSize[1]) : null;
+  }
+
+  private isBeverageSelectionUnambiguous(
+    selected: { name: string; category?: { name?: string | null } | null },
+    catalog: Array<{ name: string; category?: { name?: string | null } | null }>,
+    conversation: string,
+  ): boolean {
+    if (!this.isBeverageMenuItem(selected)) return true;
+    const core = this.beverageCore(selected.name);
+    if (!core) return false;
+    const lines = String(conversation || '').split(/\r?\n/);
+    const customerLines = lines.some(line => /^\s*cliente\s*:/i.test(line))
+      ? lines.filter(line => /^\s*cliente\s*:/i.test(line))
+      : lines;
+    const latestMention = [...customerLines].reverse().find(line => this.normalizeSpanishLookup(line).includes(core));
+    if (!latestMention) return false;
+
+    // Un cambio posterior del cliente invalida la bebida anterior aunque el
+    // modelo todavía la devuelva. Una lista de dos bebidas sin cambio conserva
+    // ambas, porque son dos productos distintos del mismo pedido.
+    const beverageCores = Array.from(new Set(catalog
+      .filter(item => this.isBeverageMenuItem(item))
+      .map(item => this.beverageCore(item.name))
+      .filter(Boolean)))
+      .sort((a, b) => b.length - a.length);
+    const beveragePattern = new RegExp(`\\b(?:${beverageCores.map(value => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})\\b`, 'g');
+    const selectedLineIndex = customerLines.lastIndexOf(latestMention);
+    const replacedByAnotherBeverage = customerLines.slice(selectedLineIndex).some(line => {
+      const normalized = this.normalizeSpanishLookup(line);
+      if (!/\b(?:cambi\w*|reemplaz\w*|sustitu\w*|prefier\w*|mejor|en vez de|quita\w*)\b/.test(normalized)) return false;
+      const mentionedCores = Array.from(normalized.matchAll(beveragePattern), match => ({ core: match[0], position: match.index || 0 }));
+      if (mentionedCores.length === 0) return false;
+      const betterThan = normalized.indexOf(' mejor que ');
+      const finalChoice = betterThan >= 0
+        ? [...mentionedCores].reverse().find(mention => mention.position < betterThan)?.core
+        : mentionedCores[mentionedCores.length - 1].core;
+      return Boolean(finalChoice && finalChoice !== core);
+    });
+    if (replacedByAnotherBeverage) return false;
+
+    const mention = latestMention
+      .split(/\s+y\s+|[,;]/i)
+      .reverse()
+      .find(part => this.normalizeSpanishLookup(part).includes(core)) || latestMention;
+    const normalizedMention = this.normalizeSpanishLookup(mention);
+    const selectedIsZero = /\bzero\b/.test(this.normalizeSpanishLookup(selected.name));
+    if (selectedIsZero !== /\b(?:zero|sin azucar)\b/.test(normalizedMention)) return false;
+
+    const variants = catalog.filter(item => this.isBeverageMenuItem(item) && this.beverageCore(item.name) === core);
+    const mentionedSize = this.beverageSizeInMl(mention);
+    const selectedSize = this.beverageSizeInMl(selected.name);
+    if (mentionedSize !== null && mentionedSize !== selectedSize) return false;
+    const mentionsGlass = /\bvidrio\b/.test(normalizedMention);
+    if (mentionsGlass && !/\bvidrio\b/i.test(selected.name)) return false;
+    if (variants.length <= 1) return true;
+
+    // Si hay varias presentaciones, la marca sola no define qué se cobra.
+    // Tamaño o empaque deben dejar una única variante posible.
+    if (mentionedSize === null && !mentionsGlass) return false;
+    const matchingVariants = variants.filter(item =>
+      (mentionedSize === null || this.beverageSizeInMl(item.name) === mentionedSize)
+      && (!mentionsGlass || /\bvidrio\b/i.test(item.name)),
+    );
+    return matchingVariants.length === 1 && matchingVariants[0].name === selected.name;
+  }
+
   private extractExplicitNeighborhood(messages: string[]): string | null {
     for (const message of [...messages].reverse()) {
       const match = message.match(/\bbarrio\s*[:\-]?\s+([^,\n.;]+)/i);
@@ -3495,6 +3580,109 @@ The Villa Dog • Montería`;
     }
   }
 
+  private buildGeminiAssistantPrompt(context: {
+    customInstructionsBlock: string;
+    recentOrdersSummary: string;
+    menuSummary: string;
+    restaurantHours: string | null;
+    zonesSummary: string;
+    menuGeneralRule: string;
+    dynamicCategoriesString: string;
+    menuCategoryRule: string;
+    menuFollowupRule: string;
+    session: { customerName?: string | null };
+    paymentInstruction: string;
+    conversationPrompt: string;
+  }): string {
+    const {
+      customInstructionsBlock, recentOrdersSummary, menuSummary, restaurantHours,
+      zonesSummary, menuGeneralRule, dynamicCategoriesString, menuCategoryRule,
+      menuFollowupRule, session, paymentInstruction, conversationPrompt,
+    } = context;
+    return `
+Eres la persona encargada de atender de forma directa el WhatsApp del restaurante "The Villa Dog" en Montería, Colombia. Habla con un tono humano, cercano, natural y muy sencillo. Evita a toda costa sonar como un robot, una máquina de soporte técnico o un asistente de inteligencia artificial genérico. Habla como un asesor amable del restaurante.
+${customInstructionsBlock}
+
+PAUTAS DE ESTILO OBLIGATORIAS:
+- TEXTO CORTO Y DIRECTO: Mantén tus respuestas en un máximo de 1 o 2 párrafos muy breves. Al cliente no le gusta leer bloques de texto largos. (EXCEPCIÓN: Cuando el cliente pida los precios de una categoría de comida, SÍ puedes y DEBES enviar la lista completa de todos los productos y precios de esa categoría en el chat).
+- CERO EMOJIS: NUNCA USES EMOJIS. Responde únicamente con texto plano y puntuación estándar. Absolutamente PROHIBIDO enviar emojis. No uses caritas ni símbolos, solo texto normal.
+- NATURALIDAD: Responde con frases frescas y sencillas (ej: "Hola, ¿cómo estás?", "¡Hola! Claro que sí, con gusto", "¡Excelente elección!").
+- ATENCIÓN A PEDIDOS PREVIOS O CANCELADOS: Si el cliente pregunta qué tenía su pedido anterior o pide repetir un pedido cancelado o anterior, REVISA el Historial de Pedidos Recientes de este cliente detallado abajo y respóndele exactamente con la lista de productos y cantidades de ese pedido.
+
+Historial de Pedidos Recientes de este Cliente:
+${recentOrdersSummary}
+
+Menú del restaurante:
+${menuSummary}
+
+Horario configurado por el restaurante:
+${restaurantHours || 'Horario por confirmar con un asesor.'}
+
+Cobertura y tarifas de domicilios según el barrio en Montería:
+${zonesSummary}
+
+    Reglas críticas de interacción:
+    1. SI EL CLIENTE PIDE "EL MENÚ" O "LA CARTA" EN GENERAL:
+       ${menuGeneralRule}
+       Responde con un formato claro y organizado, usando líneas separadas por categoría.
+
+${dynamicCategoriesString}
+
+¿Te gustaría que te detalle los precios de alguna categoría en específico o ya sabes qué quieres pedir? ¡Dime y lo armamos de una!
+
+    2. SI EL CLIENTE PIDE VER UNA CATEGORÍA COMPLETA (Pizzas, Perros, Hamburguesas, Salchipapas, Suizos, Asados, Patacones, Bebidas):
+       ${menuCategoryRule}
+
+    3. SI EL CLIENTE PREGUNTA QUÉ LE RECOMIENDAS O PIDE SUGERENCIA DEL MENÚ:
+       ¡ABSOLUTAMENTE PROHIBIDO ENVIAR TEXTO DE CORRIDO NI LA LISTA COMPLETA DE CATEGORÍAS! DEBES presentar 2 o 3 opciones estrellas organizadas OBLIGATORIAMENTE EN PUNTOS DESGLOSADOS (BULLET POINTS) CON LÍNEAS SEPARADAS.
+       Formato obligatorio:
+       "¡Hola! Claro que sí, con mucho gusto te sugiero nuestras especialidades más recomendadas:
+
+- Salchipapa Especial: Porción súper generosa con carnes seleccionadas y abundante queso fundido.
+- Pizza de la Casa: Masa artesanal horneada con el toque crujiente perfecto e ingredientes frescos.
+- Suizo Gratinado: ¡El preferido de la casa que nunca falla!
+
+¿Cuál de estos se te antoja probar hoy?"
+
+    4. REGLA FUNDAMENTAL DE CERO REPETICIÓN DEL MENÚ DIGITAL:
+       ${menuFollowupRule} (ej: "¿Qué ingredientes trae el suizo?", "Y con papas a la francesa?", "¿Cuántos gramos trae?", "¿Tienen Coca Cola?")
+       - En todas las preguntas de aclaración, ingredientes, gramos o seguimiento, RESPONDE ÚNICAMENTE LA RESPUESTA DIRECTA A LA INQUIETUD DEL CLIENTE DE FORMA CORDIAL Y CORTA. NO agregues el enlace del menú digital al final de cada mensaje.
+
+    5. TIEMPO DE ESPERA, TARIFAS Y TOTALES:
+       - NUNCA inventes ni calcules por tu cuenta un tiempo, una tarifa de domicilio o el total final del pedido.
+       - No tienes una estimación validada de cocina ni transporte. Si el cliente pregunta por demora, indica que un asesor la confirmará.
+       - Los precios solo pueden salir del menú vigente incluido arriba.
+       - La tarifa solo puede mencionarse cuando el barrio coincide claramente con una zona oficial. El total definitivo lo confirma el sistema o un asesor.
+
+    5A. BEBIDAS Y PRESENTACIONES:
+       - Usa únicamente el nombre exacto de las bebidas del menú vigente. No cambies una marca, sabor, tamaño o empaque por otro parecido.
+       - Si el cliente dice solo “gaseosa”, “jugo”, “agua”, “manzana” o una marca con varias presentaciones, pregunta cuál presentación quiere antes de resumirla como producto confirmado.
+       - Si cambia una bebida, confirma la última elección y no mantengas en el resumen la bebida anterior.
+
+    5B. RESUMEN DEL PEDIDO:
+       - Agrupa cantidades iguales como “Perro Sencillo x2”; no enumeres el mismo producto dos veces si tienen la misma preparación.
+       - Conserva las notas de preparación por producto, como “sin salsa”, “sin cebolla” o “con más queso”. No confundas estas notas con otro producto.
+       - Si dos unidades llevan preparaciones distintas, distingue claramente cuál nota corresponde a cada una.
+
+    6. MANEJO DE DATOS Y TOMAR PEDIDOS (REGLAS DE ORO):
+       - NOMBRE DEL CLIENTE: El nombre registrado de la persona es "${session.customerName || 'No especificado aún'}". Si ya conoces su nombre (por ejemplo, "${session.customerName || ''}" o si viene en el texto como "Nombre: Juan Martinez"), ESTÁ ABSOLUTAMENTE PROHIBIDO VOLVER A PREGUNTAR SU NOMBRE. Llámalo por su nombre directamente (ej: "¡Hola Juan!").
+       - CUENTAS DE TRANSFERENCIA: ${paymentInstruction}
+       - PREGUNTA ÚNICA: No pidas los datos uno por uno. Después de conocer productos y tipo de entrega, solicita EN UN SOLO MENSAJE todos los datos que falten.
+       - PEDIDO PARA PASAR A RECOGER (PICKUP): Nunca preguntes barrio ni dirección. Pide únicamente el método de pago si todavía falta.
+       - PEDIDO A DOMICILIO: Solicita juntos el barrio, la dirección exacta y el método de pago. Ejemplo: "Listo. Envíame en un solo mensaje tu barrio, dirección exacta y si pagas en efectivo o transferencia."
+       - Si el cliente ya entregó uno o dos datos, pregunta solamente por todos los que falten, juntos y en una respuesta corta.
+       - TARIFA DE DOMICILIO - REGLA CRÍTICA ABSOLUTA: La lista de barrios y tarifas que tienes disponible arriba es la lista OFICIAL. Si el barrio del cliente NO APARECE en esa lista oficial, o si no tiene precio asignado, ESTÁ ABSOLUTAMENTE PROHIBIDO DECIR QUE EL DOMICILIO ES "GRATIS", "$0" O INVENTAR UN VALOR. Jamás digas que un domicilio es gratis. En esos casos, DEBES responder exactamente: "Perfecto. El valor del domicilio a tu barrio será verificado y confirmado directamente por nuestro asesor al procesar tu pedido." e incluir [TRANSFERIR_ASESOR].
+
+    7. FINALIZACIÓN Y TRANSFERENCIA:
+       Si el cliente ya entregó los productos y todos los datos necesarios (o si recoge y ya dio el método de pago), responde que un asesor revisará y confirmará el resumen e incluye [TRANSFERIR_ASESOR]. Nunca afirmes que el pedido ya fue creado porque se crea desde el panel.
+
+Historial de la conversación reciente:
+${conversationPrompt}
+
+Restaurante (Tú):
+`;
+  }
+
   private async handleGeminiChatbot(session: any, userText: string, apiKeys: string[]) {
     try {
       const cleanPhone = (session.phone.startsWith('57') && session.phone.length === 12)
@@ -3605,78 +3793,11 @@ The Villa Dog • Montería`;
           return `${m.direction === 'IN' ? 'Cliente' : 'Restaurante (Tú)'}: ${content}`;
         }).join('\n');
 
-        const systemPrompt = `
-Eres la persona encargada de atender de forma directa el WhatsApp del restaurante "The Villa Dog" en Montería, Colombia. Habla con un tono humano, cercano, natural y muy sencillo. Evita a toda costa sonar como un robot, una máquina de soporte técnico o un asistente de inteligencia artificial genérico. Habla como un asesor amable del restaurante.
-${customInstructionsBlock}
-
-PAUTAS DE ESTILO OBLIGATORIAS:
-- TEXTO CORTO Y DIRECTO: Mantén tus respuestas en un máximo de 1 o 2 párrafos muy breves. Al cliente no le gusta leer bloques de texto largos. (EXCEPCIÓN: Cuando el cliente pida los precios de una categoría de comida, SÍ puedes y DEBES enviar la lista completa de todos los productos y precios de esa categoría en el chat).
-- CERO EMOJIS: NUNCA USES EMOJIS. Responde únicamente con texto plano y puntuación estándar. Absolutamente PROHIBIDO enviar emojis. No uses caritas ni símbolos, solo texto normal.
-- NATURALIDAD: Responde con frases frescas y sencillas (ej: "Hola, ¿cómo estás?", "¡Hola! Claro que sí, con gusto", "¡Excelente elección!").
-- ATENCIÓN A PEDIDOS PREVIOS O CANCELADOS: Si el cliente pregunta qué tenía su pedido anterior o pide repetir un pedido cancelado o anterior, REVISA el Historial de Pedidos Recientes de este cliente detallado abajo y respóndele exactamente con la lista de productos y cantidades de ese pedido.
-
-Historial de Pedidos Recientes de este Cliente:
-${recentOrdersSummary}
-
-Menú del restaurante:
-${menuSummary}
-
-Horario configurado por el restaurante:
-${restaurantHours || 'Horario por confirmar con un asesor.'}
-
-Cobertura y tarifas de domicilios según el barrio en Montería:
-${zonesSummary}
-
-    Reglas críticas de interacción:
-    1. SI EL CLIENTE PIDE "EL MENÚ" O "LA CARTA" EN GENERAL:
-       ${menuGeneralRule}
-       Responde con un formato claro y organizado, usando líneas separadas por categoría.
-
-${dynamicCategoriesString}
-
-¿Te gustaría que te detalle los precios de alguna categoría en específico o ya sabes qué quieres pedir? ¡Dime y lo armamos de una!
-
-    2. SI EL CLIENTE PIDE VER UNA CATEGORÍA COMPLETA (Pizzas, Perros, Hamburguesas, Salchipapas, Suizos, Asados, Patacones, Bebidas):
-       ${menuCategoryRule}
-
-    3. SI EL CLIENTE PREGUNTA QUÉ LE RECOMIENDAS O PIDE SUGERENCIA DEL MENÚ:
-       ¡ABSOLUTAMENTE PROHIBIDO ENVIAR TEXTO DE CORRIDO NI LA LISTA COMPLETA DE CATEGORÍAS! DEBES presentar 2 o 3 opciones estrellas organizadas OBLIGATORIAMENTE EN PUNTOS DESGLOSADOS (BULLET POINTS) CON LÍNEAS SEPARADAS.
-       Formato obligatorio:
-       "¡Hola! Claro que sí, con mucho gusto te sugiero nuestras especialidades más recomendadas:
-
-- Salchipapa Especial: Porción súper generosa con carnes seleccionadas y abundante queso fundido.
-- Pizza de la Casa: Masa artesanal horneada con el toque crujiente perfecto e ingredientes frescos.
-- Suizo Gratinado: ¡El preferido de la casa que nunca falla!
-
-¿Cuál de estos se te antoja probar hoy?"
-
-    4. REGLA FUNDAMENTAL DE CERO REPETICIÓN DEL MENÚ DIGITAL:
-       ${menuFollowupRule} (ej: "¿Qué ingredientes trae el suizo?", "Y con papas a la francesa?", "¿Cuántos gramos trae?", "¿Tienen Coca Cola?")
-       - En todas las preguntas de aclaración, ingredientes, gramos o seguimiento, RESPONDE ÚNICAMENTE LA RESPUESTA DIRECTA A LA INQUIETUD DEL CLIENTE DE FORMA CORDIAL Y CORTA. NO agregues el enlace del menú digital al final de cada mensaje.
-
-    5. TIEMPO DE ESPERA, TARIFAS Y TOTALES:
-       - NUNCA inventes ni calcules por tu cuenta un tiempo, una tarifa de domicilio o el total final del pedido.
-       - No tienes una estimación validada de cocina ni transporte. Si el cliente pregunta por demora, indica que un asesor la confirmará.
-       - Los precios solo pueden salir del menú vigente incluido arriba.
-       - La tarifa solo puede mencionarse cuando el barrio coincide claramente con una zona oficial. El total definitivo lo confirma el sistema o un asesor.
-
-    6. MANEJO DE DATOS Y TOMAR PEDIDOS (REGLAS DE ORO):
-       - NOMBRE DEL CLIENTE: El nombre registrado de la persona es "${session.customerName || 'No especificado aún'}". Si ya conoces su nombre (por ejemplo, "${session.customerName || ''}" o si viene en el texto como "Nombre: Juan Martinez"), ESTÁ ABSOLUTAMENTE PROHIBIDO VOLVER A PREGUNTAR SU NOMBRE. Llámalo por su nombre directamente (ej: "¡Hola Juan!").
-       - CUENTAS DE TRANSFERENCIA: ${paymentInstruction}
-       - PREGUNTA ÚNICA: No pidas los datos uno por uno. Después de conocer productos y tipo de entrega, solicita EN UN SOLO MENSAJE todos los datos que falten.
-       - PEDIDO PARA PASAR A RECOGER (PICKUP): Nunca preguntes barrio ni dirección. Pide únicamente el método de pago si todavía falta.
-       - PEDIDO A DOMICILIO: Solicita juntos el barrio, la dirección exacta y el método de pago. Ejemplo: "Listo. Envíame en un solo mensaje tu barrio, dirección exacta y si pagas en efectivo o transferencia."
-       - Si el cliente ya entregó uno o dos datos, pregunta solamente por todos los que falten, juntos y en una respuesta corta.
-       - TARIFA DE DOMICILIO - REGLA CRÍTICA ABSOLUTA: La lista de barrios y tarifas que tienes disponible arriba es la lista OFICIAL. Si el barrio del cliente NO APARECE en esa lista oficial, o si no tiene precio asignado, ESTÁ ABSOLUTAMENTE PROHIBIDO DECIR QUE EL DOMICILIO ES "GRATIS", "$0" O INVENTAR UN VALOR. Jamás digas que un domicilio es gratis. En esos casos, DEBES responder exactamente: "Perfecto. El valor del domicilio a tu barrio será verificado y confirmado directamente por nuestro asesor al procesar tu pedido." e incluir [TRANSFERIR_ASESOR].
-
-    7. FINALIZACIÓN Y TRANSFERENCIA:
-       Si el cliente ya entregó los productos y todos los datos necesarios (o si recoge y ya dio el método de pago), responde que un asesor revisará y confirmará el resumen e incluye [TRANSFERIR_ASESOR]. Nunca afirmes que el pedido ya fue creado porque se crea desde el panel.
-
-Historial de la conversación reciente:
-${conversationPrompt}
-
-Restaurante (Tú):
-`;
+        const systemPrompt = this.buildGeminiAssistantPrompt({
+          customInstructionsBlock, recentOrdersSummary, menuSummary, restaurantHours,
+          zonesSummary, menuGeneralRule, dynamicCategoriesString, menuCategoryRule,
+          menuFollowupRule, session, paymentInstruction, conversationPrompt,
+        });
 
       let lastError = null;
       let data = null;
@@ -4678,6 +4799,200 @@ Restaurante (Tú):
     };
   }
 
+  /**
+   * Runs a conversation against Gemini without touching WhatsApp, sessions,
+   * orders or messages. The superadmin uses this endpoint as a training
+   * sandbox before enabling the production chatbot.
+   */
+  async testGeminiChat(
+    rawMessages?: unknown,
+    key?: string,
+    model?: string,
+    instructionsOverride?: string,
+  ) {
+    if (!Array.isArray(rawMessages)) {
+      throw new BadRequestException('Envía al menos un mensaje para la prueba');
+    }
+    if (rawMessages.length > 20) {
+      throw new BadRequestException('La prueba admite hasta 20 mensajes por conversación');
+    }
+    if (rawMessages.some((entry: any) => entry?.role !== 'user' && entry?.role !== 'model')) {
+      throw new BadRequestException('Los mensajes de prueba deben ser del cliente o del modelo');
+    }
+
+    const messages = rawMessages
+      .map((entry: any) => ({
+        role: entry?.role === 'model' ? 'model' : 'user',
+        text: String(entry?.text || '').trim(),
+      }))
+      .filter((entry: { text: string }) => Boolean(entry.text));
+
+    if (messages.length === 0) {
+      throw new BadRequestException('Escribe un mensaje para iniciar la prueba');
+    }
+    if (messages[0].role !== 'user' || messages[messages.length - 1].role !== 'user') {
+      throw new BadRequestException('La conversación debe comenzar y terminar con un mensaje del cliente');
+    }
+    if (messages.some((entry: { role: string }, index: number) => entry.role !== (index % 2 === 0 ? 'user' : 'model'))) {
+      throw new BadRequestException('Los turnos del cliente y del modelo deben alternarse');
+    }
+    if (messages.some((entry: { text: string }) => entry.text.length > 2000)) {
+      throw new BadRequestException('Cada mensaje de prueba puede tener máximo 2.000 caracteres');
+    }
+    const totalCharacters = messages.reduce((total: number, entry: { text: string }) => total + entry.text.length, 0);
+    if (totalCharacters > 12000) {
+      throw new BadRequestException('La conversación de prueba es demasiado larga');
+    }
+
+    const existingSetting = await this.prisma.appSetting.findUnique({ where: { key: 'gemini_api_key' } });
+    const existingKeys = (existingSetting?.value || '').split(',').map(k => k.trim()).filter(Boolean);
+    const suppliedKeys = typeof key === 'string' ? key.split(',').map(k => k.trim()).filter(Boolean) : [];
+    const apiKeys = suppliedKeys.length > 0
+      ? this.resolveGeminiKeys(suppliedKeys, existingKeys)
+      : existingKeys;
+
+    if (apiKeys.length === 0) {
+      return {
+        success: false,
+        message: 'No hay ninguna llave API de Gemini disponible para la prueba.',
+      };
+    }
+    if (apiKeys.length > 10) {
+      throw new BadRequestException('Puedes usar máximo 10 llaves en la prueba');
+    }
+
+    const [dbItems, dbZones, configuredMenuUrl, restaurantHours, configuredInstructions, paymentQrMode, paymentAccountText] = await Promise.all([
+      this.prisma.menuItem.findMany({
+        where: { active: true },
+        include: { category: { select: { name: true } } },
+        orderBy: [{ category: { name: 'asc' } }, { price: 'asc' }],
+      }),
+      this.prisma.deliveryZone.findMany({
+        where: { active: true },
+        orderBy: { name: 'asc' },
+      }),
+      this.getSetting('digital_menu_url'),
+      this.getSetting('restaurant_hours'),
+      this.getSetting('chatbot_ai_instructions'),
+      this.getSetting('chatbot_payment_qr_mode'),
+      this.getSetting('chatbot_payment_account_text'),
+    ]);
+
+    const itemsByCategory: Record<string, string[]> = {};
+    for (const item of dbItems) {
+      const category = item.category?.name || 'General';
+      if (!itemsByCategory[category]) itemsByCategory[category] = [];
+      const description = item.description ? ` (${item.description})` : '';
+      itemsByCategory[category].push(`- ${item.name}: $${Number(item.price).toLocaleString('de-DE')}${description}`);
+    }
+    const menuSummary = Object.entries(itemsByCategory)
+      .map(([category, items]) => `*${category.toUpperCase()}*\n${items.join('\n')}`)
+      .join('\n\n') || 'No hay productos activos cargados todavía.';
+    const zonesSummary = dbZones.map(zone => `- ${zone.name}: $${Number(zone.rate).toLocaleString('de-DE')}`).join('\n');
+    const instructions = String(instructionsOverride ?? configuredInstructions ?? '').trim().slice(0, 4000);
+    const customInstructionsBlock = instructions
+      ? `\nINSTRUCCIONES ADICIONALES CONFIGURADAS POR ADMINISTRACIÓN:\n${instructions}\n`
+      : '';
+    const paymentInstruction = paymentQrMode === 'IMAGE'
+      ? 'El cobro por transferencia se comparte mediante el QR oficial. No inventes números de cuenta; indica que el asesor enviará el QR cuando corresponda.'
+      : paymentAccountText
+        ? `Los únicos datos oficiales para transferencias son:\n${paymentAccountText}`
+        : 'No hay datos de transferencia configurados. No inventes cuentas ni teléfonos; transfiere la conversación a un asesor para confirmar el pago.';
+    const displayMenuUrl = this.getShareableDigitalMenuUrl(configuredMenuUrl);
+    const menuGeneralRule = displayMenuUrl
+      ? `Muestra la lista limpia de categorías principales y al final incluye el enlace digital: ${displayMenuUrl}.`
+      : 'Muestra la lista limpia de categorías principales en el chat. Todavía no hay un enlace público configurado; no inventes ni incluyas ninguna URL.';
+    const menuCategoryRule = displayMenuUrl
+      ? `Muestra la lista de platos con sus precios correspondientes a esa categoría. Al final puedes incluir la carta digital: ${displayMenuUrl}.`
+      : 'Muestra la lista de platos con sus precios correspondientes a esa categoría. No incluyas enlaces hasta que administración configure el dominio público.';
+    const menuFollowupRule = displayMenuUrl
+      ? `- PROHIBIDO REPETIR EL ENLACE AL MENÚ DIGITAL ("${displayMenuUrl}") en preguntas de seguimiento o dudas específicas.`
+      : '- No inventes enlaces ni menciones una carta digital que todavía no tiene dominio configurado.';
+    const cleanCategories = new Set<string>();
+    Object.keys(itemsByCategory).forEach(category => {
+      const cleaned = category
+        .replace(/\s+c\/.*/i, '')
+        .replace(/\s+(Familiar|Junior|Personal|Especialidades|Clásicas|Gratinadas|Gratinados|Rellenos)$/i, '')
+        .replace(/\s+para\s+Pizza.*/i, '')
+        .trim();
+      if (cleaned) cleanCategories.add(cleaned);
+    });
+    const dynamicCategoriesString = Array.from(cleanCategories)
+      .sort((left, right) => left.localeCompare(right, 'es'))
+      .map(category => `- *${category}*`)
+      .join('\n');
+    const conversationPrompt = messages.map((entry: { role: 'user' | 'model'; text: string }) =>
+      `${entry.role === 'user' ? 'Cliente' : 'Restaurante (Tú)'}: ${entry.text.length > 1200 ? `${entry.text.slice(0, 500)}\n[Mensaje extenso ya enviado]` : entry.text}`,
+    ).join('\n');
+    const sandboxPrompt = this.buildGeminiAssistantPrompt({
+      customInstructionsBlock,
+      recentOrdersSummary: 'No hay pedidos previos registrados para este cliente.',
+      menuSummary, restaurantHours, zonesSummary, menuGeneralRule,
+      dynamicCategoriesString, menuCategoryRule, menuFollowupRule,
+      session: { customerName: '' }, paymentInstruction, conversationPrompt,
+    });
+    const modelsToTry = await this.getGeminiModels(model);
+    let lastError = 'El proveedor no devolvió una respuesta válida';
+
+    for (const apiKey of apiKeys) {
+      for (const candidateModel of modelsToTry) {
+        const startedAt = Date.now();
+        try {
+          const url = `https://generativelanguage.googleapis.com/v1beta/models/${candidateModel}:generateContent?key=${apiKey}`;
+          const response = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              contents: [{ parts: [{ text: sandboxPrompt }] }],
+              generationConfig: this.buildGeminiGenerationConfig(candidateModel, {
+                temperature: 0.3,
+                maxOutputTokens: 600,
+              }),
+            }),
+            signal: AbortSignal.timeout(15000),
+          });
+
+          if (!response.ok) {
+            const errorBody: any = await response.json().catch(() => null);
+            lastError = this.sanitizeGeminiError(
+              errorBody?.error?.message || `Gemini respondió HTTP ${response.status}`,
+              apiKeys,
+            );
+            // 403/429 significa que esta llave no puede atender ahora; pasa a
+            // la siguiente llave para conservar la continuidad del servicio.
+            if (response.status === 403 || response.status === 429) break;
+            continue;
+          }
+
+          const data: any = await response.json();
+          const reply = String(data?.candidates?.[0]?.content?.parts?.[0]?.text || '').trim();
+          if (!this.isMeaningfulGeminiReply(reply)) {
+            lastError = 'Gemini no devolvió texto para este mensaje';
+            continue;
+          }
+
+          await this.incrementGeminiUsage();
+          return {
+            success: true,
+            message: 'Respuesta generada en el entorno de prueba. No se envió nada por WhatsApp.',
+            reply: reply.slice(0, 3000),
+            model: candidateModel,
+            key: `••••${apiKey.slice(-4)}`,
+            latencyMs: Date.now() - startedAt,
+            requestsToday: await this.getGeminiUsageToday(),
+          };
+        } catch (error) {
+          lastError = this.sanitizeGeminiError(error, apiKeys);
+        }
+      }
+    }
+
+    return {
+      success: false,
+      message: `No se pudo generar la respuesta en el entorno de prueba: ${lastError}`,
+    };
+  }
+
   private buildGeminiOrderResponseSchema() {
     return {
       type: 'OBJECT',
@@ -4701,6 +5016,7 @@ Restaurante (Tú):
         detectedOrderType: { type: 'STRING', enum: ['delivery', 'pickup'], nullable: true },
         paymentMethod: { type: 'STRING', enum: ['CASH', 'TRANSFER'], nullable: true },
         independentNotes: { type: 'ARRAY', items: { type: 'STRING' } },
+        unresolvedBeverages: { type: 'ARRAY', items: { type: 'STRING' } },
         customerName: { type: 'STRING' },
         customerPhone: { type: 'STRING' },
         customerAddress: { type: 'STRING' },
@@ -4709,7 +5025,7 @@ Restaurante (Tú):
         zoneId: { type: 'STRING' },
       },
       required: [
-        'items', 'detectedOrderType', 'paymentMethod', 'independentNotes',
+        'items', 'detectedOrderType', 'paymentMethod', 'independentNotes', 'unresolvedBeverages',
         'customerName', 'customerPhone', 'customerAddress',
         'customerAddressReference', 'customerNeighborhood', 'zoneId',
       ],
@@ -4819,7 +5135,9 @@ REGLAS DE RECONOCIMIENTO Y RELACIÓN DE PRODUCTOS (THE VILLA DOG):
   * Si el cliente dice "un suizo", "suizo al plato", "suizo con papas", "suizo gratinado", "mini suizo", asigna al plato correspondiente de la categoría Suizos (con papas a la francesa por defecto salvo que diga al vapor).
 - BEBIDAS:
   * "coca cola", "postobon manzana", "kola roman", "quatro", "jugo hit", "agua", "hatsu", "bretaña".
-  * Si no menciona tamaño familiar (1.5L o 3L), asume la presentación personal PET 400ml / 500ml.
+  * Elige solo la bebida exacta del catálogo, con su marca, sabor, tamaño y empaque. No supongas 400/500 ml ni ninguna presentación por defecto.
+  * Si falta tamaño o empaque y hay más de una variante posible, no agregues bebida al carrito: escribe el nombre mencionado en "unresolvedBeverages" para que el asesor la aclare con el cliente.
+  * Si el cliente cambió de bebida, conserva solo su última elección confirmada.
 - ADICIONES:
   * Si el cliente pide queso extra, tocineta extra, salchicha extra, piña extra, etc., busca y asigna el ID exacto en "additions".
 - INSTRUCCIONES DE PREPARACIÓN Y NOTAS ("notes"):
@@ -4853,6 +5171,7 @@ Devuelve exactamente este JSON:
   "detectedOrderType": "delivery"|"pickup"|null,
   "paymentMethod": "CASH"|"TRANSFER"|null,
   "independentNotes": [],
+  "unresolvedBeverages": [],
   "customerName": "",
   "customerPhone": "",
   "customerAddress": "",
@@ -4949,6 +5268,7 @@ Responde solo con JSON válido.`;
       const rawItems = Array.isArray(rawJson?.items) ? rawJson.items : [];
       this.logger.log(`[parseOrder] Gemini devolvió JSON con ${rawItems.length} items`);
       const parsedCartItems: any[] = [];
+      const unresolvedBeverages: string[] = [];
 
       for (const rawItem of rawItems) {
         if (!rawItem || typeof rawItem !== 'object') continue;
@@ -4978,13 +5298,19 @@ Responde solo con JSON válido.`;
                   return normItem.includes(normalizedRawId) || normalizedRawId.includes(normItem);
                 })
               : undefined;
-            if (fuzzyMatch) {
+            if (fuzzyMatch && !this.isBeverageMenuItem(fuzzyMatch)) {
               this.logger.log(`[parseOrder] Encontrado por coincidencia aproximada: ${fuzzyMatch.name} (id=${fuzzyMatch.id})`);
               menuItem = fuzzyMatch;
             } else {
+              if (fuzzyMatch && this.isBeverageMenuItem(fuzzyMatch)) unresolvedBeverages.push(fuzzyMatch.name);
               continue;
             }
           }
+        }
+        if (!this.isBeverageSelectionUnambiguous(menuItem, dbItems, text)) {
+          this.logger.warn(`[parseOrder] Bebida sin presentación inequívoca: ${menuItem.name}`);
+          unresolvedBeverages.push(menuItem.name);
+          continue;
         }
         // CORRECCIÓN DETERMINÍSTICA DE TAMAÑO DE PIZZAS:
         // Si el producto seleccionado es una pizza no-personal (Familiar, Mediana, Extra Grande)
@@ -5205,6 +5531,12 @@ Responde solo con JSON válido.`;
 
       return {
         parsedCartItems,
+        unresolvedBeverages: Array.from(new Set([
+          ...unresolvedBeverages,
+          ...(Array.isArray(rawJson.unresolvedBeverages)
+            ? rawJson.unresolvedBeverages.filter((value: unknown) => typeof value === 'string').map((value: string) => value.trim().slice(0, 120)).filter(Boolean)
+            : []),
+        ])),
         detectedOrderType: rawJson.detectedOrderType === 'delivery' || rawJson.detectedOrderType === 'pickup'
           ? rawJson.detectedOrderType
           : null,

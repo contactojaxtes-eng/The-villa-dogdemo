@@ -611,4 +611,84 @@ describe('WhatsApp Gemini settings', () => {
     );
     fetchSpy.mockRestore();
   });
+
+  it('keeps ambiguous beverages out of an automatically reconstructed order', () => {
+    const service = createService();
+    const catalog = [
+      { name: 'Coca Cola Vidrio 250 ml', category: { name: 'Gaseosas y Bebidas' } },
+      { name: 'Coca Cola 400 ml', category: { name: 'Gaseosas y Bebidas' } },
+      { name: 'Coca Cola Zero 400 ml', category: { name: 'Gaseosas y Bebidas' } },
+      { name: 'Pepsi 400 ml', category: { name: 'Gaseosas y Bebidas' } },
+      { name: 'Manzana Postobón 400 ml', category: { name: 'Gaseosas y Bebidas' } },
+      { name: 'Manzana Postobón 1.5 L', category: { name: 'Gaseosas y Bebidas' } },
+    ];
+    const accept = (name: string, chat: string) => (service as any).isBeverageSelectionUnambiguous(
+      catalog.find(item => item.name === name), catalog, chat,
+    );
+
+    expect(accept('Coca Cola 400 ml', 'Cliente: Dame una Coca Cola')).toBe(false);
+    expect(accept('Coca Cola 400 ml', 'Cliente: Dame una Coca Cola 400 ml')).toBe(true);
+    expect(accept('Coca Cola Vidrio 250 ml', 'Cliente: Dame una Coca Cola de vidrio')).toBe(true);
+    expect(accept('Coca Cola Zero 400 ml', 'Cliente: Dame una Coca Cola 400 ml')).toBe(false);
+    expect(accept('Manzana Postobón 1.5 L', 'Cliente: Dame una manzana 1.5 L')).toBe(true);
+    expect(accept('Manzana Postobón 400 ml', 'Cliente: Dame una manzana 1.5 L')).toBe(false);
+    expect(accept('Coca Cola 400 ml', 'Cliente: Dame una Coca Cola 400 ml\nCliente: Mejor cámbiala por Pepsi 400 ml')).toBe(false);
+    expect(accept('Pepsi 400 ml', 'Cliente: Dame una Coca Cola 400 ml\nCliente: Mejor cámbiala por Pepsi 400 ml')).toBe(true);
+    expect(accept('Coca Cola 400 ml', 'Cliente: Cambia la Coca Cola 400 ml por Pepsi 400 ml')).toBe(false);
+    expect(accept('Pepsi 400 ml', 'Cliente: Cambia la Coca Cola 400 ml por Pepsi 400 ml')).toBe(true);
+    expect(accept('Coca Cola 400 ml', 'Cliente: Dame una Coca Cola 400 ml y una Pepsi 400 ml')).toBe(true);
+    expect(accept('Pepsi 400 ml', 'Cliente: Dame una Coca Cola 400 ml y una Pepsi 400 ml')).toBe(true);
+    expect(accept('Coca Cola 400 ml', 'Cliente: Dame una Coca Cola 400 ml\nCliente: Sí, para domicilio')).toBe(true);
+  });
+
+  it('tests a multi-turn chat with the current menu without sending a WhatsApp message', async () => {
+    const apiKey = 'test-secret-key-AB12';
+    const prisma: any = {
+      appSetting: {
+        findUnique: jest.fn().mockImplementation(({ where }: any) => {
+          if (where.key === 'gemini_api_key') return { value: apiKey };
+          if (where.key === 'gemini_model') return { value: 'gemini-2.5-flash-lite' };
+          return null;
+        }),
+      },
+      menuItem: { findMany: jest.fn().mockResolvedValue([
+        { name: 'Coca Cola 400 ml', price: 4000, description: null, category: { name: 'Gaseosas y Bebidas' } },
+        { name: 'Coca Cola Vidrio 250 ml', price: 2500, description: null, category: { name: 'Gaseosas y Bebidas' } },
+      ]) },
+      deliveryZone: { findMany: jest.fn().mockResolvedValue([]) },
+    };
+    const service = new WhatsappService(prisma, { get: jest.fn() } as any, { emitWhatsApp: jest.fn() } as any);
+    jest.spyOn(service as any, 'getSetting').mockResolvedValue(null);
+    jest.spyOn(service as any, 'getGeminiModels').mockResolvedValue(['gemini-2.5-flash-lite']);
+    jest.spyOn(service as any, 'incrementGeminiUsage').mockResolvedValue(undefined);
+    jest.spyOn(service as any, 'getGeminiUsageToday').mockResolvedValue(1);
+    const sendSpy = jest.spyOn(service, 'sendMessage');
+    const fetchSpy = jest.spyOn(global, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => ({ candidates: [{ content: { parts: [{ text: 'Tenemos Coca Cola de 250 ml en vidrio y de 400 ml. ¿Cuál quieres?' }] } }] }),
+    } as any);
+
+    try {
+      const result = await service.testGeminiChat([
+        { role: 'user', text: 'Quiero una Coca Cola' },
+        { role: 'model', text: '¿Cuál presentación quieres?' },
+        { role: 'user', text: '¿Cuáles tienen?' },
+      ], '••••AB12', 'gemini-2.5-flash-lite', 'Responde breve.');
+
+      expect(result.success).toBe(true);
+      expect(result.reply).toContain('250 ml');
+      expect(sendSpy).not.toHaveBeenCalled();
+      const payload = JSON.parse((fetchSpy.mock.calls[0][1] as RequestInit).body as string);
+      expect(payload.contents).toHaveLength(1);
+      const prompt = payload.contents[0].parts[0].text;
+      expect(prompt).toContain('Coca Cola Vidrio 250 ml');
+      expect(prompt).toContain('Responde breve.');
+      expect(prompt).toContain('Cliente: Quiero una Coca Cola');
+      expect(prompt).toContain('Restaurante (Tú): ¿Cuál presentación quieres?');
+      expect(prompt).toContain('Cliente: ¿Cuáles tienen?');
+      expect(JSON.stringify(result)).not.toContain(apiKey);
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
 });

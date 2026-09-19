@@ -56,6 +56,15 @@ function ProtectedRoute({
   // Rutas generales no restringidas (ej. AppLayout principal)
   if (!allowedRoles && !requiredPermission) return <>{children}</>
 
+  // El portal operativo solo funciona con la identidad de un domiciliario.
+  // Si el administrador conservó el enlace, llévalo a su historial de repartidores.
+  if (allowedRoles?.length === 1 && allowedRoles[0] === 'DELIVERY_DRIVER') {
+    if (user?.role !== 'DELIVERY_DRIVER') {
+      return <Navigate to={user?.role === 'SUPERADMIN' ? '/drivers' : (getFirstAllowedPath(user) || '/profile')} replace />
+    }
+    return <>{children}</>
+  }
+
   // SuperAdmin tiene acceso a todo el sistema
   if (user?.role === 'SUPERADMIN') return <>{children}</>
 

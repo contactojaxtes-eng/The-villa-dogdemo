@@ -403,6 +403,19 @@ export class WhatsappController {
     return this.whatsappService.testGeminiConnection(body?.key, body?.prompt, body?.model);
   }
 
+  @Post('test-gemini-chat')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('SUPERADMIN')
+  @ApiOperation({ summary: 'Probar Gemini en un chat aislado sin enviar mensajes de WhatsApp' })
+  async testGeminiChat(@Body() body: {
+    key?: string;
+    model?: string;
+    instructions?: string;
+    messages?: Array<{ role?: string; text?: string }>;
+  }) {
+    return this.whatsappService.testGeminiChat(body?.messages, body?.key, body?.model, body?.instructions);
+  }
+
   @Post('gemini-models')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('SUPERADMIN')
