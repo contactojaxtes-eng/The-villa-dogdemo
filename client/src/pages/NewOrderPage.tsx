@@ -411,7 +411,6 @@ interface ParsedOrderResponse {
   zoneId?: string | null;
   paymentMethod?: 'CASH' | 'TRANSFER' | null;
   modelUsed?: string;
-  unresolvedBeverages?: string[];
 }
 
 function AdditionDropdown({
@@ -666,7 +665,6 @@ export default function NewOrderPage({
   const [parsingQuickText, setParsingQuickText] = useState(false)
   const [parsingChatOrder, setParsingChatOrder] = useState(false)
   const [orderReaderModel, setOrderReaderModel] = useState('')
-  const [orderReaderWarning, setOrderReaderWarning] = useState('')
   const [suggestedProducts, setSuggestedProducts] = useState<MenuItem[]>([])
   const [lastOrderItems, setLastOrderItems] = useState<any[]>([])
   const [lastOrderDate, setLastOrderDate] = useState<string>('')
@@ -1790,7 +1788,6 @@ export default function NewOrderPage({
       }
 
       setOrderReaderModel('')
-      setOrderReaderWarning('')
 
       setParsingChatOrder(true)
       Promise.all([
@@ -2220,10 +2217,6 @@ export default function NewOrderPage({
             .then(parsed => {
               if (parsed) {
                 if (parsed.modelUsed) setOrderReaderModel(parsed.modelUsed)
-                if (parsed.unresolvedBeverages?.length) {
-                  const mentioned = parsed.unresolvedBeverages.slice(0, 3).join(', ')
-                  setOrderReaderWarning(`Bebida por confirmar (${mentioned}). Revisa la presentación y el carrito con el cliente antes de cobrar.`)
-                }
                 // Solo llamar applyData si Gemini encontró productos reales
                 if (parsed.parsedCartItems && parsed.parsedCartItems.length > 0) {
                   applyData(parsed, 'remote')
@@ -3535,12 +3528,6 @@ export default function NewOrderPage({
             <div className="flex items-center gap-2 rounded-xl border border-blue-500/25 bg-blue-500/5 px-3 py-2 text-xs text-blue-600">
               <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
               <span className="font-semibold">Completando datos desde el chat…</span>
-            </div>
-          )}
-          {orderReaderWarning && (
-            <div className="flex items-start gap-2 rounded-xl border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
-              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-              <span className="font-semibold">{orderReaderWarning}</span>
             </div>
           )}
 
