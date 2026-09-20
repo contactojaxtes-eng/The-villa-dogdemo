@@ -4,6 +4,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard, Roles } from '../auth/guards/roles.guard';
 import { AuthService } from '../auth/auth.service';
 import { SuperadminService } from './superadmin.service';
+import { TrafficService } from '../traffic/traffic.service';
 
 @ApiTags('SuperAdmin')
 @ApiBearerAuth()
@@ -14,12 +15,22 @@ export class SuperadminController {
   constructor(
     private superadminService: SuperadminService,
     private authService: AuthService,
+    private trafficService: TrafficService,
   ) {}
 
   @Get('overview')
   @ApiOperation({ summary: 'Panorama general del sistema (solo SuperAdmin)' })
   getOverview() {
     return this.superadminService.getOverview();
+  }
+
+  @Get('traffic')
+  @ApiOperation({ summary: 'Tráfico HTTP agregado por ruta durante los últimos siete días UTC' })
+  async getTraffic() {
+    return {
+      ...await this.trafficService.getLastSevenDays(),
+      connections: this.superadminService.getConnectionCounts(),
+    };
   }
 
   @Post('impersonate/:userId')

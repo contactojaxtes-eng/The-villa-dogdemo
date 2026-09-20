@@ -17,6 +17,10 @@ export class SuperadminService {
     private socketGateway: SocketGateway,
   ) {}
 
+  getConnectionCounts() {
+    return this.socketGateway.getConnectionCounts();
+  }
+
   async broadcastRefresh(actor: { id: string; name: string; role: string }) {
     const result = this.socketGateway.emitForceRefresh({
       triggeredBy: actor.id,

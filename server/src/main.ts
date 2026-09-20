@@ -6,6 +6,7 @@ import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import { AppModule } from './app.module';
 import { AllExceptionsFilter } from './common/all-exceptions.filter';
 import { PrismaService } from './prisma/prisma.service';
+import { TrafficService } from './traffic/traffic.service';
 import { contentSecurityPolicyDirectives } from './common/security-headers';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
@@ -38,6 +39,13 @@ async function bootstrap() {
   if (typeof instance.set === 'function') {
     instance.set('trust proxy', 1);
   }
+
+  // Cheap response-only aggregation. Never inspect request bodies, URL parameters or user data.
+  const trafficService = app.get(TrafficService);
+  instance.use((req: any, res: any, next: any) => {
+    trafficService.observe(req, res);
+    next();
+  });
 
   // Middleware para enrutar cualquier variante de URL del puente local a /api/imprimir/cola
   instance.use((req: any, res: any, next: any) => {

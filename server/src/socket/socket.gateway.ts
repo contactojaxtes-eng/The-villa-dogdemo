@@ -16,6 +16,12 @@ export class SocketGateway implements OnGatewayConnection, OnGatewayDisconnect, 
 
   constructor(private jwt: JwtService, private prisma: PrismaService) {}
 
+  getConnectionCounts() {
+    let sockets = 0;
+    for (const ids of this.connectedUsers.values()) sockets += ids.size;
+    return { users: this.connectedUsers.size, sockets };
+  }
+
   private hasPermission(user: any, permission: string) {
     if (user?.role === 'SUPERADMIN') return true;
     let permissions = user?.permissions;
