@@ -1,5 +1,6 @@
 import { Injectable, Logger, BadRequestException, ConflictException, ForbiddenException, NotFoundException, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { randomUUID } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { SocketGateway } from '../socket/socket.gateway';
 import { buildMessagingMenuText } from '../menu/menu-text';
@@ -231,7 +232,10 @@ export class WhatsappService implements OnModuleInit {
         menuText = '📋 *MENÚ Y PRECIOS VILLA DOG*';
       }
     }
-    const geminiRequestsToday = await this.getGeminiUsageToday();
+    const [geminiRequestsToday, geminiUsageDaily] = await Promise.all([
+      this.getGeminiUsageToday(),
+      this.getGeminiUsageDaily(),
+    ]);
     const geminiKeyCount = (settings.find(s => s.key === 'gemini_api_key')?.value || '')
       .split(',')
       .map(key => key.trim())
@@ -256,6 +260,7 @@ export class WhatsappService implements OnModuleInit {
       geminiModel: map.gemini_model || 'gemini-3.5-flash-lite',
       aiInstructions: map.chatbot_ai_instructions || '',
       geminiRequestsToday,
+      geminiUsageDaily,
       // Mientras no exista un dominio público explícito, no mostramos ni
       // compartimos la URL interna de Railway como parte de la carta.
       digitalMenuUrl: this.getShareableDigitalMenuUrl(map.digital_menu_url) || '',
@@ -5873,26 +5878,48 @@ ${menuSummary}
     const today = new Date().toISOString().split('T')[0];
     const key = `gemini_usage_${today}`;
     try {
-      const current = await this.prisma.appSetting.findUnique({ where: { key } });
-      const newValue = current ? String(Number(current.value) + 1) : '1';
-      await this.prisma.appSetting.upsert({
-        where: { key },
-        create: { key, value: newValue },
-        update: { value: newValue }
-      });
-
-      const allUsageSettings = await this.prisma.appSetting.findMany({
-        where: {
-          key: { startsWith: 'gemini_usage_' }
-        }
-      });
-      for (const s of allUsageSettings) {
-        if (s.key !== key) {
-          await this.prisma.appSetting.delete({ where: { id: s.id } }).catch(() => {});
-        }
-      }
+      // Un único UPSERT evita perder incrementos cuando varias respuestas llegan a la vez.
+      // La clave de cada día permanece en la tabla para consultar el historial.
+      await this.prisma.$executeRaw`
+        INSERT INTO "app_settings" ("id", "key", "value", "updatedAt")
+        VALUES (${randomUUID()}, ${key}, '1', NOW())
+        ON CONFLICT ("key") DO UPDATE SET
+          "value" = ("app_settings"."value"::bigint + 1)::text,
+          "updatedAt" = NOW()
+      `;
     } catch (err) {
       this.logger.error('Error incrementando uso de Gemini:', err);
+    }
+  }
+
+  async getGeminiUsageDaily(days = 30): Promise<Array<{ date: string; success: number }>> {
+    const today = new Date();
+    const todayDate = today.toISOString().slice(0, 10);
+    const firstDay = new Date(Date.UTC(
+      today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate() - days + 1,
+    )).toISOString().slice(0, 10);
+    try {
+      const settings = await this.prisma.appSetting.findMany({
+        where: {
+          key: {
+            gte: `gemini_usage_${firstDay}`,
+            lte: `gemini_usage_${todayDate}`,
+          },
+        },
+        select: { key: true, value: true },
+        orderBy: { key: 'desc' },
+      });
+      const daily = settings.flatMap(({ key, value }) => {
+        if (!/^gemini_usage_\d{4}-\d{2}-\d{2}$/.test(key)) return [];
+        const success = Number(value);
+        if (!Number.isSafeInteger(success) || success < 0) return [];
+        return [{ date: key.slice('gemini_usage_'.length), success }];
+      });
+      if (daily[0]?.date !== todayDate) daily.unshift({ date: todayDate, success: 0 });
+      return daily;
+    } catch (err) {
+      this.logger.error('Error consultando historial de uso de Gemini:', err);
+      return [{ date: todayDate, success: 0 }];
     }
   }
 

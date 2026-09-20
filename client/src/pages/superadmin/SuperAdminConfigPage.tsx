@@ -49,6 +49,7 @@ interface WhatsappCoreConfig {
   geminiModel: string
   aiInstructions: string
   geminiRequestsToday: number
+  geminiUsageDaily?: Array<{ date: string; success: number }>
 }
 
 interface GeminiKeyResult {
@@ -265,9 +266,14 @@ export default function SuperAdminConfigPage() {
   const [loadingModelInfo, setLoadingModelInfo] = useState(false)
   const [modelInfoError, setModelInfoError] = useState('')
   const [savedGeminiModel, setSavedGeminiModel] = useState('gemini-2.5-flash-lite')
+  const [geminiUsageDaily, setGeminiUsageDaily] = useState<NonNullable<WhatsappCoreConfig['geminiUsageDaily']>>([])
+  const [usageHistoryExpanded, setUsageHistoryExpanded] = useState(false)
+  const [refreshingUsage, setRefreshingUsage] = useState(false)
+  const [usageHistoryError, setUsageHistoryError] = useState('')
 
   const setWhatsappResponse = (settings: WhatsappCoreConfig) => {
     setWa(settings)
+    setGeminiUsageDaily(settings.geminiUsageDaily ?? [])
     setSavedGeminiModel(settings.geminiModel)
     const keys = settings.geminiApiKey
       ? settings.geminiApiKey.split(',').map(key => key.trim()).filter(Boolean)
@@ -301,6 +307,29 @@ export default function SuperAdminConfigPage() {
     [modelInfo],
   )
   const geminiModelChanged = wa.geminiModel.trim() !== savedGeminiModel.trim()
+  const usageDaysShown = usageHistoryExpanded ? geminiUsageDaily : geminiUsageDaily.slice(0, 7)
+  const highestUsageDay = Math.max(1, ...geminiUsageDaily.map(day => day.success))
+  const utcToday = new Date().toISOString().slice(0, 10)
+
+  const updateUsageToday = (requestsToday: number) => {
+    setWa(current => ({ ...current, geminiRequestsToday: requestsToday }))
+    setGeminiUsageDaily(current => current.map(day => day.date === utcToday ? { ...day, success: requestsToday } : day))
+  }
+
+  const refreshUsage = async () => {
+    if (refreshingUsage) return
+    setRefreshingUsage(true)
+    setUsageHistoryError('')
+    try {
+      const settings = await api.get<WhatsappCoreConfig>('/whatsapp/settings')
+      setGeminiUsageDaily(settings.geminiUsageDaily ?? [])
+      setWa(current => ({ ...current, geminiRequestsToday: settings.geminiRequestsToday }))
+    } catch (error) {
+      setUsageHistoryError(getErrorMessage(error, 'No se pudo actualizar el historial.'))
+    } finally {
+      setRefreshingUsage(false)
+    }
+  }
 
   const updateKey = (index: number, value: string) => {
     setGeminiKeys(current => current.map((key, keyIndex) => keyIndex === index ? value : key))
@@ -373,7 +402,7 @@ export default function SuperAdminConfigPage() {
       })
       setTestResult(result)
       if (typeof result.requestsToday === 'number') {
-        setWa(current => ({ ...current, geminiRequestsToday: result.requestsToday || 0 }))
+        updateUsageToday(result.requestsToday)
       }
       if (result.success) alerts.success('La IA respondió correctamente')
     } catch (error) {
@@ -417,7 +446,7 @@ export default function SuperAdminConfigPage() {
         latencyMs: result.latencyMs,
       }])
       if (typeof result.requestsToday === 'number') {
-        setWa(current => ({ ...current, geminiRequestsToday: result.requestsToday || 0 }))
+        updateUsageToday(result.requestsToday)
       }
     } catch (error) {
       setSandboxMessages(sandboxMessages)
@@ -719,6 +748,34 @@ export default function SuperAdminConfigPage() {
               <div className="flex flex-wrap items-center justify-between gap-2"><div><p className="text-xs font-black text-[var(--text-primary)]">Comprobar llaves</p><p className="text-[11px] text-[var(--text-muted)]">Verifica cada llave por separado con una respuesta corta.</p></div><Button type="button" variant="outline" onClick={() => void testGemini()} disabled={testingGemini} className="h-9 rounded-xl text-xs font-bold">{testingGemini ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Server className="mr-2 h-4 w-4" />} Probar conexión</Button></div>
               {testResult && <div className={cn('mt-3 rounded-xl border p-3 text-xs', testResult.success ? 'border-emerald-500/25 bg-emerald-500/5' : 'border-red-500/25 bg-red-500/5')}><p className="font-bold text-[var(--text-primary)]">{testResult.message}</p>{testResult.results.map(result => <p key={result.key} className="mt-1 text-[var(--text-secondary)]">{result.key}: {result.ok ? `${result.model} · ${result.latencyMs} ms` : result.error}</p>)}</div>}
             </div>
+          </Card>
+          <Card className="min-w-0 rounded-2xl border-[var(--border-subtle)] bg-[var(--bg-panel)] p-4 shadow-sm sm:p-5 xl:col-span-2">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <SectionTitle icon={Activity} title="Historial de solicitudes a Gemini" description="Compara el consumo diario de todas las llaves configuradas sin activar el bot." />
+              <Button type="button" variant="outline" onClick={() => void refreshUsage()} disabled={refreshingUsage} className="h-9 rounded-xl text-xs font-bold">
+                <RefreshCw className={cn('mr-1.5 h-4 w-4', refreshingUsage && 'animate-spin')} /> Actualizar
+              </Button>
+            </div>
+            <p className="mt-3 text-[11px] leading-5 text-[var(--text-muted)]">Fechas en UTC: cada día cierra a las 7:00 p. m. de Colombia. Se conservó el conteo de hoy; los días anteriores sin registro no significan cero uso. No incluye el consumo de otras aplicaciones ni distingue cada proyecto de Google.</p>
+            {usageHistoryError && <p role="alert" className="mt-3 rounded-xl border border-red-500/20 bg-red-500/5 p-3 text-xs text-red-600">{usageHistoryError}</p>}
+            {usageDaysShown.length === 0 ? (
+              <p className="mt-4 rounded-xl bg-[var(--bg-elevated)] p-4 text-xs text-[var(--text-muted)]">El historial estará disponible al actualizar el servidor. El contador de hoy sigue visible arriba.</p>
+            ) : (
+              <div className="mt-4 space-y-2" role="list" aria-label="Solicitudes exitosas por día UTC">
+                {usageDaysShown.map(day => {
+                  const dateLabel = new Date(`${day.date}T12:00:00Z`).toLocaleDateString('es-CO', { timeZone: 'UTC', weekday: 'short', day: 'numeric', month: 'short' })
+                  const isToday = day.date === utcToday
+                  return (
+                    <div key={day.date} role="listitem" className={cn('grid grid-cols-[6.5rem_minmax(0,1fr)_3.5rem] items-center gap-2 rounded-xl border px-3 py-2.5 sm:grid-cols-[9rem_minmax(0,1fr)_5rem] sm:gap-4', isToday ? 'border-[var(--accent)]/30 bg-[var(--accent)]/5' : 'border-[var(--border-subtle)]')}>
+                      <div className="min-w-0"><p className="truncate text-xs font-bold capitalize text-[var(--text-primary)]">{isToday ? 'Hoy' : dateLabel}</p><p className="text-[10px] text-[var(--text-muted)]">{isToday ? dateLabel : day.date}</p></div>
+                      <div className="h-2.5 overflow-hidden rounded-full bg-[var(--bg-elevated)]"><div className="h-full rounded-full bg-[var(--accent)]" style={{ width: `${day.success === 0 ? 0 : Math.max(3, day.success / highestUsageDay * 100)}%` }} /></div>
+                      <span className="text-right text-sm font-black tabular-nums text-[var(--text-primary)]" aria-label={`${day.success} solicitudes exitosas`}>{day.success.toLocaleString('es-CO')}</span>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+            {geminiUsageDaily.length > 7 && <button type="button" onClick={() => setUsageHistoryExpanded(current => !current)} className="mt-3 rounded-lg px-2 py-1.5 text-xs font-bold text-[var(--accent)] hover:bg-[var(--accent)]/5">{usageHistoryExpanded ? 'Ver últimos 7 días' : `Ver historial completo (${geminiUsageDaily.length} días)`}</button>}
           </Card>
         </div>
       )}
