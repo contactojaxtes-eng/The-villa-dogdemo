@@ -171,6 +171,7 @@ export default function DriverPortalPage() {
   const [proof, setProof] = useState<File | null>(null)
   const [saving, setSaving] = useState(false)
   const realtimeTimer = useRef<number | null>(null)
+  const realtimeConnected = useRef(false)
 
   const load = useCallback(async (quiet = false) => {
     if (!quiet) setLoading(true)
@@ -196,17 +197,33 @@ export default function DriverPortalPage() {
       if (realtimeTimer.current !== null) window.clearTimeout(realtimeTimer.current)
       realtimeTimer.current = window.setTimeout(() => { void load(true) }, 120)
     }
+    const handleConnect = () => {
+      realtimeConnected.current = true
+      refreshPortal()
+    }
+    const handleDisconnect = () => {
+      realtimeConnected.current = false
+    }
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') void load(true)
+    }
 
     // El evento no transporta pedidos: solo avisa a esta cuenta para volver a
-    // consultar su endpoint privado. El intervalo queda como respaldo de red.
+    // consultar su endpoint privado. El intervalo consulta únicamente si el
+    // socket está caído; al volver a la pestaña se reconcilia una sola vez.
     socket.on('driverPortalUpdated', refreshPortal)
-    socket.on('connect', refreshPortal)
+    socket.on('connect', handleConnect)
+    socket.on('disconnect', handleDisconnect)
+    socket.on('connect_error', handleDisconnect)
     const refreshTimer = window.setInterval(() => {
-      if (document.visibilityState === 'visible') void load(true)
+      if (document.visibilityState === 'visible' && !realtimeConnected.current) void load(true)
     }, 60_000)
+    document.addEventListener('visibilitychange', handleVisibility)
     return () => {
+      realtimeConnected.current = false
       socket.disconnect()
       window.clearInterval(refreshTimer)
+      document.removeEventListener('visibilitychange', handleVisibility)
       if (realtimeTimer.current !== null) {
         window.clearTimeout(realtimeTimer.current)
         realtimeTimer.current = null

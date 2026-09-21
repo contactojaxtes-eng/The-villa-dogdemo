@@ -12,6 +12,13 @@ import { OrdersService } from '../orders/orders.service';
 const ACTIVE_KITCHEN = ['NEW', 'PREPARING'];
 const ACTIVE_TABLE = ['OPEN'];
 const PENDING_PAYMENT = ['PENDING', 'PENDING_REVIEW'];
+// Los descansos ya programan un setTimeout exacto al crearse. Este intervalo
+// solo reconcilia reinicios del servidor o temporizadores perdidos, por lo que
+// no necesita consultar PostgreSQL cada pocos segundos.
+const COOK_BREAK_RECONCILIATION_MS = 30_000;
+// La alerta se activa después de 15 minutos; revisarla una vez por minuto
+// conserva su utilidad y evita una consulta profunda permanente cada 15 s.
+const DINING_DELAY_RECONCILIATION_MS = 60_000;
 
 @Injectable()
 export class TablesService implements OnModuleInit, OnModuleDestroy {
@@ -42,11 +49,11 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
     this.cookTimerInterval = setInterval(() => {
       this.checkExpiredCookBreaks().catch(() => {});
       this.checkExpiredDeliveryCookBreaks().catch(() => {});
-    }, 2500);
+    }, COOK_BREAK_RECONCILIATION_MS);
     void this.checkDelayedDiningKitchenTickets();
     this.diningDelayTimerInterval = setInterval(() => {
       void this.checkDelayedDiningKitchenTickets();
-    }, 15_000);
+    }, DINING_DELAY_RECONCILIATION_MS);
   }
 
   onModuleDestroy() {
