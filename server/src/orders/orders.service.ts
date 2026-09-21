@@ -22,6 +22,7 @@ type OrderListParams = {
   orderType?: string;
   page?: number;
   limit?: number;
+  compact?: boolean;
 };
 
 @Injectable()
@@ -397,9 +398,45 @@ export class OrdersService implements OnModuleInit {
 
   async findAll(params: OrderListParams) {
     const where = await this.buildOrderWhere(params);
+    const compactInclude = {
+      waiter: { select: { id: true, name: true } },
+      assignee: { select: { id: true, name: true } },
+      cancelledBy: { select: { id: true, name: true } },
+      zone: { select: { id: true, name: true, zoneGroup: true, rate: true } },
+      cashRegister: { select: { id: true, name: true } },
+      items: {
+        select: {
+          id: true,
+          quantity: true,
+          unitPrice: true,
+          totalPrice: true,
+          notes: true,
+          orderId: true,
+          menuItemId: true,
+          menuItem: { select: { id: true, name: true, price: true } },
+        },
+      },
+      payment: {
+        select: {
+          id: true,
+          amount: true,
+          method: true,
+          cashAmount: true,
+          transferAmount: true,
+          reference: true,
+          settlementId: true,
+          status: true,
+          confirmedAt: true,
+          confirmedBy: true,
+          createdAt: true,
+          orderId: true,
+        },
+      },
+      deliveryDriver: { select: { id: true, name: true, phone: true, active: true, userId: true } },
+    };
     const queryOptions: any = {
       where,
-      include: {
+      include: params.compact ? compactInclude : {
         waiter: { select: { id: true, name: true } },
         assignee: { select: { id: true, name: true } },
         cancelledBy: { select: { id: true, name: true } },
@@ -412,9 +449,12 @@ export class OrdersService implements OnModuleInit {
       orderBy: { createdAt: 'desc' },
     };
 
+    if (Number.isFinite(params.limit)) {
+      queryOptions.take = Math.min(500, Math.max(1, Math.floor(Number(params.limit))));
+    }
     // Si no hay filtro de fechas ni búsqueda, limitamos a 5000 pedidos por protección general
     // Si hay filtro de fechas (ej. Hoy, Ayer, Turno), trae TODOS los pedidos sin límite (200, 500, 1000+)
-    if (!where.createdAt && !params.search) {
+    if (!queryOptions.take && !where.createdAt && !params.search) {
       queryOptions.take = 5000;
     }
 
@@ -2142,9 +2182,20 @@ export class OrdersService implements OnModuleInit {
       include: {
         waiter: { select: { id: true, name: true } },
         assignee: { select: { id: true, name: true } },
-        zone: true,
-        items: { include: { menuItem: true } },
-        deliveryDriver: true,
+        zone: { select: { id: true, name: true, zoneGroup: true, rate: true } },
+        items: {
+          select: {
+            id: true,
+            quantity: true,
+            unitPrice: true,
+            totalPrice: true,
+            notes: true,
+            orderId: true,
+            menuItemId: true,
+            menuItem: { select: { id: true, name: true, price: true } },
+          },
+        },
+        deliveryDriver: { select: { id: true, name: true, phone: true, active: true, userId: true } },
         cashRegister: { select: { id: true, name: true } },
       },
       orderBy: { createdAt: 'asc' },

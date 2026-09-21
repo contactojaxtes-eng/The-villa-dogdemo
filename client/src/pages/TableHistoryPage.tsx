@@ -1,5 +1,5 @@
 import { ProtectedImage } from '@/components/ProtectedImage'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { ArrowLeft, CheckCircle2, ChevronDown, ChevronUp, Clock, Eye, RefreshCw, Search, UtensilsCrossed, Wallet, ChefHat, Users } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -148,6 +148,7 @@ export default function TableHistoryPage() {
   const [scope, setScope] = useState<'MINE' | 'ALL'>(() => isWaiter ? 'MINE' : 'ALL')
   const [zoomUrl, setZoomUrl] = useState<string | null>(null)
   const [selectedTable, setSelectedTable] = useState<any | null>(null)
+  const reloadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const load = useCallback(async (silent = false) => {
     if (!silent) setLoading(true)
@@ -165,6 +166,14 @@ export default function TableHistoryPage() {
     }
   }, [filterStatus, shiftFilter])
 
+  const scheduleReload = useCallback(() => {
+    if (reloadTimerRef.current !== null) return
+    reloadTimerRef.current = setTimeout(() => {
+      reloadTimerRef.current = null
+      load(true)
+    }, 350)
+  }, [load])
+
   useEffect(() => {
     load()
   }, [load])
@@ -174,16 +183,22 @@ export default function TableHistoryPage() {
     const socket = io(`${socketUrl}/the-villa-dog`, {
       transports: ['websocket', 'polling'],
     })
-    socket.on('tableCreated', () => load(true))
-    socket.on('tableUpdated', () => load(true))
-    socket.on('tableClosed', () => load(true))
-    socket.on('paymentValidated', () => load(true))
-    socket.on('cashStatusChanged', () => load(true))
-    socket.on('cashRegistersChanged', () => load(true))
-    socket.on('newOrder', () => load(true))
-    socket.on('orderUpdated', () => load(true))
-    return () => { socket.disconnect() }
-  }, [load])
+    socket.on('tableCreated', scheduleReload)
+    socket.on('tableUpdated', scheduleReload)
+    socket.on('tableClosed', scheduleReload)
+    socket.on('paymentValidated', scheduleReload)
+    socket.on('cashStatusChanged', scheduleReload)
+    socket.on('cashRegistersChanged', scheduleReload)
+    socket.on('newOrder', scheduleReload)
+    socket.on('orderUpdated', scheduleReload)
+    return () => {
+      if (reloadTimerRef.current !== null) {
+        clearTimeout(reloadTimerRef.current)
+        reloadTimerRef.current = null
+      }
+      socket.disconnect()
+    }
+  }, [scheduleReload])
 
   const [selectedWaiter, setSelectedWaiter] = useState<string>('ALL')
   const [showWaitersDetail, setShowWaitersDetail] = useState(true)

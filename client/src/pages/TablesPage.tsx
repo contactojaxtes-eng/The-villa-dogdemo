@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { io } from '@/lib/socket'
 import { PlusCircle, Search, UtensilsCrossed, Wallet, ChefHat, CheckCircle2, Clock, History, AlertCircle, Pencil } from 'lucide-react'
@@ -20,6 +20,7 @@ export default function TablesPage() {
   const [loading, setLoading] = useState(true)
   const [filterMode, setFilterMode] = useState<'OPEN_ALL' | 'OPEN_MINE' | 'HISTORY_MINE'>(() => isWaiter ? 'OPEN_MINE' : 'OPEN_ALL')
   const [now, setNow] = useState(() => Date.now())
+  const reloadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 15000)
@@ -28,8 +29,8 @@ export default function TablesPage() {
 
   const load = useCallback((silent = false) => {
     if (!silent) setLoading(true)
-    const pOpen = api.get<DiningTableSummary[]>('/tables', { force: true })
-    const pHistory = user?.id ? api.get<DiningTableSummary[]>(`/tables?status=ALL&waiterId=${user.id}&currentShift=true`, { force: true }) : Promise.resolve([])
+    const pOpen = api.get<DiningTableSummary[]>('/tables?summary=true', { force: true })
+    const pHistory = user?.id ? api.get<DiningTableSummary[]>(`/tables?status=ALL&waiterId=${user.id}&currentShift=true&summary=true`, { force: true }) : Promise.resolve([])
 
     Promise.all([pOpen, pHistory])
       .then(([openList, historyList]) => {
@@ -45,6 +46,17 @@ export default function TablesPage() {
       .catch(console.error)
       .finally(() => { if (!silent) setLoading(false) })
   }, [user?.id])
+
+  // Una misma operación puede emitir tableUpdated, cashRegistersChanged y
+  // paymentValidated casi al mismo tiempo. Agruparlos evita repetir las dos
+  // consultas de esta pantalla sin retrasar la actualización más de 300 ms.
+  const scheduleReload = useCallback(() => {
+    if (reloadTimerRef.current !== null) return
+    reloadTimerRef.current = setTimeout(() => {
+      reloadTimerRef.current = null
+      load(true)
+    }, 300)
+  }, [load])
 
   const handleEditTableName = async (e: React.MouseEvent, targetTable: DiningTableSummary) => {
     e.preventDefault()
@@ -73,14 +85,14 @@ export default function TablesPage() {
     // Sincronizar automáticamente pedidos tomados fuera de la señal
     const triggerSync = () => {
       syncOfflineOrders().then(res => {
-        if (res.synced > 0) load(true)
+        if (res.synced > 0) scheduleReload()
       }).catch(console.error)
     }
 
     triggerSync()
     window.addEventListener('online', triggerSync)
     return () => window.removeEventListener('online', triggerSync)
-  }, [load])
+  }, [load, scheduleReload])
 
   useEffect(() => {
     const socketUrl = import.meta.env.VITE_API_URL || window.location.origin
@@ -88,15 +100,21 @@ export default function TablesPage() {
       query: { userId: user?.id, userName: user?.name, userRole: user?.role },
       transports: ['websocket', 'polling'],
     })
-    socket.on('tableCreated', () => load(true))
-    socket.on('tableUpdated', () => load(true))
-    socket.on('tableClosed', () => load(true))
-    socket.on('paymentValidated', () => load(true))
-    socket.on('paymentRejected', () => load(true))
-    socket.on('cashStatusChanged', () => load(true))
-    socket.on('cashRegistersChanged', () => load(true))
-    return () => { socket.disconnect() }
-  }, [load, user?.id, user?.name, user?.role])
+    socket.on('tableCreated', scheduleReload)
+    socket.on('tableUpdated', scheduleReload)
+    socket.on('tableClosed', scheduleReload)
+    socket.on('paymentValidated', scheduleReload)
+    socket.on('paymentRejected', scheduleReload)
+    socket.on('cashStatusChanged', scheduleReload)
+    socket.on('cashRegistersChanged', scheduleReload)
+    return () => {
+      if (reloadTimerRef.current !== null) {
+        clearTimeout(reloadTimerRef.current)
+        reloadTimerRef.current = null
+      }
+      socket.disconnect()
+    }
+  }, [scheduleReload, user?.id, user?.name, user?.role])
 
   // Mesas abiertas de la mesera (aún pendientes de cobro)
   const myOpenTables = useMemo(() => {

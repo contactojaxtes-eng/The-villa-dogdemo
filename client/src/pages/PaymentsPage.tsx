@@ -134,7 +134,7 @@ export default function PaymentsPage() {
   const loadCollectOrders = async () => {
     setLoadingCollect(true)
     try {
-      const res = await api.get<any[]>('/orders?paymentStatus=PENDING')
+      const res = await api.get<any[]>('/orders?paymentStatus=PENDING&compact=true')
       const filtered = res.filter(o => o.paymentMethod !== 'CREDIT' && o.status !== 'CANCELLED')
       setCollectOrders(filtered)
     } catch (err) {
@@ -171,7 +171,7 @@ export default function PaymentsPage() {
   const loadCredits = async () => {
     setLoadingCredits(true)
     try {
-      const res = await api.get<any[]>('/orders?paymentMethod=CREDIT&paymentStatus=PENDING')
+      const res = await api.get<any[]>('/orders?paymentMethod=CREDIT&paymentStatus=PENDING&compact=true')
       setCreditOrders(res)
     } catch (err) {
       console.error('Error al cargar cartera', err)
@@ -247,10 +247,15 @@ export default function PaymentsPage() {
       transports: ['websocket', 'polling'],
     })
 
+    let refreshTimer: ReturnType<typeof setTimeout> | null = null
     const handleUpdate = () => {
-      loadData()
-      loadCredits()
-      loadCollectOrders()
+      if (refreshTimer !== null) return
+      refreshTimer = setTimeout(() => {
+        refreshTimer = null
+        loadData()
+        loadCredits()
+        loadCollectOrders()
+      }, 350)
     }
 
     socket.on('newOrder', handleUpdate)
@@ -262,6 +267,7 @@ export default function PaymentsPage() {
     socket.on('orderStatusChanged', handleUpdate)
 
     return () => {
+      if (refreshTimer !== null) clearTimeout(refreshTimer)
       socket.disconnect()
     }
   }, [date, method, status, canManageCash])

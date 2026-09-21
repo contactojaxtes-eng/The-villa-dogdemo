@@ -995,7 +995,7 @@ function ChatPage() {
       const cleanDigits = searchTarget.replace(/\D/g, '')
       const p10 = cleanDigits.length === 12 && cleanDigits.startsWith('57') ? cleanDigits.slice(2) : cleanDigits
       const query = p10.length === 10 ? p10 : (cleanDigits.length >= 7 && cleanDigits.length <= 13 ? cleanDigits : (activeSession.customerName || searchTarget))
-      api.get<any>(`/orders?search=${encodeURIComponent(query)}&limit=5&orderType=DELIVERY,PICKUP`)
+      api.get<any>(`/orders?search=${encodeURIComponent(query)}&limit=5&compact=true&orderType=DELIVERY,PICKUP`)
         .then(res => {
           const orders = Array.isArray(res) ? res : (res as any)?.orders || []
           const active = orders.find((o: any) => !['CANCELLED', 'DELIVERED'].includes(o.status))

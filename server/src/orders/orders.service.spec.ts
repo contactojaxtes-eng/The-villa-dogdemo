@@ -42,6 +42,20 @@ describe('Delivery order boundaries', () => {
     }));
   });
 
+  it('honors compact lookup limits without returning stored media blobs', async () => {
+    const prisma: any = {
+      order: { findMany: jest.fn().mockResolvedValue([]) },
+    };
+    const service = new OrdersService(prisma, {} as any, {} as any, {} as any);
+
+    await service.findAll({ search: '3001234567', orderType: 'DELIVERY,PICKUP', compact: true, limit: 5 });
+
+    const query = prisma.order.findMany.mock.calls[0][0];
+    expect(query.take).toBe(5);
+    expect(query.include.items.select.menuItem.select).toEqual({ id: true, name: true, price: true });
+    expect(query.include.payment.select.proofImage).toBeUndefined();
+  });
+
   it('paginates delivery history and only bills confirmed delivered orders', async () => {
     const prisma: any = {
       order: {
@@ -94,6 +108,8 @@ describe('Delivery order boundaries', () => {
         orderType: { in: ['DELIVERY', 'PICKUP'] },
       }),
     }));
+    const query = prisma.order.findMany.mock.calls[0][0];
+    expect(query.include.items.select.menuItem.select).toEqual({ id: true, name: true, price: true });
   });
 
   it('refuses to liquidate a delivery that is still in the kitchen', async () => {

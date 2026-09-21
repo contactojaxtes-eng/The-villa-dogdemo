@@ -67,3 +67,34 @@ describe('TablesService delivery kitchen assignment', () => {
     await expect((service as any).pickCook(station.id)).resolves.toBe('cook-a');
   });
 });
+
+describe('TablesService operational summaries', () => {
+  it('uses the compact table projection only when the board requests it', async () => {
+    const prisma: any = {
+      diningTable: { findMany: jest.fn().mockResolvedValue([]) },
+    };
+    const service = new TablesService(prisma, {} as any, {} as any);
+
+    await service.listTables({ summary: true });
+
+    const query = prisma.diningTable.findMany.mock.calls[0][0];
+    expect(query.select.orders.select.items).toBeUndefined();
+    expect(query.select.orders.select.kitchenTickets.select.assignedTo).toBeDefined();
+    expect(query.include).toBeUndefined();
+  });
+
+  it('keeps legacy payment image blobs out of the validation queue', async () => {
+    const prisma: any = {
+      cashClosing: { findMany: jest.fn().mockResolvedValue([]) },
+      payment: { findMany: jest.fn().mockResolvedValue([]) },
+    };
+    const service = new TablesService(prisma, {} as any, {} as any);
+
+    await service.listPaymentValidation();
+
+    const query = prisma.payment.findMany.mock.calls[0][0];
+    expect(query.select.proofImage).toBeUndefined();
+    expect(query.select.transferProofs.select.fileBase64).toBeUndefined();
+    expect(query.select.order.select.orderNumber).toBe(true);
+  });
+});

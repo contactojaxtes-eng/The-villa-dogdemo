@@ -1,6 +1,5 @@
 import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { io } from '@/lib/socket'
 import { api } from '../lib/api'
 import { hasUserPermission } from '../lib/permissions'
 
@@ -80,25 +79,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setLoading(false)
     }
   }, [])
-
-  // Escuchar cambios solo con una sesión autenticada.
-  useEffect(() => {
-    // El portal del domiciliario consulta únicamente sus pedidos privados.
-    // No abre el canal global de operaciones para no recibir eventos ajenos.
-    if (!user?.id || user.role === 'DELIVERY_DRIVER') return
-    const socketUrl = import.meta.env.VITE_API_URL || window.location.origin
-    const socket = io(`${socketUrl}/the-villa-dog`, {
-      transports: ['websocket', 'polling'],
-    })
-
-    socket.on('usersChanged', () => {
-      refreshProfile()
-    })
-
-    return () => {
-      socket.disconnect()
-    }
-  }, [refreshProfile, user?.id, user?.role])
 
   const login = async (email: string, password: string) => {
     const data = await api.post<{ accessToken: string; refreshToken: string; user: User }>('/auth/login', { email, password })

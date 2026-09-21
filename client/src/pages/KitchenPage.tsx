@@ -273,9 +273,21 @@ export default function KitchenPage() {
   }, [deliveryStationIds, user?.id, user?.role])
 
   const isTicketForThisCookRef = useRef(isTicketForThisCook)
+  const reloadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   useEffect(() => {
     isTicketForThisCookRef.current = isTicketForThisCook
   }, [isTicketForThisCook])
+
+  // El backend conserva eventos específicos y de compatibilidad (por ejemplo,
+  // ticketCreated + ticketUpdated). El estado local se actualiza de inmediato
+  // con el payload del socket; esta recarga agrupada solo reconcilia el listado.
+  const scheduleReload = useCallback(() => {
+    if (reloadTimerRef.current !== null) return
+    reloadTimerRef.current = setTimeout(() => {
+      reloadTimerRef.current = null
+      load(false)
+    }, 300)
+  }, [load])
 
   useEffect(() => {
     const socketUrl = import.meta.env.VITE_API_URL || window.location.origin
@@ -297,7 +309,7 @@ export default function KitchenPage() {
         const without = prev.filter(t => t.id !== ticket.id)
         return [ticket, ...without]
       })
-      load(false)
+      scheduleReload()
     })
 
     // TICKET ACTUALIZADO
@@ -315,7 +327,7 @@ export default function KitchenPage() {
         return prev.map(t => t.id === ticket.id ? ticket : t)
       })
       if (belongsToMe) {
-        load(false)
+        scheduleReload()
       }
     })
 
@@ -335,7 +347,7 @@ export default function KitchenPage() {
         if (!exists) return [ticket, ...prev]
         return prev.map(t => t.id === ticket.id ? ticket : t)
       })
-      load(false)
+      scheduleReload()
     })
 
     // CAMBIO DE ESTADO DE COCINEROS (activo/inactivo/cena)
@@ -374,16 +386,22 @@ export default function KitchenPage() {
     })
 
     // Sincronización en tiempo real inmediata ante nuevos pedidos o cambios de comandas
-    socket.on('tableOrderSubmitted', () => load(false))
-    socket.on('tableOrderEdited', () => load(false))
-    socket.on('newOrder', () => load(false))
-    socket.on('orderUpdated', () => load(false))
+    socket.on('tableOrderSubmitted', scheduleReload)
+    socket.on('tableOrderEdited', scheduleReload)
+    socket.on('newOrder', scheduleReload)
+    socket.on('orderUpdated', scheduleReload)
 
     // Cuando se abre o cierra la caja, recargar comandas para reiniciar contadores e historial a 0
-    socket.on('cashStatusChanged', () => load(false))
+    socket.on('cashStatusChanged', scheduleReload)
 
-    return () => { socket.disconnect() }
-  }, [isDeliveryCook, load, user?.id, user?.name, user?.role])
+    return () => {
+      if (reloadTimerRef.current !== null) {
+        clearTimeout(reloadTimerRef.current)
+        reloadTimerRef.current = null
+      }
+      socket.disconnect()
+    }
+  }, [isDeliveryCook, load, scheduleReload, user?.id, user?.name, user?.role])
 
   const consolidatedTickets = useMemo(() => {
     // Mantener cada ticket por su ID único para nunca borrar tickets previos del historial

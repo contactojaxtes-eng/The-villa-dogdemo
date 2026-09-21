@@ -291,6 +291,7 @@ export default function ActiveDeliveriesPage() {
   const [editReference, setEditReference] = useState<string>('')
   const [isSavingPaymentMethod, setIsSavingPaymentMethod] = useState(false)
   const socketRef = useRef<Socket | null>(null)
+  const ordersReloadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const driverFilterRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -544,6 +545,17 @@ export default function ActiveDeliveriesPage() {
       .finally(() => setLoading(false))
   }, [submittedSearch, isDeliveryStaff])
 
+  // Un cambio de pedido suele emitir orderStatusChanged + orderUpdated y, en
+  // pagos, paymentUpdated. El payload del socket actualiza la fila al instante;
+  // esta única reconciliación agrupada confirma el estado final del servidor.
+  const scheduleOrdersReload = useCallback(() => {
+    if (ordersReloadTimerRef.current !== null) return
+    ordersReloadTimerRef.current = setTimeout(() => {
+      ordersReloadTimerRef.current = null
+      loadOrders(true, true)
+    }, 300)
+  }, [loadOrders])
+
   useEffect(() => {
     const socketUrl = import.meta.env.VITE_API_URL || window.location.origin
     const socket = io(`${socketUrl}/the-villa-dog`, {
@@ -580,10 +592,7 @@ export default function ActiveDeliveriesPage() {
       } : o))
     })
 
-    socket.on('newOrder', () => { 
-      loadOrders(true, true)
-      loadDrivers()
-    })
+    socket.on('newOrder', scheduleOrdersReload)
     socket.on('orderStatusChanged', (data: { orderId: string; status: string; order?: any }) => {
       if (data && data.orderId) {
         if (
@@ -614,8 +623,7 @@ export default function ActiveDeliveriesPage() {
           return prev
         })
       }
-      loadOrders(true, true)
-      loadDrivers()
+      scheduleOrdersReload()
     })
 
     socket.on('orderUpdated', (updatedOrder: any) => {
@@ -633,21 +641,25 @@ export default function ActiveDeliveriesPage() {
         }
         setDetailOrder(prev => (prev && prev.id === updatedOrder.id) ? { ...prev, ...updatedOrder } : prev)
       }
-      loadOrders(true, true)
-      loadDrivers()
+      scheduleOrdersReload()
     })
 
     socket.on('paymentUpdated', () => {
-      loadOrders(true, true)
-      loadDrivers()
+      scheduleOrdersReload()
     })
 
     socket.on('driversChanged', () => {
       loadDrivers()
     })
 
-    return () => { socket.disconnect() }
-  }, [user, loadOrders, loadDrivers])
+    return () => {
+      if (ordersReloadTimerRef.current !== null) {
+        clearTimeout(ordersReloadTimerRef.current)
+        ordersReloadTimerRef.current = null
+      }
+      socket.disconnect()
+    }
+  }, [user, loadDrivers, scheduleOrdersReload])
 
   useEffect(() => {
     const timer = setTimeout(() => {

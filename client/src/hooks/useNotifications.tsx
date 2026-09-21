@@ -109,7 +109,7 @@ function showBrowserNotification(
 }
 
 export function useNotifications() {
-  const { user, isAuthenticated } = useAuth()
+  const { user, isAuthenticated, refreshProfile } = useAuth()
   const permissionRequested = useRef(false)
 
   useEffect(() => {
@@ -223,7 +223,7 @@ export function useNotifications() {
 
     if (tracksDiningDelays) {
       const initialRequest = user.role === 'WAITER'
-        ? api.get<DiningTableSummary[]>(`/tables?status=ALL&waiterId=${user.id}&currentShift=true`)
+        ? api.get<DiningTableSummary[]>(`/tables?status=ALL&waiterId=${user.id}&currentShift=true&summary=true`)
         : api.get<KitchenTicketSummary[]>('/kitchen/tickets?currentShift=true')
 
       void initialRequest.then(result => {
@@ -242,6 +242,9 @@ export function useNotifications() {
     socket.on('kitchenTicketEdited', trackDiningTicket)
     socket.on('tableUpdated', trackDiningTable)
     socket.on('tableClosed', trackDiningTable)
+    // Este socket global ya está abierto para las notificaciones. Reutilizarlo
+    // para el perfil evita una segunda conexión permanente por cada usuario.
+    socket.on('usersChanged', refreshProfile)
 
     const diningDelayInterval = setInterval(evaluateDiningDelays, 5000)
     const handleMuteChanged = () => {
@@ -708,5 +711,5 @@ export function useNotifications() {
       publishDiningKitchenDelays([])
       socket.disconnect()
     }
-  }, [isAuthenticated, user])
+  }, [isAuthenticated, refreshProfile, user])
 }

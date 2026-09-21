@@ -156,6 +156,58 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
+  /**
+   * Projection used by the operational table board. The detail endpoint keeps
+   * buildTableInclude(), but the board must not download receipt images,
+   * products, payment records and change logs on every realtime refresh.
+   */
+  private buildTableSummarySelect() {
+    return {
+      id: true,
+      label: true,
+      status: true,
+      notes: true,
+      openedAt: true,
+      closedAt: true,
+      createdAt: true,
+      updatedAt: true,
+      openedById: true,
+      cashRegisterId: true,
+      cashClosingId: true,
+      openedBy: { select: { id: true, name: true } },
+      orders: {
+        select: {
+          id: true,
+          orderNumber: true,
+          createdAt: true,
+          status: true,
+          orderType: true,
+          customerName: true,
+          kitchenStatus: true,
+          paymentStatus: true,
+          total: true,
+          tableId: true,
+          waiterId: true,
+          waiter: { select: { id: true, name: true } },
+          kitchenTickets: {
+            select: {
+              id: true,
+              status: true,
+              tableId: true,
+              stationId: true,
+              assignedToId: true,
+              createdAt: true,
+              updatedAt: true,
+              assignedTo: { select: { id: true, name: true } },
+              station: { select: { id: true, name: true } },
+            },
+          },
+        },
+        orderBy: { createdAt: 'asc' as const },
+      },
+    };
+  }
+
   private summarizeTable(table: any) {
     const orders = table.orders || [];
     const activeOrders = orders.filter((o: any) => o.status !== 'CANCELLED');
@@ -198,7 +250,7 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
     return new Date(Date.now() - 14 * 60 * 60 * 1000);
   }
 
-  async listTables(params: { status?: string; search?: string; waiterId?: string; currentShift?: string | boolean }) {
+  async listTables(params: { status?: string; search?: string; waiterId?: string; currentShift?: string | boolean; summary?: string | boolean }) {
     const where: any = { orders: { some: {} } };
     if (params.status === 'ALL') {
       // no status filter, return both active and closed
@@ -235,12 +287,20 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
       ];
     }
 
-    const tables = await this.prisma.diningTable.findMany({
-      where,
-      include: this.buildTableInclude(),
-      orderBy: { openedAt: 'desc' },
-      take: 200,
-    });
+    const summary = params.summary === 'true' || params.summary === true;
+    const tables: any[] = summary
+      ? await this.prisma.diningTable.findMany({
+          where,
+          select: this.buildTableSummarySelect(),
+          orderBy: { openedAt: 'desc' },
+          take: 200,
+        })
+      : await this.prisma.diningTable.findMany({
+          where,
+          include: this.buildTableInclude(),
+          orderBy: { openedAt: 'desc' },
+          take: 200,
+        });
     return tables.map(t => this.summarizeTable(t));
   }
 
@@ -1470,7 +1530,25 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
 
     const tickets = await this.prisma.kitchenTicket.findMany({
       where,
-      include: { station: { include: { users: { select: { id: true, name: true, role: true } } } }, assignedTo: { select: { id: true, name: true } }, items: true, order: { include: { waiter: true, diningTable: true } } },
+      include: {
+        station: { include: { users: { select: { id: true, name: true, role: true } } } },
+        assignedTo: { select: { id: true, name: true } },
+        items: true,
+        order: {
+          select: {
+            id: true,
+            orderNumber: true,
+            createdAt: true,
+            customerName: true,
+            notes: true,
+            orderType: true,
+            tableId: true,
+            waiterId: true,
+            waiter: { select: { id: true, name: true } },
+            diningTable: { select: { id: true, label: true, openedById: true } },
+          },
+        },
+      },
       orderBy: [{ updatedAt: 'desc' }, { createdAt: 'desc' }],
       take: 250,
     });
@@ -1777,10 +1855,34 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
 
     const payments = await this.prisma.payment.findMany({
       where: whereClause,
-      include: {
+      select: {
+        id: true,
+        amount: true,
+        method: true,
+        cashAmount: true,
+        transferAmount: true,
+        reference: true,
+        settlementId: true,
+        status: true,
+        confirmedAt: true,
+        confirmedBy: true,
+        createdAt: true,
+        orderId: true,
         order: {
-          include: {
-            diningTable: { include: { openedBy: { select: { id: true, name: true } } } },
+          select: {
+            id: true,
+            orderNumber: true,
+            customerName: true,
+            orderType: true,
+            originalPaymentMethod: true,
+            total: true,
+            diningTable: {
+              select: {
+                id: true,
+                label: true,
+                openedBy: { select: { id: true, name: true } },
+              },
+            },
             waiter: { select: { id: true, name: true } },
             deliveryDriver: { select: { id: true, name: true, phone: true, userId: true } },
           },

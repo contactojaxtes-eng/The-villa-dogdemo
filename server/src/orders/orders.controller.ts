@@ -27,6 +27,8 @@ export class OrdersController {
     @Query('paymentMethod') paymentMethod?: string,
     @Query('paymentStatus') paymentStatus?: string,
     @Query('orderType') orderType?: string,
+    @Query('limit') limit?: string,
+    @Query('compact') compact?: string,
   ) {
     return this.ordersService.findAll({
       status,
@@ -39,6 +41,8 @@ export class OrdersController {
       paymentMethod,
       paymentStatus,
       orderType,
+      limit: limit ? parseInt(limit, 10) : undefined,
+      compact: compact === 'true',
     });
   }
 
