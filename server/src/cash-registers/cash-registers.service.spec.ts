@@ -77,6 +77,7 @@ describe('CashRegistersService delivery isolation', () => {
     const prisma: any = {
       cashRegister: {
         findUnique: jest.fn().mockResolvedValue({ id: 'regular-register', purpose: 'GENERAL' }),
+        findMany: jest.fn().mockResolvedValue([]),
       },
       cashClosing: {
         findFirst: jest.fn().mockResolvedValue({

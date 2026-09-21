@@ -27,6 +27,7 @@ export class OrdersController {
     @Query('paymentMethod') paymentMethod?: string,
     @Query('paymentStatus') paymentStatus?: string,
     @Query('orderType') orderType?: string,
+    @Query('chatSessionId') chatSessionId?: string,
     @Query('limit') limit?: string,
     @Query('compact') compact?: string,
   ) {
@@ -41,6 +42,7 @@ export class OrdersController {
       paymentMethod,
       paymentStatus,
       orderType,
+      chatSessionId,
       limit: limit ? parseInt(limit, 10) : undefined,
       compact: compact === 'true',
     });
@@ -50,8 +52,12 @@ export class OrdersController {
   @UseGuards(PermissionsGuard)
   @Permissions('dispatch.view')
   @ApiOperation({ summary: 'Obtener pedidos activos' })
-  getActiveOrders(@Query('search') search?: string, @Request() req?: any) {
-    return this.ordersService.getActiveOrders(search, req?.user?.role);
+  getActiveOrders(
+    @Query('search') search?: string,
+    @Query('orderType') orderType?: string,
+    @Request() req?: any,
+  ) {
+    return this.ordersService.getActiveOrders(search, req?.user?.role, orderType);
   }
 
   @Get('stats/today')
@@ -153,9 +159,10 @@ export class OrdersController {
   batchAssignDriver(
     @Body('orderIds') orderIds: string[],
     @Body('deliveryDriverId') deliveryDriverId: string,
+    @Body('notifyCustomer') notifyCustomer: boolean,
     @Request() req: any,
   ) {
-    return this.ordersService.batchAssignDriver(orderIds, deliveryDriverId, req.user);
+    return this.ordersService.batchAssignDriver(orderIds, deliveryDriverId, req.user, notifyCustomer);
   }
 
   @Put('batch-collect')

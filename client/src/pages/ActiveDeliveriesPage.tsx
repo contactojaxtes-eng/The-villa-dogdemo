@@ -188,6 +188,8 @@ export default function ActiveDeliveriesPage() {
   const [submittedSearch, setSubmittedSearch] = useState(() => searchParams.get('search') || '')
   const [updatingId, setUpdatingId] = useState<string | null>(null)
   const [statusFilter, setStatusFilter] = useState<'ALL' | 'PENDING' | 'READY' | 'IN_ROUTE'>('ALL')
+  const [orderTypeFilter, setOrderTypeFilter] = useState<'ALL' | 'DELIVERY' | 'PICKUP'>('ALL')
+  const [zoneFilter, setZoneFilter] = useState<string>('ALL')
   const [clockTick, setTick] = useState(0)
   const [activeOperators, setActiveOperators] = useState<Record<string, { userId: string; userName: string }>>({})
   const [cancelDialog, setCancelDialog] = useState<{ id: string; orderNumber: number } | null>(null)
@@ -212,6 +214,7 @@ export default function ActiveDeliveriesPage() {
   const [inlineDriverPhone, setInlineDriverPhone] = useState('')
   const [registeringDriverInline, setRegisteringDriverInline] = useState(false)
   const [dispatchError, setDispatchError] = useState('')
+  const [notifyOnDispatch, setNotifyOnDispatch] = useState(false)
 
   const allAvailableDrivers = useMemo(() => {
     const list = [...drivers]
@@ -259,6 +262,7 @@ export default function ActiveDeliveriesPage() {
   const [batchDriverId, setBatchDriverId] = useState('')
   const [batchDriverSearch, setBatchDriverSearch] = useState('')
   const [batchAutoPrint, setBatchAutoPrint] = useState(true)
+  const [batchNotifyOnDispatch, setBatchNotifyOnDispatch] = useState(false)
   const [isSubmittingBatch, setIsSubmittingBatch] = useState(false)
   const [batchError, setBatchError] = useState('')
 
@@ -435,7 +439,7 @@ export default function ActiveDeliveriesPage() {
   const handleMarkPickupReady = async (order: Order) => {
     if (markingPickupReadyId) return
 
-    const shouldNotify = notifyOnPickupReady[order.id] ?? true
+    const shouldNotify = notifyOnPickupReady[order.id] ?? false
 
     const confirm = await alerts.confirm(
       `¿Marcar Pedido #${order.orderNumber} como LISTO?`,
@@ -506,19 +510,21 @@ export default function ActiveDeliveriesPage() {
       }
 
       const orderToUpdate = dispatchDialog.order
-      const isPending = orderToUpdate.status === 'PENDING'
-      const nextStatus = isPending ? 'IN_ROUTE' : orderToUpdate.status
+      const startsRoute = ['RECEIVED', 'PENDING', 'READY'].includes(orderToUpdate.status)
+      const nextStatus = startsRoute ? 'IN_ROUTE' : orderToUpdate.status
 
       const updatedOrder = await api.put<any>(`/orders/${orderToUpdate.id}/status`, {
         status: nextStatus,
-        deliveryDriverId: driverId
+        deliveryDriverId: driverId,
+        notifyCustomer: notifyOnDispatch,
       })
 
-      if (isPending) {
+      if (orderToUpdate.status === 'PENDING') {
         await printComandaSmart(updatedOrder, 'caja', user?.role, false, dispatchDialog.shouldKick)
       }
 
       setDispatchDialog(null)
+      setNotifyOnDispatch(false)
       loadOrders(false, true)
       alerts.success('Pedido despachado', `Pedido #${orderToUpdate.orderNumber} asignado a repartidor correctamente.`)
     } catch (err: any) {
@@ -530,20 +536,20 @@ export default function ActiveDeliveriesPage() {
     if (!silent) setLoading(true)
     const params = new URLSearchParams()
     if (submittedSearch) params.set('search', submittedSearch)
+    params.set('orderType', 'DELIVERY,PICKUP')
     api.get<Order[]>(`/orders/active?${params.toString()}`, { force })
       .then(data => {
         const deliveryOnly = (data || []).filter(o => 
           !o.tableId && 
           o.orderType !== 'LOCAL' && 
           o.source !== 'TABLE' && 
-          o.source !== 'OFFLINE_TABLE' &&
-          (!isDeliveryStaff || o.orderType !== 'PICKUP')
+          o.source !== 'OFFLINE_TABLE'
         )
         setOrders(deliveryOnly)
       })
       .catch(console.error)
       .finally(() => setLoading(false))
-  }, [submittedSearch, isDeliveryStaff])
+  }, [submittedSearch])
 
   // Un cambio de pedido suele emitir orderStatusChanged + orderUpdated y, en
   // pagos, paymentUpdated. El payload del socket actualiza la fila al instante;
@@ -599,8 +605,7 @@ export default function ActiveDeliveriesPage() {
           data.order?.tableId || 
           data.order?.orderType === 'LOCAL' || 
           data.order?.source === 'TABLE' || 
-          data.order?.source === 'OFFLINE_TABLE' ||
-          (isDeliveryStaff && data.order?.orderType === 'PICKUP')
+          data.order?.source === 'OFFLINE_TABLE'
         ) {
           setOrders(prev => prev.filter(o => o.id !== data.orderId))
         } else {
@@ -632,8 +637,7 @@ export default function ActiveDeliveriesPage() {
           updatedOrder.tableId || 
           updatedOrder.orderType === 'LOCAL' || 
           updatedOrder.source === 'TABLE' || 
-          updatedOrder.source === 'OFFLINE_TABLE' ||
-          (isDeliveryStaff && updatedOrder.orderType === 'PICKUP')
+          updatedOrder.source === 'OFFLINE_TABLE'
         ) {
           setOrders(prev => prev.filter(o => o.id !== updatedOrder.id))
         } else {
@@ -689,8 +693,14 @@ export default function ActiveDeliveriesPage() {
   const visibleOrders = useMemo(() => {
     const query = searchQuery.trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
     const matchingOrders = orders.filter(order => {
-      // 0. Si es personal de domicilio, ocultar SIEMPRE pasar a recoger (solo admin)
-      if (isDeliveryStaff && order.orderType === 'PICKUP') return false
+      // 0. Filtrar por tipo sin esconder las recogidas al asignador.
+      if (orderTypeFilter !== 'ALL' && order.orderType !== orderTypeFilter) return false
+
+      if (zoneFilter === 'NO_ZONE') {
+        if (order.zone?.name) return false
+      } else if (zoneFilter !== 'ALL' && order.zone?.name !== zoneFilter) {
+        return false
+      }
 
       // 1. Filtro por dropdown de repartidor
       if (selectedDriverFilter === 'UNASSIGNED') {
@@ -726,7 +736,16 @@ export default function ActiveDeliveriesPage() {
       const byTime = new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
       return byTime || a.orderNumber - b.orderNumber
     })
-  }, [orders, searchQuery, selectedDriverFilter, isDeliveryStaff])
+  }, [orders, searchQuery, selectedDriverFilter, isDeliveryStaff, orderTypeFilter, zoneFilter])
+
+  const availableZones = useMemo(() => {
+    return Array.from(new Set(
+      orders
+        .filter(order => order.orderType === 'DELIVERY')
+        .map(order => order.zone?.name)
+        .filter((name): name is string => Boolean(name))
+    )).sort((a, b) => a.localeCompare(b, 'es'))
+  }, [orders])
 
   const statusVisibleOrders = useMemo(() => {
     if (statusFilter === 'PENDING') return visibleOrders.filter(o => o.status === 'RECEIVED' || o.status === 'PENDING')
@@ -747,6 +766,11 @@ export default function ActiveDeliveriesPage() {
   const selectableOrders = useMemo(() => {
     return statusVisibleOrders.filter(o => !['DELIVERED', 'CANCELLED'].includes(o.status))
   }, [statusVisibleOrders])
+
+  useEffect(() => {
+    const selectableIds = new Set(selectableOrders.map(order => order.id))
+    setSelectedOrderIds(previous => previous.filter(id => selectableIds.has(id)))
+  }, [selectableOrders])
 
   const handleToggleSelectOrder = (id: string) => {
     setSelectedOrderIds(prev => 
@@ -774,19 +798,25 @@ export default function ActiveDeliveriesPage() {
     setBatchError('')
 
     try {
-      const selectedOrdersList = orders.filter(o => selectedOrderIds.includes(o.id))
+      const selectedOrdersList = orders.filter(o => selectedOrderIds.includes(o.id) && o.orderType === 'DELIVERY')
+      if (selectedOrdersList.length === 0) {
+        setBatchError('Selecciona al menos un domicilio para asignarlo a un repartidor.')
+        return
+      }
       
       try {
         await api.put<any>('/orders/batch-dispatch', {
-          orderIds: selectedOrderIds,
+          orderIds: selectedOrdersList.map(order => order.id),
           deliveryDriverId: batchDriverId,
+          notifyCustomer: batchNotifyOnDispatch,
         })
       } catch (endpointErr) {
         await Promise.all(selectedOrdersList.map(o => {
-          const nextStatus = (o.status === 'PENDING' || o.status === 'READY') ? 'IN_ROUTE' : o.status
+          const nextStatus = ['RECEIVED', 'PENDING', 'READY'].includes(o.status) ? 'IN_ROUTE' : o.status
           return api.put(`/orders/${o.id}/status`, {
             status: nextStatus,
-            deliveryDriverId: batchDriverId
+            deliveryDriverId: batchDriverId,
+            notifyCustomer: batchNotifyOnDispatch,
           })
         }))
       }
@@ -809,13 +839,14 @@ export default function ActiveDeliveriesPage() {
 
       alerts.success(
         'Pedidos Asignados',
-        `Se asignaron ${selectedOrderIds.length} pedidos al domiciliario correctamente.`
+        `Se asignaron ${selectedOrdersList.length} pedidos al domiciliario correctamente.`
       )
 
       setSelectedOrderIds([])
       setBatchDispatchOpen(false)
       setBatchDriverId('')
       setBatchDriverSearch('')
+      setBatchNotifyOnDispatch(false)
       loadOrders(false, true)
       loadDrivers()
     } catch (err: any) {
@@ -828,6 +859,16 @@ export default function ActiveDeliveriesPage() {
   const selectedOrdersList = useMemo(() => {
     return orders.filter(o => selectedOrderIds.includes(o.id))
   }, [orders, selectedOrderIds])
+
+  const selectedDeliveryOrders = useMemo(
+    () => selectedOrdersList.filter(order => order.orderType === 'DELIVERY'),
+    [selectedOrdersList],
+  )
+
+  const selectedPickupOrders = useMemo(
+    () => selectedOrdersList.filter(order => order.orderType === 'PICKUP'),
+    [selectedOrdersList],
+  )
 
   const getBatchOrderMethod = useCallback((order: Order) => {
     return (manualItemMethods[order.id]?.method || order.paymentMethod || 'CASH').toUpperCase()
@@ -987,7 +1028,7 @@ export default function ActiveDeliveriesPage() {
   const updateStatus = async (id: string, newStatus: string) => {
     setUpdatingId(id)
     try {
-      await api.put(`/orders/${id}/status`, { status: newStatus })
+      await api.put(`/orders/${id}/status`, { status: newStatus, notifyCustomer: false })
       alerts.success('Estado actualizado', 'La comanda ha cambiado de estado.')
       loadOrders()
     } catch (err: any) {
@@ -1247,6 +1288,7 @@ export default function ActiveDeliveriesPage() {
                   setSubmittedSearch('')
                   setSelectedDriverFilter('ALL')
                   setStatusFilter('ALL')
+                  setZoneFilter('ALL')
                 }}
                 title="Limpiar búsqueda y filtros"
                 aria-label="Limpiar búsqueda y filtros"
@@ -1305,6 +1347,22 @@ export default function ActiveDeliveriesPage() {
                         </SelectItem>
                       )
                     })}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="w-full shrink-0 sm:w-52">
+                <Select value={zoneFilter} onValueChange={setZoneFilter}>
+                  <SelectTrigger className="h-9 rounded-xl border-[var(--border-subtle)] bg-[var(--bg-panel)] text-xs font-bold">
+                    <div className="flex min-w-0 items-center gap-1.5">
+                      <MapPin className="h-3.5 w-3.5 shrink-0 text-[var(--accent)]" />
+                      <SelectValue placeholder="Todos los barrios" />
+                    </div>
+                  </SelectTrigger>
+                  <SelectContent className="max-h-64">
+                    <SelectItem value="ALL">Todos los barrios</SelectItem>
+                    <SelectItem value="NO_ZONE">Sin barrio registrado</SelectItem>
+                    {availableZones.map(zone => <SelectItem key={zone} value={zone}>{zone}</SelectItem>)}
                   </SelectContent>
                 </Select>
               </div>
@@ -1372,6 +1430,8 @@ export default function ActiveDeliveriesPage() {
                 setSelectedDriverFilter('ALL')
                 setStatusFilter('ALL')
                 setDriverFilterQuery('')
+                setOrderTypeFilter('ALL')
+                setZoneFilter('ALL')
                 loadOrders(false, true)
               }}
               title="Actualizar datos y limpiar filtros"
@@ -1416,7 +1476,7 @@ export default function ActiveDeliveriesPage() {
         </div>
 
         <div className="border-t border-[var(--border-subtle)] bg-[var(--bg-subtle)]/35 p-3 sm:p-4">
-          <div className="grid gap-2.5 lg:grid-cols-[minmax(260px,1fr)_minmax(260px,360px)]">
+          <div className="grid gap-2.5 md:grid-cols-2 xl:grid-cols-[minmax(260px,1fr)_minmax(250px,340px)_minmax(170px,220px)_minmax(180px,240px)]">
             <div className="relative">
               <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--text-muted)]" />
               <Input
@@ -1568,6 +1628,34 @@ export default function ActiveDeliveriesPage() {
                 </div>
               )}
             </div>
+
+            <Select value={orderTypeFilter} onValueChange={(value: 'ALL' | 'DELIVERY' | 'PICKUP') => setOrderTypeFilter(value)}>
+              <SelectTrigger className="h-11 rounded-xl border-[var(--border-subtle)] bg-[var(--bg-panel)] text-xs font-black">
+                <div className="flex min-w-0 items-center gap-2">
+                  <Store className="h-4 w-4 shrink-0 text-[var(--accent)]" />
+                  <SelectValue placeholder="Tipo de pedido" />
+                </div>
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="ALL">Todos los tipos</SelectItem>
+                <SelectItem value="DELIVERY">Solo domicilios</SelectItem>
+                <SelectItem value="PICKUP">Pasar a recoger</SelectItem>
+              </SelectContent>
+            </Select>
+
+            <Select value={zoneFilter} onValueChange={setZoneFilter}>
+              <SelectTrigger className="h-11 rounded-xl border-[var(--border-subtle)] bg-[var(--bg-panel)] text-xs font-black">
+                <div className="flex min-w-0 items-center gap-2">
+                  <MapPin className="h-4 w-4 shrink-0 text-[var(--accent)]" />
+                  <SelectValue placeholder="Barrio" />
+                </div>
+              </SelectTrigger>
+              <SelectContent className="max-h-72">
+                <SelectItem value="ALL">Todos los barrios</SelectItem>
+                <SelectItem value="NO_ZONE">Sin barrio registrado</SelectItem>
+                {availableZones.map(zone => <SelectItem key={zone} value={zone}>{zone}</SelectItem>)}
+              </SelectContent>
+            </Select>
           </div>
 
           <div className="mt-3 flex items-center gap-2 overflow-x-auto pb-0.5 scrollbar-none sm:grid sm:grid-cols-4">
@@ -1731,11 +1819,11 @@ export default function ActiveDeliveriesPage() {
             >
               Deseleccionar
             </Button>
-            {user?.role !== 'DELIVERY_MANAGER' && !isDeliveryStaff && (
+            {user?.role !== 'DELIVERY_MANAGER' && !isDeliveryStaff && selectedDeliveryOrders.some(order => order.status === 'IN_ROUTE') && (
               <Button
                 size="sm"
                 onClick={() => {
-                  const inRouteIds = selectedOrdersList.filter(order => order.status === 'IN_ROUTE').map(order => order.id)
+                   const inRouteIds = selectedDeliveryOrders.filter(order => order.status === 'IN_ROUTE').map(order => order.id)
                   if (inRouteIds.length === 0) {
                     alerts.warning('Sin pedidos en ruta', 'Solo se pueden liquidar pedidos que ya salieron con el domiciliario.')
                     return
@@ -1752,7 +1840,24 @@ export default function ActiveDeliveriesPage() {
                 <span>Liquidar pedidos en ruta</span>
               </Button>
             )}
-            {hasPermission('dispatch.change_status') && (
+            {user?.role !== 'DELIVERY_MANAGER' && !isDeliveryStaff && selectedPickupOrders.some(order => order.status === 'READY') && (
+              <Button
+                size="sm"
+                onClick={() => {
+                  const pickupReadyIds = selectedPickupOrders.filter(order => order.status === 'READY').map(order => order.id)
+                  setSelectedOrderIds(pickupReadyIds)
+                  setBatchCollectError('')
+                  setBatchCollectMode('AS_IS')
+                  setReviewedTransferIds([])
+                  setBatchCollectOpen(true)
+                }}
+                className="h-9 px-4 text-xs font-black rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white shadow-lg flex items-center gap-2 cursor-pointer border border-emerald-400/40"
+              >
+                <DollarSign className="h-4 w-4" />
+                <span>Cobrar recogidas listas</span>
+              </Button>
+            )}
+            {hasPermission('dispatch.change_status') && selectedDeliveryOrders.length > 0 && (
               <Button
                 size="sm"
                 onClick={() => {
@@ -1764,7 +1869,7 @@ export default function ActiveDeliveriesPage() {
                 className="h-9 px-4 text-xs font-black rounded-xl bg-white text-[var(--accent)] hover:bg-white/90 shadow-md border-0 cursor-pointer flex items-center gap-1.5"
               >
                 <Bike className="h-4 w-4" />
-                Asignar Repartidor a los {selectedOrderIds.length} pedidos
+                 Asignar Repartidor a {selectedDeliveryOrders.length} domicilio{selectedDeliveryOrders.length === 1 ? '' : 's'}
               </Button>
             )}
           </div>
@@ -1856,7 +1961,7 @@ export default function ActiveDeliveriesPage() {
                       const isWarning = waitingForDispatch && !isUrgent && elapsedMinutes >= DISPATCH_WARNING_MINUTES
                       const queuePosition = visibleOrders.findIndex(item => item.id === order.id) + 1
                       const isSelectedRow = selectedOrderIds.includes(order.id)
-                      const isSelectable = order.orderType === 'DELIVERY' && !['DELIVERED', 'CANCELLED'].includes(order.status)
+                      const isSelectable = ['DELIVERY', 'PICKUP'].includes(order.orderType) && !['DELIVERED', 'CANCELLED'].includes(order.status)
                       return (
                         <motion.tr key={order.id} layout initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
                           className={`border-b transition-colors ${!isDeliveryStaff ? 'last:border-b-0' : ''} ${
@@ -1984,7 +2089,7 @@ export default function ActiveDeliveriesPage() {
                                       disabled={markingPickupReadyId === order.id}
                                       className="h-6 px-2 text-[10px] font-extrabold bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg gap-1 border-0 cursor-pointer shadow-sm animate-pulse"
                                       title={
-                                        (notifyOnPickupReady[order.id] ?? true)
+                                        (notifyOnPickupReady[order.id] ?? false)
                                           ? "Marcar pedido listo y notificar por WhatsApp al cliente"
                                           : "Marcar pedido listo (sin notificar por WhatsApp)"
                                       }
@@ -1999,15 +2104,15 @@ export default function ActiveDeliveriesPage() {
                                     <label
                                       className="inline-flex items-center cursor-pointer select-none"
                                       title={
-                                        (notifyOnPickupReady[order.id] ?? true)
-                                          ? "Notificación por WhatsApp activada (marcado por defecto)"
+                                        (notifyOnPickupReady[order.id] ?? false)
+                                          ? "Notificación por WhatsApp activada"
                                           : "Notificación por WhatsApp desactivada (no se enviará mensaje al cliente)"
                                       }
                                       onClick={e => e.stopPropagation()}
                                     >
                                       <input
                                         type="checkbox"
-                                        checked={notifyOnPickupReady[order.id] ?? true}
+                                         checked={notifyOnPickupReady[order.id] ?? false}
                                         onChange={e => {
                                           e.stopPropagation()
                                           setNotifyOnPickupReady(prev => ({ ...prev, [order.id]: e.target.checked }))
@@ -2527,6 +2632,18 @@ export default function ActiveDeliveriesPage() {
                 <AlertTriangle className="h-3.5 w-3.5 shrink-0" /><span>{dispatchError}</span>
               </div>
             )}
+            <label className="flex cursor-pointer items-start gap-2.5 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-subtle)] p-3">
+              <input
+                type="checkbox"
+                checked={notifyOnDispatch}
+                onChange={event => setNotifyOnDispatch(event.target.checked)}
+                className="mt-0.5 h-4 w-4 rounded accent-[var(--accent)]"
+              />
+              <span className="text-xs font-bold text-[var(--text-secondary)]">
+                Enviar mensaje de WhatsApp al cliente al despachar
+                <span className="mt-0.5 block text-[10px] font-normal text-[var(--text-muted)]">Desactivado por defecto; actívalo solo cuando sea necesario.</span>
+              </span>
+            </label>
             <div className="flex gap-3 pt-2 border-t border-[var(--border-subtle)]/40">
               <Button variant="outline" className="flex-1 h-11 rounded-xl font-bold text-sm cursor-pointer" onClick={() => setDispatchDialog(null)}>Cancelar</Button>
               <Button className="flex-1 h-11 bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-fg)] rounded-xl font-bold text-sm shadow-md border-0 cursor-pointer" onClick={handleConfirmDispatch}>
@@ -2656,6 +2773,19 @@ export default function ActiveDeliveriesPage() {
               </Label>
             </div>
 
+            <label className="flex cursor-pointer items-start gap-2.5 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-subtle)] p-3">
+              <input
+                type="checkbox"
+                checked={batchNotifyOnDispatch}
+                onChange={event => setBatchNotifyOnDispatch(event.target.checked)}
+                className="mt-0.5 h-4 w-4 rounded accent-[var(--accent)]"
+              />
+              <span className="text-xs font-bold text-[var(--text-secondary)]">
+                Enviar mensaje de WhatsApp al despachar
+                <span className="mt-0.5 block text-[10px] font-normal text-[var(--text-muted)]">Desactivado por defecto para evitar mensajes masivos accidentales.</span>
+              </span>
+            </label>
+
             {batchError && (
               <div className="rounded-xl border border-[var(--destructive)]/20 bg-[var(--destructive)]/5 p-2.5 text-xs text-[var(--destructive)] font-semibold flex items-center gap-1.5 animate-fade-in">
                 <AlertTriangle className="h-4 w-4 shrink-0" />
@@ -2714,10 +2844,10 @@ export default function ActiveDeliveriesPage() {
           <DialogHeader>
             <DialogTitle className="text-xl font-black text-[var(--text-primary)] flex items-center gap-2">
               <DollarSign className="h-6 w-6 text-emerald-500" />
-              Liquidación de pedidos en ruta
+              Cobro masivo de pedidos
             </DialogTitle>
             <p className="text-xs text-[var(--text-secondary)]">
-              Revisa efectivo y transferencias por separado antes de finalizar <strong className="text-[var(--text-primary)]">{selectedOrdersList.length} pedidos</strong>.
+              Revisa efectivo y transferencias antes de finalizar <strong className="text-[var(--text-primary)]">{selectedOrdersList.length} pedidos</strong> de domicilio o para recoger.
             </p>
           </DialogHeader>
 
@@ -2855,7 +2985,7 @@ export default function ActiveDeliveriesPage() {
                     <span className="truncate">
                       {unreviewedTransferOrders.length > 0
                         ? `Valida ${unreviewedTransferOrders.length} transferencia${unreviewedTransferOrders.length === 1 ? '' : 's'}`
-                        : `Confirmar liquidación · ${formatCurrency(batchCollectTotals.total)}`}
+                        : `Confirmar cobro · ${formatCurrency(batchCollectTotals.total)}`}
                     </span>
                   </>
                 )}

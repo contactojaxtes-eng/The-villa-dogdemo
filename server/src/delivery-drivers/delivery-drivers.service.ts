@@ -82,12 +82,40 @@ export class DeliveryDriversService {
       : undefined;
   }
 
-  private getDriverPaymentMethod(value?: string) {
+  private getDriverPaymentMethod(value?: string): CompleteDriverDeliveryDto['method'] {
     const method = String(value || '').toUpperCase();
-    if (!['CASH', 'TRANSFER', 'NEQUI', 'BANCOLOMBIA', 'DAVIPLATA'].includes(method)) {
-      throw new BadRequestException('Selecciona el método de pago recibido: efectivo o transferencia.');
+    if (!['CASH', 'TRANSFER', 'NEQUI', 'BANCOLOMBIA', 'DAVIPLATA', 'MIXED'].includes(method)) {
+      throw new BadRequestException('Selecciona el método de pago recibido: efectivo, transferencia o mixto.');
     }
-    return method;
+    return method as CompleteDriverDeliveryDto['method'];
+  }
+
+  private getDriverPaymentBreakdown(
+    method: CompleteDriverDeliveryDto['method'],
+    total: number,
+    data: Pick<CompleteDriverDeliveryDto, 'cashAmount' | 'transferAmount'>,
+  ) {
+    if (!Number.isFinite(total) || total < 0) {
+      throw new BadRequestException('El total del pedido no es válido. Pide a caja que revise el pedido.');
+    }
+
+    if (method === 'CASH') {
+      return { cashAmount: total, transferAmount: 0, hasTransferPart: false };
+    }
+    if (method !== 'MIXED') {
+      return { cashAmount: 0, transferAmount: total, hasTransferPart: true };
+    }
+
+    const cashAmount = Number(data.cashAmount);
+    const transferAmount = Number(data.transferAmount);
+    if (!Number.isFinite(cashAmount) || !Number.isFinite(transferAmount) || cashAmount <= 0 || transferAmount <= 0) {
+      throw new BadRequestException('En un pago mixto, los valores de efectivo y transferencia deben ser mayores a cero.');
+    }
+    if (Math.abs((cashAmount + transferAmount) - total) > 1) {
+      throw new BadRequestException('Los valores de efectivo y transferencia deben sumar el total del pedido.');
+    }
+
+    return { cashAmount, transferAmount, hasTransferPart: true };
   }
 
   private portalOrderInclude() {
@@ -260,8 +288,10 @@ export class DeliveryDriversService {
       const totalDeliveredSales = completedOrdersList.reduce((sum, order) => sum + order.total, 0);
       const pendingCashOrders = completedOrdersList.filter(order =>
         !order.driverSettlementId &&
-        order.paymentStatus !== 'CONFIRMED' &&
-        ['CASH', 'MIXED'].includes(order.paymentMethod)
+        (
+          order.paymentMethod === 'MIXED' ||
+          (order.paymentMethod === 'CASH' && order.paymentStatus !== 'CONFIRMED')
+        )
       );
       const pendingCash = pendingCashOrders.reduce((sum, order) =>
         sum + (order.paymentMethod === 'MIXED' ? (order.cashAmount || 0) : order.total), 0
@@ -476,9 +506,16 @@ export class DeliveryDriversService {
     ]);
 
     const pendingCash = history
-      .filter(order => order.paymentMethod === 'CASH' && order.paymentStatus !== 'CONFIRMED' && !order.driverSettlementId)
-      .reduce((sum, order) => sum + Number(order.total || 0), 0);
-    const pendingTransfers = history.filter(order => order.paymentStatus === 'PENDING_REVIEW').length;
+      .filter(order => !order.driverSettlementId && (
+        order.paymentMethod === 'MIXED' ||
+        (order.paymentMethod === 'CASH' && order.paymentStatus !== 'CONFIRMED')
+      ))
+      .reduce((sum, order) => sum + Number(order.paymentMethod === 'MIXED' ? order.cashAmount || 0 : order.total || 0), 0);
+    const pendingTransfers = history.filter(order =>
+      order.paymentStatus === 'PENDING_REVIEW' &&
+      ['TRANSFER', 'NEQUI', 'BANCOLOMBIA', 'DAVIPLATA', 'MIXED'].includes(order.paymentMethod) &&
+      Number(order.transferAmount || order.total || 0) > 0,
+    ).length;
 
     return {
       driver: { id: driver.id, name: driver.name, phone: driver.phone, active: driver.active },
@@ -501,7 +538,6 @@ export class DeliveryDriversService {
 
   async completeMyOrder(userId: string, orderId: string, data: CompleteDriverDeliveryDto, files?: any[]) {
     const method = this.getDriverPaymentMethod(data.method);
-    const isTransfer = method !== 'CASH';
     const proofFile = this.getProofFile(files);
     // Una foto de recibo se conserva solamente durante el turno. Limitamos el
     // tamaño para que varios domiciliarios no saturen la base temporal.
@@ -532,24 +568,25 @@ export class DeliveryDriversService {
       }
 
       const amount = Number(order.total || 0);
-      const paymentStatus = isTransfer ? 'PENDING_REVIEW' : 'DRIVER_CASH_PENDING';
-      const reference = String(data.reference || '').trim().slice(0, 300) || null;
+      const { cashAmount, transferAmount, hasTransferPart } = this.getDriverPaymentBreakdown(method, amount, data);
+      const paymentStatus = hasTransferPart ? 'PENDING_REVIEW' : 'DRIVER_CASH_PENDING';
+      const reference = hasTransferPart ? (String(data.reference || '').trim().slice(0, 300) || null) : null;
       const payment = await tx.payment.upsert({
         where: { orderId: order.id },
         create: {
           orderId: order.id,
           amount,
           method,
-          cashAmount: isTransfer ? 0 : amount,
-          transferAmount: isTransfer ? amount : 0,
+          cashAmount,
+          transferAmount,
           reference,
           status: paymentStatus,
         },
         update: {
           amount,
           method,
-          cashAmount: isTransfer ? 0 : amount,
-          transferAmount: isTransfer ? amount : 0,
+          cashAmount,
+          transferAmount,
           reference,
           status: paymentStatus,
           confirmedAt: null,
@@ -565,22 +602,22 @@ export class DeliveryDriversService {
           paymentMethod: method,
           paymentStatus,
           paymentReference: reference,
-          cashAmount: isTransfer ? 0 : amount,
-          transferAmount: isTransfer ? amount : 0,
+          cashAmount,
+          transferAmount,
           cashClosingId: closing.id,
           cashRegisterId: closing.cashRegisterId,
         },
       });
 
       let proof: any = null;
-      if (isTransfer && receipt) {
+      if (hasTransferPart && receipt) {
         proof = await tx.transferProof.create({
           data: {
             paymentId: payment.id,
             orderId: order.id,
             cashClosingId: closing.id,
             submittedById: userId,
-            amount,
+            amount: transferAmount,
             method,
             status: 'PENDING',
             filePath: null,
@@ -601,7 +638,9 @@ export class DeliveryDriversService {
             status: { before: order.status, after: 'DELIVERED' },
             paymentMethod: { before: order.paymentMethod, after: method },
             paymentStatus: { before: order.paymentStatus, after: paymentStatus },
-            proofAttached: Boolean(isTransfer && receipt),
+            cashAmount: { before: order.cashAmount || 0, after: cashAmount },
+            transferAmount: { before: order.transferAmount || 0, after: transferAmount },
+            proofAttached: Boolean(hasTransferPart && receipt),
           },
         },
       });
@@ -617,7 +656,7 @@ export class DeliveryDriversService {
           deliveryDriver: { select: { id: true, name: true, phone: true } },
         },
       });
-      return { order: updatedOrder, payment, proof, isTransfer };
+      return { order: updatedOrder, payment, proof, isTransfer: hasTransferPart };
     }, operationTransaction);
 
     this.socketGateway.emitOrderStatusChange(orderId, 'DELIVERED', result.order);
@@ -635,7 +674,6 @@ export class DeliveryDriversService {
 
   async updateMyPayment(userId: string, orderId: string, data: CompleteDriverDeliveryDto) {
     const method = this.getDriverPaymentMethod(data.method);
-    const isTransfer = method !== 'CASH';
 
     const result = await this.prisma.$transaction(async tx => {
       await lockOperation(tx);
@@ -667,8 +705,9 @@ export class DeliveryDriversService {
       }
 
       const amount = Number(order.total || 0);
-      const paymentStatus = isTransfer ? 'PENDING_REVIEW' : 'DRIVER_CASH_PENDING';
-      const reference = isTransfer
+      const { cashAmount, transferAmount, hasTransferPart } = this.getDriverPaymentBreakdown(method, amount, data);
+      const paymentStatus = hasTransferPart ? 'PENDING_REVIEW' : 'DRIVER_CASH_PENDING';
+      const reference = hasTransferPart
         ? (String(data.reference || '').trim().slice(0, 300) || order.paymentReference || null)
         : null;
       const payment = await tx.payment.upsert({
@@ -677,16 +716,16 @@ export class DeliveryDriversService {
           orderId: order.id,
           amount,
           method,
-          cashAmount: isTransfer ? 0 : amount,
-          transferAmount: isTransfer ? amount : 0,
+          cashAmount,
+          transferAmount,
           reference,
           status: paymentStatus,
         },
         update: {
           amount,
           method,
-          cashAmount: isTransfer ? 0 : amount,
-          transferAmount: isTransfer ? amount : 0,
+          cashAmount,
+          transferAmount,
           reference,
           status: paymentStatus,
           confirmedAt: null,
@@ -701,12 +740,13 @@ export class DeliveryDriversService {
           paymentMethod: method,
           paymentStatus,
           paymentReference: reference,
-          cashAmount: isTransfer ? 0 : amount,
-          transferAmount: isTransfer ? amount : 0,
+          cashAmount,
+          transferAmount,
         },
       });
 
-      if (order.paymentMethod !== method) {
+      const transferAmountChanged = Math.abs(Number(order.transferAmount || 0) - transferAmount) > 1;
+      if (order.paymentMethod !== method || transferAmountChanged) {
         await tx.transferProof.updateMany({
           where: {
             orderId: order.id,
@@ -724,6 +764,8 @@ export class DeliveryDriversService {
           changes: {
             paymentMethod: { before: order.paymentMethod, after: method },
             paymentStatus: { before: order.paymentStatus, after: paymentStatus },
+            cashAmount: { before: order.cashAmount || 0, after: cashAmount },
+            transferAmount: { before: order.transferAmount || 0, after: transferAmount },
             originalPaymentMethod: order.originalPaymentMethod || order.paymentMethod,
           },
         },
@@ -761,7 +803,13 @@ export class DeliveryDriversService {
         include: { payment: true },
       });
       if (!order) throw new NotFoundException('No puedes adjuntar comprobantes a este pedido.');
-      if (order.driverSettlementId || order.paymentStatus === 'CONFIRMED') {
+      const canReplaceMixedProofAfterCashSettlement = Boolean(
+        order.driverSettlementId &&
+        order.paymentMethod === 'MIXED' &&
+        method === 'MIXED' &&
+        order.paymentStatus !== 'CONFIRMED',
+      );
+      if ((order.driverSettlementId && !canReplaceMixedProofAfterCashSettlement) || order.paymentStatus === 'CONFIRMED') {
         throw new BadRequestException('Este cobro ya fue liquidado o validado y no se puede modificar.');
       }
 
@@ -776,6 +824,26 @@ export class DeliveryDriversService {
       }
 
       const amount = Number(order.total || 0);
+      if (canReplaceMixedProofAfterCashSettlement) {
+        const settledCash = Number(order.cashAmount || 0);
+        const settledTransfer = Number(order.transferAmount || 0);
+        const requestedCash = data.cashAmount === undefined ? settledCash : Number(data.cashAmount);
+        const requestedTransfer = data.transferAmount === undefined ? settledTransfer : Number(data.transferAmount);
+        if (Math.abs(requestedCash - settledCash) > 1 || Math.abs(requestedTransfer - settledTransfer) > 1) {
+          throw new BadRequestException('El efectivo ya fue liquidado. Puedes reemplazar el comprobante, pero no cambiar los valores del pago mixto.');
+        }
+      }
+      const breakdownData = method === 'MIXED'
+        ? {
+            cashAmount: canReplaceMixedProofAfterCashSettlement
+              ? order.cashAmount ?? undefined
+              : data.cashAmount ?? order.cashAmount ?? undefined,
+            transferAmount: canReplaceMixedProofAfterCashSettlement
+              ? order.transferAmount ?? undefined
+              : data.transferAmount ?? order.transferAmount ?? undefined,
+          }
+        : data;
+      const { cashAmount, transferAmount } = this.getDriverPaymentBreakdown(method, amount, breakdownData);
       const reference = String(data.reference || '').trim().slice(0, 300) || order.paymentReference || null;
       const payment = await tx.payment.upsert({
         where: { orderId: order.id },
@@ -783,16 +851,16 @@ export class DeliveryDriversService {
           orderId: order.id,
           amount,
           method,
-          cashAmount: 0,
-          transferAmount: amount,
+          cashAmount,
+          transferAmount,
           reference,
           status: 'PENDING_REVIEW',
         },
         update: {
           amount,
           method,
-          cashAmount: 0,
-          transferAmount: amount,
+          cashAmount,
+          transferAmount,
           reference,
           status: 'PENDING_REVIEW',
           confirmedAt: null,
@@ -806,8 +874,8 @@ export class DeliveryDriversService {
           paymentMethod: method,
           paymentStatus: 'PENDING_REVIEW',
           paymentReference: reference,
-          cashAmount: 0,
-          transferAmount: amount,
+          cashAmount,
+          transferAmount,
           cashClosingId: closing.id,
           cashRegisterId: closing.cashRegisterId,
         },
@@ -828,7 +896,7 @@ export class DeliveryDriversService {
           orderId: order.id,
           cashClosingId: closing.id,
           submittedById: userId,
-          amount,
+          amount: transferAmount,
           method,
           status: 'PENDING',
           filePath: null,
@@ -846,6 +914,8 @@ export class DeliveryDriversService {
           changes: {
             paymentMethod: { before: order.paymentMethod, after: method },
             paymentStatus: { before: order.paymentStatus, after: 'PENDING_REVIEW' },
+            cashAmount: { before: order.cashAmount || 0, after: cashAmount },
+            transferAmount: { before: order.transferAmount || 0, after: transferAmount },
           },
         },
       });
@@ -889,9 +959,11 @@ export class DeliveryDriversService {
         cashClosingId: openClosing.id,
         orderType: 'DELIVERY',
         status: 'DELIVERED',
-        paymentMethod: { in: ['CASH', 'MIXED'] },
-        paymentStatus: { not: 'CONFIRMED' },
         driverSettlementId: null,
+        OR: [
+          { paymentMethod: 'MIXED' },
+          { paymentMethod: 'CASH', paymentStatus: { not: 'CONFIRMED' } },
+        ],
         deliveryDriverId: { not: null },
       },
       select: {
@@ -959,9 +1031,11 @@ export class DeliveryDriversService {
           cashClosingId: openClosing.id,
           orderType: 'DELIVERY',
           status: 'DELIVERED',
-          paymentMethod: { in: ['CASH', 'MIXED'] },
-          paymentStatus: { not: 'CONFIRMED' },
           driverSettlementId: null,
+          OR: [
+            { paymentMethod: 'MIXED' },
+            { paymentMethod: 'CASH', paymentStatus: { not: 'CONFIRMED' } },
+          ],
         },
         select: { id: true, total: true, cashAmount: true, paymentMethod: true },
       });
@@ -985,19 +1059,32 @@ export class DeliveryDriversService {
       });
       const linked = await tx.order.updateMany({
         where: { id: { in: orderIds }, driverSettlementId: null },
-        data: { driverSettlementId: settlement.id, paymentStatus: 'CONFIRMED' },
+        data: { driverSettlementId: settlement.id },
       });
       if (linked.count !== orderIds.length) {
         throw new BadRequestException('La liquidación cambió mientras se procesaba. Intenta nuevamente.');
       }
-      await tx.payment.updateMany({
-        where: { orderId: { in: orderIds } },
-        data: {
-          status: 'CONFIRMED',
-          confirmedAt: new Date(),
-          confirmedBy: receivedById,
-        },
-      });
+      // En MIXED la validacion de la transferencia y la entrega del efectivo
+      // son obligaciones independientes. Liquidar el efectivo solo enlaza el
+      // DriverSettlement; conserva PENDING_REVIEW/REJECTED/CONFIRMED de la
+      // transferencia. Un pago CASH puro si queda confirmado aqui.
+      const cashOnlyOrderIds = orders
+        .filter(order => order.paymentMethod === 'CASH')
+        .map(order => order.id);
+      if (cashOnlyOrderIds.length) {
+        await tx.order.updateMany({
+          where: { id: { in: cashOnlyOrderIds }, driverSettlementId: settlement.id },
+          data: { paymentStatus: 'CONFIRMED' },
+        });
+        await tx.payment.updateMany({
+          where: { orderId: { in: cashOnlyOrderIds } },
+          data: {
+            status: 'CONFIRMED',
+            confirmedAt: new Date(),
+            confirmedBy: receivedById,
+          },
+        });
+      }
       return tx.driverSettlement.findUnique({
         where: { id: settlement.id },
         include: {

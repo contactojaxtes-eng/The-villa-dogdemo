@@ -27,7 +27,7 @@ import {
   Wallet,
 } from 'lucide-react'
 
-type PaymentMethod = 'CASH' | 'TRANSFER' | 'NEQUI' | 'BANCOLOMBIA' | 'DAVIPLATA'
+type PaymentMethod = 'CASH' | 'TRANSFER' | 'NEQUI' | 'BANCOLOMBIA' | 'DAVIPLATA' | 'MIXED'
 
 interface ProofSummary {
   id: string
@@ -50,6 +50,8 @@ interface PortalOrder {
   deliveryFee: number
   status: string
   paymentMethod: string
+  cashAmount?: number | null
+  transferAmount?: number | null
   originalPaymentMethod?: string | null
   paymentStatus: string
   paymentReference?: string | null
@@ -83,6 +85,7 @@ const paymentOptions: Array<{ value: PaymentMethod; label: string }> = [
   { value: 'NEQUI', label: 'Nequi' },
   { value: 'BANCOLOMBIA', label: 'Bancolombia' },
   { value: 'DAVIPLATA', label: 'Daviplata' },
+  { value: 'MIXED', label: 'Mixto · efectivo + transferencia' },
 ]
 
 const paymentLabel: Record<string, string> = {
@@ -91,10 +94,11 @@ const paymentLabel: Record<string, string> = {
   NEQUI: 'Nequi',
   BANCOLOMBIA: 'Bancolombia',
   DAVIPLATA: 'Daviplata',
+  MIXED: 'Mixto · efectivo + transferencia',
 }
 
 function isTransferMethod(method?: string) {
-  return ['TRANSFER', 'NEQUI', 'BANCOLOMBIA', 'DAVIPLATA'].includes(String(method || '').toUpperCase())
+  return ['TRANSFER', 'NEQUI', 'BANCOLOMBIA', 'DAVIPLATA', 'MIXED'].includes(String(method || '').toUpperCase())
 }
 
 function normalizeDriverPaymentMethod(method?: string): PaymentMethod {
@@ -167,6 +171,8 @@ export default function DriverPortalPage() {
   const [targetOrder, setTargetOrder] = useState<PortalOrder | null>(null)
   const [dialogMode, setDialogMode] = useState<'COMPLETE' | 'PAYMENT' | 'PROOF'>('COMPLETE')
   const [method, setMethod] = useState<PaymentMethod>('CASH')
+  const [cashAmount, setCashAmount] = useState('')
+  const [transferAmount, setTransferAmount] = useState('')
   const [reference, setReference] = useState('')
   const [proof, setProof] = useState<File | null>(null)
   const [saving, setSaving] = useState(false)
@@ -236,6 +242,8 @@ export default function DriverPortalPage() {
     setDialogMode('COMPLETE')
     setMethod(normalizeDriverPaymentMethod(order.paymentMethod))
     setReference(order.paymentReference || '')
+    setCashAmount(order.cashAmount != null ? String(order.cashAmount) : '')
+    setTransferAmount(order.transferAmount != null ? String(order.transferAmount) : '')
     setProof(null)
   }
 
@@ -245,6 +253,8 @@ export default function DriverPortalPage() {
     const currentMethod = normalizeDriverPaymentMethod(order.paymentMethod)
     setMethod(isTransferMethod(currentMethod) ? currentMethod : 'TRANSFER')
     setReference(order.paymentReference || '')
+    setCashAmount(order.cashAmount != null ? String(order.cashAmount) : '')
+    setTransferAmount(order.transferAmount != null ? String(order.transferAmount) : '')
     setProof(null)
   }
 
@@ -253,6 +263,8 @@ export default function DriverPortalPage() {
     setDialogMode('PAYMENT')
     setMethod(normalizeDriverPaymentMethod(order.paymentMethod))
     setReference(order.paymentReference || '')
+    setCashAmount(order.cashAmount != null ? String(order.cashAmount) : '')
+    setTransferAmount(order.transferAmount != null ? String(order.transferAmount) : '')
     setProof(null)
   }
 
@@ -260,6 +272,8 @@ export default function DriverPortalPage() {
     if (saving) return
     setTargetOrder(null)
     setProof(null)
+    setCashAmount('')
+    setTransferAmount('')
   }
 
   const submitCollection = async () => {
@@ -272,17 +286,29 @@ export default function DriverPortalPage() {
       alerts.warning('Foto muy pesada', 'El comprobante puede pesar máximo 8 MB. Toma una foto más liviana o comprímela antes de subirla.')
       return
     }
+    const total = Number(targetOrder.total || 0)
+    const cash = Number(cashAmount)
+    const transfer = Number(transferAmount)
+    if (method === 'MIXED' && (!Number.isFinite(cash) || !Number.isFinite(transfer) || cash <= 0 || transfer <= 0 || Math.abs((cash + transfer) - total) > 1)) {
+      alerts.warning('Distribución inválida', `El efectivo y la transferencia deben ser mayores que cero y sumar ${formatCurrency(total)}.`)
+      return
+    }
     setSaving(true)
     try {
       if (dialogMode === 'PAYMENT') {
         await api.put(`/delivery-drivers/me/orders/${targetOrder.id}/payment`, {
           method,
           reference: reference.trim() || undefined,
+          ...(method === 'MIXED' ? { cashAmount: cash, transferAmount: transfer } : {}),
         })
       } else {
         const form = new FormData()
         form.append('method', method)
         if (reference.trim()) form.append('reference', reference.trim())
+        if (method === 'MIXED') {
+          form.append('cashAmount', String(cash))
+          form.append('transferAmount', String(transfer))
+        }
         if (proof) form.append('proof', proof)
         const endpoint = dialogMode === 'COMPLETE'
           ? `/delivery-drivers/me/orders/${targetOrder.id}/complete`
@@ -292,13 +318,15 @@ export default function DriverPortalPage() {
       alerts.success(
         dialogMode === 'COMPLETE' ? 'Entrega registrada' : dialogMode === 'PAYMENT' ? 'Método de pago corregido' : 'Comprobante adjuntado',
         dialogMode === 'COMPLETE'
-          ? (isTransferMethod(method) ? 'El pago quedó pendiente de validación de caja.' : 'El efectivo quedó pendiente de liquidación en caja.')
+          ? (method === 'MIXED' ? 'El efectivo quedó pendiente de liquidación y la transferencia pendiente de validación de caja.' : isTransferMethod(method) ? 'El pago quedó pendiente de validación de caja.' : 'El efectivo quedó pendiente de liquidación en caja.')
           : dialogMode === 'PAYMENT'
             ? 'El cambio ya se refleja en tu historial y en administración.'
             : 'Caja ya puede revisar el comprobante.'
       )
       setTargetOrder(null)
       setProof(null)
+      setCashAmount('')
+      setTransferAmount('')
       await load(true)
       setTab('HISTORY')
     } catch (err: any) {
@@ -460,7 +488,17 @@ export default function DriverPortalPage() {
           <div className="border-b border-[var(--border-subtle)] p-5"><DialogHeader><DialogTitle className="flex items-center gap-2 text-lg font-black"><Wallet className="h-5 w-5 text-[var(--accent)]" />{dialogMode === 'COMPLETE' ? `Entregar pedido #${targetOrder?.orderNumber}` : dialogMode === 'PAYMENT' ? `Corregir pago #${targetOrder?.orderNumber}` : `Adjuntar comprobante #${targetOrder?.orderNumber}`}</DialogTitle><DialogDescription>{dialogMode === 'COMPLETE' ? 'Elige cómo pagó realmente el cliente y confirma la entrega. La foto es opcional.' : dialogMode === 'PAYMENT' ? 'Corrige cómo pagó el cliente. El método original seguirá visible para control.' : 'Sube la foto cuando la tengas. El pedido puede haberse entregado sin comprobante.'}</DialogDescription></DialogHeader></div>
           <div className="space-y-4 p-5">
             <div className="flex items-center justify-between rounded-2xl bg-[var(--bg-elevated)] p-3"><div><p className="text-xs font-bold text-[var(--text-secondary)]">Total del pedido</p><p className="text-xl font-black text-[var(--accent)]">{formatCurrency(targetOrder?.total || 0)}</p><p className="mt-1 text-[11px] font-semibold text-[var(--text-muted)]">Método original: {originalPaymentLabel(targetOrder)}</p></div><Badge className="bg-[var(--bg-panel)] text-xs font-black text-[var(--text-primary)]">#{targetOrder?.orderNumber}</Badge></div>
-            <div className="space-y-1.5"><Label className="text-xs font-black text-[var(--text-secondary)]">Método de pago recibido</Label><select value={method} onChange={event => { setMethod(event.target.value as PaymentMethod); if (event.target.value === 'CASH') setProof(null) }} className="flex h-11 w-full rounded-xl border border-[var(--border-default)] bg-[var(--bg-input)] px-3 text-sm font-semibold text-[var(--text-primary)] outline-none focus:border-[var(--accent)]">{dialogMode !== 'PROOF' && <option value="CASH">Efectivo</option>}{paymentOptions.filter(option => option.value !== 'CASH').map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</select></div>
+            <div className="space-y-1.5"><Label className="text-xs font-black text-[var(--text-secondary)]">Método de pago recibido</Label><select value={method} onChange={event => { const next = event.target.value as PaymentMethod; setMethod(next); if (next === 'CASH') setProof(null); if (next === 'MIXED' && targetOrder) { const half = Math.round(Number(targetOrder.total || 0) / 2); if (!cashAmount) setCashAmount(String(half)); if (!transferAmount) setTransferAmount(String(Number(targetOrder.total || 0) - half)) } }} className="flex h-11 w-full rounded-xl border border-[var(--border-default)] bg-[var(--bg-input)] px-3 text-sm font-semibold text-[var(--text-primary)] outline-none focus:border-[var(--accent)]">{dialogMode !== 'PROOF' && <option value="CASH">Efectivo</option>}{paymentOptions.filter(option => option.value !== 'CASH').map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</select></div>
+            {method === 'MIXED' && (
+              <div className="rounded-2xl border border-violet-500/25 bg-violet-500/[0.06] p-3.5">
+                <p className="mb-2 text-xs font-black text-violet-800 dark:text-violet-200">Distribuye el total entre efectivo y transferencia</p>
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  <div className="space-y-1.5"><Label className="text-[11px] font-black text-[var(--text-secondary)]">Efectivo</Label><Input type="number" min="1" step="1" value={cashAmount} onChange={event => setCashAmount(event.target.value)} placeholder="0" className="h-10 rounded-xl" /></div>
+                  <div className="space-y-1.5"><Label className="text-[11px] font-black text-[var(--text-secondary)]">Transferencia</Label><Input type="number" min="1" step="1" value={transferAmount} onChange={event => setTransferAmount(event.target.value)} placeholder="0" className="h-10 rounded-xl" /></div>
+                </div>
+                <p className="mt-2 text-[11px] font-semibold text-[var(--text-secondary)]">Total distribuido: {formatCurrency((Number(cashAmount) || 0) + (Number(transferAmount) || 0))} · Pedido: {formatCurrency(targetOrder?.total || 0)}</p>
+              </div>
+            )}
             <div className="space-y-1.5"><Label className="text-xs font-black text-[var(--text-secondary)]">Referencia de pago <span className="font-medium text-[var(--text-muted)]">(opcional)</span></Label><Input value={reference} onChange={event => setReference(event.target.value)} maxLength={300} placeholder="Ej: comprobante, últimos dígitos" className="h-11 rounded-xl" /></div>
             {isTransferMethod(method) && dialogMode !== 'PAYMENT' && <div className="rounded-2xl border border-blue-500/25 bg-blue-500/[0.06] p-3.5"><div className="flex gap-2"><Camera className="mt-0.5 h-4 w-4 shrink-0 text-blue-600" /><div><p className="text-xs font-black text-blue-800 dark:text-blue-200">Foto del comprobante {dialogMode === 'PROOF' ? '' : '(opcional)'}</p><p className="mt-0.5 text-[11px] leading-4 text-blue-700/80 dark:text-blue-200/75">Puedes entregar primero y subirla desde el historial cuando la tengas. Máximo 8 MB.</p></div></div><label className="mt-3 flex h-10 cursor-pointer items-center justify-center gap-2 rounded-xl border border-dashed border-blue-500/40 bg-[var(--bg-panel)] px-3 text-xs font-black text-blue-700 transition hover:bg-blue-500/10 dark:text-blue-300"><Upload className="h-4 w-4" />{proof ? proof.name : 'Seleccionar foto'}<input type="file" accept="image/jpeg,image/png,image/webp,image/heic,image/heif" className="hidden" onChange={event => setProof(event.target.files?.[0] || null)} /></label>{proof && <button type="button" onClick={() => setProof(null)} className="mt-2 text-[11px] font-bold text-rose-600 hover:underline">Quitar foto</button>}</div>}
             {dialogMode === 'PAYMENT' && isTransferMethod(method) && <p className="rounded-xl bg-blue-500/[0.08] px-3 py-2 text-xs text-blue-700 dark:text-blue-200">La foto sigue siendo opcional. Después de guardar podrás adjuntarla desde este historial.</p>}

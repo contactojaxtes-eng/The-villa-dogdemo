@@ -958,6 +958,7 @@ function ChatPage() {
   const chatFilterRef = useRef(chatFilter)
   const sessionsRequestIdRef = useRef(0)
   const loadMoreRequestIdRef = useRef(0)
+  const activeOrderRequestIdRef = useRef(0)
   const sessionQueryRef = useRef({ search: '', filter: 'TODAY' })
   const tabsRef = useRef<HTMLDivElement>(null)
   const statusReloadTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -983,34 +984,34 @@ function ChatPage() {
 
   // Sincronizar y detectar la orden activa de este cliente en tiempo real para habilitar botón de editar
   useEffect(() => {
+    const requestId = ++activeOrderRequestIdRef.current
     if (!activeSession) {
       setActiveOrder(null)
       return
     }
-    if (activeSession.activeOrder) {
-      setActiveOrder(activeSession.activeOrder)
-    }
-    const searchTarget = (activeSession.customerPhone && activeSession.customerPhone !== '3000000000' ? activeSession.customerPhone : activeSession.phone) || activeSession.customerName || ''
-    if (searchTarget) {
-      const cleanDigits = searchTarget.replace(/\D/g, '')
-      const p10 = cleanDigits.length === 12 && cleanDigits.startsWith('57') ? cleanDigits.slice(2) : cleanDigits
-      const query = p10.length === 10 ? p10 : (cleanDigits.length >= 7 && cleanDigits.length <= 13 ? cleanDigits : (activeSession.customerName || searchTarget))
-      api.get<any>(`/orders?search=${encodeURIComponent(query)}&limit=5&compact=true&orderType=DELIVERY,PICKUP`)
-        .then(res => {
-          const orders = Array.isArray(res) ? res : (res as any)?.orders || []
-          const active = orders.find((o: any) => !['CANCELLED', 'DELIVERED'].includes(o.status))
-          if (active) {
-            setActiveOrder({
-              id: active.id,
-              orderNumber: active.orderNumber,
-              status: active.status,
-              total: active.total,
-            })
-          }
-        })
-        .catch(() => {})
-    }
-  }, [activeSession?.id, activeSession?.phone, activeSession?.customerPhone, activeSession?.customerName])
+    // Los pedidos históricos creados antes del vínculo chatSessionId llegan
+    // como activeOrder únicamente cuando el servidor encuentra una sola
+    // coincidencia segura por teléfono. Lo conservamos mientras intentamos la
+    // consulta exacta; nunca volvemos a buscar por nombre o por otro chat.
+    const legacyFallback = activeSession.activeOrder || null
+    setActiveOrder(legacyFallback)
+    api.get<any>(`/orders?chatSessionId=${encodeURIComponent(activeSession.id)}&limit=10&compact=true&orderType=DELIVERY,PICKUP`)
+      .then(res => {
+        if (requestId !== activeOrderRequestIdRef.current) return
+        const orders = Array.isArray(res) ? res : (res as any)?.orders || []
+        const active = orders.find((o: any) => !['CANCELLED', 'DELIVERED'].includes(o.status))
+        setActiveOrder(active ? {
+          id: active.id,
+          orderNumber: active.orderNumber,
+          status: active.status,
+          total: active.total,
+          chatSessionId: active.chatSessionId,
+        } : legacyFallback)
+      })
+      .catch(() => {
+        if (requestId === activeOrderRequestIdRef.current) setActiveOrder(legacyFallback)
+      })
+  }, [activeSession?.id])
 
   const toggleMuteWa = () => {
     const next = !isMutedWa
@@ -1755,13 +1756,8 @@ function ChatPage() {
     })
     socket.on('chatSessionAssigned', (payload: any) => {
       if (!payload || !payload.sessionId) return
-      const payloadDigits = (payload.phone || '').replace(/\D/g, '')
-      const payloadPhone10 = payloadDigits.length === 12 && payloadDigits.startsWith('57') ? payloadDigits.slice(2) : payloadDigits
-
       setSessions(prev => prev.map(s => {
-        const sDigits = (s.phone || '').replace(/\D/g, '')
-        const sPhone10 = sDigits.length === 12 && sDigits.startsWith('57') ? sDigits.slice(2) : sDigits
-        const isMatch = s.id === payload.sessionId || (payload.phone && s.phone === payload.phone) || (payloadPhone10 && sPhone10 && payloadPhone10.length >= 7 && payloadPhone10 === sPhone10)
+        const isMatch = s.id === payload.sessionId
         return isMatch ? {
           ...s,
           assignedToId: payload.assignedToId,
@@ -1772,9 +1768,7 @@ function ChatPage() {
 
       setActiveSession(curr => {
         if (!curr) return null
-        const cDigits = (curr.phone || '').replace(/\D/g, '')
-        const cPhone10 = cDigits.length === 12 && cDigits.startsWith('57') ? cDigits.slice(2) : cDigits
-        const isMatch = curr.id === payload.sessionId || (payload.phone && curr.phone === payload.phone) || (payloadPhone10 && cPhone10 && payloadPhone10.length >= 7 && payloadPhone10 === cPhone10)
+        const isMatch = curr.id === payload.sessionId
         return isMatch ? {
           ...curr,
           assignedToId: payload.assignedToId,
@@ -1796,38 +1790,24 @@ function ChatPage() {
 
       if (payload?.orderCreated || payload?.orderUpdated) {
         // Actualizar el pedido activo en segundo plano SIN parpadeo ni recarga de la pantalla
-        const phone = payload?.phone
-        if (phone) {
-          const cleanPhone = phone.replace(/\D/g, '').slice(-10)
-          setActiveSession(current => {
-            if (current) {
-              const curClean = (current.phone || '').replace(/\D/g, '').slice(-10)
-              if (curClean === cleanPhone) {
-                api.get<any[]>(`/orders/history/${cleanPhone}`)
-                  .then(orders => {
-                    if (orders && orders.length > 0) {
-                      const active = orders.find(o => o.status !== 'DELIVERED' && o.status !== 'CANCELLED')
-                      setActiveOrder(active || null)
-                    }
-                  })
-                  .catch(() => {})
-              }
-            }
-            return current
-          })
+        if (payload?.sessionId && activeSessionRef.current?.id === payload.sessionId) {
+          // La consulta del pedido activo usa siempre el ID exacto de sesión.
+          const requestId = ++activeOrderRequestIdRef.current
+          api.get<any>(`/orders?chatSessionId=${encodeURIComponent(payload.sessionId)}&limit=10&compact=true&orderType=DELIVERY,PICKUP`)
+            .then(res => {
+              if (requestId !== activeOrderRequestIdRef.current) return
+              const list = Array.isArray(res) ? res : (res as any)?.orders || []
+              setActiveOrder(list.find((o: any) => !['DELIVERED', 'CANCELLED'].includes(o.status)) || null)
+            })
+            .catch(() => {})
         }
         return
       }
 
       if (!payload || !payload.sessionId) return
-      const payloadDigits = (payload.phone || '').replace(/\D/g, '')
-      const payloadPhone10 = payloadDigits.length === 12 && payloadDigits.startsWith('57') ? payloadDigits.slice(2) : payloadDigits
-
       setSessions(prev => {
         return prev.map(s => {
-          const sDigits = (s.phone || '').replace(/\D/g, '')
-          const sPhone10 = sDigits.length === 12 && sDigits.startsWith('57') ? sDigits.slice(2) : sDigits
-          const isMatch = s.id === payload.sessionId || (payload.phone && s.phone === payload.phone) || (payloadPhone10 && sPhone10 && payloadPhone10.length >= 7 && payloadPhone10 === sPhone10)
+          const isMatch = s.id === payload.sessionId
           
           if (!isMatch) return s
           return {
@@ -1844,9 +1824,7 @@ function ChatPage() {
 
       setActiveSession(current => {
         if (!current) return null
-        const cDigits = (current.phone || '').replace(/\D/g, '')
-        const cPhone10 = cDigits.length === 12 && cDigits.startsWith('57') ? cDigits.slice(2) : cDigits
-        const isMatch = current.id === payload.sessionId || (payload.phone && current.phone === payload.phone) || (payloadPhone10 && cPhone10 && payloadPhone10.length >= 7 && payloadPhone10 === cPhone10)
+        const isMatch = current.id === payload.sessionId
 
         if (isMatch) {
           return {
@@ -1883,17 +1861,8 @@ function ChatPage() {
       const isIncoming = payload.direction === 'IN'
       const isActiveIncoming = isIncoming && activeSessionRef.current?.id === payload.sessionId
       setSessions(prev => {
-        const payloadPhone = (payload.phone || '').trim()
-        const cleanPayloadDigits = payloadPhone.replace(/\D/g, '')
-        const payloadPhone10 = cleanPayloadDigits.length === 12 && cleanPayloadDigits.startsWith('57') ? cleanPayloadDigits.slice(2) : cleanPayloadDigits
-
         const idx = prev.findIndex(s => {
-          if (s.id === payload.sessionId) return true
-          const sPhone = (s.phone || '').trim()
-          if (sPhone && payloadPhone && sPhone === payloadPhone) return true
-          const sClean = sPhone.replace(/\D/g, '')
-          const sPhone10 = sClean.length === 12 && sClean.startsWith('57') ? sClean.slice(2) : sClean
-          return (sPhone10 && payloadPhone10 && sPhone10.length >= 7 && payloadPhone10.length >= 7 && sPhone10 === payloadPhone10)
+          return s.id === payload.sessionId
         })
 
         const msgId = payload.id || payload.waMessageId || Math.random().toString()
@@ -1948,14 +1917,7 @@ function ChatPage() {
           return next.sort((a, b) => (new Date(b.lastMessageAt || 0).getTime() || 0) - (new Date(a.lastMessageAt || 0).getTime() || 0))
         } else {
           // Add new session, ensuring no duplicate exists in prev
-          const filteredPrev = prev.filter(s => {
-            if (s.id === payload.sessionId) return false
-            const sPhone = (s.phone || '').trim()
-            if (sPhone && payloadPhone && sPhone === payloadPhone) return false
-            const sClean = sPhone.replace(/\D/g, '')
-            const sPhone10 = sClean.length === 12 && sClean.startsWith('57') ? sClean.slice(2) : sClean
-            return !(sPhone10 && payloadPhone10 && sPhone10.length >= 7 && payloadPhone10.length >= 7 && sPhone10 === payloadPhone10)
-          })
+          const filteredPrev = prev.filter(s => s.id !== payload.sessionId)
 
           const newSession: Session = {
             id: payload.sessionId,
@@ -1974,11 +1936,7 @@ function ChatPage() {
       // 2. If it's the active chat, update active session and append message
       setActiveSession(current => {
         if (current) {
-          const curClean = (current.phone || '').replace(/\D/g, '')
-          const curPhone10 = curClean.length === 12 && curClean.startsWith('57') ? curClean.slice(2) : curClean
-          const pClean = (payload.phone || '').replace(/\D/g, '')
-          const pPhone10 = pClean.length === 12 && pClean.startsWith('57') ? pClean.slice(2) : pClean
-          if (current.id === payload.sessionId || curPhone10 === pPhone10) {
+          if (current.id === payload.sessionId) {
 
             setMessagesCached(prevMsgs => {
               const msgId = payload.id || payload.waMessageId || Math.random().toString()
@@ -2174,28 +2132,6 @@ function ChatPage() {
       olderMessagesRequestIdRef.current += 1
       setMessagesCached([])
       setHasOlderMessages(false)
-    }
-  }, [activeSession?.id])
-
-  // Fetch active order for the active session (priority: active in-progress order, fallback to latest order)
-  useEffect(() => {
-    if (activeSession) {
-      const cleanPhone = (activeSession.phone || '').replace(/\D/g, '').slice(-10)
-      api.get<any[]>(`/orders/history/${cleanPhone}`)
-        .then(orders => {
-          if (!orders || orders.length === 0) {
-            setActiveOrder(null)
-            return
-          }
-          const active = orders.find(o => o.status !== 'DELIVERED' && o.status !== 'CANCELLED')
-          setActiveOrder(active || null)
-        })
-        .catch(err => {
-          console.error('Error fetching customer active order:', err)
-          setActiveOrder(null)
-        })
-    } else {
-      setActiveOrder(null)
     }
   }, [activeSession?.id])
 

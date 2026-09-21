@@ -610,6 +610,7 @@ export default function NewOrderPage({
   const [paymentMethod, setPaymentMethod] = useState('CASH')
   const [cashAmountInput, setCashAmountInput] = useState('')
   const [transferAmountInput, setTransferAmountInput] = useState('')
+  const [notifyCustomer, setNotifyCustomer] = useState(false)
   const [notes, setNotes] = useState('')
   const [cart, setCart] = useState<CartItem[]>([])
   const [itemSearch, setItemSearch] = useState('')
@@ -952,6 +953,7 @@ export default function NewOrderPage({
       setPaymentReference('')
       setCashAmountInput('')
       setTransferAmountInput('')
+      setNotifyCustomer(false)
       setLatitude(null)
       setLongitude(null)
       setNotes('')
@@ -977,6 +979,7 @@ export default function NewOrderPage({
         setPaymentReference(draft.paymentReference || '')
         setCashAmountInput(draft.cashAmountInput || '')
         setTransferAmountInput(draft.transferAmountInput || '')
+        setNotifyCustomer(draft.notifyCustomer === true)
         setLatitude(typeof draft.latitude === 'number' ? draft.latitude : null)
         setLongitude(typeof draft.longitude === 'number' ? draft.longitude : null)
         setNotes(draft.notes || '')
@@ -1175,8 +1178,16 @@ export default function NewOrderPage({
     shouldAutoScrollRef.current = true
     userIsNearBottomRef.current = true
 
-    // 1. Identificar ID de sesión objetivo (searchParams -> customerPhone match -> localStorage last active)
-    let targetSessionId = chatSessionId || (typeof window !== 'undefined' ? localStorage.getItem('niche_last_active_whatsapp_session_id') : null)
+    // 1. Identificar la sesión exacta. En una edición nunca usamos la última
+    // sesión global: eso podía abrir el chat de otro cliente.
+    let targetSessionId = chatSessionId
+
+    if (!targetSessionId && editOrderId) {
+      const linkedChat = await api.get<any>(`/whatsapp/order-chat/${editOrderId}`).catch(() => null)
+      targetSessionId = linkedChat?.session?.id || null
+      if (linkedChat?.session) setChatDrawerSession(linkedChat.session)
+      if (Array.isArray(linkedChat?.messages)) setChatDrawerMessages(linkedChat.messages)
+    }
 
     const cleanPhone = (customerPhone || '').replace(/\D/g, '')
     const phone10 = cleanPhone.length === 12 && cleanPhone.startsWith('57') ? cleanPhone.slice(2) : cleanPhone
@@ -1185,7 +1196,9 @@ export default function NewOrderPage({
 
     // Buscar en memoria global de sesiones primero (0ms instantáneo)
     if (globalSessionsCache && globalSessionsCache.length > 0) {
-      if (phone10 && phone10.length >= 7) {
+      if (targetSessionId) {
+        cachedSession = globalSessionsCache.find(s => s.id === targetSessionId)
+      } else if (phone10 && phone10.length >= 7) {
         cachedSession = globalSessionsCache.find(s => {
           const sClean = (s.phone || '').replace(/\D/g, '')
           const s10 = sClean.length === 12 && sClean.startsWith('57') ? sClean.slice(2) : sClean
@@ -1193,9 +1206,6 @@ export default function NewOrderPage({
           const sc10 = scClean.length === 12 && scClean.startsWith('57') ? scClean.slice(2) : scClean
           return s10 === phone10 || sc10 === phone10 || s.phone === customerPhone || s.customerPhone === customerPhone
         })
-      }
-      if (!cachedSession && targetSessionId) {
-        cachedSession = globalSessionsCache.find(s => s.id === targetSessionId)
       }
     }
 
@@ -1265,8 +1275,9 @@ export default function NewOrderPage({
 
     try {
       await api.post('/whatsapp/send', {
+        sessionId: chatDrawerSession.id,
         phone: chatDrawerSession.phone,
-        text
+        text,
       })
     } catch (err: any) {
       console.error('Error enviando respuesta rápida:', err)
@@ -2237,8 +2248,8 @@ export default function NewOrderPage({
 
   useEffect(() => {
     if (editOrderId || !draftLoaded || loadedDraftKey !== activeDraftKey) return
-    localStorage.setItem(activeDraftKey, JSON.stringify({ customerName, customerPhone, exactAddress, addressReference, zoneId, zoneSearch, zoneRateEdit, mapSearch, paymentMethod, paymentReference, cashAmountInput, transferAmountInput, latitude, longitude, notes, cart, orderType, customerId, clientMutationId, updatedAt: Date.now() }))
-  }, [cart, exactAddress, addressReference, customerName, customerPhone, draftLoaded, loadedDraftKey, notes, paymentMethod, paymentReference, cashAmountInput, transferAmountInput, latitude, longitude, zoneId, zoneSearch, zoneRateEdit, mapSearch, orderType, editOrderId, customerId, activeDraftKey, clientMutationId])
+    localStorage.setItem(activeDraftKey, JSON.stringify({ customerName, customerPhone, exactAddress, addressReference, zoneId, zoneSearch, zoneRateEdit, mapSearch, paymentMethod, paymentReference, cashAmountInput, transferAmountInput, notifyCustomer, latitude, longitude, notes, cart, orderType, customerId, clientMutationId, updatedAt: Date.now() }))
+  }, [cart, exactAddress, addressReference, customerName, customerPhone, draftLoaded, loadedDraftKey, notes, paymentMethod, paymentReference, cashAmountInput, transferAmountInput, notifyCustomer, latitude, longitude, zoneId, zoneSearch, zoneRateEdit, mapSearch, orderType, editOrderId, customerId, activeDraftKey, clientMutationId])
 
   useEffect(() => {
     if (editOrderId && editOrderLoaded) return
@@ -2280,6 +2291,10 @@ export default function NewOrderPage({
 
   const addToCart = (item: MenuItem) => {
     if (!item) return
+    if (orderType === 'delivery' && /\bvidrio\b/i.test(item.name || '')) {
+      setError(`${item.name} no está disponible para domicilio porque viene en vidrio.`)
+      return
+    }
     userInteractedWithCartRef.current = true
     userClearedDraftRef.current = false
     // Verificar si el ítem pertenece a una categoría de adiciones o tipo ADICION
@@ -2561,10 +2576,14 @@ export default function NewOrderPage({
     return Number.isFinite(savedKm) && savedKm > 0 ? savedKm : null
   }, [selectedZone])
 
-  const allItems = useMemo(() => 
+  const allItems = useMemo(() =>
     (categories || [])
       .flatMap(c => (c?.items || []).map(i => ({ ...i, category: { name: c?.name || '', id: c?.id || '' } }))), 
     [categories]
+  )
+  const deliverySafeItems = useMemo(
+    () => orderType === 'delivery' ? allItems.filter(item => !/\bvidrio\b/i.test(item.name || '')) : allItems,
+    [allItems, orderType],
   )
   const displayCategories = useMemo(() => {
     return (categories || []).filter(c => c && !isAdditionCategory(c.name, (c as any)?.description))
@@ -2718,16 +2737,16 @@ export default function NewOrderPage({
   const filteredItems = useMemo(() => {
     const rawQuery = itemSearch.trim()
     if (!rawQuery) {
-      return categoryFilter === 'ALL' 
-        ? allItems.filter(i => !isAdditionCategory(i?.category?.name, (i as any)?.category?.description))
-        : allItems.filter(item => item?.category?.name === categoryFilter)
+        return categoryFilter === 'ALL'
+          ? deliverySafeItems.filter(i => !isAdditionCategory(i?.category?.name, (i as any)?.category?.description))
+          : deliverySafeItems.filter(item => item?.category?.name === categoryFilter)
     }
 
     const queryNorm = normalizeText(rawQuery)
     const queryNoSpaces = queryNorm.replace(/\s+/g, '')
     const tokens = queryNorm.split(/\s+/).filter(t => t.length > 0)
 
-    const matches = allItems.filter(item => {
+    const matches = deliverySafeItems.filter(item => {
       if (!item) return false
       const nameNorm = normalizeText(item.name || '')
       const nameNoSpaces = nameNorm.replace(/\s+/g, '')
@@ -2763,7 +2782,7 @@ export default function NewOrderPage({
     }
 
     return matches.sort((a, b) => getSearchRelevanceScore(b, rawQuery) - getSearchRelevanceScore(a, rawQuery))
-  }, [allItems, categoryFilter, itemSearch])
+  }, [deliverySafeItems, categoryFilter, itemSearch])
 
   const cartItemIds = useMemo(() => new Set(cart.map(i => i.menuItemId)), [cart])
 
@@ -2810,7 +2829,6 @@ export default function NewOrderPage({
   const missingFields = [
     cart.length === 0 && 'productos',
     orderType === 'delivery' && !customerPhone.trim() && 'teléfono',
-    orderType === 'delivery' && !zoneSearch.trim() && 'barrio',
     orderType === 'delivery' && !exactAddress.trim() && 'dirección exacta',
     orderType === 'delivery' && (!zoneRateEdit.trim() || !Number.isFinite(parseFloat(zoneRateEdit)) || parseFloat(zoneRateEdit) < 0) && 'tarifa domicilio',
   ].filter(Boolean) as string[]
@@ -3013,6 +3031,12 @@ export default function NewOrderPage({
         submittingRef.current = false
         return
       }
+      const glassItem = cart.find(item => /\bvidrio\b/i.test(item.name || ''))
+      if (glassItem) {
+        setError(`${glassItem.name} no está disponible para domicilio porque viene en vidrio.`)
+        submittingRef.current = false
+        return
+      }
       const rawRate = zoneRateEdit.trim()
       if (!rawRate) {
         setError('Por favor ingresa la tarifa de domicilio (obligatorio).')
@@ -3028,6 +3052,22 @@ export default function NewOrderPage({
     } else {
       if (cleanDigits && cleanDigits.length < 7) {
         setError('El teléfono (si se ingresa) debe tener al menos 7 dígitos.')
+        submittingRef.current = false
+        return
+      }
+    }
+
+    if (paymentMethod === 'MIXED') {
+      const cashAmount = Number(cashAmountInput)
+      const transferAmount = Number(transferAmountInput)
+      if (
+        !Number.isFinite(cashAmount) ||
+        !Number.isFinite(transferAmount) ||
+        cashAmount <= 0 ||
+        transferAmount <= 0 ||
+        Math.abs((cashAmount + transferAmount) - total) > 1
+      ) {
+        setError(`El efectivo y la transferencia deben ser mayores a cero y sumar ${formatCurrency(total)}.`)
         submittingRef.current = false
         return
       }
@@ -3093,6 +3133,7 @@ export default function NewOrderPage({
         longitude: isPickup ? undefined : (longitude || undefined),
         customerId: customerId || undefined,
         chatSessionId: chatSessionId || undefined,
+        notifyCustomer,
         source: chatSessionId ? 'WHATSAPP' : undefined,
         clientMutationId: editOrderId ? undefined : clientMutationId,
       }
@@ -3157,7 +3198,8 @@ export default function NewOrderPage({
     setClientMutationId(createClientMutationId())
     setCustomerName(''); setCustomerPhone(''); setExactAddress(''); setZoneId('')
     setZoneSearch(''); setZoneRateEdit('')
-    setPaymentMethod('CASH'); setNotes(''); setCart([]); setError(''); setOrderType('delivery'); setIsCartCollapsed(false)
+    setPaymentMethod('CASH'); setCashAmountInput(''); setTransferAmountInput(''); setNotifyCustomer(false)
+    setNotes(''); setCart([]); setError(''); setOrderType('delivery'); setIsCartCollapsed(false)
   }
 
 
@@ -3847,6 +3889,19 @@ export default function NewOrderPage({
                 </div>
               </div>
             )}
+
+            <label className="flex cursor-pointer items-start gap-2 rounded-xl border border-[var(--border-default)] bg-[var(--bg-input)] p-2.5">
+              <input
+                type="checkbox"
+                checked={notifyCustomer}
+                onChange={event => setNotifyCustomer(event.target.checked)}
+                className="mt-0.5 h-4 w-4 rounded accent-[var(--accent)]"
+              />
+              <span className="text-[11px] font-bold text-[var(--text-secondary)]">
+                Avisar al cliente por WhatsApp
+                <span className="mt-0.5 block text-[9px] font-normal text-[var(--text-muted)]">Desactivado por defecto para domicilio y pasar a recoger.</span>
+              </span>
+            </label>
           </div>
         </div>
       </Card>

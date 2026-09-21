@@ -9,8 +9,8 @@ describe('DeliveryDriversService', () => {
       },
       order: {
         findMany: jest.fn().mockResolvedValue([
-          { id: 'cash-order', total: 25_000, cashAmount: null, paymentMethod: 'CASH' },
-          { id: 'mixed-order', total: 30_000, cashAmount: 10_000, paymentMethod: 'MIXED' },
+          { id: 'cash-order', total: 25_000, cashAmount: null, paymentMethod: 'CASH', paymentStatus: 'DRIVER_CASH_PENDING' },
+          { id: 'mixed-order', total: 30_000, cashAmount: 10_000, paymentMethod: 'MIXED', paymentStatus: 'PENDING_REVIEW' },
         ]),
         updateMany: jest.fn().mockResolvedValue({ count: 2 }),
       },
@@ -45,12 +45,16 @@ describe('DeliveryDriversService', () => {
         notes: 'Faltó mil',
       },
     });
-    expect(tx.order.updateMany).toHaveBeenCalledWith({
+    expect(tx.order.updateMany).toHaveBeenNthCalledWith(1, {
       where: { id: { in: ['cash-order', 'mixed-order'] }, driverSettlementId: null },
-      data: { driverSettlementId: 'settlement-1', paymentStatus: 'CONFIRMED' },
+      data: { driverSettlementId: 'settlement-1' },
+    });
+    expect(tx.order.updateMany).toHaveBeenNthCalledWith(2, {
+      where: { id: { in: ['cash-order'] }, driverSettlementId: 'settlement-1' },
+      data: { paymentStatus: 'CONFIRMED' },
     });
     expect(tx.payment.updateMany).toHaveBeenCalledWith({
-      where: { orderId: { in: ['cash-order', 'mixed-order'] } },
+      where: { orderId: { in: ['cash-order'] } },
       data: {
         status: 'CONFIRMED',
         confirmedAt: expect.any(Date),
@@ -60,6 +64,39 @@ describe('DeliveryDriversService', () => {
     expect(socket.server.emit).toHaveBeenCalledWith('driverSettlementCreated', result);
     expect(socket.server.emit).toHaveBeenCalledWith('driversChanged');
     expect(socket.server.emit).toHaveBeenCalledWith('cashRegistersChanged');
+  });
+
+  it('keeps a mixed order pending for cash even after its transfer was confirmed', async () => {
+    const prisma: any = {
+      cashClosing: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: 'delivery-shift',
+          cashRegisterId: 'delivery-register',
+          shiftStart: new Date('2026-09-21T12:00:00Z'),
+        }),
+      },
+      order: {
+        findMany: jest.fn().mockResolvedValue([{
+          id: 'mixed-order',
+          orderNumber: 77,
+          total: 30_000,
+          cashAmount: 12_000,
+          paymentMethod: 'MIXED',
+          paymentStatus: 'CONFIRMED',
+          driverSettlementId: null,
+          deliveryDriver: { id: 'driver-1', name: 'Carlos', phone: '3000000000' },
+        }]),
+      },
+    };
+    const service = new DeliveryDriversService(prisma, { server: { emit: jest.fn() } } as any);
+
+    const result = await service.getPendingSettlements();
+
+    expect(prisma.order.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.not.objectContaining({ paymentStatus: expect.anything() }),
+    }));
+    expect(result.totalPendingCash).toBe(12_000);
+    expect(result.drivers[0].orders).toEqual([{ id: 'mixed-order', orderNumber: 77, amount: 12_000 }]);
   });
 
   it('allows a driver to close only their own transfer delivery without a proof photo', async () => {
@@ -119,6 +156,72 @@ describe('DeliveryDriversService', () => {
         status: 'DELIVERED',
         paymentStatus: 'PENDING_REVIEW',
         cashClosingId: 'delivery-shift',
+      }),
+    }));
+    expect(tx.transferProof.create).not.toHaveBeenCalled();
+    expect(socket.emitPaymentSubmitted).toHaveBeenCalled();
+  });
+
+  it('records the exact cash and transfer portions of a mixed driver payment', async () => {
+    const tx: any = {
+      $queryRaw: jest.fn().mockResolvedValue([{ locked: 1 }]),
+      deliveryDriver: {
+        findUnique: jest.fn().mockResolvedValue({ id: 'driver-1', active: true }),
+      },
+      order: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: 'mixed-order',
+          orderNumber: 42,
+          total: 30_000,
+          orderType: 'DELIVERY',
+          status: 'IN_ROUTE',
+          paymentMethod: 'CASH',
+          paymentStatus: 'PENDING',
+          cashAmount: 30_000,
+          transferAmount: 0,
+        }),
+        update: jest.fn().mockResolvedValue({ id: 'mixed-order' }),
+        findUnique: jest.fn().mockResolvedValue({ id: 'mixed-order', status: 'DELIVERED' }),
+      },
+      cashClosing: {
+        findFirst: jest.fn().mockResolvedValue({ id: 'delivery-shift', cashRegisterId: 'delivery-register' }),
+      },
+      payment: {
+        upsert: jest.fn().mockResolvedValue({ id: 'payment-2', status: 'PENDING_REVIEW' }),
+      },
+      transferProof: { create: jest.fn() },
+      orderChangeLog: { create: jest.fn().mockResolvedValue({}) },
+    };
+    const prisma: any = {
+      $transaction: jest.fn((callback: (transaction: any) => unknown) => callback(tx)),
+    };
+    const socket: any = {
+      server: { emit: jest.fn() },
+      emitOrderStatusChange: jest.fn(),
+      emitPaymentSubmitted: jest.fn(),
+    };
+    const service = new DeliveryDriversService(prisma, socket);
+
+    await service.completeMyOrder('driver-user', 'mixed-order', {
+      method: 'MIXED',
+      cashAmount: 12_000,
+      transferAmount: 18_000,
+    }, []);
+
+    expect(tx.payment.upsert).toHaveBeenCalledWith(expect.objectContaining({
+      create: expect.objectContaining({
+        method: 'MIXED',
+        cashAmount: 12_000,
+        transferAmount: 18_000,
+        status: 'PENDING_REVIEW',
+      }),
+    }));
+    expect(tx.order.update).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        paymentMethod: 'MIXED',
+        cashAmount: 12_000,
+        transferAmount: 18_000,
+        status: 'DELIVERED',
       }),
     }));
     expect(tx.transferProof.create).not.toHaveBeenCalled();
@@ -295,6 +398,42 @@ describe('DeliveryDriversService', () => {
       buffer: Buffer.from([0xff, 0xd8, 0xff, 0xd9]),
       mimetype: 'image/jpeg',
     }])).rejects.toThrow('turno actual');
+    expect(tx.payment.upsert).not.toHaveBeenCalled();
+  });
+
+  it('does not let a replacement proof change mixed amounts after cash was settled', async () => {
+    const tx: any = {
+      $queryRaw: jest.fn().mockResolvedValue([{ locked: 1 }]),
+      deliveryDriver: { findUnique: jest.fn().mockResolvedValue({ id: 'driver-1', active: true }) },
+      order: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: 'mixed-order',
+          total: 30_000,
+          orderType: 'DELIVERY',
+          status: 'DELIVERED',
+          paymentMethod: 'MIXED',
+          paymentStatus: 'PENDING_REVIEW',
+          cashAmount: 12_000,
+          transferAmount: 18_000,
+          cashClosingId: 'delivery-shift',
+          driverSettlementId: 'settlement-1',
+        }),
+      },
+      cashClosing: { findFirst: jest.fn().mockResolvedValue({ id: 'delivery-shift', cashRegisterId: 'delivery-register' }) },
+      payment: { upsert: jest.fn() },
+    };
+    const prisma: any = { $transaction: jest.fn((callback: (transaction: any) => unknown) => callback(tx)) };
+    const service = new DeliveryDriversService(prisma, { server: { emit: jest.fn() } } as any);
+
+    await expect(service.uploadMyProof('driver-user', 'mixed-order', {
+      method: 'MIXED',
+      cashAmount: 10_000,
+      transferAmount: 20_000,
+    }, [{
+      fieldname: 'proof',
+      buffer: Buffer.from([0xff, 0xd8, 0xff, 0xd9]),
+      mimetype: 'image/jpeg',
+    }])).rejects.toThrow('El efectivo ya fue liquidado');
     expect(tx.payment.upsert).not.toHaveBeenCalled();
   });
 

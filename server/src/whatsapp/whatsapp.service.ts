@@ -464,6 +464,27 @@ export class WhatsappService implements OnModuleInit {
     return clean === '3000000000' || clean === '0000000000' || /^0+$/.test(clean) || clean.length < 7;
   }
 
+  /**
+   * Variantes válidas del número remitente de WhatsApp. `phone` es la
+   * identidad de la conversación; `customerPhone` es solo un dato de contacto
+   * editable y nunca debe utilizarse para decidir a qué sesión pertenece un
+   * pedido.
+   */
+  private senderPhoneVariants(phone?: string | null): string[] {
+    const raw = (phone || '').trim();
+    if (!raw || this.isDummyPhoneNumber(raw)) return [];
+
+    const digits = raw.replace(/\D/g, '');
+    if (digits.length === 10 && digits.startsWith('3')) {
+      return Array.from(new Set([raw, digits, `57${digits}`, `+57${digits}`]));
+    }
+    if (digits.length === 12 && digits.startsWith('57')) {
+      const phone10 = digits.slice(2);
+      return Array.from(new Set([raw, digits, `+${digits}`, phone10]));
+    }
+    return [raw];
+  }
+
   extractCallablePhone(text?: string, contact?: any, rawPhone?: string): string | null {
     // 1. Direct standard Colombian phone (10 or 12 digits)
     const cleanDigits = (rawPhone || '').replace(/\D/g, '');
@@ -1732,7 +1753,7 @@ export class WhatsappService implements OnModuleInit {
             orderType: { in: ['DELIVERY', 'PICKUP'] },
             createdAt: { gte: searchSince },
           },
-          select: { id: true, orderNumber: true, customerName: true, customerPhone: true, status: true, total: true, createdAt: true },
+          select: { id: true, orderNumber: true, customerName: true, customerPhone: true, chatSessionId: true, status: true, total: true, createdAt: true },
           take: 5,
           orderBy: { createdAt: 'desc' }
         });
@@ -1746,7 +1767,7 @@ export class WhatsappService implements OnModuleInit {
               orderType: { in: ['DELIVERY', 'PICKUP'] },
               createdAt: { gte: recentDays },
             },
-            select: { id: true, orderNumber: true, customerName: true, customerPhone: true, status: true, total: true, createdAt: true },
+            select: { id: true, orderNumber: true, customerName: true, customerPhone: true, chatSessionId: true, status: true, total: true, createdAt: true },
             take: 1,
             orderBy: { createdAt: 'desc' }
           });
@@ -1788,6 +1809,12 @@ export class WhatsappService implements OnModuleInit {
         { customerName: { contains: cleanSearch, mode: 'insensitive' } },
         { id: { contains: cleanSearch, mode: 'insensitive' } },
       ];
+      const matchedOrderSessionIds = matchingOrders
+        .map(order => order.chatSessionId)
+        .filter((id): id is string => Boolean(id));
+      if (matchedOrderSessionIds.length > 0) {
+        orSearchList.push({ id: { in: Array.from(new Set(matchedOrderSessionIds)) } });
+      }
 
       // Soporte para búsqueda insensible a tildes (ej. "fabian" encuentra "Fabián", "jose" encuentra "José")
       const normSearch = cleanSearch.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
@@ -2120,124 +2147,66 @@ export class WhatsappService implements OnModuleInit {
     });
 
     let activeShiftOrders: any[] = [];
-    if (openCashShift) {
+    if (openCashShift && sessionIds.length > 0) {
       const shiftStartTime = openCashShift.shiftStart || openCashShift.createdAt;
-      const candidatePhones: string[] = [];
-      const candidateNames: string[] = [];
-      for (const s of deduplicatedSessions) {
-        const clean = (s.phone || '').replace(/\D/g, '');
-        const p10 = clean.length === 12 && clean.startsWith('57') ? clean.slice(2) : clean;
-        if (p10 && !this.isDummyPhoneNumber(p10)) {
-          candidatePhones.push(p10);
-          candidatePhones.push(`57${p10}`);
-          candidatePhones.push(`+57${p10}`);
-        }
-        if (s.phone && !this.isDummyPhoneNumber(s.phone)) candidatePhones.push(s.phone);
-        if (s.customerPhone && !this.isDummyPhoneNumber(s.customerPhone)) {
-          candidatePhones.push(s.customerPhone);
-          const custClean = s.customerPhone.replace(/\D/g, '');
-          const custP10 = custClean.length === 12 && custClean.startsWith('57') ? custClean.slice(2) : custClean;
-          if (custP10) {
-            candidatePhones.push(custP10);
-            candidatePhones.push(`57${custP10}`);
-            candidatePhones.push(`+57${custP10}`);
-          }
-          if (custClean) candidatePhones.push(custClean);
-        }
-        if (s.customerName && s.customerName.trim().length >= 3 && !['cliente mostrador', 'cliente recoger', 'cliente'].includes(s.customerName.trim().toLowerCase())) {
-          candidateNames.push(s.customerName.trim());
-        }
-      }
+      const senderPhones = Array.from(new Set(
+        deduplicatedSessions.flatMap(session => this.senderPhoneVariants(session.phone)),
+      ));
 
-      const uniqueCandidatePhones = Array.from(new Set(candidatePhones.filter(Boolean)));
-      const uniqueCandidateNames = Array.from(new Set(candidateNames.filter(Boolean)));
-
-      if (uniqueCandidatePhones.length > 0 || uniqueCandidateNames.length > 0) {
-        activeShiftOrders = await this.prisma.order.findMany({
-          where: {
-            OR: [
-              ...(uniqueCandidatePhones.length > 0 ? [{ customerPhone: { in: uniqueCandidatePhones } }] : []),
-              ...(uniqueCandidateNames.length > 0 ? [{ customerName: { in: uniqueCandidateNames, mode: 'insensitive' as const } }] : []),
-            ],
-            orderType: { in: ['DELIVERY', 'PICKUP'] },
-            createdAt: { gte: shiftStartTime },
-            status: { not: 'CANCELLED' }
-          },
-          select: {
-            id: true,
-            orderNumber: true,
-            status: true,
-            total: true,
-            customerPhone: true,
-            customerName: true,
-            createdAt: true,
-          },
-          orderBy: { createdAt: 'desc' }
-        });
-      }
+      activeShiftOrders = await this.prisma.order.findMany({
+        where: {
+          OR: [
+            { chatSessionId: { in: sessionIds } },
+            ...(senderPhones.length > 0 ? [{ chatSessionId: null, customerPhone: { in: senderPhones } }] : []),
+          ],
+          orderType: { in: ['DELIVERY', 'PICKUP'] },
+          createdAt: { gte: shiftStartTime },
+          status: { notIn: ['CANCELLED', 'DELIVERED'] },
+        },
+        select: {
+          id: true,
+          orderNumber: true,
+          status: true,
+          total: true,
+          customerPhone: true,
+          chatSessionId: true,
+          createdAt: true,
+        },
+        orderBy: { createdAt: 'desc' },
+      });
     }
 
-    for (const s of deduplicatedSessions) {
-      const sClean = (s.phone || '').replace(/\D/g, '');
-      const sP10 = sClean.length === 12 && sClean.startsWith('57') ? sClean.slice(2) : sClean;
-      const sCustClean = (s.customerPhone || '').replace(/\D/g, '');
-      const sCustP10 = sCustClean.length === 12 && sCustClean.startsWith('57') ? sCustClean.slice(2) : sCustClean;
-      
-      const match = activeShiftOrders.find(o => {
-        const oClean = (o.customerPhone || '').replace(/\D/g, '');
-        const oP10 = oClean.length === 12 && oClean.startsWith('57') ? oClean.slice(2) : oClean;
+    for (const session of deduplicatedSessions) {
+      let match = activeShiftOrders.find(order => order.chatSessionId === session.id);
 
-        const phoneMatch = !this.isDummyPhoneNumber(o.customerPhone) && !this.isDummyPhoneNumber(oP10) && (
-          (sP10 && oP10 === sP10) || 
-          (sCustP10 && oP10 === sCustP10) || 
-          (o.customerPhone && s.phone && !this.isDummyPhoneNumber(s.phone) && o.customerPhone === s.phone) || 
-          (o.customerPhone && s.customerPhone && !this.isDummyPhoneNumber(s.customerPhone) && o.customerPhone === s.customerPhone)
+      // Compatibilidad únicamente para pedidos antiguos sin chatSessionId. La
+      // identidad se compara contra el número remitente `phone`, nunca contra
+      // customerPhone ni contra el nombre editable del cliente.
+      if (!match) {
+        const senderVariants = new Set(this.senderPhoneVariants(session.phone));
+        const legacyMatches = activeShiftOrders.filter(order =>
+          !order.chatSessionId && senderVariants.has(order.customerPhone),
         );
-
-        const nameMatch = Boolean(o.customerName && s.customerName &&
-          o.customerName.trim().toLowerCase() === s.customerName.trim().toLowerCase() &&
-          !['cliente mostrador', 'cliente recoger', 'cliente'].includes(o.customerName.trim().toLowerCase()));
-
-        return phoneMatch || nameMatch;
-      });
-
-      if (match) {
-        s.activeOrder = {
-          id: match.id,
-          orderNumber: match.orderNumber,
-          status: match.status,
-          total: match.total,
-        };
-      } else {
-        s.activeOrder = null;
+        if (legacyMatches.length === 1) match = legacyMatches[0];
       }
 
-      // Si se buscó un número de pedido específico y esta sesión no tiene orden activa de turno, adjuntar la orden encontrada
-      if (!s.activeOrder && matchingOrders.length > 0) {
-        const m = matchingOrders.find(o => {
-          const oClean = (o.customerPhone || '').replace(/\D/g, '');
-          const oP10 = oClean.length === 12 && oClean.startsWith('57') ? oClean.slice(2) : oClean;
+      session.activeOrder = match ? {
+        id: match.id,
+        orderNumber: match.orderNumber,
+        status: match.status,
+        total: match.total,
+        chatSessionId: match.chatSessionId || session.id,
+      } : null;
 
-          const phoneMatches = !this.isDummyPhoneNumber(oP10) && (
-            (sP10 && oP10 === sP10) ||
-            (sCustP10 && oP10 === sCustP10) ||
-            (o.customerPhone && s.phone && o.customerPhone === s.phone) ||
-            (o.customerPhone && s.customerPhone && o.customerPhone === s.customerPhone)
-          );
-
-          const nameMatches = o.customerName && s.customerName &&
-            o.customerName !== 'Cliente Mostrador' && o.customerName !== 'Cliente Recoger' &&
-            o.customerName.trim().length >= 3 &&
-            o.customerName.toLowerCase() === s.customerName.toLowerCase();
-
-          return phoneMatches || nameMatches;
-        });
-        if (m) {
-          s.activeOrder = {
-            id: m.id,
-            orderNumber: m.orderNumber,
-            status: m.status,
-            total: m.total,
+      if (!session.activeOrder && matchingOrders.length > 0) {
+        const exactSearchMatch = matchingOrders.find(order => order.chatSessionId === session.id);
+        if (exactSearchMatch) {
+          session.activeOrder = {
+            id: exactSearchMatch.id,
+            orderNumber: exactSearchMatch.orderNumber,
+            status: exactSearchMatch.status,
+            total: exactSearchMatch.total,
+            chatSessionId: session.id,
           };
         }
       }
@@ -2347,29 +2316,6 @@ export class WhatsappService implements OnModuleInit {
       beforeDate = parsed;
     }
 
-    const raw = (session.phone || '').trim();
-    const cleanDigits = raw.replace(/\D/g, '');
-    const isStandardPhone = cleanDigits.length >= 7;
-    const phone10 = cleanDigits.length === 12 && cleanDigits.startsWith('57') ? cleanDigits.slice(2) : cleanDigits;
-    const phone12 = phone10.length === 10 && phone10.startsWith('3') ? '57' + phone10 : cleanDigits;
-
-    const orConditions: any[] = [
-      { id: sessionId },
-      { phone: raw }
-    ];
-
-    if (isStandardPhone) {
-      orConditions.push({ phone: cleanDigits }, { phone: phone10 }, { phone: phone12 });
-    }
-
-    const matchingSessions = await this.prisma.whatsAppSession.findMany({
-      where: { OR: orConditions },
-      select: { id: true }
-    });
-
-    const sessionIds = matchingSessions.map(s => s.id);
-    if (!sessionIds.includes(sessionId)) sessionIds.push(sessionId);
-
     const messageCursor = beforeDate
       ? beforeId
         ? {
@@ -2383,7 +2329,9 @@ export class WhatsappService implements OnModuleInit {
 
     const messages = await this.prisma.whatsAppMessage.findMany({
       where: {
-        sessionId: { in: sessionIds },
+        // Una conversación se identifica por su ID. No mezclar mensajes de
+        // sesiones que compartan teléfono o una variante antigua del número.
+        sessionId,
         ...messageCursor,
       },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
@@ -2734,7 +2682,7 @@ export class WhatsappService implements OnModuleInit {
           OR: [
             { phone: raw },
             ...(cleanDigits ? [{ phone: cleanDigits }] : []),
-            ...(phone10 ? [{ phone: phone10 }, { customerPhone: phone10 }] : []),
+            ...(phone10 ? [{ phone: phone10 }] : []),
           ]
         },
         orderBy: { lastMessageAt: 'desc' },
@@ -2757,8 +2705,11 @@ export class WhatsappService implements OnModuleInit {
       });
       if (!target?.active) throw new BadRequestException('La asesora seleccionada no está activa');
 
-      const canTakeOver = isSupervisor || actor?.role === 'DELIVERY_MANAGER';
-      if (canTakeOver || (actor && userId === actor.id)) {
+      // Las asesoras y el personal de domicilios solo pueden tomar un chat
+      // libre o uno que ya les pertenece. Solo ADMIN/SUPERADMIN puede reasignar
+      // una conversación atendida por otra persona.
+      const canTakeOver = isSupervisor;
+      if (canTakeOver) {
         await this.prisma.whatsAppSession.update({
           where: { id: sessionId },
           data: { assignedToId: userId, waitingForAdvisor: false },
@@ -2806,30 +2757,6 @@ export class WhatsappService implements OnModuleInit {
       data: { waitingForAdvisor: false },
       include: { assignedTo: { select: { id: true, name: true } } },
     });
-
-    if (session?.phone) {
-      const raw = session.phone.trim();
-      const cleanDigits = raw.replace(/\D/g, '');
-      const phone10 = cleanDigits.length === 12 && cleanDigits.startsWith('57') ? cleanDigits.slice(2) : cleanDigits;
-      const orList: any[] = [{ phone: raw }];
-      if (cleanDigits) orList.push({ phone: cleanDigits });
-      if (phone10 && phone10.length >= 7) {
-        orList.push({ phone: phone10 });
-        orList.push({ phone: `57${phone10}` });
-        orList.push({ phone: `+57${phone10}` });
-      }
-
-      await this.prisma.whatsAppSession.updateMany({
-        where: {
-          OR: orList,
-          id: { not: sessionId }
-        },
-        data: {
-          assignedToId: userId,
-          waitingForAdvisor: false
-        }
-      });
-    }
 
     this.socketGateway.emitWhatsApp('chatSessionAssigned', {
       id: sessionId,
@@ -3662,6 +3589,7 @@ ${dynamicCategoriesString}
     5A. BEBIDAS Y PRESENTACIONES:
        - Usa únicamente el nombre exacto de las bebidas del menú vigente. No cambies una marca, sabor, tamaño o empaque por otro parecido.
        - Si el cliente dice solo “gaseosa”, “jugo”, “agua”, “manzana” o una marca con varias presentaciones, pregunta cuál presentación quiere antes de resumirla como producto confirmado.
+       - Las bebidas cuyo nombre incluya “vidrio” NO se ofrecen ni se confirman para domicilio. Si el cliente quiere domicilio y pide una de vidrio, indícale brevemente que debe elegir otra presentación. Solo se permiten para recoger o consumir en el restaurante.
        - Si cambia una bebida, confirma la última elección y no mantengas en el resumen la bebida anterior.
 
     5B. RESUMEN DEL PEDIDO:
@@ -3674,7 +3602,7 @@ ${dynamicCategoriesString}
        - CUENTAS DE TRANSFERENCIA: ${paymentInstruction}
        - PREGUNTA ÚNICA: No pidas los datos uno por uno. Después de conocer productos y tipo de entrega, solicita EN UN SOLO MENSAJE todos los datos que falten.
        - PEDIDO PARA PASAR A RECOGER (PICKUP): Nunca preguntes barrio ni dirección. Pide únicamente el método de pago si todavía falta.
-       - PEDIDO A DOMICILIO: Solicita juntos el barrio, la dirección exacta y el método de pago. Ejemplo: "Listo. Envíame en un solo mensaje tu barrio, dirección exacta y si pagas en efectivo o transferencia."
+       - PEDIDO A DOMICILIO: La dirección exacta y el método de pago son necesarios. El barrio es opcional: úsalo si el cliente lo informa, pero NUNCA bloquees ni retrases el pedido por no tenerlo. Ejemplo: "Listo. Envíame en un solo mensaje tu dirección exacta y si pagas en efectivo o transferencia; si conoces el barrio también puedes indicarlo."
        - Si el cliente ya entregó uno o dos datos, pregunta solamente por todos los que falten, juntos y en una respuesta corta.
        - TARIFA DE DOMICILIO - REGLA CRÍTICA ABSOLUTA: La lista de barrios y tarifas que tienes disponible arriba es la lista OFICIAL. Si el barrio del cliente NO APARECE en esa lista oficial, o si no tiene precio asignado, ESTÁ ABSOLUTAMENTE PROHIBIDO DECIR QUE EL DOMICILIO ES "GRATIS", "$0" O INVENTAR UN VALOR. Jamás digas que un domicilio es gratis. En esos casos, DEBES responder exactamente: "Perfecto. El valor del domicilio a tu barrio será verificado y confirmado directamente por nuestro asesor al procesar tu pedido." e incluir [TRANSFERIR_ASESOR].
 
@@ -4249,7 +4177,7 @@ Restaurante (Tú):
           `Para tomar tu pedido, por favor cuéntanos:\n` +
           `• *Productos y adiciones* que deseas\n` +
           `• *¿Para domicilio o para recoger?*\n` +
-          `• *Dirección y barrio* de entrega\n` +
+          `• *Dirección exacta* de entrega (el barrio es opcional)\n` +
           `• *Método de pago* (Efectivo / Transferencia)\n\n` +
           `Uno de nuestros asesores tomará tu pedido de inmediato. ¡Muchas gracias! 😊`;
         await this.sendMessage(session.phone, orderTemplateText);
@@ -4804,6 +4732,21 @@ Restaurante (Tú):
     };
   }
 
+  async unassignSessionById(sessionId: string) {
+    if (!sessionId) return;
+    try {
+      const session = await this.prisma.whatsAppSession.findUnique({
+        where: { id: sessionId },
+        include: { assignedTo: { select: { id: true, name: true } } },
+      });
+      if (!session?.assignedToId) return;
+      await this.assignSession(session.id, null);
+      this.logger.log(`[unassignSessionById] Chat ${session.id} (${session.phone}) liberado automáticamente tras despacho`);
+    } catch (err) {
+      this.logger.error(`[unassignSessionById] Error liberando sesión ${sessionId}:`, err);
+    }
+  }
+
   /**
    * Runs a conversation against Gemini without touching WhatsApp, sessions,
    * orders or messages. The superadmin uses this endpoint as a training
@@ -5142,6 +5085,7 @@ REGLAS DE RECONOCIMIENTO Y RELACIÓN DE PRODUCTOS (THE VILLA DOG):
   * "coca cola", "postobon manzana", "kola roman", "quatro", "jugo hit", "agua", "hatsu", "bretaña".
   * Elige solo la bebida exacta del catálogo, con su marca, sabor, tamaño y empaque. No supongas 400/500 ml ni ninguna presentación por defecto.
   * Si falta tamaño o empaque y hay más de una variante posible, no agregues bebida al carrito: escribe el nombre mencionado en "unresolvedBeverages" para que el asesor la aclare con el cliente.
+  * Para un pedido a domicilio (detectedOrderType = "delivery") NUNCA selecciones ni agregues productos cuyo nombre incluya "vidrio". Si el cliente pide una bebida en vidrio, déjala en "unresolvedBeverages" para que el asesor ofrezca una presentación apta para domicilio. Las bebidas en vidrio solo se pueden usar en recoger o mesa.
   * Si el cliente cambió de bebida, conserva solo su última elección confirmada.
 - ADICIONES:
   * Si el cliente pide queso extra, tocineta extra, salchicha extra, piña extra, etc., busca y asigna el ID exacto en "additions".
@@ -5271,6 +5215,10 @@ Responde solo con JSON válido.`;
         ? parsedResponse
         : {};
       const rawItems = Array.isArray(rawJson?.items) ? rawJson.items : [];
+      const detectedOrderType = rawJson.detectedOrderType === 'delivery' || rawJson.detectedOrderType === 'pickup'
+        ? rawJson.detectedOrderType
+        : null;
+      const isDeliveryOrder = detectedOrderType === 'delivery';
       this.logger.log(`[parseOrder] Gemini devolvió JSON con ${rawItems.length} items`);
       const parsedCartItems: any[] = [];
       const unresolvedBeverages: string[] = [];
@@ -5311,6 +5259,14 @@ Responde solo con JSON válido.`;
               continue;
             }
           }
+        }
+        // La restricción de bebidas en vidrio se aplica también después de la
+        // resolución por ID/nombre para que una respuesta de Gemini nunca
+        // termine agregando una presentación no entregable a domicilio.
+        if (isDeliveryOrder && /\bvidrio\b/i.test(menuItem.name)) {
+          this.logger.warn(`[parseOrder] Producto en vidrio rechazado para domicilio: ${menuItem.name}`);
+          unresolvedBeverages.push(`${menuItem.name} (no disponible para domicilio)`);
+          continue;
         }
         if (!this.isBeverageSelectionUnambiguous(menuItem, dbItems, text)) {
           this.logger.warn(`[parseOrder] Bebida sin presentación inequívoca: ${menuItem.name}`);
@@ -5542,9 +5498,7 @@ Responde solo con JSON válido.`;
             ? rawJson.unresolvedBeverages.filter((value: unknown) => typeof value === 'string').map((value: string) => value.trim().slice(0, 120)).filter(Boolean)
             : []),
         ])),
-        detectedOrderType: rawJson.detectedOrderType === 'delivery' || rawJson.detectedOrderType === 'pickup'
-          ? rawJson.detectedOrderType
-          : null,
+        detectedOrderType,
         independentNotes: Array.isArray(rawJson.independentNotes)
           ? rawJson.independentNotes.filter((note: unknown) => typeof note === 'string').map((note: string) => note.trim().slice(0, 300)).filter(Boolean)
           : [],
@@ -6007,30 +5961,34 @@ ${menuSummary}
     }
 
     if (!session && order.customerPhone) {
-      const cleanP = order.customerPhone.replace(/\D/g, '');
-      const p10 = (cleanP.length === 12 && cleanP.startsWith('57')) ? cleanP.slice(2) : cleanP;
-      if (p10 && p10 !== '3000000000' && p10 !== '0000000000') {
-        session = await this.prisma.whatsAppSession.findFirst({
-          where: {
-            OR: [
-              { customerPhone: p10 },
-              { customerPhone: `57${p10}` },
-              { customerPhone: `+57${p10}` },
-              { phone: order.customerPhone },
-              { phone: p10 },
-              { phone: `57${p10}` },
-              { phone: `+57${p10}` },
-              ...(order.customerName && !order.customerName.startsWith('@') && order.customerName !== 'Cliente Mostrador' && order.customerName !== 'Cliente Recoger' ? [{ customerName: { equals: order.customerName.trim(), mode: 'insensitive' as any } }] : [])
-            ]
-          },
-          orderBy: { lastMessageAt: 'desc' }
+      const senderPhones = this.senderPhoneVariants(order.customerPhone);
+      if (senderPhones.length > 0) {
+        const candidates = await this.prisma.whatsAppSession.findMany({
+          where: { phone: { in: senderPhones } },
+          orderBy: { lastMessageAt: 'desc' },
+          take: 2,
         });
+        // Solo enlazamos pedidos antiguos cuando existe una única sesión
+        // inequívoca. Si hay dos conversaciones con el mismo número, elegir la
+        // más reciente podría abrir o editar el pedido de otro chat.
+        session = candidates.length === 1 ? candidates[0] : null;
 
         if (session && !order.chatSessionId) {
-          await this.prisma.order.update({
-            where: { id: order.id },
+          const linked = await this.prisma.order.updateMany({
+            where: { id: order.id, chatSessionId: null },
             data: { chatSessionId: session.id },
-          }).catch(() => {});
+          }).catch(() => ({ count: 0 }));
+          if (linked.count === 0) {
+            // Otra operación enlazó el pedido primero. Volvemos a leer el
+            // vínculo real y no usamos el candidato calculado con datos viejos.
+            const current = await this.prisma.order.findUnique({
+              where: { id: order.id },
+              select: { chatSessionId: true },
+            });
+            session = current?.chatSessionId
+              ? await this.prisma.whatsAppSession.findUnique({ where: { id: current.chatSessionId } })
+              : null;
+          }
         }
       }
     }
@@ -6066,10 +6024,6 @@ ${menuSummary}
       return this.sendDirectToSession(sessionId, text);
     }
 
-    if (order.customerPhone) {
-      return this.sendMessage(order.customerPhone, text);
-    }
-
-    throw new BadRequestException('El pedido no cuenta con un número de teléfono o sesión de chat válida.');
+    throw new BadRequestException('El pedido no tiene una conversación de WhatsApp única asociada. Ábrelo desde el chat correcto antes de enviar el mensaje.');
   }
 }

@@ -70,6 +70,13 @@ export default function OrderWhatsAppModal({
 
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const socketRef = useRef<Socket | null>(null)
+  const loadRequestIdRef = useRef(0)
+
+  useEffect(() => {
+    setSession(null)
+    setMessages([])
+    setTransferProofs([])
+  }, [order?.id])
 
   useEffect(() => {
     setCurrentOrder(order)
@@ -83,10 +90,11 @@ export default function OrderWhatsAppModal({
 
   const loadChat = async (silent = false) => {
     if (!order?.id) return
+    const requestId = ++loadRequestIdRef.current
     if (!silent) setLoading(true)
     try {
       const data = await api.get<any>(`/whatsapp/order-chat/${order.id}`)
-      if (data) {
+      if (data && requestId === loadRequestIdRef.current) {
         if (data.order) setCurrentOrder(data.order)
         setSession(data.session || null)
         setMessages(data.messages || [])
@@ -95,11 +103,13 @@ export default function OrderWhatsAppModal({
     } catch (err: any) {
       console.error('Error cargando chat de orden:', err)
       if (!silent) {
-        alerts.toast('No se pudo cargar el chat de WhatsApp del pedido', 'error')
+        void alerts.error('No se pudo cargar el chat', 'No fue posible abrir la conversación de WhatsApp de este pedido.')
       }
     } finally {
-      if (!silent) setLoading(false)
-      scrollToBottom(false)
+      if (requestId === loadRequestIdRef.current) {
+        if (!silent) setLoading(false)
+        scrollToBottom(false)
+      }
     }
   }
 
@@ -121,36 +131,27 @@ export default function OrderWhatsAppModal({
     socketRef.current = socket
 
     socket.on('whatsappMessage', (newMsg: any) => {
-      if (!newMsg) return
-      const isTargetSession = session && newMsg.sessionId === session.id
-      const cleanCustomerPhone = (currentOrder?.customerPhone || '').replace(/\D/g, '')
-      const msgPhone = (newMsg.phone || newMsg.customerPhone || '').replace(/\D/g, '')
-      const isTargetPhone = cleanCustomerPhone && msgPhone && (
-        cleanCustomerPhone.includes(msgPhone) || msgPhone.includes(cleanCustomerPhone)
-      )
-
-      if (isTargetSession || isTargetPhone) {
-        setMessages((prev) => {
-          if (prev.some((m) => m.id === newMsg.id || (m.waMessageId && m.waMessageId === newMsg.waMessageId))) {
-            return prev
-          }
-          return [...prev, newMsg]
-        })
-        scrollToBottom(true)
-      }
+      if (!newMsg || !session?.id || newMsg.sessionId !== session.id) return
+      setMessages((prev) => {
+        if (prev.some((m) => m.id === newMsg.id || (m.waMessageId && m.waMessageId === newMsg.waMessageId))) {
+          return prev
+        }
+        return [...prev, newMsg]
+      })
+      scrollToBottom(true)
     })
 
     return () => {
       socket.disconnect()
     }
-  }, [isOpen, session?.id, currentOrder?.customerPhone])
+  }, [isOpen, session?.id, user?.id, user?.name])
 
   const handleCopyPhone = () => {
     if (!currentOrder?.customerPhone) return
     navigator.clipboard.writeText(currentOrder.customerPhone)
     setCopiedPhone(true)
     setTimeout(() => setCopiedPhone(false), 2000)
-    alerts.toast('Teléfono copiado al portapapeles', 'info')
+    alerts.toast('Teléfono copiado al portapapeles')
   }
 
   const handleSendMessage = async (e?: React.FormEvent) => {

@@ -294,7 +294,7 @@ describe('WhatsApp advisor concurrency', () => {
     expect(claimed.map(session => session.assignedToId)).toEqual(
       Array.from({ length: 10 }, (_, index) => `advisor-${index + 1}`),
     );
-    expect(prisma.whatsAppSession.updateMany).toHaveBeenCalledTimes(20);
+    expect(prisma.whatsAppSession.updateMany).toHaveBeenCalledTimes(10);
   });
 
   it('loads a bounded message page and returns it in chronological order', async () => {
@@ -313,9 +313,11 @@ describe('WhatsApp advisor concurrency', () => {
 
     await expect(service.getSessionMessages('chat-1')).resolves.toEqual([oldest, newest]);
     expect(prisma.whatsAppMessage.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ sessionId: 'chat-1' }),
       take: 120,
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
     }));
+    expect(prisma.whatsAppSession.findMany).not.toHaveBeenCalled();
 
     await service.getSessionMessages('chat-1', '2026-09-05T14:00:00.000Z', 120, 'm1');
     expect(prisma.whatsAppMessage.findMany).toHaveBeenLastCalledWith(expect.objectContaining({
@@ -404,7 +406,7 @@ describe('WhatsApp live menu sharing', () => {
     expect(sentMessage).not.toContain('Adición de Queso');
     expect(sentMessage).toContain('https://pedidos.example/menu');
     expect(prisma.appSetting.findMany).toHaveBeenCalledWith({
-      where: { key: { in: ['digital_menu_url', 'chatbot_menu_share_message'] } },
+      where: { key: { in: ['digital_menu_url', 'chatbot_menu_share_message', 'chatbot_menu_text'] } },
     });
   });
 
@@ -690,5 +692,34 @@ describe('WhatsApp Gemini settings', () => {
     } finally {
       fetchSpy.mockRestore();
     }
+  });
+});
+
+describe('WhatsApp order chat isolation', () => {
+  it('does not attach a legacy order when more than one session has the same sender phone', async () => {
+    const prisma: any = {
+      order: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: 'order-1',
+          chatSessionId: null,
+          customerPhone: '3001234567',
+          transferProofs: [],
+        }),
+        updateMany: jest.fn(),
+      },
+      whatsAppSession: {
+        findMany: jest.fn().mockResolvedValue([
+          { id: 'session-new', phone: '573001234567' },
+          { id: 'session-old', phone: '3001234567' },
+        ]),
+      },
+    };
+    const service = new WhatsappService(prisma, { get: jest.fn() } as any, { emitWhatsApp: jest.fn() } as any);
+
+    const result = await service.getOrderChat('order-1');
+
+    expect(result.session).toBeNull();
+    expect(result.messages).toEqual([]);
+    expect(prisma.order.updateMany).not.toHaveBeenCalled();
   });
 });

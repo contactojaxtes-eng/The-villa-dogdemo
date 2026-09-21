@@ -1,6 +1,6 @@
 import { Prisma } from '@prisma/client';
 import { lockOperation, operationTransaction } from '../common/operation-lock';
-import { Injectable, NotFoundException, BadRequestException, Logger, ForbiddenException, OnModuleInit, Inject, forwardRef, Optional } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ConflictException, Logger, ForbiddenException, OnModuleInit, Inject, forwardRef, Optional } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { SocketGateway } from '../socket/socket.gateway';
 import { DeliveryDriverGateway } from '../socket/delivery-driver.gateway';
@@ -20,6 +20,7 @@ type OrderListParams = {
   paymentMethod?: string;
   paymentStatus?: string;
   orderType?: string;
+  chatSessionId?: string;
   page?: number;
   limit?: number;
   compact?: boolean;
@@ -55,7 +56,30 @@ export class OrdersService implements OnModuleInit {
     const upper = pm.trim().toUpperCase();
     if (upper === 'CASH') return 'Efectivo';
     if (upper === 'CORTESIA') return 'Cortesía';
+    if (upper === 'MIXED') return 'Mixto (efectivo + transferencia)';
     return 'Transferencia';
+  }
+
+  private resolvePaymentBreakdown(methodValue: string | undefined, totalValue: number, cashValue?: number, transferValue?: number) {
+    const method = String(methodValue || 'CASH').toUpperCase();
+    const total = Number(totalValue || 0);
+    if (method === 'MIXED') {
+      const cashAmount = Number(cashValue);
+      const transferAmount = Number(transferValue);
+      if (
+        !Number.isFinite(cashAmount) ||
+        !Number.isFinite(transferAmount) ||
+        cashAmount <= 0 ||
+        transferAmount <= 0 ||
+        Math.abs((cashAmount + transferAmount) - total) > 1
+      ) {
+        throw new BadRequestException('En un pago mixto, efectivo y transferencia deben ser mayores a cero y sumar el total del pedido.');
+      }
+      return { cashAmount, transferAmount };
+    }
+    if (method === 'CASH') return { cashAmount: total, transferAmount: 0 };
+    if (['CREDIT', 'CORTESIA'].includes(method)) return { cashAmount: 0, transferAmount: 0 };
+    return { cashAmount: 0, transferAmount: total };
   }
 
   async onModuleInit() {
@@ -174,16 +198,9 @@ export class OrdersService implements OnModuleInit {
       if (p10 && p10 !== '3000000000' && p10 !== '0000000000') {
         const session = await this.prisma.whatsAppSession.findFirst({
           where: {
-            OR: [
-              { customerPhone: p10 },
-              { customerPhone: `57${p10}` },
-              { customerPhone: `+57${p10}` },
-              { phone: order.customerPhone },
-              { phone: p10 },
-              { phone: `57${p10}` },
-              { phone: `+57${p10}` },
-              ...(order.customerName && !order.customerName.startsWith('@') && order.customerName !== 'Cliente Mostrador' && order.customerName !== 'Cliente Recoger' ? [{ customerName: { equals: order.customerName.trim(), mode: 'insensitive' as any } }] : [])
-            ]
+            OR: [order.customerPhone, p10, `57${p10}`, `+57${p10}`]
+              .filter(Boolean)
+              .map(phone => ({ phone })),
           },
           orderBy: { lastMessageAt: 'desc' }
         });
@@ -209,6 +226,7 @@ export class OrdersService implements OnModuleInit {
     if (params.paymentMethod) where.paymentMethod = params.paymentMethod;
     if (params.paymentStatus) where.paymentStatus = params.paymentStatus;
     if (params.orderNumber) where.orderNumber = params.orderNumber;
+    if (params.chatSessionId) where.chatSessionId = params.chatSessionId;
     if (params.orderType) {
       const allowedTypes = params.orderType
         .split(',')
@@ -566,7 +584,7 @@ export class OrdersService implements OnModuleInit {
       }
       return { order: await this.createWithinTransaction(data, tx), replay: false };
     }, operationTransaction);
-    if (!result.replay) await this.notifyCreated(result.order);
+    if (!result.replay) await this.notifyCreated(result.order, data.notifyCustomer === true);
     return result.replay ? { ...result.order, idempotentReplay: true } : result.order;
   }
 
@@ -598,6 +616,7 @@ export class OrdersService implements OnModuleInit {
     chatSessionId?: string;
     tableId?: string;
     clientMutationId?: string;
+    notifyCustomer?: boolean;
   }, tx: Prisma.TransactionClient) {
     if (!Array.isArray(data.items) || data.items.length > 100 || !data.items.length) {
       throw new BadRequestException('El pedido debe incluir al menos un producto');
@@ -610,6 +629,14 @@ export class OrdersService implements OnModuleInit {
 
     if (data.userId && data.userRole) {
       await this.assertCashOpenForOrder(data.userId, data.userRole, data.orderType || 'DELIVERY');
+    }
+
+    if (data.chatSessionId) {
+      const sessionExists = await tx.whatsAppSession.findUnique({
+        where: { id: data.chatSessionId },
+        select: { id: true },
+      });
+      if (!sessionExists) throw new BadRequestException('La conversación de WhatsApp ya no existe.');
     }
 
     if (data.customerPhone) {
@@ -632,20 +659,12 @@ export class OrdersService implements OnModuleInit {
           data.customerPhone = cust.phone;
         }
       }
-      if ((!data.customerPhone || data.customerPhone === '3000000000') && data.customerName && data.customerName !== 'Cliente Mostrador' && data.customerName !== 'Cliente Recoger') {
-        const custByName = await tx.customer.findFirst({
-          where: { name: { equals: data.customerName.trim(), mode: 'insensitive' }, phone: { notIn: ['3000000000', '0000000000'] } }
-        });
-        if (custByName?.phone) {
-          data.customerPhone = custByName.phone;
-        } else {
-          const session = await tx.whatsAppSession.findFirst({
-            where: { customerName: { equals: data.customerName.trim(), mode: 'insensitive' }, customerPhone: { not: null } }
-          });
-          if (session?.customerPhone && session.customerPhone !== '3000000000') {
-            const sc = session.customerPhone.replace(/\D/g, '');
-            data.customerPhone = (sc.length === 12 && sc.startsWith('57')) ? sc.slice(2) : sc;
-          }
+      if ((!data.customerPhone || data.customerPhone === '3000000000') && data.chatSessionId) {
+        const session = await tx.whatsAppSession.findUnique({ where: { id: data.chatSessionId } });
+        const exactSessionPhone = session?.customerPhone || session?.phone;
+        if (exactSessionPhone && !this.isDummyPhoneNumber(exactSessionPhone)) {
+          const sc = exactSessionPhone.replace(/\D/g, '');
+          data.customerPhone = (sc.length === 12 && sc.startsWith('57')) ? sc.slice(2) : sc;
         }
       }
     }
@@ -777,6 +796,9 @@ export class OrdersService implements OnModuleInit {
       if (!Number.isSafeInteger(item.quantity) || item.quantity <= 0 || item.quantity > 100) throw new BadRequestException('La cantidad de cada producto debe ser mayor a cero');
       const menuItem = menuItemMap.get(item.menuItemId);
       if (!menuItem || !menuItem.active) throw new BadRequestException(`Item ${item.menuItemId} no encontrado`);
+      if (normalizedOrderType === 'DELIVERY' && /\bvidrio\b/i.test(menuItem.name)) {
+        throw new BadRequestException(`${menuItem.name} no se puede enviar a domicilio. Elige una presentación que no sea de vidrio.`);
+      }
       const itemIsCourtesy = isCourtesy || item.isCourtesy;
       const unitPrice = itemIsCourtesy ? 0 : menuItem.price;
       const totalPrice = unitPrice * item.quantity;
@@ -790,7 +812,7 @@ export class OrdersService implements OnModuleInit {
       });
     }
 
-    const isPickupOrLocal = data.orderType === 'PICKUP' || data.orderType === 'LOCAL';
+    const isPickupOrLocal = normalizedOrderType === 'PICKUP' || normalizedOrderType === 'LOCAL';
     let deliveryFee = 0;
     if (!isPickupOrLocal && !isCourtesy) {
       if (typeof data.deliveryFee === 'number') {
@@ -798,26 +820,31 @@ export class OrdersService implements OnModuleInit {
       } else if (resolvedZoneId) {
         const zone = await tx.deliveryZone.findUnique({ where: { id: resolvedZoneId } });
         if (zone) deliveryFee = zone.rate;
+        else throw new BadRequestException('La zona de domicilio seleccionada ya no existe.');
+      } else {
+        throw new BadRequestException('Ingresa la tarifa de domicilio antes de guardar el pedido.');
       }
     }
 
     if (!Number.isFinite(deliveryFee) || deliveryFee < 0) throw new BadRequestException('Tarifa de domicilio inválida');
     const tax = 0; // Los precios de los productos del menú ya incluyen el Impoconsumo (8%)
     const total = isCourtesy ? 0 : (subtotal + (isPickupOrLocal ? 0 : deliveryFee));
+    const paymentBreakdown = this.resolvePaymentBreakdown(
+      data.paymentMethod,
+      total,
+      data.cashAmount,
+      data.transferAmount,
+    );
 
     let effectiveCustomerPhone = data.customerPhone;
     const digitsOnly = (data.customerPhone || '').replace(/\D/g, '');
     if (digitsOnly.length >= 13 || (data.customerPhone || '').startsWith('@')) {
       try {
-        const session = await tx.whatsAppSession.findFirst({
-          where: {
-            OR: [
-              { phone: data.customerPhone },
-              { id: data.customerPhone },
-              ...(data.customerName ? [{ customerName: data.customerName }] : [])
-            ]
-          }
-        });
+        const session = data.chatSessionId
+          ? await tx.whatsAppSession.findUnique({ where: { id: data.chatSessionId } })
+          : await tx.whatsAppSession.findFirst({
+              where: { OR: [{ phone: data.customerPhone }, { id: data.customerPhone }] },
+            });
         if (session?.customerPhone) {
           const sDigits = session.customerPhone.replace(/\D/g, '');
           const s10 = (sDigits.length === 12 && sDigits.startsWith('57')) ? sDigits.slice(2) : sDigits;
@@ -870,8 +897,8 @@ export class OrdersService implements OnModuleInit {
         notes: data.notes,
         subtotal, tax, deliveryFee: isPickupOrLocal ? 0 : deliveryFee, total,
         paymentMethod: data.paymentMethod || 'CASH',
-        cashAmount: data.paymentMethod === 'MIXED' ? (data.cashAmount || 0) : (data.paymentMethod === 'CASH' ? total : 0),
-        transferAmount: data.paymentMethod === 'MIXED' ? (data.transferAmount || 0) : (data.paymentMethod !== 'CASH' && data.paymentMethod !== 'CREDIT' && data.paymentMethod !== 'CORTESIA' ? total : 0),
+        cashAmount: paymentBreakdown.cashAmount,
+        transferAmount: paymentBreakdown.transferAmount,
         paymentReference: data.paymentReference,
         orderType: normalizedOrderType,
         source: data.source || 'MANUAL',
@@ -914,8 +941,8 @@ export class OrdersService implements OnModuleInit {
         orderId: order.id,
         amount: total,
         method: data.paymentMethod || 'CASH',
-        cashAmount: data.paymentMethod === 'MIXED' ? (data.cashAmount || 0) : (data.paymentMethod === 'CASH' ? total : 0),
-        transferAmount: data.paymentMethod === 'MIXED' ? (data.transferAmount || 0) : (data.paymentMethod !== 'CASH' && data.paymentMethod !== 'CREDIT' && data.paymentMethod !== 'CORTESIA' ? total : 0),
+        cashAmount: paymentBreakdown.cashAmount,
+        transferAmount: paymentBreakdown.transferAmount,
         reference: data.paymentReference,
         status: data.paymentMethod === 'CASH' ? 'PENDING' : 'PENDING',
       },
@@ -924,17 +951,17 @@ export class OrdersService implements OnModuleInit {
     return order;
   }
 
-  async notifyCreated(order: any) {
+  async notifyCreated(order: any, notifyCustomer = false) {
     this.socketGateway.emitNewOrder(order);
     if (order.source === 'WHATSAPP' || order.chatSessionId || (!order.tableId && order.orderType !== 'LOCAL')) {
-      this.socketGateway.emitWhatsApp('whatsappSessionUpdated', { orderCreated: true, phone: order.customerPhone, orderNumber: order.orderNumber, status: order.status });
+      this.socketGateway.emitWhatsApp('whatsappSessionUpdated', { orderCreated: true, sessionId: order.chatSessionId || undefined, phone: order.customerPhone, orderNumber: order.orderNumber, status: order.status });
     }
 
     // Los pedidos de domicilios se gestionan 100% por impresión térmica física independiente.
     // NO se envían a las tablets de cocina de meseras/salón.
 
     try {
-      if (this.canSendWhatsApp(order)) {
+      if (notifyCustomer && this.canSendWhatsApp(order)) {
         const formatCOP = (val: number) => new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', minimumFractionDigits: 0 }).format(val);
 
         const grouped = this.groupOrderItems(order.items || []);
@@ -1071,11 +1098,15 @@ export class OrdersService implements OnModuleInit {
     zoneName?: string;
     notes?: string;
     paymentMethod?: string;
+    cashAmount?: number;
+    transferAmount?: number;
     paymentReference?: string;
     orderType?: string;
     deliveryFee?: number;
     tax?: number;
     customerId?: string;
+    chatSessionId?: string;
+    notifyCustomer?: boolean;
   }, tx: Prisma.TransactionClient, user?: any) {
     const existing = await tx.order.findUnique({
       where: { id },
@@ -1083,6 +1114,17 @@ export class OrdersService implements OnModuleInit {
     });
     if (!existing) throw new NotFoundException('Pedido no encontrado');
     if (existing.status === 'CANCELLED') throw new BadRequestException('No se puede editar un pedido cancelado');
+
+    if (data.chatSessionId) {
+      if (existing.chatSessionId && existing.chatSessionId !== data.chatSessionId) {
+        throw new ConflictException('Este pedido pertenece a otra conversación de WhatsApp. Actualiza el chat antes de editarlo.');
+      }
+      const sessionExists = await tx.whatsAppSession.findUnique({
+        where: { id: data.chatSessionId },
+        select: { id: true },
+      });
+      if (!sessionExists) throw new BadRequestException('La conversación de WhatsApp ya no existe.');
+    }
 
     const canManageOrders = user?.role && ['ADMIN', 'SUPERADMIN', 'CASHIER', 'DELIVERY_MANAGER', 'DISPATCHER'].includes(user.role);
     if (['CONFIRMED', 'PENDING_REVIEW'].includes(existing.paymentStatus) && !canManageOrders) {
@@ -1121,20 +1163,12 @@ export class OrdersService implements OnModuleInit {
           data.customerPhone = cust.phone;
         }
       }
-      if ((!data.customerPhone || data.customerPhone === '3000000000') && data.customerName && data.customerName !== 'Cliente Mostrador' && data.customerName !== 'Cliente Recoger') {
-        const custByName = await tx.customer.findFirst({
-          where: { name: { equals: data.customerName.trim(), mode: 'insensitive' }, phone: { notIn: ['3000000000', '0000000000'] } }
-        });
-        if (custByName?.phone) {
-          data.customerPhone = custByName.phone;
-        } else {
-          const session = await tx.whatsAppSession.findFirst({
-            where: { customerName: { equals: data.customerName.trim(), mode: 'insensitive' }, customerPhone: { not: null } }
-          });
-          if (session?.customerPhone && session.customerPhone !== '3000000000') {
-            const sc = session.customerPhone.replace(/\D/g, '');
-            data.customerPhone = (sc.length === 12 && sc.startsWith('57')) ? sc.slice(2) : sc;
-          }
+      if ((!data.customerPhone || data.customerPhone === '3000000000') && data.chatSessionId) {
+        const session = await tx.whatsAppSession.findUnique({ where: { id: data.chatSessionId } });
+        const exactSessionPhone = session?.customerPhone || session?.phone;
+        if (exactSessionPhone && !this.isDummyPhoneNumber(exactSessionPhone)) {
+          const sc = exactSessionPhone.replace(/\D/g, '');
+          data.customerPhone = (sc.length === 12 && sc.startsWith('57')) ? sc.slice(2) : sc;
         }
       }
     }
@@ -1142,6 +1176,7 @@ export class OrdersService implements OnModuleInit {
     const resolvedZoneId = await this.findOrCreateZone(data.zoneId, data.zoneName, data.deliveryFee);
 
     const isCourtesy = data.paymentMethod === 'CORTESIA';
+    const normalizedOrderType = data.orderType || existing.orderType || 'DELIVERY';
     let subtotal = 0;
     const orderItems: any[] = [];
     const menuItemIds = data.items.map(i => i.menuItemId);
@@ -1152,6 +1187,9 @@ export class OrdersService implements OnModuleInit {
       if (!Number.isSafeInteger(item.quantity) || item.quantity <= 0 || item.quantity > 100) throw new BadRequestException('La cantidad de cada producto debe ser mayor a cero');
       const menuItem = menuItemMap.get(item.menuItemId);
       if (!menuItem || !menuItem.active) throw new BadRequestException(`Item ${item.menuItemId} no encontrado`);
+      if (normalizedOrderType === 'DELIVERY' && /\bvidrio\b/i.test(menuItem.name)) {
+        throw new BadRequestException(`${menuItem.name} no se puede enviar a domicilio. Elige una presentación que no sea de vidrio.`);
+      }
       const itemIsCourtesy = isCourtesy || item.isCourtesy;
       const unitPrice = itemIsCourtesy ? 0 : menuItem.price;
       const totalPrice = unitPrice * item.quantity;
@@ -1165,7 +1203,7 @@ export class OrdersService implements OnModuleInit {
       });
     }
 
-    const isPickupOrLocal = data.orderType === 'PICKUP' || data.orderType === 'LOCAL';
+    const isPickupOrLocal = normalizedOrderType === 'PICKUP' || normalizedOrderType === 'LOCAL';
     let deliveryFee = 0;
     if (!isPickupOrLocal && !isCourtesy) {
       if (typeof data.deliveryFee === 'number') {
@@ -1173,11 +1211,20 @@ export class OrdersService implements OnModuleInit {
       } else if (resolvedZoneId) {
         const zone = await tx.deliveryZone.findUnique({ where: { id: resolvedZoneId } });
         if (zone) deliveryFee = zone.rate;
+        else throw new BadRequestException('La zona de domicilio seleccionada ya no existe.');
+      } else {
+        throw new BadRequestException('Ingresa la tarifa de domicilio antes de guardar el pedido.');
       }
     }
 
     const tax = 0; // Los precios de los productos del menú ya incluyen el Impoconsumo (8%)
     const total = isCourtesy ? 0 : (subtotal + (isPickupOrLocal ? 0 : deliveryFee));
+    const paymentBreakdown = this.resolvePaymentBreakdown(
+      data.paymentMethod,
+      total,
+      data.cashAmount,
+      data.transferAmount,
+    );
 
     let resolvedCustomerId = data.customerId || existing.customerId || null;
     if (!resolvedCustomerId && data.customerPhone && !this.isDummyPhoneNumber(data.customerPhone)) {
@@ -1228,11 +1275,14 @@ export class OrdersService implements OnModuleInit {
           deliveryFee: isPickupOrLocal ? 0 : deliveryFee,
           total,
           paymentMethod: data.paymentMethod || 'CASH',
+          cashAmount: paymentBreakdown.cashAmount,
+          transferAmount: paymentBreakdown.transferAmount,
           paymentReference: data.paymentReference ?? null,
-          orderType: data.orderType || 'DELIVERY',
+          orderType: normalizedOrderType,
           zoneId: isPickupOrLocal ? null : (resolvedZoneId ?? null),
           deliveryDriverId: isPickupOrLocal ? null : existing.deliveryDriverId,
           customerId: resolvedCustomerId,
+          chatSessionId: existing.chatSessionId || data.chatSessionId || null,
           items: {
             create: orderItems,
           },
@@ -1254,6 +1304,8 @@ export class OrdersService implements OnModuleInit {
         data: {
           amount: total,
           method: data.paymentMethod || 'CASH',
+          cashAmount: paymentBreakdown.cashAmount,
+          transferAmount: paymentBreakdown.transferAmount,
           reference: data.paymentReference ?? null,
         },
       });
@@ -1272,7 +1324,7 @@ export class OrdersService implements OnModuleInit {
     );
 
     try {
-      if (this.canSendWhatsApp(updated)) {
+      if (data.notifyCustomer === true && this.canSendWhatsApp(updated)) {
         const formatCOP = (val: number) => new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', minimumFractionDigits: 0 }).format(val);
 
         const grouped = this.groupOrderItems(updated.items || []);
@@ -1327,8 +1379,6 @@ export class OrdersService implements OnModuleInit {
     const oldNotes = (existing.notes || '').trim();
     const newNotes = (data.notes !== undefined ? data.notes : existing.notes || '').trim();
     const itemsOrNotesChanged = oldItemsSignature !== newItemsSignature || oldNotes !== newNotes;
-    const itemsActuallyChanged = oldItemsSignature !== newItemsSignature;
-
     const deliveryKitchenMode = 'PRINT';
     let deliveryAutoPrint = true;
     if (this.tablesService) {
@@ -1341,7 +1391,7 @@ export class OrdersService implements OnModuleInit {
     }
 
     try {
-      if (itemsActuallyChanged) {
+      if (itemsOrNotesChanged) {
         const printerSettings = await this.printService.getPrinterSettings();
         const shouldPrint = this.isDeliveryKitchenOrder(updated)
           ? deliveryAutoPrint
@@ -1429,8 +1479,14 @@ export class OrdersService implements OnModuleInit {
       && order.orderType === 'DELIVERY'
       && !!targetDriverId
       && ['CASH', 'MIXED'].includes(order.paymentMethod);
-    if (hasDriverCash && order.paymentStatus !== 'CONFIRMED') {
+    const hasDriverCashOnly = hasDriverCash && order.paymentMethod === 'CASH';
+    const mixedNeedsTransferReview = hasDriverCash
+      && order.paymentMethod === 'MIXED'
+      && !['PENDING_REVIEW', 'CONFIRMED', 'REJECTED'].includes(order.paymentStatus);
+    if (hasDriverCashOnly && order.paymentStatus !== 'CONFIRMED') {
       dataUpdate.paymentStatus = 'DRIVER_CASH_PENDING';
+    } else if (mixedNeedsTransferReview) {
+      dataUpdate.paymentStatus = 'PENDING_REVIEW';
     }
 
     if (order.status === status && deliveryDriverId === undefined) return order;
@@ -1461,11 +1517,18 @@ export class OrdersService implements OnModuleInit {
     });
 
     if (status === 'DELIVERED') {
-      if (hasDriverCash && order.paymentStatus !== 'CONFIRMED') {
+      if (hasDriverCashOnly && order.paymentStatus !== 'CONFIRMED') {
         await this.prisma.payment.updateMany({
           where: { orderId: id },
           data: { status: 'DRIVER_CASH_PENDING' },
         });
+      } else if (order.paymentMethod === 'MIXED') {
+        if (mixedNeedsTransferReview) {
+          await this.prisma.payment.updateMany({
+            where: { orderId: id },
+            data: { status: 'PENDING_REVIEW' },
+          });
+        }
       } else if (order.paymentMethod === 'CASH') {
         await this.prisma.payment.updateMany({
           where: { orderId: id },
@@ -1487,10 +1550,10 @@ export class OrdersService implements OnModuleInit {
         orderId: id,
       },
     );
-    this.socketGateway.emitWhatsApp('whatsappSessionUpdated', { orderUpdated: true, phone: updated.customerPhone, orderNumber: updated.orderNumber, status: updated.status });
+    this.socketGateway.emitWhatsApp('whatsappSessionUpdated', { orderUpdated: true, sessionId: updated.chatSessionId || undefined, phone: updated.customerPhone, orderNumber: updated.orderNumber, status: updated.status });
 
     try {
-      const shouldNotify = notifyCustomer !== false;
+      const shouldNotify = notifyCustomer === true;
       if (shouldNotify && this.canSendWhatsApp(updated)) {
         let text = '';
         if (status === 'READY' && updated.orderType === 'PICKUP') {
@@ -1505,7 +1568,16 @@ export class OrdersService implements OnModuleInit {
         if (text) {
           await this.sendOrderWhatsAppNotification(updated, text);
         }
-        if (status === 'DELIVERED') {
+      }
+      // Finalizar un pedido siempre libera la atención del chat. Esto es una
+      // operación interna y no depende de enviar un mensaje al cliente.
+      if (status === 'DELIVERED') {
+        if (updated.chatSessionId) {
+          await this.whatsappService.unassignSessionById(updated.chatSessionId);
+        } else if (updated.customerPhone) {
+          // Compatibilidad con pedidos antiguos sin vínculo explícito. Los
+          // pedidos nuevos siempre llevan chatSessionId y no usan teléfono
+          // para liberar otra conversación por accidente.
           await this.whatsappService.unassignSessionByPhone(updated.customerPhone);
         }
       }
@@ -1516,7 +1588,7 @@ export class OrdersService implements OnModuleInit {
     return updated;
   }
 
-  async batchAssignDriver(orderIds: string[], deliveryDriverId: string, user?: { id: string; role: string }) {
+  async batchAssignDriver(orderIds: string[], deliveryDriverId: string, user?: { id: string; role: string }, notifyCustomer = false) {
     if (!orderIds || !Array.isArray(orderIds) || orderIds.length === 0) {
       throw new BadRequestException('Debes proporcionar al menos un ID de pedido');
     }
@@ -1534,8 +1606,12 @@ export class OrdersService implements OnModuleInit {
       try {
         const order = await this.prisma.order.findUnique({ where: { id: orderId } });
         if (!order || ['DELIVERED', 'CANCELLED'].includes(order.status)) continue;
-        const nextStatus = (order.status === 'PENDING' || order.status === 'READY') ? 'IN_ROUTE' : order.status;
-        const updated = await this.updateStatus(orderId, nextStatus, user, deliveryDriverId);
+        if (order.orderType !== 'DELIVERY' || order.tableId) {
+          this.logger.warn(`Se omitió #${order.orderNumber} en despacho masivo porque no es un domicilio.`);
+          continue;
+        }
+        const nextStatus = ['RECEIVED', 'PENDING', 'READY'].includes(order.status) ? 'IN_ROUTE' : order.status;
+        const updated = await this.updateStatus(orderId, nextStatus, user, deliveryDriverId, notifyCustomer === true);
         results.push(updated);
       } catch (err: any) {
         this.logger.warn(`Error al asignar pedido ${orderId} en lote: ${err.message}`);
@@ -1597,10 +1673,18 @@ export class OrdersService implements OnModuleInit {
       throw new BadRequestException('Uno o más pedidos ya no existen. Actualiza la pantalla antes de liquidar.');
     }
 
-    const invalidOrders = orders.filter(order => order.status !== 'IN_ROUTE' || order.orderType !== 'DELIVERY' || !order.deliveryDriverId);
+    const invalidOrders = orders.filter(order => {
+      if (order.orderType === 'DELIVERY') {
+        return order.status !== 'IN_ROUTE' || !order.deliveryDriverId;
+      }
+      if (order.orderType === 'PICKUP') {
+        return order.status !== 'READY';
+      }
+      return true;
+    });
     if (invalidOrders.length > 0) {
       const labels = invalidOrders.map(order => `#${order.orderNumber}`).join(', ');
-      throw new BadRequestException(`Solo se pueden liquidar domicilios en ruta y con repartidor asignado. Revisa: ${labels}.`);
+      throw new BadRequestException(`Solo se pueden liquidar domicilios en ruta o pedidos para recoger listos. Revisa: ${labels}.`);
     }
 
     const allowedMethods = new Set(['CASH', 'TRANSFER', 'NEQUI', 'BANCOLOMBIA', 'DAVIPLATA', 'MIXED']);
@@ -1634,6 +1718,7 @@ export class OrdersService implements OnModuleInit {
     }
 
     const results = [];
+    const deliveryCashByDriver = new Map<string, Array<{ id: string; cash: number }>>();
     let totalCash = 0;
     let totalTransfer = 0;
     let grandTotal = 0;
@@ -1678,6 +1763,46 @@ export class OrdersService implements OnModuleInit {
         totalTransfer += transferAmount;
         grandTotal += orderTotal;
         results.push(updated);
+
+        if (order.orderType === 'DELIVERY' && order.deliveryDriverId && cashAmount > 0) {
+          const current = deliveryCashByDriver.get(order.deliveryDriverId) || [];
+          current.push({ id: order.id, cash: cashAmount });
+          deliveryCashByDriver.set(order.deliveryDriverId, current);
+        }
+    }
+
+    // Este flujo significa que Caja recibió físicamente el efectivo del
+    // domiciliario. Registrar la liquidación evita que la porción en efectivo
+    // de un pago MIXED vuelva a aparecer pendiente después de validar su
+    // transferencia por separado.
+    if (user?.id && deliveryCashByDriver.size > 0) {
+      for (const [driverId, entries] of deliveryCashByDriver) {
+        await this.prisma.$transaction(async tx => {
+          const expectedCash = entries.reduce((sum, entry) => sum + entry.cash, 0);
+          const settlement = await tx.driverSettlement.create({
+            data: {
+              driverId,
+              cashClosingId: activeClosing.id,
+              receivedById: user.id,
+              expectedCash,
+              receivedCash: expectedCash,
+              difference: 0,
+              notes: 'Liquidación masiva desde despachos',
+            },
+          });
+          const linked = await tx.order.updateMany({
+            where: {
+              id: { in: entries.map(entry => entry.id) },
+              deliveryDriverId: driverId,
+              driverSettlementId: null,
+            },
+            data: { driverSettlementId: settlement.id },
+          });
+          if (linked.count !== entries.length) {
+            throw new ConflictException('Uno de los pedidos cambió mientras se registraba el efectivo del domiciliario.');
+          }
+        }, operationTransaction);
+      }
     }
 
     return {
@@ -2064,18 +2189,9 @@ export class OrdersService implements OnModuleInit {
       ? (await this.prisma.order.findUnique({ where: { id } }))?.total || 0 
       : order.total;
 
-    let finalCash = 0;
-    let finalTransfer = 0;
-    if (method === 'MIXED') {
-      finalCash = Number(cashAmount || 0);
-      finalTransfer = Number(transferAmount || 0);
-    } else if (method === 'CASH') {
-      finalCash = currentTotal;
-      finalTransfer = 0;
-    } else if (method !== 'CREDIT' && method !== 'CORTESIA') {
-      finalCash = 0;
-      finalTransfer = currentTotal;
-    }
+    const paymentBreakdown = this.resolvePaymentBreakdown(method, currentTotal, cashAmount, transferAmount);
+    const finalCash = paymentBreakdown.cashAmount;
+    const finalTransfer = paymentBreakdown.transferAmount;
 
     await this.prisma.payment.updateMany({
       where: { orderId: id },
@@ -2147,7 +2263,7 @@ export class OrdersService implements OnModuleInit {
     return updated;
   }
 
-  async getActiveOrders(search?: string, userRole?: string) {
+  async getActiveOrders(search?: string, userRole?: string, requestedOrderType?: string) {
     const cleanSearch = (search || '').trim();
     const isDeliveryStaff = Boolean(
       userRole &&
@@ -2155,10 +2271,16 @@ export class OrdersService implements OnModuleInit {
       (['DELIVERY_MANAGER', 'DISPATCHER'].includes(userRole) || /dispatch|domicil/i.test(userRole))
     );
 
+    const requestedTypes = String(requestedOrderType || '')
+      .split(',')
+      .map(value => value.trim().toUpperCase())
+      .filter(value => ['DELIVERY', 'PICKUP'].includes(value));
+    const orderTypes = requestedTypes.length > 0 ? Array.from(new Set(requestedTypes)) : ['DELIVERY', 'PICKUP'];
+
     const where: any = {
       status: { notIn: ['DELIVERED', 'CANCELLED'] },
       tableId: null,
-      orderType: isDeliveryStaff ? 'DELIVERY' : { in: ['DELIVERY', 'PICKUP'] },
+      orderType: orderTypes.length === 1 ? orderTypes[0] : { in: orderTypes },
     };
     if (cleanSearch) {
       const digitsOnly = cleanSearch.replace(/\D/g, '');
