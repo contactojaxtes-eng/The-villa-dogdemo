@@ -274,6 +274,10 @@ export default function ActiveDeliveriesPage() {
   const [batchCollectError, setBatchCollectError] = useState('')
   const [manualItemMethods, setManualItemMethods] = useState<Record<string, { method: string; cashAmount?: number; transferAmount?: number }>>({})
   const [reviewedTransferIds, setReviewedTransferIds] = useState<string[]>([])
+  const [batchPickupReadyOpen, setBatchPickupReadyOpen] = useState(false)
+  const [batchNotifyPickupReady, setBatchNotifyPickupReady] = useState(false)
+  const [isSubmittingBatchPickupReady, setIsSubmittingBatchPickupReady] = useState(false)
+  const [batchPickupReadyError, setBatchPickupReadyError] = useState('')
 
   const filteredDrivers = useMemo(() => {
     if (!driverSearch.trim()) return drivers
@@ -869,6 +873,39 @@ export default function ActiveDeliveriesPage() {
     () => selectedOrdersList.filter(order => order.orderType === 'PICKUP'),
     [selectedOrdersList],
   )
+
+  const selectedPickupWaitingOrders = useMemo(
+    () => selectedPickupOrders.filter(order => ['RECEIVED', 'PENDING'].includes(order.status)),
+    [selectedPickupOrders],
+  )
+
+  const handleConfirmBatchPickupReady = async () => {
+    if (selectedPickupWaitingOrders.length === 0) return
+    setIsSubmittingBatchPickupReady(true)
+    setBatchPickupReadyError('')
+    try {
+      const result = await api.put<any>('/orders/batch-pickup-ready', {
+        orderIds: selectedPickupWaitingOrders.map(order => order.id),
+        notifyCustomer: batchNotifyPickupReady,
+      })
+      if (Number(result?.updatedCount || 0) !== selectedPickupWaitingOrders.length) {
+        throw new Error('No se actualizaron todas las recogidas seleccionadas. Actualiza la pantalla y revisa sus estados.')
+      }
+      alerts.success(
+        'Recogidas listas',
+        `${selectedPickupWaitingOrders.length} pedido${selectedPickupWaitingOrders.length === 1 ? '' : 's'} quedaron listos para recoger${batchNotifyPickupReady ? ' y se avisó a los clientes.' : '.'}`,
+      )
+      setSelectedOrderIds([])
+      setBatchPickupReadyOpen(false)
+      setBatchNotifyPickupReady(false)
+      loadOrders(false, true)
+    } catch (err: any) {
+      setBatchPickupReadyError(err.message || 'No se pudieron marcar las recogidas como listas.')
+      loadOrders(false, true)
+    } finally {
+      setIsSubmittingBatchPickupReady(false)
+    }
+  }
 
   const getBatchOrderMethod = useCallback((order: Order) => {
     return (manualItemMethods[order.id]?.method || order.paymentMethod || 'CASH').toUpperCase()
@@ -1819,6 +1856,20 @@ export default function ActiveDeliveriesPage() {
             >
               Deseleccionar
             </Button>
+            {hasPermission('dispatch.change_status') && selectedPickupWaitingOrders.length > 0 && (
+              <Button
+                size="sm"
+                onClick={() => {
+                  setBatchPickupReadyError('')
+                  setBatchNotifyPickupReady(false)
+                  setBatchPickupReadyOpen(true)
+                }}
+                className="h-9 rounded-xl border border-white/30 bg-white px-4 text-xs font-black text-[var(--accent)] shadow-md hover:bg-white/90"
+              >
+                <CheckCircle2 className="h-4 w-4" />
+                Marcar {selectedPickupWaitingOrders.length} recogida{selectedPickupWaitingOrders.length === 1 ? '' : 's'} lista{selectedPickupWaitingOrders.length === 1 ? '' : 's'}
+              </Button>
+            )}
             {user?.role !== 'DELIVERY_MANAGER' && !isDeliveryStaff && selectedDeliveryOrders.some(order => order.status === 'IN_ROUTE') && (
               <Button
                 size="sm"
@@ -2814,6 +2865,86 @@ export default function ActiveDeliveriesPage() {
                   </>
                 ) : (
                   `Asignar los ${selectedOrderIds.length} pedidos`
+                )}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Marcar varias recogidas como listas ── */}
+      <Dialog
+        open={batchPickupReadyOpen}
+        onOpenChange={open => {
+          if (!open && !isSubmittingBatchPickupReady) {
+            setBatchPickupReadyOpen(false)
+            setBatchPickupReadyError('')
+            setBatchNotifyPickupReady(false)
+          }
+        }}
+      >
+        <DialogContent className="max-w-md rounded-3xl border-[var(--border-default)] bg-[var(--bg-panel)] p-6">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-lg font-black text-[var(--text-primary)]">
+              <Store className="h-5 w-5 text-[var(--accent)]" />
+              Marcar recogidas como listas
+            </DialogTitle>
+          </DialogHeader>
+
+          <div className="space-y-4 pt-2">
+            <div className="rounded-2xl border border-[var(--accent)]/25 bg-[var(--accent)]/10 p-3.5">
+              <p className="text-xs font-black text-[var(--accent)]">
+                Se actualizarán {selectedPickupWaitingOrders.length} pedido{selectedPickupWaitingOrders.length === 1 ? '' : 's'} para recoger:
+              </p>
+              <div className="mt-2 flex max-h-24 flex-wrap gap-1.5 overflow-y-auto">
+                {selectedPickupWaitingOrders.map(order => (
+                  <span key={order.id} className="rounded-lg border border-[var(--border-default)] bg-[var(--bg-panel)] px-2 py-0.5 text-xs font-black">
+                    #{order.orderNumber} · {order.customerName}
+                  </span>
+                ))}
+              </div>
+            </div>
+
+            <label className="flex cursor-pointer items-start gap-2.5 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-subtle)] p-3">
+              <input
+                type="checkbox"
+                checked={batchNotifyPickupReady}
+                onChange={event => setBatchNotifyPickupReady(event.target.checked)}
+                className="mt-0.5 h-4 w-4 shrink-0 rounded accent-[var(--accent)]"
+              />
+              <span className="text-xs font-bold text-[var(--text-secondary)]">
+                Avisar por WhatsApp que el pedido está listo
+                <span className="mt-0.5 block text-[10px] font-normal text-[var(--text-muted)]">
+                  Está desactivado por defecto. Actívalo solo si deseas enviar el aviso a todos los seleccionados.
+                </span>
+              </span>
+            </label>
+
+            {batchPickupReadyError && (
+              <div className="flex items-center gap-1.5 rounded-xl border border-[var(--destructive)]/20 bg-[var(--destructive)]/5 p-2.5 text-xs font-semibold text-[var(--destructive)]">
+                <AlertTriangle className="h-4 w-4 shrink-0" />
+                <span>{batchPickupReadyError}</span>
+              </div>
+            )}
+
+            <div className="flex gap-3 border-t border-[var(--border-subtle)]/40 pt-3">
+              <Button
+                variant="outline"
+                className="h-11 flex-1 rounded-xl font-bold"
+                onClick={() => setBatchPickupReadyOpen(false)}
+                disabled={isSubmittingBatchPickupReady}
+              >
+                Cancelar
+              </Button>
+              <Button
+                className="h-11 flex-1 rounded-xl border-0 bg-[var(--accent)] font-black text-[var(--accent-fg)] hover:bg-[var(--accent-hover)]"
+                onClick={handleConfirmBatchPickupReady}
+                disabled={isSubmittingBatchPickupReady || selectedPickupWaitingOrders.length === 0}
+              >
+                {isSubmittingBatchPickupReady ? (
+                  <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Actualizando…</>
+                ) : (
+                  'Confirmar listas'
                 )}
               </Button>
             </div>

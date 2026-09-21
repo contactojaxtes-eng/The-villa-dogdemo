@@ -165,6 +165,18 @@ export class OrdersController {
     return this.ordersService.batchAssignDriver(orderIds, deliveryDriverId, req.user, notifyCustomer);
   }
 
+  @Put('batch-pickup-ready')
+  @Permissions('dispatch.change_status')
+  @UseGuards(PermissionsGuard)
+  @ApiOperation({ summary: 'Marcar múltiples pedidos para recoger como listos' })
+  batchMarkPickupReady(
+    @Body('orderIds') orderIds: string[],
+    @Body('notifyCustomer') notifyCustomer: boolean,
+    @Request() req: any,
+  ) {
+    return this.ordersService.batchMarkPickupReady(orderIds, req.user, notifyCustomer);
+  }
+
   @Put('batch-collect')
   @Permissions('orders.edit', 'payment_validation.cash', 'payment_validation.transfer')
   @UseGuards(PermissionsGuard)

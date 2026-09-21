@@ -202,6 +202,32 @@ describe('Delivery order boundaries', () => {
     expect(result).toMatchObject({ collectedCount: 2, cash: 32000, transfer: 0, total: 32000 });
   });
 
+  it('marks several pending pickup orders ready without notifying unless explicitly enabled', async () => {
+    const pickupOrders = [
+      { id: 'pickup-1', orderNumber: 313, status: 'PENDING', orderType: 'PICKUP' },
+      { id: 'pickup-2', orderNumber: 314, status: 'RECEIVED', orderType: 'PICKUP' },
+    ];
+    const prisma: any = {
+      order: { findMany: jest.fn().mockResolvedValue(pickupOrders) },
+    };
+    const service = new OrdersService(prisma, {} as any, {} as any, {} as any);
+    jest.spyOn(service, 'updateStatus').mockImplementation(async (id: string) => ({ id, status: 'READY' }) as any);
+
+    const result = await service.batchMarkPickupReady(
+      pickupOrders.map(order => order.id),
+      { id: 'admin-1', role: 'ADMIN' },
+      false,
+    );
+
+    expect(service.updateStatus).toHaveBeenNthCalledWith(
+      1, 'pickup-1', 'READY', { id: 'admin-1', role: 'ADMIN' }, undefined, false,
+    );
+    expect(service.updateStatus).toHaveBeenNthCalledWith(
+      2, 'pickup-2', 'READY', { id: 'admin-1', role: 'ADMIN' }, undefined, false,
+    );
+    expect(result).toMatchObject({ success: true, updatedCount: 2 });
+  });
+
   it('refuses an individual confirmed payment while a delivery is still in the kitchen', async () => {
     const prisma: any = {
       order: {

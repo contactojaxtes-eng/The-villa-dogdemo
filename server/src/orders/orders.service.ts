@@ -1625,6 +1625,37 @@ export class OrdersService implements OnModuleInit {
     };
   }
 
+  async batchMarkPickupReady(orderIds: string[], user?: { id: string; role: string }, notifyCustomer = false) {
+    const uniqueIds = [...new Set((orderIds || []).filter(Boolean))];
+    if (uniqueIds.length === 0 || uniqueIds.length > 100) {
+      throw new BadRequestException('Selecciona entre 1 y 100 pedidos para recoger.');
+    }
+
+    const orders = await this.prisma.order.findMany({
+      where: { id: { in: uniqueIds } },
+      select: { id: true, orderNumber: true, orderType: true, status: true },
+    });
+    if (orders.length !== uniqueIds.length) {
+      throw new BadRequestException('Uno de los pedidos ya no existe. Actualiza la pantalla e intenta nuevamente.');
+    }
+
+    const invalid = orders.filter(order =>
+      order.orderType !== 'PICKUP' || !['RECEIVED', 'PENDING', 'READY'].includes(order.status),
+    );
+    if (invalid.length > 0) {
+      throw new BadRequestException(
+        `Solo puedes marcar recogidas pendientes como listas. Revisa: ${invalid.map(order => `#${order.orderNumber}`).join(', ')}.`,
+      );
+    }
+
+    const updated = [];
+    for (const order of orders) {
+      updated.push(await this.updateStatus(order.id, 'READY', user, undefined, notifyCustomer === true));
+    }
+
+    return { success: true, updatedCount: updated.length, orders: updated };
+  }
+
   async batchCollectPayments(
     ordersPayload: Array<{ id: string; method?: string; cashAmount?: number; transferAmount?: number; reference?: string; transferReviewed?: boolean }>,
     globalMethod?: string,
