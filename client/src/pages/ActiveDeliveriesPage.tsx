@@ -859,6 +859,19 @@ export default function ActiveDeliveriesPage() {
     })
   }, [orders, searchQuery, selectedDriverFilter, isDeliveryStaff, orderTypeFilter, zoneFilter])
 
+  const driverActiveOrdersMap = useMemo(() => {
+    const map = new Map<string, Order[]>()
+    for (const o of orders) {
+      const dId = o.deliveryDriverId || o.deliveryDriver?.id
+      if (dId && o.status !== 'CANCELLED') {
+        const list = map.get(dId) || []
+        list.push(o)
+        map.set(dId, list)
+      }
+    }
+    return map
+  }, [orders])
+
   const availableZones = useMemo(() => {
     return Array.from(new Set(
       orders
@@ -1950,25 +1963,38 @@ export default function ActiveDeliveriesPage() {
         >
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2.5 border-b border-[var(--border-subtle)]/60">
             <div className="flex items-center gap-2.5">
-              <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-amber-500/10 text-amber-600">
+              <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-amber-500/10 text-amber-600 shrink-0">
                 <Bike className="h-4.5 w-4.5" />
               </div>
               <div>
-                <h3 className="text-xs font-black text-[var(--text-primary)] uppercase tracking-wider flex items-center gap-2">
-                  Fila de Turnos de Repartidores
+                <div className="flex items-center gap-2 flex-wrap">
+                  <h3 className="text-xs font-black text-[var(--text-primary)] uppercase tracking-wider">
+                    Fila de Turnos de Repartidores
+                  </h3>
                   {nextDriverInTurn && (
                     <span className="text-[10px] font-extrabold text-amber-700 dark:text-amber-300 bg-amber-500/15 px-2.5 py-0.5 rounded-full border border-amber-500/30">
                       👑 Turno: {nextDriverInTurn.name}
                     </span>
                   )}
-                </h3>
+                  {selectedDriverFilter !== 'ALL' && (
+                    <button
+                      type="button"
+                      onClick={() => setSelectedDriverFilter('ALL')}
+                      className="text-[10px] font-black text-amber-600 dark:text-amber-400 hover:underline bg-amber-500/10 px-2.5 py-0.5 rounded-full border border-amber-500/30 flex items-center gap-1 cursor-pointer transition-all active:scale-95"
+                      title="Quitar filtro y ver todos los pedidos"
+                    >
+                      <span>✕ Quitar filtro</span>
+                      <span>(Ver todos)</span>
+                    </button>
+                  )}
+                </div>
                 <p className="text-[10px] text-[var(--text-muted)] font-medium">
-                  Rotación equitativa automática al completar 10 carreras o al entregar sus pedidos en ruta.
+                  Haz clic en cualquier repartidor para ver sus comandas en ruta. Clic de nuevo o en el selector superior para ver todos.
                 </p>
               </div>
             </div>
             {isAdmin && (
-              <span className="text-[10px] font-bold text-amber-700 dark:text-amber-300 bg-amber-500/10 px-2 py-0.5 rounded-md self-start sm:self-auto border border-amber-500/20">
+              <span className="text-[10px] font-bold text-amber-700 dark:text-amber-300 bg-amber-500/10 px-2 py-0.5 rounded-md self-start sm:self-auto border border-amber-500/20 shrink-0">
                 🛡️ Control de Pausas (Admin)
               </span>
             )}
@@ -1981,35 +2007,108 @@ export default function ActiveDeliveriesPage() {
               const remainingSec = d.breakUntil ? Math.max(0, Math.floor((d.breakUntil - Date.now()) / 1000)) : 0
               const remainingMin = Math.ceil(remainingSec / 60)
               const isTurn = !isOnBreak && nextDriverInTurn?.id === d.id
+              const isFilterSelected = selectedDriverFilter === d.id
+
+              const dOrders = driverActiveOrdersMap.get(d.id) || []
+              const carryingOrders = dOrders.filter(o => ['RECEIVED', 'PENDING', 'READY', 'IN_ROUTE'].includes(o.status))
+              const deliveredOrders = dOrders.filter(o => o.status === 'DELIVERED')
 
               return (
                 <div
                   key={d.id}
+                  onClick={() => setSelectedDriverFilter(isFilterSelected ? 'ALL' : d.id)}
                   className={cn(
-                    "flex items-center gap-2 rounded-xl px-3 py-2 border text-xs font-bold shrink-0 transition-all shadow-xs",
-                    isOnBreak
-                      ? "bg-purple-500/10 border-purple-500/30 text-purple-700 dark:text-purple-300"
-                      : isTurn
-                        ? "bg-amber-500/15 border-amber-500/40 text-amber-800 dark:text-amber-200 ring-2 ring-amber-500/20"
-                        : "bg-[var(--bg-subtle)] border-[var(--border-subtle)] text-[var(--text-primary)]"
+                    "flex items-center gap-2 rounded-xl px-3 py-2 border text-xs font-bold shrink-0 transition-all shadow-xs cursor-pointer select-none",
+                    isFilterSelected
+                      ? "bg-[var(--accent)] text-[var(--accent-fg)] border-[var(--accent)] ring-2 ring-[var(--accent)]/40 shadow-md scale-[1.02]"
+                      : isOnBreak
+                        ? "bg-purple-500/10 border-purple-500/30 text-purple-700 dark:text-purple-300 hover:border-purple-500/50"
+                        : isTurn
+                          ? "bg-amber-500/15 border-amber-500/40 text-amber-800 dark:text-amber-200 ring-2 ring-amber-500/20 hover:bg-amber-500/20"
+                          : "bg-[var(--bg-subtle)] border-[var(--border-subtle)] text-[var(--text-primary)] hover:border-[var(--accent)]/50 hover:bg-[var(--bg-hover)]"
                   )}
+                  title={isFilterSelected ? `Viendo pedidos de ${d.name}. Clic para ver todos.` : `Clic para filtrar y ver los pedidos de ${d.name}`}
                 >
                   <div className="flex items-center gap-1.5">
                     {isTurn ? (
                       <span className="text-sm">👑</span>
                     ) : (
-                      <span className="text-[10px] font-extrabold text-[var(--text-muted)]">#{idx + 1}</span>
+                      <span className={cn("text-[10px] font-extrabold", isFilterSelected ? "text-[var(--accent-fg)]/70" : "text-[var(--text-muted)]")}>
+                        #{idx + 1}
+                      </span>
                     )}
-                    <span className="font-extrabold truncate max-w-[130px]">{d.name}</span>
+                    <span className="font-extrabold truncate max-w-[120px]">{d.name}</span>
                   </div>
 
-                  {isOnBreak ? (
-                    <span className="text-[10px] font-black px-1.5 py-0.5 rounded-md bg-purple-500/20 text-purple-700 dark:text-purple-300 flex items-center gap-1">
+                  {/* Contador de carreras de turno */}
+                  <span
+                    className={cn(
+                      "text-[9px] font-extrabold px-1.5 py-0.5 rounded-md",
+                      isFilterSelected ? "bg-black/20 text-white" : "bg-black/5 dark:bg-white/5 text-[var(--text-muted)]"
+                    )}
+                    title="Carreras acumuladas en este turno"
+                  >
+                    {d.tripOrderCount || 0}/10
+                  </span>
+
+                  {/* Pedidos que lleva el repartidor */}
+                  {carryingOrders.length > 0 ? (
+                    <div className="flex items-center gap-1" title={`${carryingOrders.length} pedido(s) activos`}>
+                      {carryingOrders.slice(0, 3).map(o => (
+                        <span
+                          key={o.id}
+                          className={cn(
+                            "text-[9px] font-black px-1.5 py-0.5 rounded-md",
+                            isFilterSelected
+                              ? "bg-white text-black font-black"
+                              : o.status === 'IN_ROUTE'
+                                ? "bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30"
+                                : "bg-amber-500/20 text-amber-700 dark:text-amber-300 border border-amber-500/30"
+                          )}
+                        >
+                          #{o.orderNumber}
+                        </span>
+                      ))}
+                      {carryingOrders.length > 3 && (
+                        <span className={cn("text-[9px] font-bold", isFilterSelected ? "text-white" : "text-[var(--text-muted)]")}>
+                          +{carryingOrders.length - 3}
+                        </span>
+                      )}
+                    </div>
+                  ) : deliveredOrders.length > 0 ? (
+                    <span
+                      className={cn(
+                        "text-[9px] font-bold px-1.5 py-0.5 rounded-md",
+                        isFilterSelected ? "bg-black/20 text-white" : "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+                      )}
+                      title={`${deliveredOrders.length} pedido(s) entregados en espera de cierre de caja`}
+                    >
+                      ✓ {deliveredOrders.length} ent.
+                    </span>
+                  ) : isOnBreak ? (
+                    <span
+                      className={cn(
+                        "text-[10px] font-black px-1.5 py-0.5 rounded-md flex items-center gap-1",
+                        isFilterSelected ? "bg-black/20 text-white" : "bg-purple-500/20 text-purple-700 dark:text-purple-300"
+                      )}
+                    >
                       🍽️ {remainingMin > 0 ? `${remainingMin}m` : '0m'}
                     </span>
                   ) : (
-                    <span className="text-[9px] font-extrabold px-1.5 py-0.5 rounded-md bg-black/5 dark:bg-white/5 text-[var(--text-muted)]" title="Carreras acumuladas en este turno">
-                      {d.tripOrderCount || 0}/10
+                    <span
+                      className={cn(
+                        "text-[9px] font-bold px-1.5 py-0.5 rounded-md",
+                        isFilterSelected ? "bg-black/20 text-white" : "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+                      )}
+                    >
+                      ✓ Libre
+                    </span>
+                  )}
+
+                  {/* Indicador de filtro activo */}
+                  {isFilterSelected && (
+                    <span className="text-[9px] font-black bg-black/20 text-white px-1.5 py-0.5 rounded-md">
+                      ✓ Ver
                     </span>
                   )}
 
@@ -2018,18 +2117,24 @@ export default function ActiveDeliveriesPage() {
                     isOnBreak ? (
                       <button
                         type="button"
-                        onClick={() => handleEndBreak(d.id, d.name)}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          handleEndBreak(d.id, d.name)
+                        }}
                         title="Terminar descanso y reincorporar al final de la fila"
-                        className="cursor-pointer text-[10px] font-black px-2 py-0.5 rounded-lg bg-purple-600 hover:bg-purple-700 text-white border-0 transition-all"
+                        className="cursor-pointer text-[10px] font-black px-2 py-0.5 rounded-lg bg-purple-600 hover:bg-purple-700 text-white border-0 transition-all ml-1"
                       >
                         Reincorporar
                       </button>
                     ) : (
                       <button
                         type="button"
-                        onClick={() => setBreakDialog({ driver: d, minutes: 20, customMinutes: '' })}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          setBreakDialog({ driver: d, minutes: 20, customMinutes: '' })
+                        }}
                         title="Asignar Cena / Descanso (sale de la fila)"
-                        className="cursor-pointer text-[10px] font-bold px-2 py-0.5 rounded-lg bg-[var(--bg-elevated)] hover:bg-[var(--bg-hover)] text-[var(--text-secondary)] border border-[var(--border-subtle)] transition-all flex items-center gap-1"
+                        className="cursor-pointer text-[10px] font-bold px-2 py-0.5 rounded-lg bg-[var(--bg-elevated)] hover:bg-[var(--bg-hover)] text-[var(--text-secondary)] border border-[var(--border-subtle)] transition-all flex items-center gap-1 ml-1"
                       >
                         🍽️ Cena/Descanso
                       </button>
