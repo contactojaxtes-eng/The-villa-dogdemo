@@ -310,7 +310,8 @@ export default function OrdersPage() {
 
       const updatedOrder = await api.put<any>(`/orders/${orderToUpdate.id}/status`, {
         status: nextStatus,
-        deliveryDriverId: driverId
+        deliveryDriverId: driverId,
+        notifyCustomer: true,
       })
 
       if (isPending) {

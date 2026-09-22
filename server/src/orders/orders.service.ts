@@ -1554,13 +1554,19 @@ export class OrdersService implements OnModuleInit {
 
 
     try {
-      const shouldNotify = notifyCustomer === true;
+      const isDeliveryDispatch = (status === 'IN_ROUTE' || (deliveryDriverId !== undefined && deliveryDriverId !== null)) && updated.orderType === 'DELIVERY';
+      const shouldNotify = isDeliveryDispatch ? notifyCustomer !== false : notifyCustomer === true;
       if (shouldNotify && this.canSendWhatsApp(updated)) {
         let text = '';
         if (status === 'READY' && updated.orderType === 'PICKUP') {
           text = `¡Tu pedido ya está listo!\n\nPuedes pasar a recogerlo en nuestro restaurante. 🏠\n¡Te esperamos!`;
-        } else if (status === 'IN_ROUTE' && updated.orderType === 'DELIVERY') {
-          const driver: any = updated.deliveryDriver || updated.assignee;
+        } else if (isDeliveryDispatch) {
+          let driver: any = updated.deliveryDriver || updated.assignee;
+          if (!driver && deliveryDriverId) {
+            try {
+              driver = await this.prisma.deliveryDriver.findUnique({ where: { id: deliveryDriverId } });
+            } catch {}
+          }
           const driverInfo = driver?.name ? `con tu domiciliario ${driver.name}` : 'con el domiciliario';
           text = `¡Hola ${updated.customerName}! Tu pedido ya va en camino ${driverInfo}. ¡Gracias por tu compra en The Villa Dog!`;
         }
@@ -1588,7 +1594,7 @@ export class OrdersService implements OnModuleInit {
     return updated;
   }
 
-  async batchAssignDriver(orderIds: string[], deliveryDriverId: string, user?: { id: string; role: string }, notifyCustomer = false) {
+  async batchAssignDriver(orderIds: string[], deliveryDriverId: string, user?: { id: string; role: string }, notifyCustomer = true) {
     if (!orderIds || !Array.isArray(orderIds) || orderIds.length === 0) {
       throw new BadRequestException('Debes proporcionar al menos un ID de pedido');
     }

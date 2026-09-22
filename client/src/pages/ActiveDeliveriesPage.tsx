@@ -261,7 +261,7 @@ export default function ActiveDeliveriesPage() {
   const [batchDriverId, setBatchDriverId] = useState('')
   const [batchDriverSearch, setBatchDriverSearch] = useState('')
   const [batchAutoPrint, setBatchAutoPrint] = useState(true)
-  const [batchNotifyOnDispatch, setBatchNotifyOnDispatch] = useState(false)
+  const [batchNotifyOnDispatch, setBatchNotifyOnDispatch] = useState(true)
   const [isSubmittingBatch, setIsSubmittingBatch] = useState(false)
   const [batchError, setBatchError] = useState('')
 
