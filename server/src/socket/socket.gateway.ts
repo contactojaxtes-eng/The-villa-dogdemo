@@ -317,7 +317,9 @@ export class SocketGateway implements OnGatewayConnection, OnGatewayDisconnect, 
 
     const rooms = Array.from(recipientIds, userId => `user:${userId}`);
     if (rooms.length > 0) {
-      this.server.to(rooms).emit('diningKitchenTicketDelayed', ticket);
+      this.server.to(rooms).to('admins').emit('diningKitchenTicketDelayed', ticket);
+    } else {
+      this.server.to('admins').emit('diningKitchenTicketDelayed', ticket);
     }
   }
 

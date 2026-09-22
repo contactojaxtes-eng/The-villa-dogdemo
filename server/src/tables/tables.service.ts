@@ -1766,7 +1766,17 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
           originalName: isCash ? 'Cobro en Efectivo (Mesera)' : 'Cobro Mixto (Mesera)',
         } });
       }
-      return { table: await this.findTable(tableId, tx), payment: payments[0], replay: false };
+      return {
+        table: await this.findTable(tableId, tx),
+        payment: payments[0],
+        amount,
+        method: data.method,
+        cashAmount: isMixed ? cashPart : (isCash ? amount : 0),
+        transferAmount: isMixed ? transferPart : (!isCash ? amount : 0),
+        waiterName: user.name,
+        source: 'WAITER',
+        replay: false,
+      };
     }, operationTransaction);
     if (!result.replay) {
       this.socketGateway.emitPaymentSubmitted(result);

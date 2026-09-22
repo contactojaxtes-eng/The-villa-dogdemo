@@ -180,6 +180,7 @@ export default function ActiveDeliveriesPage() {
     ['DELIVERY_MANAGER', 'DISPATCHER'].includes(user?.role || '') ||
     Boolean(user?.role && /dispatch|domicil/i.test(user.role))
   )
+  const canManageBreaks = isAdmin || isDeliveryStaff || ['DELIVERY_MANAGER', 'DISPATCHER'].includes(user?.role || '')
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
   const [orders, setOrders] = useState<Order[]>([])
@@ -306,6 +307,10 @@ export default function ActiveDeliveriesPage() {
     customMinutes: string;
   } | null>(null)
   const [isSubmittingBreak, setIsSubmittingBreak] = useState(false)
+
+  const activeBreaksCount = useMemo(() => {
+    return driverQueueData?.driversInOrder?.filter(d => d.onBreak).length || 0
+  }, [driverQueueData])
 
   const nextDriverInTurn = useMemo(() => {
     if (!driverQueueData?.driversInOrder) return null
@@ -606,7 +611,7 @@ export default function ActiveDeliveriesPage() {
   }
 
   const handleStartBreak = async () => {
-    if (!breakDialog?.driver || !isAdmin) return
+    if (!breakDialog?.driver || !canManageBreaks) return
     const minutes = parseInt(breakDialog.customMinutes) || breakDialog.minutes || 15
     setIsSubmittingBreak(true)
     try {
@@ -622,7 +627,7 @@ export default function ActiveDeliveriesPage() {
   }
 
   const handleEndBreak = async (driverId: string, driverName?: string) => {
-    if (!isAdmin) return
+    if (!canManageBreaks) return
     setIsSubmittingBreak(true)
     try {
       await api.post(`/delivery-drivers/${driverId}/break/end`)
@@ -770,8 +775,11 @@ export default function ActiveDeliveriesPage() {
       loadDriverQueue()
     })
 
-    socket.on('driverBreakFinished', () => {
+    socket.on('driverBreakFinished', (payload: any) => {
       loadDriverQueue()
+      if (payload?.driverName) {
+        alerts.toast(`⏰ Descanso finalizado: ${payload.driverName} se ha reincorporado a la fila de turnos.`)
+      }
     })
 
     return () => {
@@ -1530,6 +1538,33 @@ export default function ActiveDeliveriesPage() {
             </div>
 
             <div className="flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-none lg:pb-0">
+              {/* Botón Cena / Descanso (Al lado izquierdo de Todos) */}
+              {canManageBreaks && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const defaultDriver = (selectedFilterDriver && selectedFilterDriver.id !== 'ALL' && selectedFilterDriver.id !== 'UNASSIGNED')
+                      ? selectedFilterDriver
+                      : (driverQueueData?.driversInOrder?.find(d => !d.onBreak) || allAvailableDrivers[0] || null)
+                    setBreakDialog({
+                      driver: defaultDriver,
+                      minutes: 20,
+                      customMinutes: '',
+                    })
+                  }}
+                  className="flex shrink-0 cursor-pointer select-none items-center gap-1.5 rounded-xl border border-amber-500/30 bg-amber-500/10 hover:bg-amber-500/20 text-amber-600 dark:text-amber-400 px-3 py-1.5 text-xs font-bold transition-all shadow-sm"
+                  title="Gestionar tiempo de cena o descanso de domiciliarios"
+                >
+                  <UtensilsCrossed className="h-3.5 w-3.5 text-amber-500" />
+                  <span>Cena / Descanso</span>
+                  {activeBreaksCount > 0 && (
+                    <span className="rounded-full bg-purple-600 text-white px-1.5 text-[10px] font-black">
+                      {activeBreaksCount}
+                    </span>
+                  )}
+                </button>
+              )}
+
               {[
                 { id: 'ALL', label: 'Todos', count: visibleOrders.length },
                 { id: 'PENDING', label: 'En cocina', count: visibleOrders.filter(order => order.status === 'RECEIVED' || order.status === 'PENDING').length },
@@ -2112,8 +2147,8 @@ export default function ActiveDeliveriesPage() {
                     </span>
                   )}
 
-                  {/* Botón único Cena / Descanso (SOLO ADMINISTRADOR) */}
-                  {isAdmin && (
+                  {/* Botón único Cena / Descanso */}
+                  {canManageBreaks && (
                     isOnBreak ? (
                       <button
                         type="button"
@@ -3845,19 +3880,53 @@ export default function ActiveDeliveriesPage() {
         </DialogContent>
       </Dialog>
 
-      {/* ── Modal Cena / Descanso (Solo Administrador) ── */}
+      {/* ── Modal Cena / Descanso ── */}
       <Dialog open={!!breakDialog} onOpenChange={open => { if (!open) setBreakDialog(null) }}>
         <DialogContent className="bg-[var(--bg-panel)] border-[var(--border-default)] rounded-3xl max-w-sm p-6">
           <DialogHeader>
             <DialogTitle className="text-lg font-black text-[var(--text-primary)] flex items-center gap-2">
               <UtensilsCrossed className="h-5 w-5 text-amber-500" />
-              Cena / Descanso — {breakDialog?.driver?.name}
+              Cena / Descanso {breakDialog?.driver?.name ? `— ${breakDialog.driver.name}` : ''}
             </DialogTitle>
           </DialogHeader>
 
           <div className="space-y-4 pt-2">
             <div className="p-3 rounded-2xl bg-amber-500/10 border border-amber-500/20 text-xs font-semibold text-[var(--text-secondary)]">
               Al pausar, el repartidor sale de la fila de turnos. Al finalizar su tiempo de cena se reincorpora automáticamente al final de la fila.
+            </div>
+
+            {/* Selector de Repartidor */}
+            <div className="space-y-1.5">
+              <Label className="text-[10px] font-bold text-[var(--text-secondary)] uppercase tracking-wider">
+                Seleccionar Domiciliario
+              </Label>
+              <Select
+                value={breakDialog?.driver?.id || ''}
+                onValueChange={(driverId) => {
+                  const qDriver = driverQueueData?.driversInOrder?.find(d => d.id === driverId)
+                  const baseDriver = allAvailableDrivers.find(d => d.id === driverId) || drivers.find(d => d.id === driverId)
+                  const chosen = qDriver || baseDriver
+                  if (chosen) {
+                    setBreakDialog(prev => prev ? { ...prev, driver: chosen } : null)
+                  }
+                }}
+              >
+                <SelectTrigger className="h-10 rounded-xl border-[var(--border-default)] bg-[var(--bg-input)] text-xs font-bold">
+                  <SelectValue placeholder="Selecciona un domiciliario..." />
+                </SelectTrigger>
+                <SelectContent className="max-h-64">
+                  {allAvailableDrivers.map(d => {
+                    const qDriver = driverQueueData?.driversInOrder?.find(qd => qd.id === d.id)
+                    const isOnBreak = qDriver?.onBreak ?? false
+                    const remainingMin = isOnBreak && qDriver?.breakUntil ? Math.max(0, Math.ceil((qDriver.breakUntil - Date.now()) / 60000)) : 0
+                    return (
+                      <SelectItem key={d.id} value={d.id} className="text-xs font-medium">
+                        {isOnBreak ? `🍽️ ${d.name} (En descanso · ${remainingMin}m)` : `🛵 ${d.name}`}
+                      </SelectItem>
+                    )
+                  })}
+                </SelectContent>
+              </Select>
             </div>
 
             {breakDialog?.driver?.onBreak ? (

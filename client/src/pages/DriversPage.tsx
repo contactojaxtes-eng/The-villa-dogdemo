@@ -1018,8 +1018,8 @@ export default function DriversPage() {
                               <History className="h-3.5 w-3.5" /> Ver entregas
                             </Button>
 
-                            {/* Botón Cena / Descanso (Solo Administrador) */}
-                            {hasRole('ADMIN', 'SUPERADMIN') && (
+                            {/* Botón Cena / Descanso */}
+                            {hasRole('ADMIN', 'SUPERADMIN', 'DELIVERY_MANAGER', 'DISPATCHER') && (
                               isOnBreak ? (
                                 <div className="flex items-center gap-1">
                                   <span className="text-[10px] font-black text-amber-600 dark:text-amber-400 bg-amber-500/10 border border-amber-500/25 px-2 py-1 rounded-xl animate-pulse">

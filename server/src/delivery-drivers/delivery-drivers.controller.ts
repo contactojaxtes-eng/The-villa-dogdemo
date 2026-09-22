@@ -159,7 +159,7 @@ export class DeliveryDriversController {
   }
 
   @Post('queue/reorder')
-  @Roles('ADMIN', 'SUPERADMIN', 'DELIVERY_MANAGER')
+  @Roles('ADMIN', 'SUPERADMIN', 'DELIVERY_MANAGER', 'DISPATCHER')
   @UseGuards(RolesGuard)
   @ApiOperation({ summary: 'Reordenar la fila de turnos de domiciliarios' })
   reorderQueue(@Body() body: { queue: string[] }) {
@@ -167,17 +167,17 @@ export class DeliveryDriversController {
   }
 
   @Post(':id/break')
-  @Roles('ADMIN', 'SUPERADMIN')
+  @Roles('ADMIN', 'SUPERADMIN', 'DELIVERY_MANAGER', 'DISPATCHER')
   @UseGuards(RolesGuard)
-  @ApiOperation({ summary: 'Asignar tiempo de cena / descanso a un domiciliario (Solo Administradores)' })
+  @ApiOperation({ summary: 'Asignar tiempo de cena / descanso a un domiciliario' })
   startBreak(@Param('id') id: string, @Body() body: { minutes?: number }) {
     return this.deliveryDriversService.startDriverBreak(id, body?.minutes || 15);
   }
 
   @Post(':id/break/end')
-  @Roles('ADMIN', 'SUPERADMIN')
+  @Roles('ADMIN', 'SUPERADMIN', 'DELIVERY_MANAGER', 'DISPATCHER')
   @UseGuards(RolesGuard)
-  @ApiOperation({ summary: 'Finalizar descanso de un domiciliario y reincorporarlo al final de la fila (Solo Administradores)' })
+  @ApiOperation({ summary: 'Finalizar descanso de un domiciliario y reincorporarlo al final de la fila' })
   endBreak(@Param('id') id: string) {
     return this.deliveryDriversService.endDriverBreak(id);
   }

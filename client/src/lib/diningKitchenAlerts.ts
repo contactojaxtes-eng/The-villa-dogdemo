@@ -39,6 +39,10 @@ export function isActiveDiningKitchenTicket(ticket: KitchenTicketSummary) {
 export function isDiningKitchenTicketForUser(ticket: KitchenTicketSummary, user: BasicUser) {
   if (!isActiveDiningKitchenTicket(ticket)) return false
 
+  if (['ADMIN', 'SUPERADMIN'].includes(user.role || '')) {
+    return true
+  }
+
   if (user.role === 'WAITER') {
     return ticket.order?.waiter?.id === user.id
   }

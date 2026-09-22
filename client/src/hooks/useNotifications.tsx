@@ -15,6 +15,7 @@ import {
 } from '@/lib/diningKitchenAlerts'
 import { hasUserPermission } from '@/lib/permissions'
 import { alerts } from '@/lib/alerts'
+import { formatCurrency } from '@/lib/utils'
 
 // Simple notification sound using Web Audio API
 function playNotificationSound(type: 'message' | 'urgent' = 'message') {
@@ -134,8 +135,8 @@ export function useNotifications() {
     const isMuted = () => localStorage.getItem('the_villa_dog_mute_notifications') === 'true'
 
     // Alertas exclusivas de comandas de salón demoradas. Se conservan en el
-    // shell global para que la mesera las vea aunque esté creando otro pedido.
-    const tracksDiningDelays = user.role === 'WAITER' || user.role === 'KITCHEN'
+    // shell global para que la mesera y el administrador las vean a tiempo.
+    const tracksDiningDelays = user.role === 'WAITER' || user.role === 'KITCHEN' || ['ADMIN', 'SUPERADMIN'].includes(user.role || '')
     const trackedDiningTickets = new Map<string, KitchenTicketSummary>()
     const openDiningDelayToasts = new Set<string>()
     const notifiedDiningTickets = new Set<string>()
@@ -255,8 +256,8 @@ export function useNotifications() {
 
     socket.on('newOrder', (order: { orderNumber?: number; customerName?: string; orderType?: string; tableId?: string; source?: string }) => {
       if (isMuted()) return
-      // Cocineros y meseros NO deben recibir la alerta general
-      if (['KITCHEN', 'WAITER'].includes(user.role || '')) return
+      // Cocineros, meseros y administradores NO deben recibir la alerta emergente de nuevos pedidos
+      if (['KITCHEN', 'WAITER', 'ADMIN', 'SUPERADMIN'].includes(user.role || '')) return
 
       const isTableOrder = Boolean(order?.tableId || order?.orderType === 'LOCAL' || order?.orderType === 'DINE_IN' || order?.source === 'TABLE' || order?.source === 'OFFLINE_TABLE')
 
@@ -285,8 +286,8 @@ export function useNotifications() {
 
     socket.on('orderStatusChanged', (data: { orderId: string; status: string; order?: any }) => {
       if (isMuted()) return
-      // Cocineros NO deben recibir alertas de cambio de estado de pedidos ni domicilios
-      if (user.role === 'KITCHEN') return
+      // Cocineros y administradores NO reciben alertas de cambio de estado de pedidos ni domicilios
+      if (['KITCHEN', 'ADMIN', 'SUPERADMIN'].includes(user.role || '')) return
 
       const isTableOrder = Boolean(data.order?.tableId || data.order?.orderType === 'LOCAL' || data.order?.orderType === 'DINE_IN' || data.order?.source === 'TABLE' || data.order?.source === 'OFFLINE_TABLE')
 
@@ -373,16 +374,49 @@ export function useNotifications() {
     socket.on('paymentSubmitted', (payload: any) => {
       if (isMuted()) return
       if (!['ADMIN', 'SUPERADMIN', 'CASHIER'].includes(user.role || '')) return
-      toast.warning('Pago pendiente por validar', {
-        description: `${payload?.table?.label || 'Mesa'} - revisa caja`,
+
+      const tableLabel = payload?.table?.label || payload?.table?.name || 'Mesa'
+      const waiterName = payload?.waiterName || payload?.table?.openedBy?.name || ''
+      const totalAmount = Number(payload?.amount ?? payload?.payment?.amount ?? payload?.table?.total ?? 0)
+      const method = String(payload?.method || payload?.payment?.method || '').toUpperCase()
+
+      let methodText = ''
+      if (method === 'CASH') {
+        methodText = '💵 Efectivo'
+      } else if (method === 'MIXED') {
+        const cash = Number(payload?.cashAmount ?? payload?.payment?.cashAmount ?? 0)
+        const transf = Number(payload?.transferAmount ?? payload?.payment?.transferAmount ?? Math.max(0, totalAmount - cash))
+        methodText = `🔀 Mixto (Efectivo: ${formatCurrency(cash)} · Transf: ${formatCurrency(transf)})`
+      } else if (['TRANSFER', 'NEQUI', 'BANCOLOMBIA', 'DAVIPLATA'].includes(method)) {
+        methodText = `📲 Transferencia (${method === 'TRANSFER' ? 'Tr.' : method})`
+      } else {
+        methodText = method || 'Por validar'
+      }
+
+      const desc = `${tableLabel}${waiterName ? ` · ${waiterName}` : ''}: ${formatCurrency(totalAmount)} · ${methodText} - revisa caja`
+
+      toast.warning('💰 Pago registrado por mesera', {
+        description: desc,
         icon: <Bell className="h-4 w-4 text-[#F59E0B]" />,
-        duration: 6000,
+        duration: 9000,
+        action: {
+          label: 'Validar en Caja',
+          onClick: () => {
+            window.location.href = '/payment-validation'
+          },
+        },
       })
+      playNotificationSound('urgent')
+      showBrowserNotification(
+        `💰 Pago registrado: ${tableLabel}`,
+        `${formatCurrency(totalAmount)} · ${methodText}`,
+        '/payment-validation'
+      )
     })
 
     socket.on('paymentRejected', (payload: any) => {
-      // Exclusivo ÚNICAMENTE para Admin y SuperAdmin (ningún otro perfil debe recibir esta alerta)
-      if (!['ADMIN', 'SUPERADMIN'].includes(user.role || '')) return
+      // Alertas de rechazo de pago para meseros y cajeros (los administradores solo reciben los eventos solicitados)
+      if (['ADMIN', 'SUPERADMIN'].includes(user.role || '')) return
 
       const tableLabel = payload?.table?.label || payload?.order?.diningTable?.label || payload?.order?.customerName || 'Mesa'
       const orderNum = payload?.order?.orderNumber || payload?.payment?.order?.orderNumber || payload?.table?.orders?.[0]?.orderNumber || '—'
@@ -526,6 +560,37 @@ export function useNotifications() {
 
     socket.on('cookBreakReincorporated', (payload: { userId: string }) => {
       activeBreaks.delete(payload.userId)
+    })
+
+    // Alerta de fin de descanso de domiciliarios
+    socket.on('driverBreakFinished', (payload: { driverId: string; driverName: string; finishedAt: number; breakReason?: string; breakMinutes?: number }) => {
+      // Notificar a administradores, cajeros y gestores/despachadores de domicilios
+      if (!['ADMIN', 'SUPERADMIN', 'CASHIER', 'DELIVERY_MANAGER', 'DISPATCHER'].includes(user.role || '')) return
+
+      const isSoundMuted = isMuted() || localStorage.getItem('niche_mute_sounds') === 'true'
+      if (!isSoundMuted) {
+        playUrgentBell()
+      }
+
+      const driverName = payload?.driverName || 'El repartidor'
+      const title = `⏰ ¡Fin de descanso: ${driverName}!`
+      const desc = `${driverName} cumplió su tiempo de descanso y se reincorporó al final de la fila de turnos.`
+
+      toast.warning(title, {
+        description: desc,
+        icon: <Bell className="h-5 w-5 text-amber-500 animate-bounce" />,
+        duration: 12000,
+        action: {
+          label: 'Ver Despachos',
+          onClick: () => { window.location.href = '/dispatch' },
+        },
+      })
+
+      showBrowserNotification(
+        title,
+        desc,
+        '/dispatch'
+      )
     })
 
     socket.on('kitchenCookStatusChanged', (statuses: Record<string, any>) => {
