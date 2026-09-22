@@ -1552,6 +1552,7 @@ export class OrdersService implements OnModuleInit {
     );
     this.socketGateway.emitWhatsApp('whatsappSessionUpdated', { orderUpdated: true, sessionId: updated.chatSessionId || undefined, phone: updated.customerPhone, orderNumber: updated.orderNumber, status: updated.status });
 
+
     try {
       const shouldNotify = notifyCustomer === true;
       if (shouldNotify && this.canSendWhatsApp(updated)) {
@@ -1561,8 +1562,7 @@ export class OrdersService implements OnModuleInit {
         } else if (status === 'IN_ROUTE' && updated.orderType === 'DELIVERY') {
           const driver: any = updated.deliveryDriver || updated.assignee;
           const driverInfo = driver?.name ? `con tu domiciliario ${driver.name}` : 'con el domiciliario';
-          const driverPhoneInfo = driver?.phone ? ` (${driver.phone})` : '';
-          text = `¡Hola ${updated.customerName}! Tu pedido ya va en camino ${driverInfo}${driverPhoneInfo}. ¡Gracias por tu compra en The Villa Dog!`;
+          text = `¡Hola ${updated.customerName}! Tu pedido ya va en camino ${driverInfo}. ¡Gracias por tu compra en The Villa Dog!`;
         }
 
         if (text) {
@@ -2311,7 +2311,7 @@ export class OrdersService implements OnModuleInit {
     const where: any = {
       status: { notIn: ['DELIVERED', 'CANCELLED'] },
       tableId: null,
-      orderType: orderTypes.length === 1 ? orderTypes[0] : { in: orderTypes },
+      orderType: isDeliveryStaff ? 'DELIVERY' : (orderTypes.length === 1 ? orderTypes[0] : { in: orderTypes }),
     };
     if (cleanSearch) {
       const digitsOnly = cleanSearch.replace(/\D/g, '');

@@ -540,14 +540,15 @@ export default function ActiveDeliveriesPage() {
     if (!silent) setLoading(true)
     const params = new URLSearchParams()
     if (submittedSearch) params.set('search', submittedSearch)
-    params.set('orderType', 'DELIVERY,PICKUP')
+    params.set('orderType', isDeliveryStaff ? 'DELIVERY' : 'DELIVERY,PICKUP')
     api.get<Order[]>(`/orders/active?${params.toString()}`, { force })
       .then(data => {
         const deliveryOnly = (data || []).filter(o => 
           !o.tableId && 
           o.orderType !== 'LOCAL' && 
           o.source !== 'TABLE' && 
-          o.source !== 'OFFLINE_TABLE'
+          o.source !== 'OFFLINE_TABLE' &&
+          (!isDeliveryStaff || o.orderType !== 'PICKUP')
         )
         setOrders(deliveryOnly)
       })
@@ -697,7 +698,10 @@ export default function ActiveDeliveriesPage() {
   const visibleOrders = useMemo(() => {
     const query = searchQuery.trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
     const matchingOrders = orders.filter(order => {
-      // 0. Filtrar por tipo sin esconder las recogidas al asignador.
+      // 0. En el perfil del gestor de domicilios no deben aparecer pedidos para recoger
+      if (isDeliveryStaff && order.orderType === 'PICKUP') return false
+
+      // Filtrar por tipo sin esconder las recogidas al asignador.
       if (orderTypeFilter !== 'ALL' && order.orderType !== orderTypeFilter) return false
 
       if (zoneFilter === 'NO_ZONE') {
