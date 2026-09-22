@@ -610,7 +610,7 @@ export default function NewOrderPage({
   const [paymentMethod, setPaymentMethod] = useState('CASH')
   const [cashAmountInput, setCashAmountInput] = useState('')
   const [transferAmountInput, setTransferAmountInput] = useState('')
-  const [notifyCustomer, setNotifyCustomer] = useState(false)
+  const [notifyCustomer, setNotifyCustomer] = useState(true)
   const [notes, setNotes] = useState('')
   const [cart, setCart] = useState<CartItem[]>([])
   const [itemSearch, setItemSearch] = useState('')
@@ -888,6 +888,7 @@ export default function NewOrderPage({
           setNotes((order.notes || '').replace(/^\[MOSTRADOR\]\s*/i, '').replace(/^\[PICKUP\]\s*/i, '').trim())
           setPaymentMethod(order.paymentMethod || 'CASH')
           setPaymentReference(order.paymentReference || '')
+          setNotifyCustomer(true)
           setLatitude(order.latitude || null)
           setLongitude(order.longitude || null)
           setCustomerId(order.customerId || '')
@@ -953,7 +954,7 @@ export default function NewOrderPage({
       setPaymentReference('')
       setCashAmountInput('')
       setTransferAmountInput('')
-      setNotifyCustomer(false)
+      setNotifyCustomer(true)
       setLatitude(null)
       setLongitude(null)
       setNotes('')
@@ -979,7 +980,7 @@ export default function NewOrderPage({
         setPaymentReference(draft.paymentReference || '')
         setCashAmountInput(draft.cashAmountInput || '')
         setTransferAmountInput(draft.transferAmountInput || '')
-        setNotifyCustomer(draft.notifyCustomer === true)
+        setNotifyCustomer(draft.notifyCustomer !== undefined ? draft.notifyCustomer === true : true)
         setLatitude(typeof draft.latitude === 'number' ? draft.latitude : null)
         setLongitude(typeof draft.longitude === 'number' ? draft.longitude : null)
         setNotes(draft.notes || '')
@@ -3198,7 +3199,7 @@ export default function NewOrderPage({
     setClientMutationId(createClientMutationId())
     setCustomerName(''); setCustomerPhone(''); setExactAddress(''); setZoneId('')
     setZoneSearch(''); setZoneRateEdit('')
-    setPaymentMethod('CASH'); setCashAmountInput(''); setTransferAmountInput(''); setNotifyCustomer(false)
+    setPaymentMethod('CASH'); setCashAmountInput(''); setTransferAmountInput(''); setNotifyCustomer(true)
     setNotes(''); setCart([]); setError(''); setOrderType('delivery'); setIsCartCollapsed(false)
   }
 
@@ -3899,7 +3900,7 @@ export default function NewOrderPage({
               />
               <span className="text-[11px] font-bold text-[var(--text-secondary)]">
                 Avisar al cliente por WhatsApp
-                <span className="mt-0.5 block text-[9px] font-normal text-[var(--text-muted)]">Desactivado por defecto para domicilio y pasar a recoger.</span>
+                <span className="mt-0.5 block text-[9px] font-normal text-[var(--text-muted)]">Activado por defecto para enviar el detalle del pedido al cliente.</span>
               </span>
             </label>
           </div>

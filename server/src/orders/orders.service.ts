@@ -584,7 +584,7 @@ export class OrdersService implements OnModuleInit {
       }
       return { order: await this.createWithinTransaction(data, tx), replay: false };
     }, operationTransaction);
-    if (!result.replay) await this.notifyCreated(result.order, data.notifyCustomer === true);
+    if (!result.replay) await this.notifyCreated(result.order, data.notifyCustomer !== false);
     return result.replay ? { ...result.order, idempotentReplay: true } : result.order;
   }
 
@@ -951,7 +951,7 @@ export class OrdersService implements OnModuleInit {
     return order;
   }
 
-  async notifyCreated(order: any, notifyCustomer = false) {
+  async notifyCreated(order: any, notifyCustomer = true) {
     this.socketGateway.emitNewOrder(order);
     if (order.source === 'WHATSAPP' || order.chatSessionId || (!order.tableId && order.orderType !== 'LOCAL')) {
       this.socketGateway.emitWhatsApp('whatsappSessionUpdated', { orderCreated: true, sessionId: order.chatSessionId || undefined, phone: order.customerPhone, orderNumber: order.orderNumber, status: order.status });
@@ -1324,7 +1324,7 @@ export class OrdersService implements OnModuleInit {
     );
 
     try {
-      if (data.notifyCustomer === true && this.canSendWhatsApp(updated)) {
+      if (data.notifyCustomer !== false && this.canSendWhatsApp(updated)) {
         const formatCOP = (val: number) => new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', minimumFractionDigits: 0 }).format(val);
 
         const grouped = this.groupOrderItems(updated.items || []);
