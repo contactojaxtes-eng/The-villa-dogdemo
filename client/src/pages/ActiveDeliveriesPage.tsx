@@ -2123,7 +2123,7 @@ export default function ActiveDeliveriesPage() {
               <Button
                 size="sm"
                 onClick={() => {
-                  setBatchDriverId(nextDriverInTurn?.id || '')
+                  setBatchDriverId('')
                   setBatchDriverSearch('')
                   setBatchError('')
                   setBatchDispatchOpen(true)
@@ -2823,16 +2823,25 @@ export default function ActiveDeliveriesPage() {
                   <span className="text-xl">👑</span>
                   <div>
                     <p className="text-xs font-black text-amber-800 dark:text-amber-300">
-                      Repartidor en turno: {nextDriverInTurn.name} (#1 en fila)
+                      Siguiente en turno: {nextDriverInTurn.name} (#1 en fila)
                     </p>
                     <p className="text-[10px] text-[var(--text-muted)] font-bold">
-                      Siguiente en rotación equitativa ({driverQueueData?.tripOrderCounts?.[nextDriverInTurn.id] || 0}/10 pedidos)
+                      Control de disponibilidad ({driverQueueData?.tripOrderCounts?.[nextDriverInTurn.id] || 0}/10 pedidos)
                     </p>
                   </div>
                 </div>
-                <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-700 dark:text-amber-300 border border-amber-500/30 shrink-0">
-                  #1 Turno
-                </span>
+                <button
+                  type="button"
+                  onClick={() => setSelectedDriverId(nextDriverInTurn.id)}
+                  className={cn(
+                    "text-[10px] font-black px-2.5 py-1 rounded-xl cursor-pointer shadow-xs transition-all shrink-0 border-0",
+                    selectedDriverId === nextDriverInTurn.id
+                      ? "bg-emerald-600 text-white"
+                      : "bg-amber-500 hover:bg-amber-600 text-white"
+                  )}
+                >
+                  {selectedDriverId === nextDriverInTurn.id ? '✓ Seleccionado' : 'Elegir en turno'}
+                </button>
               </div>
             )}
 
@@ -2998,9 +3007,23 @@ export default function ActiveDeliveriesPage() {
             </div>
 
             {nextDriverInTurn && (
-              <div className="flex items-center gap-2 p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-700 dark:text-amber-400 text-xs font-black">
-                <span>👑</span>
-                <span>Repartidor en turno: <span className="underline">{nextDriverInTurn.name}</span> (#1 en fila)</span>
+              <div className="flex items-center justify-between gap-2 p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-700 dark:text-amber-400 text-xs font-black">
+                <div className="flex items-center gap-2">
+                  <span>👑</span>
+                  <span>Siguiente en turno: <span className="underline">{nextDriverInTurn.name}</span> (#1 en fila)</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setBatchDriverId(nextDriverInTurn.id)}
+                  className={cn(
+                    "text-[10px] font-black px-2.5 py-1 rounded-lg cursor-pointer shrink-0 border-0 transition-all",
+                    batchDriverId === nextDriverInTurn.id
+                      ? "bg-emerald-600 text-white"
+                      : "bg-amber-500 hover:bg-amber-600 text-white"
+                  )}
+                >
+                  {batchDriverId === nextDriverInTurn.id ? '✓ Seleccionado' : 'Elegir'}
+                </button>
               </div>
             )}
 
@@ -3676,7 +3699,7 @@ export default function ActiveDeliveriesPage() {
                     )}
                     {hasPermission('dispatch.change_status') && o.orderType !== 'PICKUP' && o.orderType !== 'LOCAL' && activeStatuses.includes(o.status) && (
                       <Button size="sm" variant="outline" className={`h-9 px-4 text-xs font-bold rounded-xl gap-1.5 cursor-pointer ${o.deliveryDriver ? 'border-emerald-500/30 text-emerald-600 hover:bg-emerald-500/10' : 'border-amber-500/30 text-amber-600 hover:bg-amber-500/10'}`}
-                        onClick={() => { setDetailOrder(null); setSelectedDriverId(o.deliveryDriverId || nextDriverInTurn?.id || ''); setRegisteringDriverInline(false); setDispatchError(''); setDispatchDialog({ order: o, shouldKick: false }); }}
+                        onClick={() => { setDetailOrder(null); setSelectedDriverId(o.deliveryDriverId || ''); setRegisteringDriverInline(false); setDispatchError(''); setDispatchDialog({ order: o, shouldKick: false }); }}
                         title={o.deliveryDriver ? 'Cambiar repartidor' : 'Asignar repartidor'}>
                         <Bike className="h-3.5 w-3.5" />
                         {o.deliveryDriver ? `Repartidor: ${o.deliveryDriver.name}` : 'Asignar Repartidor'}

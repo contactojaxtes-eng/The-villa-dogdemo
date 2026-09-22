@@ -19,6 +19,7 @@ import {
 } from 'lucide-react'
 import { formatCurrency, formatDate, getStatusColor, getStatusLabel, cleanNotes, groupOrderItems, formatThousandsInput, parseThousandsInput } from '@/lib/utils'
 import { printComandaSmart } from '@/lib/printer'
+import { alerts } from '@/lib/alerts'
 
 interface DriverOrder {
   id: string
@@ -131,6 +132,17 @@ export default function DriversPage() {
   const [detailOrder, setDetailOrder] = useState<any>(null)
   const [loadingOrder, setLoadingOrder] = useState(false)
 
+  // Break state (Cena / Descanso para Domiciliarios)
+  const [driverQueueData, setDriverQueueData] = useState<{
+    queue?: string[]
+    tripOrderCounts?: Record<string, number>
+    breaks?: Record<string, { onBreak?: boolean; breakUntil?: number; reason?: string }>
+  } | null>(null)
+  const [breakModalDriver, setBreakModalDriver] = useState<Driver | null>(null)
+  const [breakMinutes, setBreakMinutes] = useState(20)
+  const [customMinutes, setCustomMinutes] = useState('')
+  const [submittingBreak, setSubmittingBreak] = useState(false)
+
   const loadDrivers = useCallback(async () => {
     setLoading(true)
     setLoadError('')
@@ -165,13 +177,58 @@ export default function DriversPage() {
     }
   }
 
+  const loadDriverQueue = useCallback(async () => {
+    try {
+      const data = await api.get<any>('/delivery-drivers/queue')
+      setDriverQueueData(data)
+    } catch (err) {
+      console.warn('Error al cargar cola de turnos de repartidores:', err)
+    }
+  }, [])
+
   useEffect(() => {
     loadClosings()
-  }, [])
+    loadDriverQueue()
+  }, [loadDriverQueue])
 
   useEffect(() => {
     loadDrivers()
   }, [loadDrivers])
+
+  const handleStartBreak = async () => {
+    if (!breakModalDriver) return
+    const mins = customMinutes ? parseInt(customMinutes) || 20 : breakMinutes
+    if (mins <= 0) {
+      alerts.warning('Tiempo inválido', 'Por favor ingresa un número de minutos mayor a 0.')
+      return
+    }
+    setSubmittingBreak(true)
+    try {
+      await api.post(`/delivery-drivers/${breakModalDriver.id}/break`, { minutes: mins })
+      alerts.success('Cena / Descanso iniciada', `${breakModalDriver.name} estará en descanso por ${mins} minutos y saldrá de la fila de turnos.`)
+      setBreakModalDriver(null)
+      loadDriverQueue()
+      loadDrivers()
+    } catch (err: any) {
+      alerts.error('Error al asignar descanso', err.message || 'No se pudo iniciar el descanso')
+    } finally {
+      setSubmittingBreak(false)
+    }
+  }
+
+  const handleEndBreak = async (driverId: string, driverName?: string) => {
+    setSubmittingBreak(true)
+    try {
+      await api.post(`/delivery-drivers/${driverId}/break/end`)
+      alerts.success('Descanso finalizado', `${driverName || 'El repartidor'} se ha reincorporado al final de la fila de turnos.`)
+      loadDriverQueue()
+      loadDrivers()
+    } catch (err: any) {
+      alerts.error('Error al finalizar descanso', err.message || 'No se pudo finalizar el descanso')
+    } finally {
+      setSubmittingBreak(false)
+    }
+  }
 
   useEffect(() => {
     const socketUrl = import.meta.env.VITE_API_URL || window.location.origin
@@ -182,6 +239,7 @@ export default function DriversPage() {
 
     const handleUpdate = () => {
       loadDrivers()
+      loadDriverQueue()
     }
 
     socket.on('newOrder', handleUpdate)
@@ -189,11 +247,22 @@ export default function DriversPage() {
     socket.on('orderUpdated', handleUpdate)
     socket.on('paymentUpdated', handleUpdate)
     socket.on('driversChanged', handleUpdate)
+    socket.on('driverQueueUpdated', (data: any) => {
+      setDriverQueueData(data)
+    })
+    socket.on('driverBreakStarted', () => {
+      loadDriverQueue()
+      loadDrivers()
+    })
+    socket.on('driverBreakFinished', () => {
+      loadDriverQueue()
+      loadDrivers()
+    })
 
     return () => {
       socket.disconnect()
     }
-  }, [user, loadDrivers])
+  }, [user, loadDrivers, loadDriverQueue])
 
   const filteredDrivers = useMemo(() => {
     const q = search.toLowerCase().trim()
@@ -861,7 +930,12 @@ export default function DriversPage() {
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <AnimatePresence>
-                {filteredDrivers.map(d => (
+                {filteredDrivers.map(d => {
+                  const breakInfo = driverQueueData?.breaks?.[d.id]
+                  const isOnBreak = Boolean(breakInfo?.onBreak && (breakInfo?.breakUntil || 0) > Date.now())
+                  const remainingMin = isOnBreak ? Math.max(0, Math.ceil(((breakInfo?.breakUntil || 0) - Date.now()) / 60000)) : 0
+
+                  return (
                   <motion.div
                     key={d.id}
                     variants={fadeUp}
@@ -884,12 +958,22 @@ export default function DriversPage() {
                               </a>
                             </div>
                           </div>
-                          <Badge
-                            variant="outline"
-                            className={`shrink-0 rounded-full px-2 py-0.5 text-[9px] font-extrabold uppercase ${d.active ? 'border-emerald-500/20 bg-emerald-500/10 text-emerald-500' : 'border-zinc-500/20 bg-zinc-500/10 text-zinc-400'}`}
-                          >
-                            <span className="mr-1">●</span>{d.active ? 'Activo' : 'Inactivo'}
-                          </Badge>
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            {isOnBreak && (
+                              <Badge
+                                variant="outline"
+                                className="border-amber-500/30 bg-amber-500/15 text-amber-600 dark:text-amber-400 text-[9px] font-black animate-pulse px-2 py-0.5 rounded-full"
+                              >
+                                🍽️ En Cena ({remainingMin}m)
+                              </Badge>
+                            )}
+                            <Badge
+                              variant="outline"
+                              className={`shrink-0 rounded-full px-2 py-0.5 text-[9px] font-extrabold uppercase ${d.active ? 'border-emerald-500/20 bg-emerald-500/10 text-emerald-500' : 'border-zinc-500/20 bg-zinc-500/10 text-zinc-400'}`}
+                            >
+                              <span className="mr-1">●</span>{d.active ? 'Activo' : 'Inactivo'}
+                            </Badge>
+                          </div>
                         </div>
 
                         <Separator className="bg-[var(--border-subtle)]/50" />
@@ -923,15 +1007,53 @@ export default function DriversPage() {
                           </div>
                         )}
 
-                        <div className="flex items-center justify-between gap-2 pt-1.5">
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => handleViewDetail(d.id)}
-                            className="h-8 text-[10px] font-bold rounded-xl px-3 border-[var(--border-default)] hover:bg-[var(--bg-hover)] text-[var(--text-secondary)] flex items-center gap-1 cursor-pointer active:scale-95 transition-all"
-                          >
-                            <History className="h-3.5 w-3.5" /> Ver entregas
-                          </Button>
+                        <div className="flex items-center justify-between gap-2 pt-1.5 flex-wrap">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => handleViewDetail(d.id)}
+                              className="h-8 text-[10px] font-bold rounded-xl px-2.5 border-[var(--border-default)] hover:bg-[var(--bg-hover)] text-[var(--text-secondary)] flex items-center gap-1 cursor-pointer active:scale-95 transition-all"
+                            >
+                              <History className="h-3.5 w-3.5" /> Ver entregas
+                            </Button>
+
+                            {/* Botón Cena / Descanso (Solo Administrador) */}
+                            {hasRole('ADMIN', 'SUPERADMIN') && (
+                              isOnBreak ? (
+                                <div className="flex items-center gap-1">
+                                  <span className="text-[10px] font-black text-amber-600 dark:text-amber-400 bg-amber-500/10 border border-amber-500/25 px-2 py-1 rounded-xl animate-pulse">
+                                    🍽️ Cena ({remainingMin}m)
+                                  </span>
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={() => void handleEndBreak(d.id, d.name)}
+                                    disabled={submittingBreak}
+                                    className="h-8 rounded-xl px-2 text-[10px] font-bold text-rose-500 border-rose-500/30 hover:bg-rose-500/10 cursor-pointer"
+                                    title="Terminar cena y reincorporar a la fila"
+                                  >
+                                    ✕
+                                  </Button>
+                                </div>
+                              ) : (
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => {
+                                    setBreakModalDriver(d)
+                                    setBreakMinutes(20)
+                                    setCustomMinutes('')
+                                  }}
+                                  className="h-8 rounded-xl px-2.5 text-[10px] font-black border-amber-500/30 text-amber-600 hover:bg-amber-500/10 dark:text-amber-400 flex items-center gap-1 cursor-pointer"
+                                  title="Programar tiempo de cena o descanso"
+                                >
+                                  <UtensilsCrossed className="h-3.5 w-3.5 text-amber-500" />
+                                  <span>Cena / Descanso</span>
+                                </Button>
+                              )
+                            )}
+                          </div>
                           <div className="flex items-center gap-1">
                             {hasRole('ADMIN', 'SUPERADMIN') && (
                             <Button
@@ -979,7 +1101,7 @@ export default function DriversPage() {
                       </CardContent>
                     </Card>
                   </motion.div>
-                ))}
+                )})}
               </AnimatePresence>
             </div>
           )}
@@ -1393,6 +1515,90 @@ export default function DriversPage() {
               </div>
             )
           })()}
+        </DialogContent>
+      </Dialog>
+
+      {/* Modal para Programar Tiempo de Cena / Descanso */}
+      <Dialog open={!!breakModalDriver} onOpenChange={open => { if (!open) setBreakModalDriver(null) }}>
+        <DialogContent className="border-[var(--border-subtle)] bg-[var(--bg-panel)] rounded-3xl shadow-2xl p-0 overflow-hidden max-w-md w-[95vw]">
+          <div className="h-1.5 w-full bg-gradient-to-r from-amber-500 via-orange-500 to-rose-500" />
+
+          <div className="p-5 border-b border-[var(--border-subtle)]">
+            <DialogTitle className="text-base font-black text-[var(--text-primary)] flex items-center gap-2">
+              <span className="text-lg">🍽️</span>
+              Tiempo de Cena / Descanso para {breakModalDriver?.name}
+            </DialogTitle>
+            <p className="text-xs text-[var(--text-secondary)] mt-1">
+              Durante este tiempo, el repartidor sale de la fila de turnos. Al finalizar, <strong>se reincorpora automáticamente al final de la fila</strong>.
+            </p>
+          </div>
+
+          <div className="p-5 space-y-4">
+            <div className="space-y-1.5">
+              <Label className="text-xs font-black uppercase text-[var(--text-secondary)] tracking-wider">
+                Selecciona la duración:
+              </Label>
+              <div className="grid grid-cols-3 gap-2">
+                {[15, 20, 30, 45, 60].map(mins => (
+                  <button
+                    key={mins}
+                    type="button"
+                    onClick={() => { setBreakMinutes(mins); setCustomMinutes('') }}
+                    className={`py-2.5 px-3 rounded-xl border text-xs font-black transition-all cursor-pointer ${
+                      breakMinutes === mins && !customMinutes
+                        ? 'bg-amber-500 text-white border-amber-600 shadow-md'
+                        : 'bg-[var(--bg-elevated)] border-[var(--border-subtle)] text-[var(--text-primary)] hover:border-amber-500'
+                    }`}
+                  >
+                    ⏱️ {mins} min
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label className="text-xs font-black uppercase text-[var(--text-secondary)] tracking-wider">
+                O escribe los minutos exactos:
+              </Label>
+              <div className="relative">
+                <Input
+                  type="number"
+                  min="1"
+                  max="180"
+                  placeholder="Ej: 25"
+                  value={customMinutes}
+                  onChange={e => {
+                    setCustomMinutes(e.target.value)
+                    const val = parseInt(e.target.value)
+                    if (val > 0) setBreakMinutes(val)
+                  }}
+                  className="h-10 rounded-xl bg-[var(--bg-elevated)] border-[var(--border-default)] font-bold text-sm pr-16"
+                />
+                <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-[var(--text-muted)] font-bold">
+                  minutos
+                </span>
+              </div>
+            </div>
+
+            <div className="flex gap-2 pt-2 border-t border-[var(--border-subtle)]/40">
+              <Button
+                variant="outline"
+                className="flex-1 h-11 rounded-xl font-bold text-sm cursor-pointer"
+                onClick={() => setBreakModalDriver(null)}
+                disabled={submittingBreak}
+              >
+                Cancelar
+              </Button>
+              <Button
+                className="flex-1 h-11 bg-amber-500 hover:bg-amber-600 text-white rounded-xl font-bold text-sm shadow-md border-0 cursor-pointer"
+                onClick={() => void handleStartBreak()}
+                disabled={submittingBreak}
+              >
+                {submittingBreak ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+                Iniciar Cena / Descanso
+              </Button>
+            </div>
+          </div>
         </DialogContent>
       </Dialog>
     </div>
