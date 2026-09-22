@@ -980,7 +980,7 @@ export default function NewOrderPage({
         setPaymentReference(draft.paymentReference || '')
         setCashAmountInput(draft.cashAmountInput || '')
         setTransferAmountInput(draft.transferAmountInput || '')
-        setNotifyCustomer(draft.notifyCustomer !== undefined ? draft.notifyCustomer === true : true)
+        setNotifyCustomer(true)
         setLatitude(typeof draft.latitude === 'number' ? draft.latitude : null)
         setLongitude(typeof draft.longitude === 'number' ? draft.longitude : null)
         setNotes(draft.notes || '')

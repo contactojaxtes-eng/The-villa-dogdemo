@@ -443,7 +443,7 @@ export default function ActiveDeliveriesPage() {
   const handleMarkPickupReady = async (order: Order) => {
     if (markingPickupReadyId) return
 
-    const shouldNotify = notifyOnPickupReady[order.id] ?? false
+    const shouldNotify = notifyOnPickupReady[order.id] ?? true
 
     const confirm = await alerts.confirm(
       `¿Marcar Pedido #${order.orderNumber} como LISTO?`,
@@ -2140,7 +2140,7 @@ export default function ActiveDeliveriesPage() {
                                       disabled={markingPickupReadyId === order.id}
                                       className="h-6 px-2 text-[10px] font-extrabold bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg gap-1 border-0 cursor-pointer shadow-sm animate-pulse"
                                       title={
-                                        (notifyOnPickupReady[order.id] ?? false)
+                                        (notifyOnPickupReady[order.id] ?? true)
                                           ? "Marcar pedido listo y notificar por WhatsApp al cliente"
                                           : "Marcar pedido listo (sin notificar por WhatsApp)"
                                       }
@@ -2155,7 +2155,7 @@ export default function ActiveDeliveriesPage() {
                                     <label
                                       className="inline-flex items-center cursor-pointer select-none"
                                       title={
-                                        (notifyOnPickupReady[order.id] ?? false)
+                                        (notifyOnPickupReady[order.id] ?? true)
                                           ? "Notificación por WhatsApp activada"
                                           : "Notificación por WhatsApp desactivada (no se enviará mensaje al cliente)"
                                       }
@@ -2163,7 +2163,7 @@ export default function ActiveDeliveriesPage() {
                                     >
                                       <input
                                         type="checkbox"
-                                         checked={notifyOnPickupReady[order.id] ?? false}
+                                        checked={notifyOnPickupReady[order.id] ?? true}
                                         onChange={e => {
                                           e.stopPropagation()
                                           setNotifyOnPickupReady(prev => ({ ...prev, [order.id]: e.target.checked }))
