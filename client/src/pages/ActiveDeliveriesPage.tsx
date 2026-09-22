@@ -214,7 +214,6 @@ export default function ActiveDeliveriesPage() {
   const [inlineDriverPhone, setInlineDriverPhone] = useState('')
   const [registeringDriverInline, setRegisteringDriverInline] = useState(false)
   const [dispatchError, setDispatchError] = useState('')
-  const [notifyOnDispatch, setNotifyOnDispatch] = useState(false)
 
   const allAvailableDrivers = useMemo(() => {
     const list = [...drivers]
@@ -520,7 +519,7 @@ export default function ActiveDeliveriesPage() {
       const updatedOrder = await api.put<any>(`/orders/${orderToUpdate.id}/status`, {
         status: nextStatus,
         deliveryDriverId: driverId,
-        notifyCustomer: notifyOnDispatch,
+        notifyCustomer: true,
       })
 
       if (orderToUpdate.status === 'PENDING') {
@@ -528,7 +527,6 @@ export default function ActiveDeliveriesPage() {
       }
 
       setDispatchDialog(null)
-      setNotifyOnDispatch(false)
       loadOrders(false, true)
       alerts.success('Pedido despachado', `Pedido #${orderToUpdate.orderNumber} asignado a repartidor correctamente.`)
     } catch (err: any) {
@@ -2687,18 +2685,6 @@ export default function ActiveDeliveriesPage() {
                 <AlertTriangle className="h-3.5 w-3.5 shrink-0" /><span>{dispatchError}</span>
               </div>
             )}
-            <label className="flex cursor-pointer items-start gap-2.5 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-subtle)] p-3">
-              <input
-                type="checkbox"
-                checked={notifyOnDispatch}
-                onChange={event => setNotifyOnDispatch(event.target.checked)}
-                className="mt-0.5 h-4 w-4 rounded accent-[var(--accent)]"
-              />
-              <span className="text-xs font-bold text-[var(--text-secondary)]">
-                Enviar mensaje de WhatsApp al cliente al despachar
-                <span className="mt-0.5 block text-[10px] font-normal text-[var(--text-muted)]">Desactivado por defecto; actívalo solo cuando sea necesario.</span>
-              </span>
-            </label>
             <div className="flex gap-3 pt-2 border-t border-[var(--border-subtle)]/40">
               <Button variant="outline" className="flex-1 h-11 rounded-xl font-bold text-sm cursor-pointer" onClick={() => setDispatchDialog(null)}>Cancelar</Button>
               <Button className="flex-1 h-11 bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-fg)] rounded-xl font-bold text-sm shadow-md border-0 cursor-pointer" onClick={handleConfirmDispatch}>
