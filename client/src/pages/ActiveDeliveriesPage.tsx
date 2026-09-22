@@ -260,8 +260,6 @@ export default function ActiveDeliveriesPage() {
   const [batchDispatchOpen, setBatchDispatchOpen] = useState(false)
   const [batchDriverId, setBatchDriverId] = useState('')
   const [batchDriverSearch, setBatchDriverSearch] = useState('')
-  const [batchAutoPrint, setBatchAutoPrint] = useState(true)
-  const [batchNotifyOnDispatch, setBatchNotifyOnDispatch] = useState(true)
   const [isSubmittingBatch, setIsSubmittingBatch] = useState(false)
   const [batchError, setBatchError] = useState('')
 
@@ -278,14 +276,60 @@ export default function ActiveDeliveriesPage() {
   const [isSubmittingBatchPickupReady, setIsSubmittingBatchPickupReady] = useState(false)
   const [batchPickupReadyError, setBatchPickupReadyError] = useState('')
 
+  const [driverQueueData, setDriverQueueData] = useState<{
+    queue: string[];
+    tripOrderCounts: Record<string, number>;
+    breaks: Record<string, {
+      onBreak: boolean;
+      breakMinutes?: number;
+      breakStartedAt?: number;
+      breakUntil?: number | null;
+      breakReason?: string;
+    }>;
+    driversInOrder: Array<{
+      id: string;
+      name: string;
+      phone: string;
+      queueIndex: number;
+      onBreak: boolean;
+      breakMinutes?: number;
+      breakStartedAt?: number;
+      breakUntil?: number | null;
+      breakReason?: string;
+      tripOrderCount: number;
+    }>;
+  } | null>(null)
+
+  const [breakDialog, setBreakDialog] = useState<{
+    driver: any;
+    minutes: number;
+    customMinutes: string;
+  } | null>(null)
+  const [isSubmittingBreak, setIsSubmittingBreak] = useState(false)
+
+  const nextDriverInTurn = useMemo(() => {
+    if (!driverQueueData?.driversInOrder) return null
+    return driverQueueData.driversInOrder.find(d => !d.onBreak) || null
+  }, [driverQueueData])
+
   const filteredDrivers = useMemo(() => {
-    if (!driverSearch.trim()) return drivers
+    const queueOrder = driverQueueData?.queue || []
+    const sorted = [...drivers].sort((a, b) => {
+      const idxA = queueOrder.indexOf(a.id)
+      const idxB = queueOrder.indexOf(b.id)
+      if (idxA !== -1 && idxB !== -1) return idxA - idxB
+      if (idxA !== -1) return -1
+      if (idxB !== -1) return 1
+      return (a.name || '').localeCompare(b.name || '')
+    })
+
+    if (!driverSearch.trim()) return sorted
     const q = driverSearch.trim().toLowerCase()
-    return drivers.filter(d => 
+    return sorted.filter(d => 
       (d.name && d.name.toLowerCase().includes(q)) || 
       (d.phone && d.phone.includes(q))
     )
-  }, [driverSearch, drivers])
+  }, [driverSearch, drivers, driverQueueData])
 
   const [detailOrder, setDetailOrder] = useState<Order | null>(null)
   const [chatModalOrder, setChatModalOrder] = useState<Order | null>(null)
@@ -329,9 +373,19 @@ export default function ActiveDeliveriesPage() {
     }
   }, [])
 
+  const loadDriverQueue = useCallback(async () => {
+    try {
+      const res = await api.get<any>('/delivery-drivers/queue')
+      setDriverQueueData(res)
+    } catch (err) {
+      console.warn('Error al cargar cola de repartidores:', err)
+    }
+  }, [])
+
   useEffect(() => {
     loadDrivers()
-  }, [loadDrivers])
+    loadDriverQueue()
+  }, [loadDrivers, loadDriverQueue])
 
   useEffect(() => {
     if (collectDialog) {
@@ -522,15 +576,63 @@ export default function ActiveDeliveriesPage() {
         notifyCustomer: true,
       })
 
-      if (orderToUpdate.status === 'PENDING') {
-        await printComandaSmart(updatedOrder, 'caja', user?.role, false, dispatchDialog.shouldKick)
-      }
+      // NO PRINTING ON DISPATCH (Eliminada impresión automática de comanda al despachar según instrucción del usuario)
 
       setDispatchDialog(null)
       loadOrders(false, true)
+      loadDriverQueue()
       alerts.success('Pedido despachado', `Pedido #${orderToUpdate.orderNumber} asignado a repartidor correctamente.`)
     } catch (err: any) {
       setDispatchError(err.message || 'No se pudo despachar el pedido')
+    }
+  }
+
+  const handleMarkDelivered = async (order: Order) => {
+    if (updatingId === order.id) return
+    setUpdatingId(order.id)
+    try {
+      await api.put(`/orders/${order.id}/status`, {
+        status: 'DELIVERED',
+        notifyCustomer: false, // Regla: no se le envía mensaje al cliente al marcar entregado
+      })
+      alerts.success('Pedido entregado', `Pedido #${order.orderNumber} marcado como entregado.`)
+      loadOrders(false, true)
+      loadDriverQueue()
+    } catch (err: any) {
+      alerts.error('Error al entregar pedido', err.message || 'No se pudo actualizar el estado.')
+    } finally {
+      setUpdatingId(null)
+    }
+  }
+
+  const handleStartBreak = async () => {
+    if (!breakDialog?.driver || !isAdmin) return
+    const minutes = parseInt(breakDialog.customMinutes) || breakDialog.minutes || 15
+    setIsSubmittingBreak(true)
+    try {
+      await api.post(`/delivery-drivers/${breakDialog.driver.id}/break`, { minutes })
+      alerts.success('Cena / Descanso asignado', `${breakDialog.driver.name} estará en descanso por ${minutes} minutos.`)
+      setBreakDialog(null)
+      loadDriverQueue()
+    } catch (err: any) {
+      alerts.error('Error al asignar descanso', err.message || 'No se pudo iniciar el descanso.')
+    } finally {
+      setIsSubmittingBreak(false)
+    }
+  }
+
+  const handleEndBreak = async (driverId: string, driverName?: string) => {
+    if (!isAdmin) return
+    setIsSubmittingBreak(true)
+    try {
+      await api.post(`/delivery-drivers/${driverId}/break/end`)
+      alerts.success('Descanso finalizado', `${driverName || 'El repartidor'} se ha reincorporado al final de la fila de turnos.`)
+      if (breakDialog?.driver?.id === driverId) setBreakDialog(null)
+      loadDriverQueue()
+    } catch (err: any) {
+      alerts.error('Error al finalizar descanso', err.message || 'No se pudo finalizar el descanso.')
+    } finally {
+      setIsSubmittingBreak(false)
     }
   }
 
@@ -657,6 +759,19 @@ export default function ActiveDeliveriesPage() {
 
     socket.on('driversChanged', () => {
       loadDrivers()
+      loadDriverQueue()
+    })
+
+    socket.on('driverQueueUpdated', (data: any) => {
+      setDriverQueueData(data)
+    })
+
+    socket.on('driverBreakStarted', () => {
+      loadDriverQueue()
+    })
+
+    socket.on('driverBreakFinished', () => {
+      loadDriverQueue()
     })
 
     return () => {
@@ -666,7 +781,7 @@ export default function ActiveDeliveriesPage() {
       }
       socket.disconnect()
     }
-  }, [user, loadDrivers, scheduleOrdersReload])
+  }, [user, loadDrivers, loadDriverQueue, scheduleOrdersReload])
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -761,13 +876,23 @@ export default function ActiveDeliveriesPage() {
   }, [visibleOrders, statusFilter])
 
   const filteredBatchDrivers = useMemo(() => {
-    if (!batchDriverSearch.trim()) return drivers
+    const queueOrder = driverQueueData?.queue || []
+    const sorted = [...drivers].sort((a, b) => {
+      const idxA = queueOrder.indexOf(a.id)
+      const idxB = queueOrder.indexOf(b.id)
+      if (idxA !== -1 && idxB !== -1) return idxA - idxB
+      if (idxA !== -1) return -1
+      if (idxB !== -1) return 1
+      return (a.name || '').localeCompare(b.name || '')
+    })
+
+    if (!batchDriverSearch.trim()) return sorted
     const q = batchDriverSearch.trim().toLowerCase()
-    return drivers.filter(d => 
+    return sorted.filter(d => 
       (d.name && d.name.toLowerCase().includes(q)) || 
       (d.phone && d.phone.includes(q))
     )
-  }, [batchDriverSearch, drivers])
+  }, [batchDriverSearch, drivers, driverQueueData])
 
   const selectableOrders = useMemo(() => {
     return statusVisibleOrders.filter(o => !['DELIVERED', 'CANCELLED'].includes(o.status))
@@ -814,7 +939,7 @@ export default function ActiveDeliveriesPage() {
         await api.put<any>('/orders/batch-dispatch', {
           orderIds: selectedOrdersList.map(order => order.id),
           deliveryDriverId: batchDriverId,
-          notifyCustomer: batchNotifyOnDispatch,
+          notifyCustomer: true,
         })
       } catch (endpointErr) {
         await Promise.all(selectedOrdersList.map(o => {
@@ -822,25 +947,9 @@ export default function ActiveDeliveriesPage() {
           return api.put(`/orders/${o.id}/status`, {
             status: nextStatus,
             deliveryDriverId: batchDriverId,
-            notifyCustomer: batchNotifyOnDispatch,
+            notifyCustomer: true,
           })
         }))
-      }
-
-      if (batchAutoPrint) {
-        for (const ord of selectedOrdersList) {
-          if (ord.status === 'PENDING') {
-            try {
-              await printComandaSmart({
-                ...ord,
-                status: 'IN_ROUTE',
-                deliveryDriver: drivers.find(driver => driver.id === batchDriverId) || ord.deliveryDriver,
-              }, 'caja', user?.role, false, false)
-            } catch (pErr) {
-              console.warn('Error imprimiendo comanda en lote:', pErr)
-            }
-          }
-        }
       }
 
       alerts.success(
@@ -852,9 +961,9 @@ export default function ActiveDeliveriesPage() {
       setBatchDispatchOpen(false)
       setBatchDriverId('')
       setBatchDriverSearch('')
-      setBatchNotifyOnDispatch(false)
       loadOrders(false, true)
       loadDrivers()
+      loadDriverQueue()
     } catch (err: any) {
       setBatchError(err.message || 'Error al despachar pedidos en lote')
     } finally {
@@ -1833,6 +1942,106 @@ export default function ActiveDeliveriesPage() {
         </div>
       </motion.div>
 
+      {/* ── Fila de Turnos de Domiciliarios ── */}
+      {driverQueueData?.driversInOrder && driverQueueData.driversInOrder.length > 0 && (
+        <motion.div
+          variants={fadeUp}
+          className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-3.5 shadow-xs"
+        >
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2.5 border-b border-[var(--border-subtle)]/60">
+            <div className="flex items-center gap-2.5">
+              <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-amber-500/10 text-amber-600">
+                <Bike className="h-4.5 w-4.5" />
+              </div>
+              <div>
+                <h3 className="text-xs font-black text-[var(--text-primary)] uppercase tracking-wider flex items-center gap-2">
+                  Fila de Turnos de Repartidores
+                  {nextDriverInTurn && (
+                    <span className="text-[10px] font-extrabold text-amber-700 dark:text-amber-300 bg-amber-500/15 px-2.5 py-0.5 rounded-full border border-amber-500/30">
+                      👑 Turno: {nextDriverInTurn.name}
+                    </span>
+                  )}
+                </h3>
+                <p className="text-[10px] text-[var(--text-muted)] font-medium">
+                  Rotación equitativa automática al completar 10 carreras o al entregar sus pedidos en ruta.
+                </p>
+              </div>
+            </div>
+            {isAdmin && (
+              <span className="text-[10px] font-bold text-amber-700 dark:text-amber-300 bg-amber-500/10 px-2 py-0.5 rounded-md self-start sm:self-auto border border-amber-500/20">
+                🛡️ Control de Pausas (Admin)
+              </span>
+            )}
+          </div>
+
+          {/* Chips horizontales de repartidores */}
+          <div className="flex items-center gap-2 overflow-x-auto pt-2.5 pb-1 custom-scrollbar">
+            {driverQueueData.driversInOrder.map((d, idx) => {
+              const isOnBreak = d.onBreak
+              const remainingSec = d.breakUntil ? Math.max(0, Math.floor((d.breakUntil - Date.now()) / 1000)) : 0
+              const remainingMin = Math.ceil(remainingSec / 60)
+              const isTurn = !isOnBreak && nextDriverInTurn?.id === d.id
+
+              return (
+                <div
+                  key={d.id}
+                  className={cn(
+                    "flex items-center gap-2 rounded-xl px-3 py-2 border text-xs font-bold shrink-0 transition-all shadow-xs",
+                    isOnBreak
+                      ? "bg-purple-500/10 border-purple-500/30 text-purple-700 dark:text-purple-300"
+                      : isTurn
+                        ? "bg-amber-500/15 border-amber-500/40 text-amber-800 dark:text-amber-200 ring-2 ring-amber-500/20"
+                        : "bg-[var(--bg-subtle)] border-[var(--border-subtle)] text-[var(--text-primary)]"
+                  )}
+                >
+                  <div className="flex items-center gap-1.5">
+                    {isTurn ? (
+                      <span className="text-sm">👑</span>
+                    ) : (
+                      <span className="text-[10px] font-extrabold text-[var(--text-muted)]">#{idx + 1}</span>
+                    )}
+                    <span className="font-extrabold truncate max-w-[130px]">{d.name}</span>
+                  </div>
+
+                  {isOnBreak ? (
+                    <span className="text-[10px] font-black px-1.5 py-0.5 rounded-md bg-purple-500/20 text-purple-700 dark:text-purple-300 flex items-center gap-1">
+                      🍽️ {remainingMin > 0 ? `${remainingMin}m` : '0m'}
+                    </span>
+                  ) : (
+                    <span className="text-[9px] font-extrabold px-1.5 py-0.5 rounded-md bg-black/5 dark:bg-white/5 text-[var(--text-muted)]" title="Carreras acumuladas en este turno">
+                      {d.tripOrderCount || 0}/10
+                    </span>
+                  )}
+
+                  {/* Botón único Cena / Descanso (SOLO ADMINISTRADOR) */}
+                  {isAdmin && (
+                    isOnBreak ? (
+                      <button
+                        type="button"
+                        onClick={() => handleEndBreak(d.id, d.name)}
+                        title="Terminar descanso y reincorporar al final de la fila"
+                        className="cursor-pointer text-[10px] font-black px-2 py-0.5 rounded-lg bg-purple-600 hover:bg-purple-700 text-white border-0 transition-all"
+                      >
+                        Reincorporar
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => setBreakDialog({ driver: d, minutes: 20, customMinutes: '' })}
+                        title="Asignar Cena / Descanso (sale de la fila)"
+                        className="cursor-pointer text-[10px] font-bold px-2 py-0.5 rounded-lg bg-[var(--bg-elevated)] hover:bg-[var(--bg-hover)] text-[var(--text-secondary)] border border-[var(--border-subtle)] transition-all flex items-center gap-1"
+                      >
+                        🍽️ Cena/Descanso
+                      </button>
+                    )
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        </motion.div>
+      )}
+
       {/* ── Selection Action Bar (Asignación Múltiple / en Lote) ── */}
       {selectedOrderIds.length > 0 && (
         <motion.div
@@ -1914,7 +2123,7 @@ export default function ActiveDeliveriesPage() {
               <Button
                 size="sm"
                 onClick={() => {
-                  setBatchDriverId('')
+                  setBatchDriverId(nextDriverInTurn?.id || '')
                   setBatchDriverSearch('')
                   setBatchError('')
                   setBatchDispatchOpen(true)
@@ -2242,15 +2451,41 @@ export default function ActiveDeliveriesPage() {
                             )}>{formatCurrency(order.total)}</span>
                           </td>
                           <td className="px-3 py-2.5">
-                            {order.status === 'IN_ROUTE' || order.deliveryDriver ? (
+                            {order.status === 'DELIVERED' ? (
                               <div className={cn('flex flex-col', isDeliveryStaff ? 'gap-0.5' : 'items-start gap-1')}>
-                                <span className={cn(
-                                  'inline-flex items-center gap-1 rounded-lg border border-blue-500/25 px-2 py-1 text-[11px] font-black text-blue-700 dark:text-blue-300',
-                                  isDeliveryStaff ? 'bg-blue-500/15' : 'bg-blue-500/10'
-                                )}>
-                                  <Clock className="h-3 w-3 text-blue-600" />
-                                  En ruta · {routeElapsed}
+                                <span className="inline-flex items-center gap-1 rounded-lg border border-emerald-500/25 bg-emerald-500/10 px-2 py-1 text-[11px] font-black text-emerald-700 dark:text-emerald-300">
+                                  <CheckCircle2 className="h-3 w-3 text-emerald-600" />
+                                  Entregado
                                 </span>
+                                {order.updatedAt && (
+                                  <span className="text-[9px] font-bold text-[var(--text-muted)] pl-0.5">
+                                    A las {formatTimeOnly(order.updatedAt)}
+                                  </span>
+                                )}
+                              </div>
+                            ) : order.status === 'IN_ROUTE' || order.deliveryDriver ? (
+                              <div className={cn('flex flex-col', isDeliveryStaff ? 'gap-0.5' : 'items-start gap-1')}>
+                                <div className="flex items-center gap-1.5 flex-wrap">
+                                  <span className={cn(
+                                    'inline-flex items-center gap-1 rounded-lg border border-blue-500/25 px-2 py-1 text-[11px] font-black text-blue-700 dark:text-blue-300',
+                                    isDeliveryStaff ? 'bg-blue-500/15' : 'bg-blue-500/10'
+                                  )}>
+                                    <Clock className="h-3 w-3 text-blue-600" />
+                                    En ruta · {routeElapsed}
+                                  </span>
+                                  {hasPermission('dispatch.change_status') && order.status === 'IN_ROUTE' && (
+                                    <Button
+                                      size="sm"
+                                      onClick={() => handleMarkDelivered(order)}
+                                      disabled={updatingId === order.id}
+                                      className="h-6 px-2 text-[10px] font-extrabold bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg gap-1 border-0 cursor-pointer shadow-xs active:scale-95"
+                                      title="Marcar pedido como entregado"
+                                    >
+                                      {updatingId === order.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <CheckCircle2 className="h-3 w-3" />}
+                                      <span>Entregado</span>
+                                    </Button>
+                                  )}
+                                </div>
                                 <span className="text-[9px] font-bold text-[var(--text-muted)] pl-0.5">
                                   Salió {formatTimeOnly(order.updatedAt)}
                                 </span>
@@ -2582,6 +2817,25 @@ export default function ActiveDeliveriesPage() {
         <DialogContent className="bg-[var(--bg-panel)] border-[var(--border-default)] rounded-3xl max-w-md">
           <DialogHeader><DialogTitle className="text-lg font-black text-[var(--text-primary)]"><Bike className="inline h-5 w-5 mr-2 text-[var(--accent)]" />Asignar Repartidor — #{dispatchDialog?.order?.orderNumber}</DialogTitle></DialogHeader>
           <div className="space-y-4">
+            {nextDriverInTurn && (
+              <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-3 flex items-center justify-between gap-2 shadow-xs">
+                <div className="flex items-center gap-2.5">
+                  <span className="text-xl">👑</span>
+                  <div>
+                    <p className="text-xs font-black text-amber-800 dark:text-amber-300">
+                      Repartidor en turno: {nextDriverInTurn.name} (#1 en fila)
+                    </p>
+                    <p className="text-[10px] text-[var(--text-muted)] font-bold">
+                      Siguiente en rotación equitativa ({driverQueueData?.tripOrderCounts?.[nextDriverInTurn.id] || 0}/10 pedidos)
+                    </p>
+                  </div>
+                </div>
+                <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-700 dark:text-amber-300 border border-amber-500/30 shrink-0">
+                  #1 Turno
+                </span>
+              </div>
+            )}
+
             {!registeringDriverInline ? (
               <>
                 <div className="space-y-2">
@@ -2619,10 +2873,16 @@ export default function ActiveDeliveriesPage() {
                     )}
                   </div>
 
-                  {/* Lista interactiva con scroll rápido */}
+                  {/* Lista interactiva con scroll rápido ordenada por cola */}
                   <div className="max-h-52 overflow-y-auto space-y-1 border border-[var(--border-subtle)] rounded-xl p-1 bg-[var(--bg-input)]/50">
                     {filteredDrivers.map(d => {
                       const isSelected = selectedDriverId === d.id
+                      const queueIdx = driverQueueData?.queue ? driverQueueData.queue.indexOf(d.id) : -1
+                      const breakInfo = driverQueueData?.breaks?.[d.id]
+                      const isOnBreak = breakInfo?.onBreak
+                      const remainingSec = breakInfo?.breakUntil ? Math.max(0, Math.floor((breakInfo.breakUntil - Date.now()) / 1000)) : 0
+                      const remainingMin = Math.ceil(remainingSec / 60)
+
                       return (
                         <button
                           key={d.id}
@@ -2637,23 +2897,40 @@ export default function ActiveDeliveriesPage() {
                         >
                           <div className="flex items-center gap-2">
                             <Bike className={cn("h-3.5 w-3.5 shrink-0", isSelected ? "text-[var(--accent-fg)]" : "text-[var(--accent)]")} />
-                            <span>{d.name}</span>
+                            <span className="font-extrabold">{d.name}</span>
+                            {queueIdx !== -1 && (
+                              <span className={cn(
+                                "text-[9px] font-extrabold px-1.5 py-0.2 rounded-md",
+                                isSelected ? "bg-black/20 text-white" : "bg-black/5 dark:bg-white/10 text-[var(--text-muted)]"
+                              )}>
+                                {queueIdx === 0 ? '👑 #1' : `#${queueIdx + 1}`}
+                              </span>
+                            )}
                           </div>
-                          {d.activeDeliveries > 0 ? (
-                            <span className={cn(
-                              "text-[10px] font-extrabold px-2 py-0.5 rounded-full",
-                              isSelected ? "bg-black/20 text-white" : "text-amber-500 bg-amber-500/10"
-                            )}>
-                              ({d.activeDeliveries} activos)
-                            </span>
-                          ) : (
-                            <span className={cn(
-                              "text-[10px] font-extrabold px-2 py-0.5 rounded-full",
-                              isSelected ? "bg-black/20 text-white" : "text-emerald-500 bg-emerald-500/10"
-                            )}>
-                              ✓ Libre
-                            </span>
-                          )}
+                          <div className="flex items-center gap-1.5">
+                            {isOnBreak ? (
+                              <span className={cn(
+                                "text-[10px] font-black px-2 py-0.5 rounded-full flex items-center gap-1",
+                                isSelected ? "bg-black/20 text-white" : "text-purple-600 bg-purple-500/15 border border-purple-500/20"
+                              )}>
+                                🍽️ Cena ({remainingMin}m)
+                              </span>
+                            ) : d.activeDeliveries > 0 ? (
+                              <span className={cn(
+                                "text-[10px] font-extrabold px-2 py-0.5 rounded-full",
+                                isSelected ? "bg-black/20 text-white" : "text-amber-500 bg-amber-500/10"
+                              )}>
+                                ({d.activeDeliveries} activos)
+                              </span>
+                            ) : (
+                              <span className={cn(
+                                "text-[10px] font-extrabold px-2 py-0.5 rounded-full",
+                                isSelected ? "bg-black/20 text-white" : "text-emerald-500 bg-emerald-500/10"
+                              )}>
+                                ✓ Libre
+                              </span>
+                            )}
+                          </div>
                         </button>
                       )
                     })}
@@ -2688,7 +2965,7 @@ export default function ActiveDeliveriesPage() {
             <div className="flex gap-3 pt-2 border-t border-[var(--border-subtle)]/40">
               <Button variant="outline" className="flex-1 h-11 rounded-xl font-bold text-sm cursor-pointer" onClick={() => setDispatchDialog(null)}>Cancelar</Button>
               <Button className="flex-1 h-11 bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-fg)] rounded-xl font-bold text-sm shadow-md border-0 cursor-pointer" onClick={handleConfirmDispatch}>
-                {dispatchDialog?.order?.status === 'PENDING' ? 'Despachar e Imprimir' : 'Confirmar'}
+                Confirmar Despacho
               </Button>
             </div>
           </div>
@@ -2719,6 +2996,13 @@ export default function ActiveDeliveriesPage() {
                 ))}
               </div>
             </div>
+
+            {nextDriverInTurn && (
+              <div className="flex items-center gap-2 p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-700 dark:text-amber-400 text-xs font-black">
+                <span>👑</span>
+                <span>Repartidor en turno: <span className="underline">{nextDriverInTurn.name}</span> (#1 en fila)</span>
+              </div>
+            )}
 
             <div className="space-y-2">
               <div className="flex items-center justify-between">
@@ -2799,33 +3083,6 @@ export default function ActiveDeliveriesPage() {
                 )}
               </div>
             </div>
-
-            {/* Imprimir comandas para los pedidos pendientes */}
-            <div className="flex items-center gap-2.5 p-3 rounded-xl bg-[var(--bg-subtle)] border border-[var(--border-subtle)]">
-              <input
-                type="checkbox"
-                id="batchAutoPrint"
-                checked={batchAutoPrint}
-                onChange={e => setBatchAutoPrint(e.target.checked)}
-                className="h-4 w-4 rounded accent-[var(--accent)] cursor-pointer shrink-0"
-              />
-              <Label htmlFor="batchAutoPrint" className="text-xs font-bold text-[var(--text-secondary)] cursor-pointer select-none">
-                Imprimir factura de caja para pedidos que pasen a En Ruta
-              </Label>
-            </div>
-
-            <label className="flex cursor-pointer items-start gap-2.5 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-subtle)] p-3">
-              <input
-                type="checkbox"
-                checked={batchNotifyOnDispatch}
-                onChange={event => setBatchNotifyOnDispatch(event.target.checked)}
-                className="mt-0.5 h-4 w-4 rounded accent-[var(--accent)]"
-              />
-              <span className="text-xs font-bold text-[var(--text-secondary)]">
-                Enviar mensaje de WhatsApp al despachar
-                <span className="mt-0.5 block text-[10px] font-normal text-[var(--text-muted)]">Desactivado por defecto para evitar mensajes masivos accidentales.</span>
-              </span>
-            </label>
 
             {batchError && (
               <div className="rounded-xl border border-[var(--destructive)]/20 bg-[var(--destructive)]/5 p-2.5 text-xs text-[var(--destructive)] font-semibold flex items-center gap-1.5 animate-fade-in">
@@ -3409,9 +3666,17 @@ export default function ActiveDeliveriesPage() {
                         <DollarSign className="h-3.5 w-3.5" /> Cobrar Pedido
                       </Button>
                     )}
+                    {hasPermission('dispatch.change_status') && o.status === 'IN_ROUTE' && (
+                      <Button size="sm" className="h-9 px-4 text-xs font-extrabold bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl gap-1.5 border-0 cursor-pointer shadow-xs active:scale-95 transition-all"
+                        onClick={() => { setDetailOrder(null); handleMarkDelivered(o); }}
+                        title="Marcar como entregado"
+                      >
+                        <CheckCircle2 className="h-3.5 w-3.5" /> Marcar Entregado
+                      </Button>
+                    )}
                     {hasPermission('dispatch.change_status') && o.orderType !== 'PICKUP' && o.orderType !== 'LOCAL' && activeStatuses.includes(o.status) && (
                       <Button size="sm" variant="outline" className={`h-9 px-4 text-xs font-bold rounded-xl gap-1.5 cursor-pointer ${o.deliveryDriver ? 'border-emerald-500/30 text-emerald-600 hover:bg-emerald-500/10' : 'border-amber-500/30 text-amber-600 hover:bg-amber-500/10'}`}
-                        onClick={() => { setDetailOrder(null); setSelectedDriverId(o.deliveryDriverId || ''); setRegisteringDriverInline(false); setDispatchError(''); setDispatchDialog({ order: o, shouldKick: false }); }}
+                        onClick={() => { setDetailOrder(null); setSelectedDriverId(o.deliveryDriverId || nextDriverInTurn?.id || ''); setRegisteringDriverInline(false); setDispatchError(''); setDispatchDialog({ order: o, shouldKick: false }); }}
                         title={o.deliveryDriver ? 'Cambiar repartidor' : 'Asignar repartidor'}>
                         <Bike className="h-3.5 w-3.5" />
                         {o.deliveryDriver ? `Repartidor: ${o.deliveryDriver.name}` : 'Asignar Repartidor'}
@@ -3449,6 +3714,93 @@ export default function ActiveDeliveriesPage() {
               </>
             )
           })()}
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Modal Cena / Descanso (Solo Administrador) ── */}
+      <Dialog open={!!breakDialog} onOpenChange={open => { if (!open) setBreakDialog(null) }}>
+        <DialogContent className="bg-[var(--bg-panel)] border-[var(--border-default)] rounded-3xl max-w-sm p-6">
+          <DialogHeader>
+            <DialogTitle className="text-lg font-black text-[var(--text-primary)] flex items-center gap-2">
+              <UtensilsCrossed className="h-5 w-5 text-amber-500" />
+              Cena / Descanso — {breakDialog?.driver?.name}
+            </DialogTitle>
+          </DialogHeader>
+
+          <div className="space-y-4 pt-2">
+            <div className="p-3 rounded-2xl bg-amber-500/10 border border-amber-500/20 text-xs font-semibold text-[var(--text-secondary)]">
+              Al pausar, el repartidor sale de la fila de turnos. Al finalizar su tiempo de cena se reincorpora automáticamente al final de la fila.
+            </div>
+
+            {breakDialog?.driver?.onBreak ? (
+              <div className="space-y-3 text-center py-2">
+                <p className="text-xs text-[var(--text-muted)] font-bold">Actualmente en descanso</p>
+                <div className="text-2xl font-black text-purple-600 dark:text-purple-400">
+                  🍽️ {breakDialog.driver.breakUntil ? `${Math.max(0, Math.ceil((breakDialog.driver.breakUntil - Date.now()) / 60000))} min restantes` : 'En descanso'}
+                </div>
+                <Button
+                  type="button"
+                  className="w-full h-11 bg-purple-600 hover:bg-purple-700 text-white rounded-xl font-bold cursor-pointer border-0 shadow-md"
+                  onClick={() => handleEndBreak(breakDialog.driver.id, breakDialog.driver.name)}
+                  disabled={isSubmittingBreak}
+                >
+                  {isSubmittingBreak ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Terminar Descanso y Reincorporar'}
+                </Button>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                <Label className="text-[10px] font-bold text-[var(--text-secondary)] uppercase tracking-wider">Duración del descanso</Label>
+                <div className="grid grid-cols-3 gap-2">
+                  {[15, 20, 30, 45, 60].map(mins => (
+                    <Button
+                      key={mins}
+                      type="button"
+                      variant={breakDialog?.minutes === mins && !breakDialog?.customMinutes ? 'default' : 'outline'}
+                      onClick={() => setBreakDialog(prev => prev ? { ...prev, minutes: mins, customMinutes: '' } : null)}
+                      className={cn(
+                        "h-10 rounded-xl font-black text-xs cursor-pointer",
+                        breakDialog?.minutes === mins && !breakDialog?.customMinutes
+                          ? "bg-[var(--accent)] text-[var(--accent-fg)] border-0"
+                          : "border-[var(--border-subtle)] hover:bg-[var(--bg-hover)]"
+                      )}
+                    >
+                      {mins} min
+                    </Button>
+                  ))}
+                </div>
+
+                <div className="space-y-1.5 pt-1">
+                  <Label className="text-[10px] font-bold text-[var(--text-muted)]">O minutos personalizados:</Label>
+                  <Input
+                    type="number"
+                    min="1"
+                    max="240"
+                    placeholder="Ej: 25"
+                    value={breakDialog?.customMinutes || ''}
+                    onChange={e => setBreakDialog(prev => prev ? { ...prev, customMinutes: e.target.value } : null)}
+                    className="bg-[var(--bg-input)] border-[var(--border-default)] rounded-xl text-xs h-9.5 font-bold"
+                  />
+                </div>
+
+                <div className="flex gap-2 pt-2 border-t border-[var(--border-subtle)]/40">
+                  <Button
+                    variant="outline"
+                    className="flex-1 h-11 rounded-xl font-bold text-sm cursor-pointer"
+                    onClick={() => setBreakDialog(null)}
+                  >
+                    Cancelar
+                  </Button>
+                  <Button
+                    className="flex-1 h-11 bg-amber-500 hover:bg-amber-600 text-white rounded-xl font-bold text-sm shadow-md border-0 cursor-pointer"
+                    onClick={handleStartBreak}
+                    disabled={isSubmittingBreak}
+                  >
+                    {isSubmittingBreak ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Iniciar Cena / Descanso'}
+                  </Button>
+                </div>
+              </div>
+            )}
+          </div>
         </DialogContent>
       </Dialog>
 

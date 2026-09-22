@@ -150,6 +150,38 @@ export class DeliveryDriversController {
     return this.deliveryDriversService.getSettlements(id);
   }
 
+  @Get('queue')
+  @Permissions('drivers.view', 'dispatch.view')
+  @UseGuards(PermissionsGuard)
+  @ApiOperation({ summary: 'Obtener la cola de turnos y estado de pausas de los domiciliarios' })
+  getQueue() {
+    return this.deliveryDriversService.getQueueState();
+  }
+
+  @Post('queue/reorder')
+  @Roles('ADMIN', 'SUPERADMIN', 'DELIVERY_MANAGER')
+  @UseGuards(RolesGuard)
+  @ApiOperation({ summary: 'Reordenar la fila de turnos de domiciliarios' })
+  reorderQueue(@Body() body: { queue: string[] }) {
+    return this.deliveryDriversService.reorderQueue(body.queue);
+  }
+
+  @Post(':id/break')
+  @Roles('ADMIN', 'SUPERADMIN')
+  @UseGuards(RolesGuard)
+  @ApiOperation({ summary: 'Asignar tiempo de cena / descanso a un domiciliario (Solo Administradores)' })
+  startBreak(@Param('id') id: string, @Body() body: { minutes?: number }) {
+    return this.deliveryDriversService.startDriverBreak(id, body?.minutes || 15);
+  }
+
+  @Post(':id/break/end')
+  @Roles('ADMIN', 'SUPERADMIN')
+  @UseGuards(RolesGuard)
+  @ApiOperation({ summary: 'Finalizar descanso de un domiciliario y reincorporarlo al final de la fila (Solo Administradores)' })
+  endBreak(@Param('id') id: string) {
+    return this.deliveryDriversService.endDriverBreak(id);
+  }
+
   @Get(':id')
   @Permissions('drivers.view', 'dispatch.view')
   @UseGuards(PermissionsGuard)

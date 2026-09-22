@@ -7,6 +7,7 @@ import { DeliveryDriverGateway } from '../socket/delivery-driver.gateway';
 import { WhatsappService } from '../whatsapp/whatsapp.service';
 import { PrintService } from '../print/print.service';
 import { TablesService } from '../tables/tables.service';
+import { DeliveryDriversService } from '../delivery-drivers/delivery-drivers.service';
 import { dashboardRange } from './dashboard-range';
 
 type OrderListParams = {
@@ -37,6 +38,7 @@ export class OrdersService implements OnModuleInit {
     @Inject(forwardRef(() => PrintService)) private printService: PrintService,
     @Optional() @Inject(forwardRef(() => TablesService)) private tablesService?: TablesService,
     @Optional() private deliveryDriverGateway?: DeliveryDriverGateway,
+    @Optional() @Inject(forwardRef(() => DeliveryDriversService)) private deliveryDriversService?: DeliveryDriversService,
   ) {}
 
   private isDeliveryKitchenOrder(order: any) {
@@ -1551,6 +1553,22 @@ export class OrdersService implements OnModuleInit {
       },
     );
     this.socketGateway.emitWhatsApp('whatsappSessionUpdated', { orderUpdated: true, sessionId: updated.chatSessionId || undefined, phone: updated.customerPhone, orderNumber: updated.orderNumber, status: updated.status });
+
+    // Cola de repartidores: conteo de carreras (rotación a los 10 pedidos) y reincorporación al entregar
+    const isNewDispatchOrAssignment = updated.orderType === 'DELIVERY' && (
+      (status === 'IN_ROUTE' && order.status !== 'IN_ROUTE') ||
+      (deliveryDriverId !== undefined && deliveryDriverId !== null && deliveryDriverId !== order.deliveryDriverId)
+    );
+    if (isNewDispatchOrAssignment && targetDriverId) {
+      this.deliveryDriversService?.onOrdersAssigned(targetDriverId, 1);
+    }
+
+    if (status === 'DELIVERED') {
+      const deliveredDriverId = updated.deliveryDriverId || order.deliveryDriverId || targetDriverId;
+      if (deliveredDriverId) {
+        this.deliveryDriversService?.onOrderDelivered(deliveredDriverId);
+      }
+    }
 
 
     try {

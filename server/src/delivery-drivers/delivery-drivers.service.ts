@@ -1195,4 +1195,257 @@ export class DeliveryDriversService {
     this.socketGateway.server.emit('driversChanged');
     return deactivated;
   }
+
+  // ── Queue & Break Management (Cola de Turnos Equitativa & Cena/Descanso) ──
+  private static readonly QUEUE_SETTING_KEY = 'delivery_driver_queue_state';
+
+  private async getRawQueueState(): Promise<{
+    queue: string[];
+    tripOrderCounts: Record<string, number>;
+    breaks: Record<string, {
+      onBreak: boolean;
+      breakMinutes?: number;
+      breakStartedAt?: number;
+      breakUntil?: number | null;
+      breakReason?: string;
+      notifiedFinished?: boolean;
+    }>;
+  }> {
+    const setting = await this.prisma.appSetting.findUnique({
+      where: { key: DeliveryDriversService.QUEUE_SETTING_KEY },
+    }).catch(() => null);
+
+    let state: any = { queue: [], tripOrderCounts: {}, breaks: {} };
+    if (setting?.value) {
+      try {
+        state = JSON.parse(setting.value) || state;
+      } catch {}
+    }
+    if (!Array.isArray(state.queue)) state.queue = [];
+    if (!state.tripOrderCounts || typeof state.tripOrderCounts !== 'object') state.tripOrderCounts = {};
+    if (!state.breaks || typeof state.breaks !== 'object') state.breaks = {};
+    return state;
+  }
+
+  private async saveQueueState(state: any): Promise<void> {
+    await this.prisma.appSetting.upsert({
+      where: { key: DeliveryDriversService.QUEUE_SETTING_KEY },
+      update: { value: JSON.stringify(state) },
+      create: { key: DeliveryDriversService.QUEUE_SETTING_KEY, value: JSON.stringify(state) },
+    });
+    this.socketGateway.server.emit('driverQueueUpdated', state);
+  }
+
+  async checkExpiredDriverBreaks(): Promise<boolean> {
+    const state = await this.getRawQueueState();
+    let changed = false;
+    const now = Date.now();
+
+    for (const [driverId, b] of Object.entries(state.breaks)) {
+      if (!b?.onBreak || !b?.breakUntil || now < b.breakUntil) continue;
+      b.onBreak = false;
+      b.notifiedFinished = true;
+      changed = true;
+
+      // Al terminar su tiempo de cena se reincorpora al final de la fila
+      state.queue = state.queue.filter(id => id !== driverId).concat(driverId);
+
+      const driver = await this.prisma.deliveryDriver.findUnique({
+        where: { id: driverId },
+        select: { name: true },
+      }).catch(() => null);
+
+      const payload = {
+        driverId,
+        driverName: driver?.name || 'Domiciliario',
+        finishedAt: now,
+        breakReason: 'Cena / Descanso',
+        breakMinutes: b.breakMinutes || 15,
+      };
+      this.socketGateway.server.emit('driverBreakFinished', payload);
+    }
+
+    if (changed) {
+      await this.saveQueueState(state);
+    }
+    return changed;
+  }
+
+  async getQueueState(): Promise<any> {
+    await this.checkExpiredDriverBreaks();
+    const state = await this.getRawQueueState();
+
+    const activeDrivers = await this.prisma.deliveryDriver.findMany({
+      where: { active: true },
+      select: { id: true, name: true, phone: true },
+    });
+
+    const activeDriverIds = new Set(activeDrivers.map(d => d.id));
+
+    let updatedQueue = state.queue.filter(id => activeDriverIds.has(id));
+    for (const driver of activeDrivers) {
+      if (!updatedQueue.includes(driver.id)) {
+        updatedQueue.push(driver.id);
+      }
+    }
+
+    if (updatedQueue.length !== state.queue.length || updatedQueue.some((id, i) => id !== state.queue[i])) {
+      state.queue = updatedQueue;
+      await this.saveQueueState(state);
+    }
+
+    const driverMap = new Map(activeDrivers.map(d => [d.id, d]));
+
+    const driversInOrder = state.queue
+      .map((id, index) => {
+        const driver = driverMap.get(id);
+        if (!driver) return null;
+        const b = state.breaks[id] || { onBreak: false };
+        return {
+          id: driver.id,
+          name: driver.name,
+          phone: driver.phone,
+          queueIndex: index,
+          onBreak: Boolean(b.onBreak),
+          breakMinutes: b.breakMinutes,
+          breakStartedAt: b.breakStartedAt,
+          breakUntil: b.breakUntil,
+          breakReason: b.breakReason || 'Cena / Descanso',
+          tripOrderCount: state.tripOrderCounts[id] || 0,
+        };
+      })
+      .filter(Boolean);
+
+    return {
+      queue: state.queue,
+      tripOrderCounts: state.tripOrderCounts,
+      breaks: state.breaks,
+      driversInOrder,
+    };
+  }
+
+  async startDriverBreak(driverId: string, minutes: number): Promise<any> {
+    const driver = await this.prisma.deliveryDriver.findUnique({ where: { id: driverId } });
+    if (!driver) throw new NotFoundException('Domiciliario no encontrado');
+
+    const duration = Math.max(1, Math.min(240, Number(minutes) || 15));
+    const state = await this.getRawQueueState();
+    const now = Date.now();
+
+    state.breaks[driverId] = {
+      onBreak: true,
+      breakMinutes: duration,
+      breakStartedAt: now,
+      breakUntil: now + duration * 60 * 1000,
+      breakReason: 'Cena / Descanso',
+      notifiedFinished: false,
+    };
+
+    await this.saveQueueState(state);
+
+    const payload = {
+      driverId,
+      driverName: driver.name,
+      breakMinutes: duration,
+      breakUntil: state.breaks[driverId].breakUntil,
+      breakReason: 'Cena / Descanso',
+    };
+    this.socketGateway.server.emit('driverBreakStarted', payload);
+
+    setTimeout(() => this.checkExpiredDriverBreaks().catch(() => {}), Math.max(500, duration * 60 * 1000));
+
+    return this.getQueueState();
+  }
+
+  async endDriverBreak(driverId: string): Promise<any> {
+    const driver = await this.prisma.deliveryDriver.findUnique({ where: { id: driverId } });
+    if (!driver) throw new NotFoundException('Domiciliario no encontrado');
+
+    const state = await this.getRawQueueState();
+    if (state.breaks[driverId]) {
+      state.breaks[driverId].onBreak = false;
+      state.breaks[driverId].breakUntil = null;
+      state.breaks[driverId].notifiedFinished = true;
+    }
+
+    // Regla 2: Cuando termine su tiempo de cena se reincorpora al final de la fila
+    state.queue = state.queue.filter(id => id !== driverId).concat(driverId);
+
+    await this.saveQueueState(state);
+
+    const payload = {
+      driverId,
+      driverName: driver.name,
+      finishedAt: Date.now(),
+      breakReason: 'Cena / Descanso',
+    };
+    this.socketGateway.server.emit('driverBreakFinished', payload);
+
+    return this.getQueueState();
+  }
+
+  async onOrdersAssigned(driverId: string, count: number): Promise<void> {
+    if (!driverId || count <= 0) return;
+    try {
+      const state = await this.getRawQueueState();
+      const currentCount = (state.tripOrderCounts[driverId] || 0) + count;
+
+      // Regla 3: Cuenta como un turno completo cuando lleve 10 pedidos asignados
+      // para que se vaya automáticamente al final de la fila ese repartidor
+      if (currentCount >= 10) {
+        state.tripOrderCounts[driverId] = 0;
+        state.queue = state.queue.filter(id => id !== driverId).concat(driverId);
+      } else {
+        state.tripOrderCounts[driverId] = currentCount;
+      }
+
+      await this.saveQueueState(state);
+    } catch (err) {
+      console.error('Error actualizando cola tras asignación de pedidos:', err);
+    }
+  }
+
+  async onOrderDelivered(driverId?: string): Promise<void> {
+    if (!driverId) return;
+    try {
+      // Regla 1: Debe reingresar automáticamente al final de la lista cuando
+      // el gestor de pedido le haya dado entregado a ese pedido de ese domiciliario
+      // y dicho domiciliario cuando entregue todos sus domicilios queda al final de la fila.
+      const remainingInRoute = await this.prisma.order.count({
+        where: {
+          deliveryDriverId: driverId,
+          status: 'IN_ROUTE',
+          orderType: 'DELIVERY',
+        },
+      });
+
+      if (remainingInRoute === 0) {
+        const state = await this.getRawQueueState();
+        state.queue = state.queue.filter(id => id !== driverId).concat(driverId);
+        state.tripOrderCounts[driverId] = 0;
+        await this.saveQueueState(state);
+      }
+    } catch (err) {
+      console.error('Error rotando domiciliario tras entrega:', err);
+    }
+  }
+
+  async reorderQueue(newQueue: string[]): Promise<any> {
+    if (!Array.isArray(newQueue)) throw new BadRequestException('Formato de cola inválido');
+    const state = await this.getRawQueueState();
+    const activeDrivers = await this.prisma.deliveryDriver.findMany({
+      where: { active: true },
+      select: { id: true },
+    });
+    const validIds = new Set(activeDrivers.map(d => d.id));
+    const filtered = newQueue.filter(id => validIds.has(id));
+
+    for (const d of activeDrivers) {
+      if (!filtered.includes(d.id)) filtered.push(d.id);
+    }
+
+    state.queue = filtered;
+    await this.saveQueueState(state);
+    return this.getQueueState();
+  }
 }

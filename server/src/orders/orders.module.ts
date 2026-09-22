@@ -6,9 +6,10 @@ import { SocketModule } from '../socket/socket.module';
 import { WhatsappModule } from '../whatsapp/whatsapp.module';
 import { PrintModule } from '../print/print.module';
 import { TablesModule } from '../tables/tables.module';
+import { DeliveryDriversModule } from '../delivery-drivers/delivery-drivers.module';
 
 @Module({
-  imports: [SocketModule, WhatsappModule, forwardRef(() => PrintModule), forwardRef(() => TablesModule)],
+  imports: [SocketModule, WhatsappModule, forwardRef(() => PrintModule), forwardRef(() => TablesModule), forwardRef(() => DeliveryDriversModule)],
   controllers: [OrdersController, PublicOrdersController],
   providers: [OrdersService],
   exports: [OrdersService],
