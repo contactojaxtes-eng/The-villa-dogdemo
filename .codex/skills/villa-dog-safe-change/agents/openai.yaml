@@ -1,0 +1,4 @@
+interface:
+  display_name: "Villa Dog: cambio seguro"
+  short_description: "Cambios delicados sin romper operacion en vivo"
+  default_prompt: "Aplica el cambio solicitado en The Villa Dog, conserva los invariantes operativos, valida solo lo afectado y presenta un resultado revisable."
