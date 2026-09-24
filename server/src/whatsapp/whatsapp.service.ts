@@ -88,13 +88,20 @@ export class WhatsappService implements OnModuleInit {
   }
 
   private beverageSizeInMl(value: string): number | null {
-    const match = String(value || '').match(/\b(\d+(?:[.,]\d+)?)\s*(ml|mililitros?|l|litros?)\b/i);
+    const str = String(value || '');
+    if (/\b(?:1[.,]5\s*l(?:itros?)?|litro\s+y\s+medio)\b/i.test(str)) return 1500;
+    if (/\b(?:2[.,]5\s*l(?:itros?)?|dos\s+litros\s+y\s+medio)\b/i.test(str)) return 2500;
+    const match = str.match(/\b(\d+(?:[.,]\d+)?)\s*(ml|mililitros?|l|litros?)\b/i);
     if (match) {
       const amount = Number(match[1].replace(',', '.'));
       return Math.round(amount * (/^m/i.test(match[2]) ? 1 : 1000));
     }
+    const literMatch = str.match(/\b(1[.,]5|2[.,]5)\b/);
+    if (literMatch) {
+      return Math.round(Number(literMatch[1].replace(',', '.')) * 1000);
+    }
     // Los clientes también suelen decir solo “la 400” o “la 250”.
-    const commonSize = String(value || '').match(/\b(250|300|350|400|500|600|750)\b/);
+    const commonSize = str.match(/\b(250|300|350|400|500|600|750)\b/);
     return commonSize ? Number(commonSize[1]) : null;
   }
 
@@ -104,6 +111,9 @@ export class WhatsappService implements OnModuleInit {
     conversation: string,
   ): boolean {
     if (!this.isBeverageMenuItem(selected)) return true;
+    // REGLA CRÍTICA: Las únicas bebidas que la IA NUNCA debe halar son las de vidrio
+    if (/\bvidrio\b/i.test(selected.name)) return false;
+
     const core = this.beverageCore(selected.name);
     if (!core) return false;
     const lines = String(conversation || '').split(/\r?\n/);
@@ -144,22 +154,34 @@ export class WhatsappService implements OnModuleInit {
     const selectedIsZero = /\bzero\b/.test(this.normalizeSpanishLookup(selected.name));
     if (selectedIsZero !== /\b(?:zero|sin azucar)\b/.test(normalizedMention)) return false;
 
-    const variants = catalog.filter(item => this.isBeverageMenuItem(item) && this.beverageCore(item.name) === core);
+    // Si el cliente pide explícitamente vidrio, la IA NO debe jalar bebidas de vidrio
+    const mentionsGlass = /\bvidrio\b/.test(normalizedMention);
+    if (mentionsGlass) return false;
+
+    // Solo se consideran presentaciones no-vidrio
+    const nonGlassVariants = catalog.filter(item =>
+      this.isBeverageMenuItem(item) &&
+      this.beverageCore(item.name) === core &&
+      !/\bvidrio\b/i.test(item.name),
+    );
+    if (nonGlassVariants.length === 0) return false;
+
     const mentionedSize = this.beverageSizeInMl(mention);
     const selectedSize = this.beverageSizeInMl(selected.name);
-    if (mentionedSize !== null && mentionedSize !== selectedSize) return false;
-    const mentionsGlass = /\bvidrio\b/.test(normalizedMention);
-    if (mentionsGlass && !/\bvidrio\b/i.test(selected.name)) return false;
-    if (variants.length <= 1) return true;
 
-    // Si hay varias presentaciones, la marca sola no define qué se cobra.
-    // Tamaño o empaque deben dejar una única variante posible.
-    if (mentionedSize === null && !mentionsGlass) return false;
-    const matchingVariants = variants.filter(item =>
-      (mentionedSize === null || this.beverageSizeInMl(item.name) === mentionedSize)
-      && (!mentionsGlass || /\bvidrio\b/i.test(item.name)),
-    );
-    return matchingVariants.length === 1 && matchingVariants[0].name === selected.name;
+    // Si el cliente especificó tamaño explícito (1.5 L, 2.5 L, 400 ml, etc.)
+    if (mentionedSize !== null) {
+      return selectedSize === mentionedSize;
+    }
+
+    // Si no especificó tamaño (ej: "una coca cola", "dos manzanas", "una colombiana"),
+    // la IA debe halar la presentación personal plástica por defecto (400 ml o <= 600 ml)
+    const personalVariant = nonGlassVariants.find(item => {
+      const size = this.beverageSizeInMl(item.name);
+      return size !== null && size <= 600;
+    }) || nonGlassVariants[0];
+
+    return selected.name === personalVariant.name;
   }
 
   private extractExplicitNeighborhood(messages: string[]): string | null {
@@ -5083,9 +5105,11 @@ REGLAS DE RECONOCIMIENTO Y RELACIÓN DE PRODUCTOS (THE VILLA DOG):
   * Si el cliente dice "un suizo", "suizo al plato", "suizo con papas", "suizo gratinado", "mini suizo", asigna al plato correspondiente de la categoría Suizos (con papas a la francesa por defecto salvo que diga al vapor).
 - BEBIDAS:
   * "coca cola", "postobon manzana", "kola roman", "quatro", "jugo hit", "agua", "hatsu", "bretaña".
-  * Elige solo la bebida exacta del catálogo, con su marca, sabor, tamaño y empaque. No supongas 400/500 ml ni ninguna presentación por defecto.
-  * Si falta tamaño o empaque y hay más de una variante posible, no agregues bebida al carrito: escribe el nombre mencionado en "unresolvedBeverages" para que el asesor la aclare con el cliente.
-  * Para un pedido a domicilio (detectedOrderType = "delivery") NUNCA selecciones ni agregues productos cuyo nombre incluya "vidrio". Si el cliente pide una bebida en vidrio, déjala en "unresolvedBeverages" para que el asesor ofrezca una presentación apta para domicilio. Las bebidas en vidrio solo se pueden usar en recoger o mesa.
+  * ¡IMPORTANTE! LA IA SÍ DEBE HALAR / AGREGAR LAS BEBIDAS AL CARRITO ("items"):
+    - Las ÚNICAS bebidas que la IA NUNCA debe agregar a "items" son las BEBIDAS DE VIDRIO (las que incluyan "vidrio" en el nombre, como "Coca Cola Vidrio 250 ml", "Manzana Vidrio 250 ml", etc.). NUNCA selecciones ni agregues bebidas de vidrio a "items". Si el cliente pide bebida en vidrio, no la agregues a "items" y déjala en "unresolvedBeverages".
+    - Para todas las demás bebidas (plásticas, personales, 1.5 L, 2.5 L, jugos, agua):
+      * Si el cliente NO especifica el tamaño (ej: "una coca cola", "dos manzanas", "una colombiana", "un jugo hit mora", "un agua"), asigna por defecto la presentación personal plástica correspondiente (400 ml o 300 ml para agua). NUNCA asignes vidrio.
+      * Si el cliente especifica tamaño (ej: "1.5 L", "2.5 L", "400 ml"), asigna esa presentación exacta.
   * Si el cliente cambió de bebida, conserva solo su última elección confirmada.
 - ADICIONES:
   * Si el cliente pide queso extra, tocineta extra, salchicha extra, piña extra, etc., busca y asigna el ID exacto en "additions".
@@ -5245,28 +5269,71 @@ Responde solo con JSON válido.`;
             this.logger.log(`[parseOrder] Encontrado por nombre: ${nameMatch.name} (id=${nameMatch.id})`);
             menuItem = nameMatch;
           } else {
-            const fuzzyMatch = normalizedRawId
-              ? dbItems.find(i => {
-                  const normItem = this.normalizeSpanishLookup(i.name);
-                  return normItem.includes(normalizedRawId) || normalizedRawId.includes(normItem);
-                })
-              : undefined;
-            if (fuzzyMatch && !this.isBeverageMenuItem(fuzzyMatch)) {
-              this.logger.log(`[parseOrder] Encontrado por coincidencia aproximada: ${fuzzyMatch.name} (id=${fuzzyMatch.id})`);
-              menuItem = fuzzyMatch;
+            // Si rawId corresponde a una bebida (ej: Gemini envió "Coca Cola" o "Manzana"),
+            // buscar entre las variantes no-vidrio
+            const beverageMatch = dbItems.find(i => {
+              if (!this.isBeverageMenuItem(i)) return false;
+              if (/\bvidrio\b/i.test(i.name)) return false;
+              const core = this.beverageCore(i.name);
+              return core && (core === normalizedRawId || normalizedRawId.includes(core) || core.includes(normalizedRawId));
+            });
+            if (beverageMatch) {
+              const core = this.beverageCore(beverageMatch.name);
+              const nonGlassVariants = dbItems.filter(i =>
+                this.isBeverageMenuItem(i) &&
+                this.beverageCore(i.name) === core &&
+                !/\bvidrio\b/i.test(i.name),
+              );
+              const sizeInText = this.beverageSizeInMl(text);
+              const matchedBySize = sizeInText ? nonGlassVariants.find(i => this.beverageSizeInMl(i.name) === sizeInText) : null;
+              const defaultPersonal = nonGlassVariants.find(i => {
+                const s = this.beverageSizeInMl(i.name);
+                return s !== null && s <= 600;
+              }) || nonGlassVariants[0];
+              menuItem = matchedBySize || defaultPersonal || beverageMatch;
+              this.logger.log(`[parseOrder] Bebida encontrada por búsqueda inteligente: ${menuItem.name} (id=${menuItem.id})`);
             } else {
-              if (fuzzyMatch && this.isBeverageMenuItem(fuzzyMatch)) unresolvedBeverages.push(fuzzyMatch.name);
-              continue;
+              const fuzzyMatch = normalizedRawId
+                ? dbItems.find(i => {
+                    const normItem = this.normalizeSpanishLookup(i.name);
+                    return normItem.includes(normalizedRawId) || normalizedRawId.includes(normItem);
+                  })
+                : undefined;
+              if (fuzzyMatch && !this.isBeverageMenuItem(fuzzyMatch)) {
+                this.logger.log(`[parseOrder] Encontrado por coincidencia aproximada: ${fuzzyMatch.name} (id=${fuzzyMatch.id})`);
+                menuItem = fuzzyMatch;
+              } else {
+                continue;
+              }
             }
           }
         }
-        // La restricción de bebidas en vidrio se aplica también después de la
-        // resolución por ID/nombre para que una respuesta de Gemini nunca
-        // termine agregando una presentación no entregable a domicilio.
-        if (isDeliveryOrder && /\bvidrio\b/i.test(menuItem.name)) {
-          this.logger.warn(`[parseOrder] Producto en vidrio rechazado para domicilio: ${menuItem.name}`);
-          unresolvedBeverages.push(`${menuItem.name} (no disponible para domicilio)`);
-          continue;
+        // REGLA CRÍTICA: Las únicas bebidas que la IA NUNCA debe halar son las de vidrio.
+        // Si el modelo devolvió una bebida de vidrio por error, verificar si el cliente pidió vidrio:
+        if (menuItem && /\bvidrio\b/i.test(menuItem.name)) {
+          const core = this.beverageCore(menuItem.name);
+          const mentionsGlass = /\bvidrio\b/i.test(this.normalizeSpanishLookup(text));
+          if (!mentionsGlass) {
+            // El cliente no pidió vidrio, auto-corregir a la variante personal plástica
+            const nonGlassEquivalent = dbItems.find(i =>
+              this.isBeverageMenuItem(i) &&
+              this.beverageCore(i.name) === core &&
+              !/\bvidrio\b/i.test(i.name) &&
+              (this.beverageSizeInMl(i.name) || 0) <= 600,
+            );
+            if (nonGlassEquivalent) {
+              this.logger.log(`[parseOrder] Corrigiendo bebida de vidrio a presentación plástica personal: ${menuItem.name} -> ${nonGlassEquivalent.name}`);
+              menuItem = nonGlassEquivalent;
+            } else {
+              this.logger.warn(`[parseOrder] Bebida en vidrio no admitida por IA: ${menuItem.name}`);
+              unresolvedBeverages.push(`${menuItem.name} (no disponible en vidrio)`);
+              continue;
+            }
+          } else {
+            this.logger.warn(`[parseOrder] Bebida en vidrio solicitada no admitida por IA: ${menuItem.name}`);
+            unresolvedBeverages.push(`${menuItem.name} (no disponible en vidrio)`);
+            continue;
+          }
         }
         if (!this.isBeverageSelectionUnambiguous(menuItem, dbItems, text)) {
           this.logger.warn(`[parseOrder] Bebida sin presentación inequívoca: ${menuItem.name}`);
@@ -5490,14 +5557,31 @@ Responde solo con JSON válido.`;
         }
       }
 
+      const addedBeverageCores = new Set(
+        parsedCartItems
+          .filter(item => this.isBeverageMenuItem(item.menuItem))
+          .map(item => this.beverageCore(item.menuItem.name))
+          .filter(Boolean),
+      );
+
+      const cleanedUnresolvedBeverages = Array.from(new Set([
+        ...unresolvedBeverages,
+        ...(Array.isArray(rawJson.unresolvedBeverages)
+          ? rawJson.unresolvedBeverages.filter((value: unknown) => typeof value === 'string').map((value: string) => value.trim().slice(0, 120)).filter(Boolean)
+          : []),
+      ])).filter(entry => {
+        const normEntry = this.normalizeSpanishLookup(entry);
+        if (!/\bvidrio\b/i.test(normEntry)) {
+          for (const core of addedBeverageCores) {
+            if (normEntry.includes(core) || core.includes(normEntry)) return false;
+          }
+        }
+        return true;
+      });
+
       return {
         parsedCartItems,
-        unresolvedBeverages: Array.from(new Set([
-          ...unresolvedBeverages,
-          ...(Array.isArray(rawJson.unresolvedBeverages)
-            ? rawJson.unresolvedBeverages.filter((value: unknown) => typeof value === 'string').map((value: string) => value.trim().slice(0, 120)).filter(Boolean)
-            : []),
-        ])),
+        unresolvedBeverages: cleanedUnresolvedBeverages,
         detectedOrderType,
         independentNotes: Array.isArray(rawJson.independentNotes)
           ? rawJson.independentNotes.filter((note: unknown) => typeof note === 'string').map((note: string) => note.trim().slice(0, 300)).filter(Boolean)

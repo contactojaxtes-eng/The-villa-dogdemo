@@ -82,9 +82,6 @@ interface DriverPortalData {
 const paymentOptions: Array<{ value: PaymentMethod; label: string }> = [
   { value: 'CASH', label: 'Efectivo' },
   { value: 'TRANSFER', label: 'Transferencia' },
-  { value: 'NEQUI', label: 'Nequi' },
-  { value: 'BANCOLOMBIA', label: 'Bancolombia' },
-  { value: 'DAVIPLATA', label: 'Daviplata' },
   { value: 'MIXED', label: 'Mixto · efectivo + transferencia' },
 ]
 
@@ -103,9 +100,9 @@ function isTransferMethod(method?: string) {
 
 function normalizeDriverPaymentMethod(method?: string): PaymentMethod {
   const normalized = String(method || '').toUpperCase()
-  return paymentOptions.some(option => option.value === normalized)
-    ? normalized as PaymentMethod
-    : 'CASH'
+  if (['TRANSFER', 'NEQUI', 'BANCOLOMBIA', 'DAVIPLATA'].includes(normalized)) return 'TRANSFER'
+  if (normalized === 'MIXED') return 'MIXED'
+  return 'CASH'
 }
 
 function originalPaymentLabel(order?: PortalOrder | null) {

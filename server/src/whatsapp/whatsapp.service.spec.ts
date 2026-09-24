@@ -614,7 +614,7 @@ describe('WhatsApp Gemini settings', () => {
     fetchSpy.mockRestore();
   });
 
-  it('keeps ambiguous beverages out of an automatically reconstructed order', () => {
+  it('pulls beverages defaulting to personal presentation and strictly excludes glass beverages', () => {
     const service = createService();
     const catalog = [
       { name: 'Coca Cola Vidrio 250 ml', category: { name: 'Gaseosas y Bebidas' } },
@@ -628,12 +628,17 @@ describe('WhatsApp Gemini settings', () => {
       catalog.find(item => item.name === name), catalog, chat,
     );
 
-    expect(accept('Coca Cola 400 ml', 'Cliente: Dame una Coca Cola')).toBe(false);
+    // Si el cliente pide la bebida sin tamaño, la IA debe halar la presentación personal no-vidrio (400 ml)
+    expect(accept('Coca Cola 400 ml', 'Cliente: Dame una Coca Cola')).toBe(true);
     expect(accept('Coca Cola 400 ml', 'Cliente: Dame una Coca Cola 400 ml')).toBe(true);
-    expect(accept('Coca Cola Vidrio 250 ml', 'Cliente: Dame una Coca Cola de vidrio')).toBe(true);
+    // Las bebidas de vidrio NUNCA las debe halar la IA
+    expect(accept('Coca Cola Vidrio 250 ml', 'Cliente: Dame una Coca Cola de vidrio')).toBe(false);
+    expect(accept('Coca Cola Vidrio 250 ml', 'Cliente: Dame una Coca Cola')).toBe(false);
     expect(accept('Coca Cola Zero 400 ml', 'Cliente: Dame una Coca Cola 400 ml')).toBe(false);
+    expect(accept('Coca Cola Zero 400 ml', 'Cliente: Dame una Coca Cola Zero')).toBe(true);
     expect(accept('Manzana Postobón 1.5 L', 'Cliente: Dame una manzana 1.5 L')).toBe(true);
     expect(accept('Manzana Postobón 400 ml', 'Cliente: Dame una manzana 1.5 L')).toBe(false);
+    expect(accept('Manzana Postobón 400 ml', 'Cliente: Dame una manzana')).toBe(true);
     expect(accept('Coca Cola 400 ml', 'Cliente: Dame una Coca Cola 400 ml\nCliente: Mejor cámbiala por Pepsi 400 ml')).toBe(false);
     expect(accept('Pepsi 400 ml', 'Cliente: Dame una Coca Cola 400 ml\nCliente: Mejor cámbiala por Pepsi 400 ml')).toBe(true);
     expect(accept('Coca Cola 400 ml', 'Cliente: Cambia la Coca Cola 400 ml por Pepsi 400 ml')).toBe(false);

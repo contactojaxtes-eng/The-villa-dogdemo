@@ -1519,26 +1519,42 @@ export class OrdersService implements OnModuleInit {
     });
 
     if (status === 'DELIVERED') {
-      if (hasDriverCashOnly && order.paymentStatus !== 'CONFIRMED') {
-        await this.prisma.payment.updateMany({
-          where: { orderId: id },
-          data: { status: 'DRIVER_CASH_PENDING' },
-        });
-      } else if (order.paymentMethod === 'MIXED') {
-        if (mixedNeedsTransferReview) {
+      if (order.orderType === 'DELIVERY') {
+        // En domicilios, el cobro NUNCA se confirma automáticamente al entregar.
+        // El administrador es el único y último que valida y confirma el cobro.
+        const targetPaymentStatus = ['TRANSFER', 'MIXED', 'NEQUI', 'BANCOLOMBIA', 'DAVIPLATA'].includes(order.paymentMethod)
+          ? 'PENDING_REVIEW'
+          : (order.paymentStatus === 'CONFIRMED' ? 'CONFIRMED' : 'DRIVER_CASH_PENDING');
+        if (order.paymentStatus !== 'CONFIRMED') {
           await this.prisma.payment.updateMany({
             where: { orderId: id },
-            data: { status: 'PENDING_REVIEW' },
+            data: { status: targetPaymentStatus },
           });
+          await this.prisma.order.update({ where: { id }, data: { paymentStatus: targetPaymentStatus } });
+          updated.paymentStatus = targetPaymentStatus;
         }
-      } else if (order.paymentMethod === 'CASH') {
-        await this.prisma.payment.updateMany({
-          where: { orderId: id },
-          data: { status: 'CONFIRMED' },
-        });
-        await this.prisma.order.update({ where: { id }, data: { paymentStatus: 'CONFIRMED' } });
       } else {
-        await this.prisma.order.update({ where: { id }, data: { paymentStatus: 'CONFIRMED' } });
+        if (hasDriverCashOnly && order.paymentStatus !== 'CONFIRMED') {
+          await this.prisma.payment.updateMany({
+            where: { orderId: id },
+            data: { status: 'DRIVER_CASH_PENDING' },
+          });
+        } else if (order.paymentMethod === 'MIXED') {
+          if (mixedNeedsTransferReview) {
+            await this.prisma.payment.updateMany({
+              where: { orderId: id },
+              data: { status: 'PENDING_REVIEW' },
+            });
+          }
+        } else if (order.paymentMethod === 'CASH') {
+          await this.prisma.payment.updateMany({
+            where: { orderId: id },
+            data: { status: 'CONFIRMED' },
+          });
+          await this.prisma.order.update({ where: { id }, data: { paymentStatus: 'CONFIRMED' } });
+        } else {
+          await this.prisma.order.update({ where: { id }, data: { paymentStatus: 'CONFIRMED' } });
+        }
       }
     }
 

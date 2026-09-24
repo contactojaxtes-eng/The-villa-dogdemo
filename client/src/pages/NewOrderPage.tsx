@@ -328,33 +328,52 @@ function beverageCore(name: string): string {
 }
 
 function beverageSizeInMl(value: string): number | null {
-  const match = value.match(/\b(\d+(?:[.,]\d+)?)\s*(ml|mililitros?|l|litros?)\b/i)
+  const str = String(value || '')
+  if (/\b(?:1[.,]5\s*l(?:itros?)?|litro\s+y\s+medio)\b/i.test(str)) return 1500
+  if (/\b(?:2[.,]5\s*l(?:itros?)?|dos\s+litros\s+y\s+medio)\b/i.test(str)) return 2500
+  const match = str.match(/\b(\d+(?:[.,]\d+)?)\s*(ml|mililitros?|l|litros?)\b/i)
   if (match) return Math.round(Number(match[1].replace(',', '.')) * (/^m/i.test(match[2]) ? 1 : 1000))
-  const commonSize = value.match(/\b(250|300|350|400|500|600|750)\b/)
+  const literMatch = str.match(/\b(1[.,]5|2[.,]5)\b/)
+  if (literMatch) return Math.round(Number(literMatch[1].replace(',', '.')) * 1000)
+  const commonSize = str.match(/\b(250|300|350|400|500|600|750)\b/)
   return commonSize ? Number(commonSize[1]) : null
 }
 
 function isBeverageSelectionUnambiguous(selected: MenuItem, catalog: MenuItem[], clause: string): boolean {
   if (!isBeverageItem(selected)) return true
+  // REGLA CRÍTICA: Las únicas bebidas que la IA NUNCA debe halar son las de vidrio
+  if (/\bvidrio\b/i.test(selected.name || '')) return false
+
   const core = beverageCore(selected.name)
   const normalizedClause = normalizeText(clause).replace(/\s+/g, ' ')
   if (!core || !normalizedClause.includes(core)) return false
   const selectedIsZero = /\bzero\b/.test(normalizeText(selected.name))
   if (selectedIsZero !== /\b(?:zero|sin azucar)\b/.test(normalizedClause)) return false
 
-  const variants = catalog.filter(item => isBeverageItem(item) && beverageCore(item.name) === core)
-  const mentionedSize = beverageSizeInMl(clause)
-  if (mentionedSize !== null && mentionedSize !== beverageSizeInMl(selected.name)) return false
   const mentionsGlass = /\bvidrio\b/.test(normalizedClause)
-  if (mentionsGlass && !/\bvidrio\b/i.test(selected.name)) return false
-  if (variants.length <= 1) return true
-  if (mentionedSize === null && !mentionsGlass) return false
+  if (mentionsGlass) return false
 
-  const matchingVariants = variants.filter(item =>
-    (mentionedSize === null || beverageSizeInMl(item.name) === mentionedSize)
-    && (!mentionsGlass || /\bvidrio\b/i.test(item.name)),
+  const nonGlassVariants = catalog.filter(item =>
+    isBeverageItem(item) &&
+    beverageCore(item.name) === core &&
+    !/\bvidrio\b/i.test(item.name || ''),
   )
-  return matchingVariants.length === 1 && matchingVariants[0].id === selected.id
+  if (nonGlassVariants.length === 0) return false
+
+  const mentionedSize = beverageSizeInMl(clause)
+  const selectedSize = beverageSizeInMl(selected.name)
+
+  if (mentionedSize !== null) {
+    return selectedSize === mentionedSize
+  }
+
+  // Si no especificó tamaño (ej: "una coca cola", "una manzana"), se toma por defecto la presentación personal plástica (<= 600 ml)
+  const personalVariant = nonGlassVariants.find(item => {
+    const size = beverageSizeInMl(item.name)
+    return size !== null && size <= 600
+  }) || nonGlassVariants[0]
+
+  return selected.id === personalVariant.id
 }
 
 function extractPaymentMethod(text: string): 'CASH' | 'TRANSFER' | null {
@@ -1453,6 +1472,14 @@ export default function NewOrderPage({
               if (normalizedClause.includes('super') && normalizedName.includes('super')) score += 80
             } else {
               score -= 70
+            }
+          }
+
+          // BEBIDAS
+          if (isBeverageItem(item)) {
+            const core = beverageCore(item.name)
+            if (core && normalizedClause.includes(core)) {
+              score += 120
             }
           }
 
