@@ -208,6 +208,92 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
+  /**
+   * Projection for the table sales history. It keeps the fields rendered by the
+   * screen, but excludes receipt bytes, change logs and full menu/category rows.
+   */
+  private buildTableHistorySelect(): Prisma.DiningTableSelect {
+    return {
+      id: true,
+      label: true,
+      status: true,
+      notes: true,
+      openedAt: true,
+      closedAt: true,
+      createdAt: true,
+      updatedAt: true,
+      openedById: true,
+      cashRegisterId: true,
+      cashClosingId: true,
+      openedBy: { select: { id: true, name: true } },
+      orders: {
+        select: {
+          id: true,
+          orderNumber: true,
+          createdAt: true,
+          status: true,
+          orderType: true,
+          customerName: true,
+          kitchenStatus: true,
+          paymentStatus: true,
+          paymentMethod: true,
+          cashAmount: true,
+          transferAmount: true,
+          total: true,
+          tableId: true,
+          waiterId: true,
+          waiter: { select: { id: true, name: true } },
+          payment: {
+            select: {
+              id: true,
+              method: true,
+              status: true,
+              amount: true,
+              cashAmount: true,
+              transferAmount: true,
+            },
+          },
+          items: {
+            select: {
+              id: true,
+              menuItemId: true,
+              quantity: true,
+              unitPrice: true,
+              totalPrice: true,
+              notes: true,
+              menuItem: { select: { id: true, name: true } },
+            },
+          },
+          kitchenTickets: {
+            select: {
+              id: true,
+              status: true,
+              assignedToId: true,
+              assignedTo: { select: { id: true, name: true } },
+            },
+          },
+        },
+        orderBy: { createdAt: 'asc' as const },
+      },
+      transferProofs: {
+        select: {
+          ...receiptSummary,
+          payment: {
+            select: {
+              id: true,
+              method: true,
+              status: true,
+              amount: true,
+              cashAmount: true,
+              transferAmount: true,
+            },
+          },
+        },
+        orderBy: { createdAt: 'desc' as const },
+      },
+    };
+  }
+
   private summarizeTable(table: any) {
     const orders = table.orders || [];
     const activeOrders = orders.filter((o: any) => o.status !== 'CANCELLED');
@@ -250,7 +336,7 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
     return new Date(Date.now() - 14 * 60 * 60 * 1000);
   }
 
-  async listTables(params: { status?: string; search?: string; waiterId?: string; currentShift?: string | boolean; summary?: string | boolean }) {
+  async listTables(params: { status?: string; search?: string; waiterId?: string; currentShift?: string | boolean; summary?: string | boolean; view?: string }) {
     const where: any = { orders: { some: {} } };
     if (params.status === 'ALL') {
       // no status filter, return both active and closed
@@ -288,6 +374,7 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
     }
 
     const summary = params.summary === 'true' || params.summary === true;
+    const history = params.view === 'history';
     const tables: any[] = summary
       ? await this.prisma.diningTable.findMany({
           where,
@@ -295,6 +382,13 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
           orderBy: { openedAt: 'desc' },
           take: 200,
         })
+      : history
+        ? await this.prisma.diningTable.findMany({
+            where,
+            select: this.buildTableHistorySelect(),
+            orderBy: { openedAt: 'desc' },
+            take: 200,
+          })
       : await this.prisma.diningTable.findMany({
           where,
           include: this.buildTableInclude(),

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { io } from '@/lib/socket'
 import { Banknote, Bell, BellOff, CheckCircle2, Eye, History, Image, RefreshCw, RotateCcw, Search, Smartphone, Wallet, XCircle, ZoomIn, ZoomOut } from 'lucide-react'
@@ -54,6 +54,9 @@ export default function PaymentValidationPage() {
   const [proofZoom, setProofZoom] = useState(1)
   const [isMuted, setIsMuted] = useState(() => isNotificationsMuted())
   const [actionLoading, setActionLoading] = useState<string | null>(null)
+  const connectedOnceRef = useRef(false)
+  const paymentReloadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const paymentRequestIdRef = useRef(0)
 
   useEffect(() => {
     const syncMute = () => setIsMuted(isNotificationsMuted())
@@ -82,22 +85,105 @@ export default function PaymentValidationPage() {
   }, [])
 
   // Cargar todos los pagos para filtrado reactivo e instantáneo (0ms) en memoria
-  const load = useCallback(() => {
+  const loadPayments = useCallback(() => {
+    const requestId = ++paymentRequestIdRef.current
     setLoading(true)
-    loadCancellations()
-    api.get<any>('/payment-validation?status=ALL&method=ALL')
+    api.get<any>('/payment-validation?status=ALL&method=ALL', { force: true })
       .then(res => {
+        if (requestId !== paymentRequestIdRef.current) return
         const rows = Array.isArray(res) ? res : (res?.data || res?.items || [])
         setPayments(Array.isArray(rows) ? rows : [])
       })
       .catch(err => {
+        if (requestId !== paymentRequestIdRef.current) return
         console.error(err)
         setPayments([])
       })
-      .finally(() => setLoading(false))
-  }, [loadCancellations])
+      .finally(() => {
+        if (requestId === paymentRequestIdRef.current) setLoading(false)
+      })
+  }, [])
+
+  const load = useCallback(() => {
+    loadPayments()
+    loadCancellations()
+  }, [loadCancellations, loadPayments])
+
+  const schedulePaymentsReload = useCallback(() => {
+    if (paymentReloadTimerRef.current !== null) {
+      clearTimeout(paymentReloadTimerRef.current)
+    }
+    paymentReloadTimerRef.current = setTimeout(() => {
+      paymentReloadTimerRef.current = null
+      loadPayments()
+    }, 250)
+  }, [loadPayments])
+
+  const applyPaymentReview = useCallback((payload: any, forcedStatus?: 'CONFIRMED' | 'REJECTED') => {
+    const payment = payload?.payment || payload
+    const paymentId = payment?.id || payload?.paymentId
+    if (!paymentId) {
+      loadPayments()
+      return
+    }
+
+    setPayments(current => current.map(row => {
+      const samePayment = row.id === paymentId
+        || (payment?.settlementId && row.settlementId === payment.settlementId)
+      if (!samePayment) return row
+
+      const status = forcedStatus || payment.status || row.status
+      return {
+        ...row,
+        ...payment,
+        status,
+        order: payload?.order
+          ? { ...(row.order || {}), ...payload.order, paymentStatus: status }
+          : row.order
+            ? { ...row.order, paymentStatus: status }
+            : row.order,
+        transferProofs: Array.isArray(row.transferProofs)
+          ? row.transferProofs.map((proof: any) => ({
+              ...proof,
+              status,
+              rejectionReason: forcedStatus === 'REJECTED'
+                ? (payload?.reason || proof.rejectionReason)
+                : proof.rejectionReason,
+            }))
+          : row.transferProofs,
+      }
+    }))
+  }, [loadPayments])
+
+  const applyCancellationResolution = useCallback((payload: any) => {
+    const orderId = payload?.orderId || payload?.order?.id || payload?.id
+    if (!orderId) return
+
+    setCancellations(current => current.filter(item => item.id !== orderId))
+    if (!payload?.approved && payload?.status !== 'CANCELLED') return
+
+    setPayments(current => current.map(row => {
+      if (row.order?.id !== orderId && row.orderId !== orderId) return row
+      return {
+        ...row,
+        status: 'REJECTED',
+        order: row.order
+          ? { ...row.order, status: 'CANCELLED', paymentStatus: 'REJECTED' }
+          : row.order,
+      }
+    }))
+    // El evento no incluye settlementId ni todos los pagos agrupados. Una sola
+    // reconciliación debounced conserva la verdad del servidor sin polling.
+    schedulePaymentsReload()
+  }, [schedulePaymentsReload])
 
   useEffect(() => { load() }, [load])
+
+  useEffect(() => () => {
+    if (paymentReloadTimerRef.current !== null) {
+      clearTimeout(paymentReloadTimerRef.current)
+    }
+  }, [])
 
   useEffect(() => {
     const socketUrl = import.meta.env.VITE_API_URL || window.location.origin
@@ -105,19 +191,19 @@ export default function PaymentValidationPage() {
       query: { userId: user?.id, userName: user?.name, userRole: user?.role },
       transports: ['websocket', 'polling'],
     })
-    socket.on('paymentSubmitted', load)
-    socket.on('paymentValidated', load)
-    socket.on('paymentRejected', load)
-    socket.on('cancellationRequested', () => {
-      loadCancellations()
-      load()
+    socket.on('connect', () => {
+      if (connectedOnceRef.current) load()
+      else connectedOnceRef.current = true
     })
-    socket.on('cancellationResolved', () => {
-      loadCancellations()
-      load()
-    })
+    // Un pago nuevo necesita su proyección completa (pedido, mesa y comprobantes).
+    // Las revisiones posteriores ya traen el identificador y se aplican en memoria.
+    socket.on('paymentSubmitted', schedulePaymentsReload)
+    socket.on('paymentValidated', (payload: any) => applyPaymentReview(payload, 'CONFIRMED'))
+    socket.on('paymentRejected', (payload: any) => applyPaymentReview(payload, 'REJECTED'))
+    socket.on('cancellationRequested', loadCancellations)
+    socket.on('cancellationResolved', applyCancellationResolution)
     return () => { socket.disconnect() }
-  }, [user?.id, user?.name, user?.role, load, loadCancellations])
+  }, [user?.id, user?.name, user?.role, load, loadCancellations, schedulePaymentsReload, applyPaymentReview, applyCancellationResolution])
 
   // Filtrado instantáneo en cliente (0ms)
   const safePayments = useMemo(() => Array.isArray(payments) ? payments : [], [payments])
@@ -250,9 +336,12 @@ export default function PaymentValidationPage() {
     }
 
     try {
-      await api.put(`/payment-validation/${payment.id}/${action}`, action === 'reject' ? { reason: reasonText } : {})
+      const result = await api.put<any>(`/payment-validation/${payment.id}/${action}`, action === 'reject' ? { reason: reasonText } : {})
       alerts.toast(action === 'validate' ? `✅ Pago validado (${payment.order?.diningTable?.label || payment.order?.customerName || 'Pedido'})` : `❌ Pago rechazado`)
-      load()
+      applyPaymentReview(
+        action === 'reject' ? { ...result, reason: reasonText } : result,
+        action === 'validate' ? 'CONFIRMED' : 'REJECTED',
+      )
     } catch (err: any) {
       alerts.error('No se pudo procesar', err?.response?.data?.message || err.message)
     }
@@ -266,9 +355,9 @@ export default function PaymentValidationPage() {
     if (!ok) return
     setActionLoading(order.id)
     try {
-      await api.put(`/orders/${order.id}/cancellation/approve`, {})
+      const result = await api.put<any>(`/orders/${order.id}/cancellation/approve`, {})
       alerts.success('Cancelación aprobada', `El pedido #${order.orderNumber} fue cancelado y retirado de la cuenta de la mesera.`)
-      load()
+      applyCancellationResolution({ orderId: result?.id || order.id, status: 'CANCELLED', approved: true })
     } catch (err: any) {
       alerts.error('No se pudo aprobar', err?.response?.data?.message || err.message)
     } finally {
@@ -287,7 +376,7 @@ export default function PaymentValidationPage() {
     try {
       await api.put(`/orders/${order.id}/cancellation/reject`, { reason: reason.trim() })
       alerts.info('Cancelación rechazada', `La solicitud del pedido #${order.orderNumber} fue rechazada y el pedido continúa activo.`)
-      load()
+      setCancellations(current => current.filter(item => item.id !== order.id))
     } catch (err: any) {
       alerts.error('No se pudo rechazar', err?.response?.data?.message || err.message)
     } finally {

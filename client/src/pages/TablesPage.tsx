@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { io } from '@/lib/socket'
-import { PlusCircle, Search, UtensilsCrossed, Wallet, ChefHat, CheckCircle2, Clock, History, AlertCircle, Pencil } from 'lucide-react'
+import { PlusCircle, Search, UtensilsCrossed, Wallet, ChefHat, CheckCircle2, Clock, History, AlertCircle, Pencil, RefreshCw } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { api } from '@/lib/api'
@@ -10,6 +10,53 @@ import { formatCurrency, cn } from '@/lib/utils'
 import { useAuth } from '@/hooks/useAuth'
 import type { DiningTableSummary } from '@/lib/tableTypes'
 import { syncOfflineOrders } from '@/lib/offlineTableOrders'
+
+const hasOwn = (value: object, key: PropertyKey) => Object.prototype.hasOwnProperty.call(value, key)
+type TableEventOverride = { table: DiningTableSummary; sequence: number }
+
+function snapshotVersion(table: any): number {
+  const version = Date.parse(String(table?.updatedAt || ''))
+  return Number.isFinite(version) ? version : Number.NaN
+}
+
+function incomingSnapshotIsCurrent(current: any, incoming: any): boolean {
+  const currentVersion = snapshotVersion(current)
+  const incomingVersion = snapshotVersion(incoming)
+  if (!Number.isFinite(incomingVersion)) return false
+  return !Number.isFinite(currentVersion) || incomingVersion >= currentVersion
+}
+
+function extractTableSnapshot(payload: any): any | null {
+  if (payload?.table && typeof payload.table === 'object') return payload.table
+  // Los eventos de pagos de domicilios no contienen una mesa.
+  if (payload?.payment || payload?.order || payload?.delivery === true) return null
+  return payload && typeof payload === 'object' ? payload : null
+}
+
+function isCompleteTableSnapshot(table: any): table is DiningTableSummary {
+  if (!table || typeof table.id !== 'string' || typeof table.label !== 'string' || typeof table.status !== 'string') return false
+  if (!Number.isFinite(snapshotVersion(table))) return false
+  if (!hasOwn(table, 'total') || table.total === null || table.total === '' || !Number.isFinite(Number(table.total))) return false
+  if (!hasOwn(table, 'balance') || table.balance === null || table.balance === '' || !Number.isFinite(Number(table.balance))) return false
+  if (!hasOwn(table, 'openedBy') || !Array.isArray(table.orders)) return false
+
+  return table.orders.every((order: any) => (
+    order &&
+    typeof order.id === 'string' &&
+    typeof order.status === 'string' &&
+    hasOwn(order, 'total') &&
+    hasOwn(order, 'paymentStatus') &&
+    hasOwn(order, 'kitchenStatus') &&
+    hasOwn(order, 'waiter') &&
+    Array.isArray(order.kitchenTickets) &&
+    order.kitchenTickets.every((ticket: any) => (
+      ticket &&
+      typeof ticket.id === 'string' &&
+      typeof ticket.status === 'string' &&
+      hasOwn(ticket, 'assignedTo')
+    ))
+  ))
+}
 
 export default function TablesPage() {
   const { user } = useAuth()
@@ -20,7 +67,12 @@ export default function TablesPage() {
   const [loading, setLoading] = useState(true)
   const [filterMode, setFilterMode] = useState<'OPEN_ALL' | 'OPEN_MINE' | 'HISTORY_MINE'>(() => isWaiter ? 'OPEN_MINE' : 'OPEN_ALL')
   const [now, setNow] = useState(() => Date.now())
-  const reloadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const connectedOnceRef = useRef(false)
+  const reconcileTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const loadRequestRef = useRef(0)
+  const eventSequenceRef = useRef(0)
+  const eventOverridesRef = useRef<Map<string, TableEventOverride>>(new Map())
+  const latestVersionRef = useRef<Map<string, number>>(new Map())
 
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 15000)
@@ -28,34 +80,142 @@ export default function TablesPage() {
   }, [])
 
   const load = useCallback((silent = false) => {
+    const requestId = ++loadRequestRef.current
+    const sequenceAtStart = eventSequenceRef.current
     if (!silent) setLoading(true)
     const pOpen = api.get<DiningTableSummary[]>('/tables?summary=true', { force: true })
     const pHistory = user?.id ? api.get<DiningTableSummary[]>(`/tables?status=ALL&waiterId=${user.id}&currentShift=true&summary=true`, { force: true }) : Promise.resolve([])
 
     Promise.all([pOpen, pHistory])
       .then(([openList, historyList]) => {
-        setOpenTables(Array.isArray(openList) ? openList : [])
+        if (requestId !== loadRequestRef.current) return
+        const overlay = (
+          response: DiningTableSummary[],
+          belongsToQuery: (table: DiningTableSummary, existedInResponse: boolean) => boolean,
+        ) => {
+          const result = new Map(response.map(table => [table.id, table]))
+          const orderedIds = response.map(table => table.id)
+          for (const { table, sequence } of eventOverridesRef.current.values()) {
+            const serverTable = result.get(table.id)
+            const arrivedDuringRequest = sequence > sequenceAtStart
+            const eventIsNewer = !serverTable || snapshotVersion(table) > snapshotVersion(serverTable)
+            if (!arrivedDuringRequest && !eventIsNewer) continue
+            if (serverTable && !incomingSnapshotIsCurrent(serverTable, table)) continue
+            if (!belongsToQuery(table, Boolean(serverTable))) {
+              result.delete(table.id)
+              continue
+            }
+            result.set(table.id, table)
+            if (!orderedIds.includes(table.id)) orderedIds.unshift(table.id)
+          }
+          return orderedIds.flatMap(id => result.has(id) ? [result.get(id)!] : []).slice(0, 200)
+        }
+
+        const nextOpen = overlay(
+          Array.isArray(openList) ? openList : [],
+          table => table.status === 'OPEN' && (table.orders?.length || 0) > 0,
+        )
+        const historyWithOverrides = overlay(
+          Array.isArray(historyList) ? historyList : [],
+          (table, existedInResponse) => {
+            const belongsToUser = table.openedBy?.id === user?.id || (table.orders || []).some(order => order.waiter?.id === user?.id)
+            const belongsToCurrentShift = table.status === 'OPEN' || existedInResponse
+            return belongsToUser && belongsToCurrentShift && (table.orders?.length || 0) > 0
+          },
+        )
+
+        setOpenTables(nextOpen)
         // Mesas que la mesera ya cobró o cerró (para que NUNCA se le desaparezcan tras validar en caja)
-        const hist = (Array.isArray(historyList) ? historyList : []).filter((t: any) =>
+        const hist = historyWithOverrides.filter((t: any) =>
           t.status === 'CLOSED' ||
           t.balance === 0 ||
           t.orders?.some((o: any) => o.paymentStatus === 'PENDING_REVIEW' || o.paymentStatus === 'CONFIRMED')
         )
         setMyHistoryTables(hist)
+        for (const table of [...nextOpen, ...hist]) {
+          latestVersionRef.current.set(table.id, snapshotVersion(table))
+        }
+        const appliedSequence = eventSequenceRef.current
+        for (const [id, event] of eventOverridesRef.current) {
+          if (event.sequence <= appliedSequence) eventOverridesRef.current.delete(id)
+        }
       })
       .catch(console.error)
-      .finally(() => { if (!silent) setLoading(false) })
+      .finally(() => {
+        if (requestId === loadRequestRef.current && !silent) setLoading(false)
+      })
   }, [user?.id])
 
-  // Una misma operación puede emitir tableUpdated, cashRegistersChanged y
-  // paymentValidated casi al mismo tiempo. Agruparlos evita repetir las dos
-  // consultas de esta pantalla sin retrasar la actualización más de 300 ms.
-  const scheduleReload = useCallback(() => {
-    if (reloadTimerRef.current !== null) return
-    reloadTimerRef.current = setTimeout(() => {
-      reloadTimerRef.current = null
+  const scheduleReconcile = useCallback(() => {
+    if (reconcileTimerRef.current !== null) clearTimeout(reconcileTimerRef.current)
+    reconcileTimerRef.current = setTimeout(() => {
+      reconcileTimerRef.current = null
       load(true)
     }, 300)
+  }, [load])
+
+  const applyTableEvent = useCallback((payload: any) => {
+    const candidate = extractTableSnapshot(payload)
+    if (!candidate?.id) return
+    if (!isCompleteTableSnapshot(candidate)) {
+      scheduleReconcile()
+      return
+    }
+    const table = candidate as DiningTableSummary
+    const version = snapshotVersion(table)
+    const latestVersion = latestVersionRef.current.get(table.id)
+    if (latestVersion !== undefined && version < latestVersion) return
+    const previousOverride = eventOverridesRef.current.get(table.id)
+    if (previousOverride && !incomingSnapshotIsCurrent(previousOverride.table, table)) return
+    const sequence = ++eventSequenceRef.current
+    eventOverridesRef.current.set(table.id, { table, sequence })
+    latestVersionRef.current.set(table.id, version)
+
+    setOpenTables(previous => {
+      const current = previous.find(item => item.id === table.id)
+      const exists = Boolean(current)
+      const belongsToOpenQuery = table.status === 'OPEN' && (table.orders?.length || 0) > 0
+      if (!belongsToOpenQuery) {
+        return current && incomingSnapshotIsCurrent(current, table)
+          ? previous.filter(item => item.id !== table.id)
+          : previous
+      }
+      return exists
+        ? previous.map(item => item.id === table.id && incomingSnapshotIsCurrent(item, table) ? table : item)
+        : [table, ...previous].slice(0, 200)
+    })
+
+    // La consulta de historial usa currentShift=true. Una mesa abierta siempre
+    // pertenece al turno actual; para una cerrada el corte depende de caja, así
+    // que actualizamos una fila ya conocida y reconciliamos la membresía.
+    const requiresShiftMembershipCheck = table.status !== 'OPEN'
+    if (requiresShiftMembershipCheck) scheduleReconcile()
+    setMyHistoryTables(previous => {
+      const belongsToUser = table.openedBy?.id === user?.id || (table.orders || []).some((order: any) => order.waiter?.id === user?.id)
+      const belongsInHistory = belongsToUser && (
+        table.status === 'CLOSED' ||
+        Number(table.balance) === 0 ||
+        (table.orders || []).some((order: any) => order.paymentStatus === 'PENDING_REVIEW' || order.paymentStatus === 'CONFIRMED')
+      )
+      const current = previous.find(item => item.id === table.id)
+      const exists = Boolean(current)
+      if (!belongsInHistory) {
+        return current && incomingSnapshotIsCurrent(current, table)
+          ? previous.filter(item => item.id !== table.id)
+          : previous
+      }
+      if (requiresShiftMembershipCheck && !exists) return previous
+      return exists
+        ? previous.map(item => item.id === table.id && incomingSnapshotIsCurrent(item, table) ? table : item)
+        : [table, ...previous].slice(0, 200)
+    })
+  }, [scheduleReconcile, user?.id])
+
+  useEffect(() => () => {
+    if (reconcileTimerRef.current !== null) {
+      clearTimeout(reconcileTimerRef.current)
+      reconcileTimerRef.current = null
+    }
   }, [load])
 
   const handleEditTableName = async (e: React.MouseEvent, targetTable: DiningTableSummary) => {
@@ -85,36 +245,34 @@ export default function TablesPage() {
     // Sincronizar automáticamente pedidos tomados fuera de la señal
     const triggerSync = () => {
       syncOfflineOrders().then(res => {
-        if (res.synced > 0) scheduleReload()
+        if (res.synced > 0) load(true)
       }).catch(console.error)
     }
 
     triggerSync()
     window.addEventListener('online', triggerSync)
     return () => window.removeEventListener('online', triggerSync)
-  }, [load, scheduleReload])
+  }, [load])
 
   useEffect(() => {
+    connectedOnceRef.current = false
     const socketUrl = import.meta.env.VITE_API_URL || window.location.origin
     const socket = io(`${socketUrl}/the-villa-dog`, {
       query: { userId: user?.id, userName: user?.name, userRole: user?.role },
       transports: ['websocket', 'polling'],
     })
-    socket.on('tableCreated', scheduleReload)
-    socket.on('tableUpdated', scheduleReload)
-    socket.on('tableClosed', scheduleReload)
-    socket.on('paymentValidated', scheduleReload)
-    socket.on('paymentRejected', scheduleReload)
-    socket.on('cashStatusChanged', scheduleReload)
-    socket.on('cashRegistersChanged', scheduleReload)
-    return () => {
-      if (reloadTimerRef.current !== null) {
-        clearTimeout(reloadTimerRef.current)
-        reloadTimerRef.current = null
-      }
-      socket.disconnect()
-    }
-  }, [scheduleReload, user?.id, user?.name, user?.role])
+    socket.on('connect', () => {
+      if (connectedOnceRef.current) load(true)
+      connectedOnceRef.current = true
+    })
+    socket.on('tableCreated', applyTableEvent)
+    socket.on('tableUpdated', applyTableEvent)
+    socket.on('tableClosed', applyTableEvent)
+    socket.on('paymentValidated', applyTableEvent)
+    socket.on('paymentRejected', applyTableEvent)
+    socket.on('cashStatusChanged', scheduleReconcile)
+    return () => { socket.disconnect() }
+  }, [applyTableEvent, load, scheduleReconcile, user?.id, user?.name, user?.role])
 
   // Mesas abiertas de la mesera (aún pendientes de cobro)
   const myOpenTables = useMemo(() => {
@@ -156,6 +314,9 @@ export default function TablesPage() {
         </div>
         {!isWaiter && (
           <div className="hidden md:flex gap-2">
+            <Button type="button" variant="outline" onClick={() => load(true)} className="gap-1.5 border-[var(--border-default)] font-black text-xs">
+              <RefreshCw className="h-4 w-4" /> Actualizar
+            </Button>
             <Button asChild variant="outline" className="gap-1.5 border-[var(--border-default)] font-black text-xs">
               <Link to="/tables/history"><History className="h-4 w-4 text-[var(--accent)]" /> Historial Completo</Link>
             </Button>

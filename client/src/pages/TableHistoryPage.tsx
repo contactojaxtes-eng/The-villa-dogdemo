@@ -10,6 +10,63 @@ import { formatCurrency } from '@/lib/utils'
 import { useAuth } from '@/hooks/useAuth'
 import { io } from '@/lib/socket'
 
+const hasOwn = (value: object, key: PropertyKey) => Object.prototype.hasOwnProperty.call(value, key)
+type TableEventOverride = { table: any; sequence: number }
+
+function snapshotVersion(table: any): number {
+  const version = Date.parse(String(table?.updatedAt || ''))
+  return Number.isFinite(version) ? version : Number.NaN
+}
+
+function incomingSnapshotIsCurrent(current: any, incoming: any): boolean {
+  const currentVersion = snapshotVersion(current)
+  const incomingVersion = snapshotVersion(incoming)
+  if (!Number.isFinite(incomingVersion)) return false
+  return !Number.isFinite(currentVersion) || incomingVersion >= currentVersion
+}
+
+function extractTableSnapshot(payload: any): any | null {
+  if (payload?.table && typeof payload.table === 'object') return payload.table
+  if (payload?.payment || payload?.order || payload?.delivery === true) return null
+  return payload && typeof payload === 'object' ? payload : null
+}
+
+function isCompleteHistorySnapshot(table: any): boolean {
+  if (!table || typeof table.id !== 'string' || typeof table.label !== 'string' || typeof table.status !== 'string') return false
+  if (!Number.isFinite(snapshotVersion(table))) return false
+  if (!hasOwn(table, 'total') || table.total === null || table.total === '' || !Number.isFinite(Number(table.total))) return false
+  if (!hasOwn(table, 'balance') || table.balance === null || table.balance === '' || !Number.isFinite(Number(table.balance))) return false
+  if (!hasOwn(table, 'openedBy') || !Array.isArray(table.orders) || !Array.isArray(table.transferProofs)) return false
+
+  const completeOrders = table.orders.every((order: any) => (
+    order &&
+    typeof order.id === 'string' &&
+    typeof order.status === 'string' &&
+    hasOwn(order, 'total') &&
+    hasOwn(order, 'paymentStatus') &&
+    hasOwn(order, 'paymentMethod') &&
+    hasOwn(order, 'payment') &&
+    hasOwn(order, 'waiter') &&
+    Array.isArray(order.items) &&
+    order.items.every((item: any) => item && typeof item.id === 'string' && hasOwn(item, 'menuItem')) &&
+    Array.isArray(order.kitchenTickets) &&
+    order.kitchenTickets.every((ticket: any) => (
+      ticket &&
+      typeof ticket.id === 'string' &&
+      typeof ticket.status === 'string' &&
+      hasOwn(ticket, 'assignedTo')
+    ))
+  ))
+  const completeProofs = table.transferProofs.every((proof: any) => (
+    proof &&
+    typeof proof.id === 'string' &&
+    hasOwn(proof, 'status') &&
+    hasOwn(proof, 'method') &&
+    hasOwn(proof, 'payment')
+  ))
+  return completeOrders && completeProofs
+}
+
 function formatTableDate(dateVal?: string | Date | null): string {
   if (!dateVal) return '—'
   try {
@@ -148,30 +205,116 @@ export default function TableHistoryPage() {
   const [scope, setScope] = useState<'MINE' | 'ALL'>(() => isWaiter ? 'MINE' : 'ALL')
   const [zoomUrl, setZoomUrl] = useState<string | null>(null)
   const [selectedTable, setSelectedTable] = useState<any | null>(null)
-  const reloadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const connectedOnceRef = useRef(false)
+  const reconcileTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const loadRequestRef = useRef(0)
+  const eventSequenceRef = useRef(0)
+  const eventOverridesRef = useRef<Map<string, TableEventOverride>>(new Map())
+  const latestVersionRef = useRef<Map<string, number>>(new Map())
 
   const load = useCallback(async (silent = false) => {
+    const requestId = ++loadRequestRef.current
+    const sequenceAtStart = eventSequenceRef.current
     if (!silent) setLoading(true)
     try {
       const q = new URLSearchParams()
       if (filterStatus) q.set('status', filterStatus)
       if (shiftFilter === 'CURRENT') q.set('currentShift', 'true')
+      q.set('view', 'history')
       const res = await api.get<any[]>(`/tables?${q.toString()}`, { force: true })
-      setTables(Array.isArray(res) ? res : [])
+      if (requestId !== loadRequestRef.current) return
+      const response = Array.isArray(res) ? res : []
+      const result = new Map<string, any>(response.map(table => [table.id, table]))
+      const orderedIds = response.map(table => table.id)
+      for (const { table, sequence } of eventOverridesRef.current.values()) {
+        const serverTable = result.get(table.id)
+        const arrivedDuringRequest = sequence > sequenceAtStart
+        const eventIsNewer = !serverTable || snapshotVersion(table) > snapshotVersion(serverTable)
+        if (!arrivedDuringRequest && !eventIsNewer) continue
+        if (serverTable && !incomingSnapshotIsCurrent(serverTable, table)) continue
+
+        const matchesStatus = filterStatus === 'ALL' || table.status === filterStatus
+        const hasOrders = table.orders.length > 0
+        const belongsToCurrentShift = shiftFilter === 'ALL' || table.status === 'OPEN' || Boolean(serverTable)
+        if (!matchesStatus || !hasOrders || !belongsToCurrentShift) {
+          result.delete(table.id)
+          continue
+        }
+        result.set(table.id, table)
+        if (!orderedIds.includes(table.id)) orderedIds.unshift(table.id)
+      }
+      const rows = orderedIds.flatMap(id => result.has(id) ? [result.get(id)!] : []).slice(0, 200)
+      setTables(rows)
+      setSelectedTable((current: any | null) => {
+        if (!current) return current
+        const replacement = result.get(current.id)
+        return replacement && incomingSnapshotIsCurrent(current, replacement) ? replacement : current
+      })
+      for (const table of rows) latestVersionRef.current.set(table.id, snapshotVersion(table))
+      const appliedSequence = eventSequenceRef.current
+      for (const [id, event] of eventOverridesRef.current) {
+        if (event.sequence <= appliedSequence) eventOverridesRef.current.delete(id)
+      }
     } catch (err) {
+      if (requestId !== loadRequestRef.current) return
       console.error(err)
       setTables([])
     } finally {
-      if (!silent) setLoading(false)
+      if (requestId === loadRequestRef.current && !silent) setLoading(false)
     }
   }, [filterStatus, shiftFilter])
 
-  const scheduleReload = useCallback(() => {
-    if (reloadTimerRef.current !== null) return
-    reloadTimerRef.current = setTimeout(() => {
-      reloadTimerRef.current = null
+  const scheduleReconcile = useCallback(() => {
+    if (reconcileTimerRef.current !== null) clearTimeout(reconcileTimerRef.current)
+    reconcileTimerRef.current = setTimeout(() => {
+      reconcileTimerRef.current = null
       load(true)
     }, 350)
+  }, [load])
+
+  const applyTableEvent = useCallback((payload: any) => {
+    const table = extractTableSnapshot(payload)
+    if (!table?.id) return
+    if (!isCompleteHistorySnapshot(table)) {
+      scheduleReconcile()
+      return
+    }
+    const version = snapshotVersion(table)
+    const latestVersion = latestVersionRef.current.get(table.id)
+    if (latestVersion !== undefined && version < latestVersion) return
+    const previousOverride = eventOverridesRef.current.get(table.id)
+    if (previousOverride && !incomingSnapshotIsCurrent(previousOverride.table, table)) return
+    const sequence = ++eventSequenceRef.current
+    eventOverridesRef.current.set(table.id, { table, sequence })
+    latestVersionRef.current.set(table.id, version)
+
+    const matchesStatus = filterStatus === 'ALL' || table.status === filterStatus
+    const hasOrders = table.orders.length > 0
+    const membershipNeedsServer = shiftFilter === 'CURRENT' && matchesStatus && hasOrders && table.status !== 'OPEN'
+    if (membershipNeedsServer) scheduleReconcile()
+
+    setTables(previous => {
+      const existingIndex = previous.findIndex(item => item.id === table.id)
+      if (!matchesStatus || !hasOrders) {
+        if (existingIndex < 0) return previous
+        return incomingSnapshotIsCurrent(previous[existingIndex], table)
+          ? previous.filter(item => item.id !== table.id)
+          : previous
+      }
+      // No insertar a ciegas una mesa cerrada cuando el filtro depende del
+      // turno actual: solo el servidor conoce el corte de caja vigente.
+      if (membershipNeedsServer && existingIndex < 0) return previous
+      if (existingIndex < 0) return [table, ...previous].slice(0, 200)
+      return previous.map(item => item.id === table.id && incomingSnapshotIsCurrent(item, table) ? table : item)
+    })
+    setSelectedTable((current: any) => current?.id === table.id && incomingSnapshotIsCurrent(current, table) ? table : current)
+  }, [filterStatus, scheduleReconcile, shiftFilter])
+
+  useEffect(() => () => {
+    if (reconcileTimerRef.current !== null) {
+      clearTimeout(reconcileTimerRef.current)
+      reconcileTimerRef.current = null
+    }
   }, [load])
 
   useEffect(() => {
@@ -179,26 +322,23 @@ export default function TableHistoryPage() {
   }, [load])
 
   useEffect(() => {
+    connectedOnceRef.current = false
     const socketUrl = import.meta.env.VITE_API_URL || window.location.origin
     const socket = io(`${socketUrl}/the-villa-dog`, {
       transports: ['websocket', 'polling'],
     })
-    socket.on('tableCreated', scheduleReload)
-    socket.on('tableUpdated', scheduleReload)
-    socket.on('tableClosed', scheduleReload)
-    socket.on('paymentValidated', scheduleReload)
-    socket.on('cashStatusChanged', scheduleReload)
-    socket.on('cashRegistersChanged', scheduleReload)
-    socket.on('newOrder', scheduleReload)
-    socket.on('orderUpdated', scheduleReload)
-    return () => {
-      if (reloadTimerRef.current !== null) {
-        clearTimeout(reloadTimerRef.current)
-        reloadTimerRef.current = null
-      }
-      socket.disconnect()
-    }
-  }, [scheduleReload])
+    socket.on('connect', () => {
+      if (connectedOnceRef.current) load(true)
+      connectedOnceRef.current = true
+    })
+    socket.on('tableCreated', applyTableEvent)
+    socket.on('tableUpdated', applyTableEvent)
+    socket.on('tableClosed', applyTableEvent)
+    socket.on('paymentValidated', applyTableEvent)
+    socket.on('paymentRejected', applyTableEvent)
+    socket.on('cashStatusChanged', scheduleReconcile)
+    return () => { socket.disconnect() }
+  }, [applyTableEvent, load, scheduleReconcile])
 
   const [selectedWaiter, setSelectedWaiter] = useState<string>('ALL')
   const [showWaitersDetail, setShowWaitersDetail] = useState(true)
@@ -344,6 +484,9 @@ export default function TableHistoryPage() {
           </div>
         </div>
         <div className="hidden md:flex items-center gap-2">
+          <Button type="button" variant="outline" size="sm" onClick={() => load(true)} className="gap-1 text-xs font-bold">
+            <RefreshCw className="h-3.5 w-3.5" /> Actualizar
+          </Button>
           <Button asChild size="sm" className="bg-[var(--accent)] text-[var(--accent-fg)] font-black text-xs gap-1 shadow-sm">
             <Link to="/tables/new"><UtensilsCrossed className="h-3.5 w-3.5" /> Nuevo Pedido Mesa</Link>
           </Button>

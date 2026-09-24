@@ -1617,8 +1617,9 @@ function ChatPage() {
   }, [chatSearch])
 
   // Fetch message history for selected session with instant 0ms in-memory cache
-  const loadMessages = async (sessionId: string, initialSession?: Session | null) => {
+  const loadMessages = async (sessionId: string, initialSession?: Session | null, force = false) => {
     const requestId = ++messagesRequestIdRef.current
+    const requestStartedAt = Date.now()
     olderMessagesRequestIdRef.current += 1
     setLoadingOlderMessages(false)
     // 1. Si ya tenemos mensajes cacheados en memoria, renderizar al instante sin spinner
@@ -1635,7 +1636,7 @@ function ChatPage() {
     }
 
     try {
-      const data = await api.get<Message[]>(`/whatsapp/sessions/${sessionId}/messages?limit=120`)
+      const data = await api.get<Message[]>(`/whatsapp/sessions/${sessionId}/messages?limit=120`, { force })
       if (requestId !== messagesRequestIdRef.current || activeSessionRef.current?.id !== sessionId) return
       const safeMessages = Array.isArray(data) ? data : []
       setHasOlderMessages(safeMessages.length === 120)
@@ -1643,10 +1644,23 @@ function ChatPage() {
         const knownIds = new Set(safeMessages.map(item => item.id))
         const knownWaIds = new Set(safeMessages.map(item => item.waMessageId).filter(Boolean))
         const serverOutgoingContent = new Set(safeMessages.filter(item => item.direction === 'OUT').map(item => item.content))
+        const earliestServerTime = safeMessages.reduce((earliest, item) => {
+          const timestamp = new Date(item.createdAt).getTime()
+          return Number.isFinite(timestamp) ? Math.min(earliest, timestamp) : earliest
+        }, Number.POSITIVE_INFINITY)
+        const serverReturnedFullHistory = safeMessages.length < 120
         const currentOnly = current.filter(item => {
           if (knownIds.has(item.id) || (item.waMessageId && knownWaIds.has(item.waMessageId))) return false
           const isOptimistic = String(item.id).startsWith('temp-') || String(item.id).startsWith('opt-')
-          return !(isOptimistic && item.direction === 'OUT' && serverOutgoingContent.has(item.content))
+          if (isOptimistic) return !(item.direction === 'OUT' && serverOutgoingContent.has(item.content))
+
+          // Reconciliar eliminaciones ocurridas durante una desconexión sin borrar
+          // mensajes antiguos que quedaron fuera de la ventana de 120 ni eventos
+          // nuevos recibidos por Socket.IO mientras esta petición estaba en vuelo.
+          const itemTime = new Date(item.createdAt).getTime()
+          if (Number.isFinite(itemTime) && itemTime >= requestStartedAt) return true
+          if (!serverReturnedFullHistory && Number.isFinite(itemTime) && itemTime < earliestServerTime) return true
+          return false
         })
         const merged = [...safeMessages, ...currentOnly]
           .sort((a, b) => {
@@ -1725,7 +1739,11 @@ function ChatPage() {
       if (activeSessionRef.current?.id) {
         socket.emit('chatViewJoin', { sessionId: activeSessionRef.current.id })
       }
-      if (connectedOnce) loadSessions()
+      if (connectedOnce) {
+        loadSessions()
+        const currentSession = activeSessionRef.current
+        if (currentSession?.id) loadMessages(currentSession.id, currentSession, true)
+      }
       connectedOnce = true
     })
     socket.on('disconnect', () => setRealtimeStatus(socket.active ? 'connecting' : 'disconnected'))
@@ -2135,9 +2153,11 @@ function ChatPage() {
     }
   }, [activeSession?.id])
 
-  // Sincronización suave de respaldo (WebSockets ya maneja el 100% de mensajes en tiempo real)
+  // Socket.IO mantiene el chat al día. Solo reconciliamos al recuperar foco si
+  // la conexión sigue caída; una reconexión correcta ya sincroniza arriba.
   useEffect(() => {
     const handleFocus = () => {
+      if (socketRef.current?.connected) return
       if (activeSession?.id) {
         api.get<Message[]>(`/whatsapp/sessions/${activeSession.id}/messages`)
           .then(newMsgs => {
@@ -2159,15 +2179,8 @@ function ChatPage() {
 
     window.addEventListener('focus', handleFocus)
 
-    // Heartbeat suave cada 30 segundos solo de respaldo en segundo plano (sin parpadeos)
-    const backupInterval = setInterval(() => {
-      if (document.visibilityState !== 'visible') return
-      handleFocus()
-    }, 30000)
-
     return () => {
       window.removeEventListener('focus', handleFocus)
-      clearInterval(backupInterval)
     }
   }, [activeSession?.id])
 

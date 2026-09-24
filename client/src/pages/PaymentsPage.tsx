@@ -248,23 +248,91 @@ export default function PaymentsPage() {
     })
 
     let refreshTimer: ReturnType<typeof setTimeout> | null = null
-    const handleUpdate = () => {
+    let connectedOnce = false
+    const refreshFinancials = () => {
       if (refreshTimer !== null) return
       refreshTimer = setTimeout(() => {
         refreshTimer = null
         loadData()
-        loadCredits()
-        loadCollectOrders()
       }, 350)
     }
 
-    socket.on('newOrder', handleUpdate)
-    socket.on('cashRegistersChanged', handleUpdate)
-    socket.on('cashStatusChanged', handleUpdate)
-    socket.on('paymentUpdated', handleUpdate)
-    socket.on('orderUpdated', handleUpdate)
-    socket.on('orderCreated', handleUpdate)
-    socket.on('orderStatusChanged', handleUpdate)
+    const isPendingOrder = (order: any) => order && order.status !== 'CANCELLED' && order.paymentStatus === 'PENDING'
+    const applyOrder = (payload: any) => {
+      const order = payload?.order || payload
+      if (!order?.id) return
+      setCollectOrders(previous => {
+        const existing = previous.find(item => item.id === order.id)
+        const merged = existing ? { ...existing, ...order } : order
+        const eligible = isPendingOrder(merged) && merged.paymentMethod !== 'CREDIT'
+        if (!eligible) return previous.filter(item => item.id !== order.id)
+        return existing
+          ? previous.map(item => item.id === order.id ? merged : item)
+          : [merged, ...previous]
+      })
+      setCreditOrders(previous => {
+        const existing = previous.find(item => item.id === order.id)
+        const merged = existing ? { ...existing, ...order } : order
+        const eligible = isPendingOrder(merged) && merged.paymentMethod === 'CREDIT'
+        if (!eligible) return previous.filter(item => item.id !== order.id)
+        return existing
+          ? previous.map(item => item.id === order.id ? merged : item)
+          : [merged, ...previous]
+      })
+    }
+    const applyStatus = (payload: any) => {
+      if (payload?.order?.id) {
+        applyOrder({ ...payload.order, status: payload.status || payload.order.status })
+      } else if (payload?.orderId && (payload.status === 'CANCELLED' || payload.status === 'DELIVERED')) {
+        setCollectOrders(previous => previous.filter(item => item.id !== payload.orderId))
+        setCreditOrders(previous => previous.filter(item => item.id !== payload.orderId))
+      }
+    }
+    const applyPayment = (payment: any) => {
+      const orderId = payment?.orderId || payment?.order?.id
+      if (payment?.order?.id) applyOrder(payment.order)
+      if (orderId && payment?.status && payment.status !== 'PENDING') {
+        setCollectOrders(previous => previous.filter(item => item.id !== orderId))
+        setCreditOrders(previous => previous.filter(item => item.id !== orderId))
+      }
+      refreshFinancials()
+    }
+    const applyPaymentSubmitted = (payload: any) => {
+      const affectedOrders = new Map<string, any>()
+      if (payload?.order?.id) affectedOrders.set(payload.order.id, payload.order)
+      for (const order of payload?.table?.orders || []) {
+        if (order?.id) affectedOrders.set(order.id, order)
+      }
+
+      const paymentOrderId = payload?.payment?.orderId
+      if (paymentOrderId && !affectedOrders.has(paymentOrderId)) {
+        // El evento de cobro de mesa puede traer solo payment.orderId. Parchear
+        // ese pedido basta para retirarlo de las colas PENDING sin otra consulta.
+        affectedOrders.set(paymentOrderId, {
+          id: paymentOrderId,
+          paymentStatus: payload?.payment?.status || 'PENDING_REVIEW',
+        })
+      }
+
+      for (const order of affectedOrders.values()) applyOrder(order)
+    }
+
+    socket.on('connect', () => {
+      if (connectedOnce) {
+        loadData()
+        loadCredits()
+        loadCollectOrders()
+      }
+      connectedOnce = true
+    })
+    socket.on('newOrder', applyOrder)
+    socket.on('orderCreated', applyOrder)
+    socket.on('orderUpdated', applyOrder)
+    socket.on('orderStatusChanged', applyStatus)
+    socket.on('paymentSubmitted', applyPaymentSubmitted)
+    socket.on('paymentUpdated', applyPayment)
+    socket.on('cashRegistersChanged', refreshFinancials)
+    socket.on('cashStatusChanged', refreshFinancials)
 
     return () => {
       if (refreshTimer !== null) clearTimeout(refreshTimer)
@@ -462,7 +530,7 @@ export default function PaymentsPage() {
           )}
           <Button 
             variant="outline" 
-            onClick={loadData} 
+            onClick={() => { loadData(); loadCredits(); loadCollectOrders() }}
             className="border-[var(--border-default)] bg-[var(--bg-panel)] text-[var(--text-primary)] hover:bg-[var(--bg-hover)] transition-all rounded-xl h-10"
           >
             <RefreshCw className="mr-2 h-4 w-4" /> Actualizar

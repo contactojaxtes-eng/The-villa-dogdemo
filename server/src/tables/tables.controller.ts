@@ -21,8 +21,9 @@ export class TablesController {
     @Query('waiterId') waiterId?: string,
     @Query('currentShift') currentShift?: string,
     @Query('summary') summary?: string,
+    @Query('view') view?: string,
   ) {
-    return this.tablesService.listTables({ status, search, waiterId, currentShift, summary });
+    return this.tablesService.listTables({ status, search, waiterId, currentShift, summary, view });
   }
 
   @Get(':id')

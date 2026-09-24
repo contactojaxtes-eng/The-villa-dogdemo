@@ -141,6 +141,70 @@ function isReadyForCollection(order: Order): boolean {
   return false
 }
 
+function isOrderVisibleInDispatch(order: Partial<Order>, deliveryStaffOnly: boolean): boolean {
+  if (!order.id || order.tableId) return false
+  if (order.orderType !== 'DELIVERY' && order.orderType !== 'PICKUP') return false
+  if (deliveryStaffOnly && order.orderType !== 'DELIVERY') return false
+  if (order.source === 'TABLE' || order.source === 'OFFLINE_TABLE') return false
+  return order.status !== 'DELIVERED' && order.status !== 'CANCELLED'
+}
+
+function matchesDispatchSearch(order: Partial<Order>, search: string): boolean {
+  const query = search.trim().toLowerCase()
+  if (!query) return true
+
+  const searchableValues = [
+    order.customerName,
+    order.customerPhone,
+    order.customerAddress,
+    order.addressReference,
+    order.zone?.name,
+    order.deliveryDriver?.name,
+    ...(order.items || []).map(item => item.menuItem?.name),
+  ]
+  if (searchableValues.some(value => String(value || '').toLowerCase().includes(query))) return true
+
+  const digitsOnly = query.replace(/\D/g, '')
+  const orderNumber = digitsOnly ? Number.parseInt(digitsOnly, 10) : Number.NaN
+  return Number.isSafeInteger(orderNumber) && orderNumber >= 0 && orderNumber <= 2147483647 && order.orderNumber === orderNumber
+}
+
+function canInsertSocketOrder(order: Partial<Order>): order is Order {
+  return Boolean(
+    order.id &&
+    typeof order.orderNumber === 'number' &&
+    typeof order.customerName === 'string' &&
+    typeof order.customerPhone === 'string' &&
+    typeof order.customerAddress === 'string' &&
+    typeof order.createdAt === 'string' &&
+    typeof order.orderType === 'string' &&
+    typeof order.status === 'string' &&
+    order.waiter
+  )
+}
+
+function mergePartialOrderPatch(current: Partial<Order>, patch: Partial<Order>): Partial<Order> {
+  if (current.updatedAt && patch.updatedAt) {
+    const currentTime = new Date(current.updatedAt).getTime()
+    const patchTime = new Date(patch.updatedAt).getTime()
+    if (Number.isFinite(currentTime) && Number.isFinite(patchTime) && patchTime < currentTime) return current
+  }
+
+  const definedPatch = Object.entries(patch).reduce<Record<string, unknown>>((result, [key, value]) => {
+    if (value !== undefined) result[key] = value
+    return result
+  }, {})
+  return { ...current, ...definedPatch }
+}
+
+function mergeOrderPatch(current: Order, patch: Partial<Order>): Order {
+  return mergePartialOrderPatch(current, patch) as Order
+}
+
+function sortDispatchOrders(orders: Order[]): Order[] {
+  return [...orders].sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime())
+}
+
 const fadeUp = {
   hidden: { opacity: 0, y: 15 },
   visible: { opacity: 1, y: 0, transition: { duration: 0.4, ease: [0.25, 0.46, 0.45, 0.94] as const } },
@@ -348,6 +412,8 @@ export default function ActiveDeliveriesPage() {
   const [isSavingPaymentMethod, setIsSavingPaymentMethod] = useState(false)
   const socketRef = useRef<Socket | null>(null)
   const ordersReloadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const ordersRequestIdRef = useRef(0)
+  const ordersEventOverridesRef = useRef<Map<string, Partial<Order>>>(new Map())
   const driverFilterRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -642,12 +708,14 @@ export default function ActiveDeliveriesPage() {
   }
 
   const loadOrders = useCallback((silent = false, force = false) => {
+    const requestId = ++ordersRequestIdRef.current
     if (!silent) setLoading(true)
     const params = new URLSearchParams()
     if (submittedSearch) params.set('search', submittedSearch)
     params.set('orderType', isDeliveryStaff ? 'DELIVERY' : 'DELIVERY,PICKUP')
     api.get<Order[]>(`/orders/active?${params.toString()}`, { force })
       .then(data => {
+        if (requestId !== ordersRequestIdRef.current) return
         const deliveryOnly = (data || []).filter(o => 
           !o.tableId && 
           o.orderType !== 'LOCAL' && 
@@ -655,16 +723,30 @@ export default function ActiveDeliveriesPage() {
           o.source !== 'OFFLINE_TABLE' &&
           (!isDeliveryStaff || o.orderType !== 'PICKUP')
         )
-        setOrders(deliveryOnly)
+        const reconciled = new Map(deliveryOnly.map(order => [order.id, order]))
+        for (const [orderId, patch] of ordersEventOverridesRef.current) {
+          const current = reconciled.get(orderId)
+          const candidate = current ? mergeOrderPatch(current, patch) : patch
+          if (!isOrderVisibleInDispatch(candidate, isDeliveryStaff) || !matchesDispatchSearch(candidate, submittedSearch)) {
+            reconciled.delete(orderId)
+          } else if (current) {
+            reconciled.set(orderId, candidate as Order)
+          } else if (canInsertSocketOrder(candidate)) {
+            reconciled.set(orderId, candidate)
+          }
+        }
+        setOrders(sortDispatchOrders(Array.from(reconciled.values())))
+        ordersEventOverridesRef.current.clear()
       })
       .catch(console.error)
-      .finally(() => setLoading(false))
-  }, [submittedSearch])
+      .finally(() => {
+        if (requestId === ordersRequestIdRef.current) setLoading(false)
+      })
+  }, [isDeliveryStaff, submittedSearch])
 
-  // Un cambio de pedido suele emitir orderStatusChanged + orderUpdated y, en
-  // pagos, paymentUpdated. El payload del socket actualiza la fila al instante;
-  // esta única reconciliación agrupada confirma el estado final del servidor.
-  const scheduleOrdersReload = useCallback(() => {
+  // Solo se usa cuando llega un evento sin identidad suficiente para aplicarlo
+  // localmente. Los eventos normales no vuelven a descargar la lista completa.
+  const scheduleOrdersReconciliation = useCallback(() => {
     if (ordersReloadTimerRef.current !== null) return
     ordersReloadTimerRef.current = setTimeout(() => {
       ordersReloadTimerRef.current = null
@@ -679,9 +761,55 @@ export default function ActiveDeliveriesPage() {
       transports: ['websocket', 'polling'],
     })
     socketRef.current = socket
+    let hasConnectedOnce = false
+
+    const applyOrderPatch = (patch: Partial<Order>, allowInsert: boolean) => {
+      if (!patch.id) return
+
+      const previousOverride = ordersEventOverridesRef.current.get(patch.id)
+      const combinedPatch = previousOverride
+        ? mergePartialOrderPatch(previousOverride, patch)
+        : patch
+      ordersEventOverridesRef.current.set(patch.id, combinedPatch)
+
+      setOrders(currentOrders => {
+        const currentIndex = currentOrders.findIndex(order => order.id === patch.id)
+        const current = currentIndex >= 0 ? currentOrders[currentIndex] : null
+        const candidate = current ? mergeOrderPatch(current, patch) : patch
+        const shouldRemainVisible = isOrderVisibleInDispatch(candidate, isDeliveryStaff) && matchesDispatchSearch(candidate, submittedSearch)
+
+        if (!shouldRemainVisible) {
+          return currentIndex >= 0 ? currentOrders.filter(order => order.id !== patch.id) : currentOrders
+        }
+
+        if (currentIndex >= 0) {
+          if (candidate === current) return currentOrders
+          const next = [...currentOrders]
+          next[currentIndex] = candidate as Order
+          return next
+        }
+
+        if (!allowInsert || !canInsertSocketOrder(candidate)) return currentOrders
+        return sortDispatchOrders([...currentOrders, candidate])
+      })
+
+      setDetailOrder(current => {
+        if (!current || current.id !== patch.id) return current
+        return mergeOrderPatch(current, patch)
+      })
+    }
 
     socket.on('connect', () => {
       socket.emit('getActiveOperators')
+      if (hasConnectedOnce) {
+        // Una reconexión sí reconcilia porque pudo haber eventos durante el corte.
+        // La respuesta completa del servidor vuelve a ser la referencia después
+        // del corte; cualquier evento nuevo recibido durante la petición se
+        // registrará otra vez en este mapa y se superpondrá al resultado HTTP.
+        ordersEventOverridesRef.current.clear()
+        loadOrders(true, true)
+      }
+      hasConnectedOnce = true
     })
 
     socket.on('activeOperators', (ops: Record<string, { userId: string; userName: string }>) => {
@@ -708,25 +836,17 @@ export default function ActiveDeliveriesPage() {
       } : o))
     })
 
-    socket.on('newOrder', scheduleOrdersReload)
+    socket.on('newOrder', (newOrder: Partial<Order>) => {
+      if (!newOrder?.id) {
+        scheduleOrdersReconciliation()
+        return
+      }
+      applyOrderPatch(newOrder, true)
+    })
+
     socket.on('orderStatusChanged', (data: { orderId: string; status: string; order?: any }) => {
       if (data && data.orderId) {
-        if (
-          data.order?.tableId || 
-          data.order?.orderType === 'LOCAL' || 
-          data.order?.source === 'TABLE' || 
-          data.order?.source === 'OFFLINE_TABLE'
-        ) {
-          setOrders(prev => prev.filter(o => o.id !== data.orderId))
-        } else {
-          setOrders(prev => prev.map(o => o.id === data.orderId ? {
-            ...o,
-            status: data.status,
-            ...(data.order || {}),
-          } : o))
-        }
-
-        setDetailOrder(prev => (prev && prev.id === data.orderId) ? { ...prev, status: data.status, ...(data.order || {}) } : prev)
+        applyOrderPatch({ ...(data.order || {}), id: data.orderId, status: data.status }, Boolean(data.order))
 
         setCancelDialog(prev => {
           if (prev && prev.id === data.orderId && data.status === 'CANCELLED') {
@@ -737,29 +857,36 @@ export default function ActiveDeliveriesPage() {
           }
           return prev
         })
+      } else {
+        scheduleOrdersReconciliation()
       }
-      scheduleOrdersReload()
     })
 
     socket.on('orderUpdated', (updatedOrder: any) => {
       if (updatedOrder && updatedOrder.id) {
-        if (
-          updatedOrder.tableId || 
-          updatedOrder.orderType === 'LOCAL' || 
-          updatedOrder.source === 'TABLE' || 
-          updatedOrder.source === 'OFFLINE_TABLE'
-        ) {
-          setOrders(prev => prev.filter(o => o.id !== updatedOrder.id))
-        } else {
-          setOrders(prev => prev.map(o => o.id === updatedOrder.id ? { ...o, ...updatedOrder } : o))
-        }
-        setDetailOrder(prev => (prev && prev.id === updatedOrder.id) ? { ...prev, ...updatedOrder } : prev)
+        applyOrderPatch(updatedOrder, true)
+      } else {
+        // Existe una ruta antigua que emite solo el id; no se puede inferir el cambio.
+        scheduleOrdersReconciliation()
       }
-      scheduleOrdersReload()
     })
 
-    socket.on('paymentUpdated', () => {
-      scheduleOrdersReload()
+    socket.on('paymentUpdated', (payment: any) => {
+      const orderId = typeof payment?.orderId === 'string'
+        ? payment.orderId
+        : (typeof payment?.order?.id === 'string' ? payment.order.id : null)
+      if (!orderId) {
+        scheduleOrdersReconciliation()
+        return
+      }
+
+      applyOrderPatch({
+        id: orderId,
+        paymentStatus: typeof payment.status === 'string' ? payment.status : undefined,
+        paymentMethod: typeof payment.method === 'string' ? payment.method : undefined,
+        cashAmount: typeof payment.cashAmount === 'number' ? payment.cashAmount : undefined,
+        transferAmount: typeof payment.transferAmount === 'number' ? payment.transferAmount : undefined,
+      }, false)
     })
 
     socket.on('driversChanged', () => {
@@ -789,7 +916,7 @@ export default function ActiveDeliveriesPage() {
       }
       socket.disconnect()
     }
-  }, [user, loadDrivers, loadDriverQueue, scheduleOrdersReload])
+  }, [user, isDeliveryStaff, submittedSearch, loadOrders, loadDrivers, loadDriverQueue, scheduleOrdersReconciliation])
 
   useEffect(() => {
     const timer = setTimeout(() => {

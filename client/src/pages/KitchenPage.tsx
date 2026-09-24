@@ -34,6 +34,13 @@ import { playUrgentBell } from '@/lib/sound'
 import { cn, cleanNotes as sanitizeKitchenNote } from '@/lib/utils'
 
 type KitchenTab = 'ALL_ACTIVE' | 'NEW' | 'PREPARING' | 'READY' | 'HISTORY'
+type OrderScopedSocketPayload = { orderId?: unknown; order?: { id?: unknown } }
+
+function isOlderTicketVersion(candidate: KitchenTicketSummary, current: KitchenTicketSummary) {
+  const candidateTime = Date.parse(candidate.updatedAt || candidate.createdAt || '')
+  const currentTime = Date.parse(current.updatedAt || current.createdAt || '')
+  return Number.isFinite(candidateTime) && Number.isFinite(currentTime) && candidateTime < currentTime
+}
 
 
 type GroupedKitchenItem = KitchenTicketItemSummary & {
@@ -147,6 +154,11 @@ export default function KitchenPage() {
   const [breakRemaining, setBreakRemaining] = useState<string>('')
   const [deliveryStationIds, setDeliveryStationIds] = useState<Set<string>>(new Set())
   const [isDeliveryCook, setIsDeliveryCook] = useState(false)
+  const initialLoadStartedRef = useRef(false)
+  const loadInFlightRef = useRef<Promise<void> | null>(null)
+  const ticketEventSequenceRef = useRef(0)
+  const ticketEventOverridesRef = useRef<Map<string, { sequence: number; ticket: KitchenTicketSummary; belongs: boolean }>>(new Map())
+  const ticketVersionsRef = useRef<Map<string, KitchenTicketSummary>>(new Map())
 
   // Cargar estado inicial de cena/pausa del cocinero
   useEffect(() => {
@@ -224,22 +236,52 @@ export default function KitchenPage() {
   }
 
   // Carga inicial (silenciosa en segundo plano para no hacer parpadear la pantalla)
-  const load = useCallback((showSpinner = false) => {
+  const load = useCallback((showSpinner = false): Promise<void> => {
+    if (loadInFlightRef.current) {
+      if (!showSpinner) return loadInFlightRef.current
+      setLoading(true)
+      return loadInFlightRef.current.finally(() => setLoading(false))
+    }
+
     if (showSpinner) setLoading(true)
-    api.get<KitchenTicketSummary[]>('/kitchen/tickets?currentShift=true', { force: true })
+    const sequenceAtStart = ticketEventSequenceRef.current
+    const request = api.get<KitchenTicketSummary[]>('/kitchen/tickets?currentShift=true', { force: true })
       .then(items => {
         // Domicilios opera 100% por impresora física y nunca debe salir en las tablets de cocina de salón/meseras
         const onlyTableTickets = (items || []).filter(t => Boolean(t.tableId || t.order?.tableId || t.table?.id || (t.order as any)?.diningTable || t.order?.orderType === 'LOCAL'))
-        setTickets(onlyTableTickets)
+        const snapshot = new Map(onlyTableTickets.map(ticket => [ticket.id, ticket]))
+
+        // Si llegó un evento mientras esta petición estaba en vuelo, ese payload es
+        // posterior al snapshot HTTP y debe prevalecer para no perder tiempo real.
+        for (const [ticketId, event] of ticketEventOverridesRef.current) {
+          if (event.sequence <= sequenceAtStart) continue
+          const snapshotTicket = snapshot.get(ticketId)
+          if (snapshotTicket && isOlderTicketVersion(event.ticket, snapshotTicket)) continue
+          if (event.belongs) snapshot.set(ticketId, event.ticket)
+          else snapshot.delete(ticketId)
+        }
+        ticketVersionsRef.current = new Map(snapshot)
+        ticketEventOverridesRef.current.clear()
+        setTickets(Array.from(snapshot.values()))
       })
       .catch(console.error)
-      .finally(() => {
-        if (showSpinner) setLoading(false)
-      })
+    loadInFlightRef.current = request
+    return request.finally(() => {
+      if (loadInFlightRef.current === request) loadInFlightRef.current = null
+      if (showSpinner) setLoading(false)
+    })
   }, [])
 
   useEffect(() => {
-    load(true)
+    // Darle primero a Socket.IO una ventana corta para conectarse. Así el
+    // snapshot inicial se solicita después de estar suscritos y no existe un
+    // hueco entre la consulta HTTP y la conexión. Si no hay red, igual carga.
+    const fallback = setTimeout(() => {
+      if (initialLoadStartedRef.current) return
+      initialLoadStartedRef.current = true
+      void load(true)
+    }, 1_000)
+    return () => clearTimeout(fallback)
   }, [load])
 
   // Determinar si un ticket pertenece específicamente a este cocinero / estación
@@ -273,96 +315,163 @@ export default function KitchenPage() {
   }, [deliveryStationIds, user?.id, user?.role])
 
   const isTicketForThisCookRef = useRef(isTicketForThisCook)
-  const reloadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const isDeliveryCookRef = useRef(isDeliveryCook)
+  const socketGapDetectedRef = useRef(false)
+  const recentTicketEventsRef = useRef<Map<string, number>>(new Map())
+  const pendingGapReloadsRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map())
+  const notifiedTicketVersionsRef = useRef<Set<string>>(new Set())
   useEffect(() => {
     isTicketForThisCookRef.current = isTicketForThisCook
   }, [isTicketForThisCook])
 
-  // El backend conserva eventos específicos y de compatibilidad (por ejemplo,
-  // ticketCreated + ticketUpdated). El estado local se actualiza de inmediato
-  // con el payload del socket; esta recarga agrupada solo reconcilia el listado.
-  const scheduleReload = useCallback(() => {
-    if (reloadTimerRef.current !== null) return
-    reloadTimerRef.current = setTimeout(() => {
-      reloadTimerRef.current = null
-      load(false)
-    }, 300)
+  useEffect(() => {
+    isDeliveryCookRef.current = isDeliveryCook
+  }, [isDeliveryCook])
+
+  const markTicketEvent = useCallback((ticket: KitchenTicketSummary) => {
+    if (!ticket.orderId) return
+    recentTicketEventsRef.current.set(ticket.orderId, Date.now())
+    const pending = pendingGapReloadsRef.current.get(ticket.orderId)
+    if (pending) {
+      clearTimeout(pending)
+      pendingGapReloadsRef.current.delete(ticket.orderId)
+    }
+  }, [])
+
+  const applyTicketEvent = useCallback((ticket: KitchenTicketSummary, prepend = false) => {
+    const belongsToMe = isTicketForThisCookRef.current(ticket)
+    const currentVersion = ticketVersionsRef.current.get(ticket.id)
+    if (currentVersion && isOlderTicketVersion(ticket, currentVersion)) return false
+
+    markTicketEvent(ticket)
+    const sequence = ++ticketEventSequenceRef.current
+    ticketEventOverridesRef.current.set(ticket.id, { sequence, ticket, belongs: belongsToMe })
+    ticketVersionsRef.current.set(ticket.id, ticket)
+
+    setTickets(prev => {
+      const index = prev.findIndex(current => current.id === ticket.id)
+      const current = index === -1 ? undefined : prev[index]
+      if (current && isOlderTicketVersion(ticket, current)) return prev
+
+      if (!belongsToMe) {
+        return index === -1 ? prev : prev.filter(current => current.id !== ticket.id)
+      }
+      if (index === -1) return prepend ? [ticket, ...prev] : [...prev, ticket]
+
+      // Los eventos de compatibilidad pueden repetir exactamente el mismo ticket.
+      // Ignorar la misma versión evita renders, sonidos y trabajo duplicado.
+      if (ticket.updatedAt && current?.updatedAt === ticket.updatedAt) return prev
+
+      const next = [...prev]
+      next[index] = ticket
+      return next
+    })
+
+    return belongsToMe
+  }, [markTicketEvent])
+
+  // Los eventos generales de mesa llegan después del evento específico de cocina.
+  // Solo reconciliamos si falta ese evento, lo cual indica un salto real en la secuencia.
+  const reconcileMissingTicketEvent = useCallback((payload: OrderScopedSocketPayload) => {
+    const rawOrderId = payload?.orderId || payload?.order?.id
+    const orderId = typeof rawOrderId === 'string' ? rawOrderId : ''
+    if (!orderId || pendingGapReloadsRef.current.has(orderId)) return
+
+    const observedAt = Date.now()
+    const recentTicketAt = recentTicketEventsRef.current.get(orderId) || 0
+    if (observedAt - recentTicketAt < 5_000) return
+
+    const timer = setTimeout(() => {
+      pendingGapReloadsRef.current.delete(orderId)
+      const ticketAt = recentTicketEventsRef.current.get(orderId) || 0
+      if (ticketAt < observedAt) load(false)
+    }, 1_500)
+    pendingGapReloadsRef.current.set(orderId, timer)
   }, [load])
 
   useEffect(() => {
+    const pendingGapReloads = pendingGapReloadsRef.current
     const socketUrl = import.meta.env.VITE_API_URL || window.location.origin
     const socket = io(`${socketUrl}/the-villa-dog`, {
       query: { userId: user?.id, userName: user?.name, userRole: user?.role },
       transports: ['websocket', 'polling'],
     })
+    let hasConnectedOnce = false
 
     socket.on('connect', () => {
-      load(false)
+      const firstConnection = !hasConnectedOnce
+      const mustReconcile = socketGapDetectedRef.current
+      hasConnectedOnce = true
+      socketGapDetectedRef.current = false
+      if (firstConnection) {
+        if (!initialLoadStartedRef.current) {
+          initialLoadStartedRef.current = true
+          void load(true)
+        } else {
+          // El fallback HTTP empezó antes de conectar: al terminar, tomar un
+          // snapshot ya cubierto por los listeners para cerrar ese único hueco.
+          const pendingInitialLoad = loadInFlightRef.current
+          if (pendingInitialLoad) void pendingInitialLoad.finally(() => load(false))
+          else void load(false)
+        }
+      } else if (mustReconcile) {
+        void load(false)
+      }
+    })
+
+    socket.on('connect_error', () => {
+      socketGapDetectedRef.current = true
+    })
+
+    socket.on('disconnect', reason => {
+      if (reason !== 'io client disconnect' && hasConnectedOnce) {
+        socketGapDetectedRef.current = true
+      }
     })
 
     // TICKET CREADO
     socket.on('kitchenTicketCreated', (ticket: KitchenTicketSummary) => {
-      if (!isTicketForThisCookRef.current(ticket)) return
-      playUrgentBell()
+      const belongsToMe = applyTicketEvent(ticket, true)
+      if (!belongsToMe) return
 
-      setTickets(prev => {
-        const without = prev.filter(t => t.id !== ticket.id)
-        return [ticket, ...without]
-      })
-      scheduleReload()
+      const version = `created:${ticket.id}:${ticket.updatedAt || ticket.createdAt || ''}`
+      if (!notifiedTicketVersionsRef.current.has(version)) {
+        notifiedTicketVersionsRef.current.add(version)
+        playUrgentBell()
+      }
     })
 
     // TICKET ACTUALIZADO
     socket.on('kitchenTicketUpdated', (ticket: KitchenTicketSummary) => {
-      const belongsToMe = isTicketForThisCookRef.current(ticket)
-      setTickets(prev => {
-        const exists = prev.some(t => t.id === ticket.id)
-        if (!exists) {
-          return belongsToMe ? [ticket, ...prev] : prev
-        }
-        // Si ya no me pertenece (ej: reasignado a otro cocinero), retirarlo de mi pantalla
-        if (!belongsToMe) {
-          return prev.filter(t => t.id !== ticket.id)
-        }
-        return prev.map(t => t.id === ticket.id ? ticket : t)
-      })
-      if (belongsToMe) {
-        scheduleReload()
-      }
+      applyTicketEvent(ticket, true)
     })
 
     // TICKET EDITADO (modificaciones de mesera)
     socket.on('kitchenTicketEdited', (ticket: KitchenTicketSummary) => {
-      if (!isTicketForThisCookRef.current(ticket)) {
-        // Asegurar que si este cocinero tenía este ticket por error en memoria, lo retire
-        setTickets(prev => prev.filter(t => t.id !== ticket.id))
-        return
+      const belongsToMe = applyTicketEvent(ticket, true)
+      if (!belongsToMe) return
+
+      const version = `edited:${ticket.id}:${ticket.updatedAt || ticket.createdAt || ''}`
+      if (!notifiedTicketVersionsRef.current.has(version)) {
+        notifiedTicketVersionsRef.current.add(version)
+        alerts.toast(`✏️ Pedido editado #${ticket.order?.orderNumber || ''} (${ticket.station?.name || 'cocina'})`)
+        playUrgentBell()
       }
-
-      alerts.toast(`✏️ Pedido editado #${ticket.order?.orderNumber || ''} (${ticket.station?.name || 'cocina'})`)
-      playUrgentBell()
-
-      setTickets(prev => {
-        const exists = prev.some(t => t.id === ticket.id)
-        if (!exists) return [ticket, ...prev]
-        return prev.map(t => t.id === ticket.id ? ticket : t)
-      })
-      scheduleReload()
     })
 
     // CAMBIO DE ESTADO DE COCINEROS (activo/inactivo/cena)
     socket.on('kitchenCookStatusChanged', (statuses: Record<string, any>) => {
-      if (!isDeliveryCook && user?.id && statuses && statuses[user.id]) {
+      if (!isDeliveryCookRef.current && user?.id && statuses && statuses[user.id]) {
         setCookStatus(statuses[user.id])
       }
     })
 
     socket.on('deliveryKitchenCookStatusChanged', (statuses: Record<string, any>) => {
-      if (isDeliveryCook && user?.id) setCookStatus(statuses?.[user.id] || { active: true, onBreak: false })
+      if (isDeliveryCookRef.current && user?.id) setCookStatus(statuses?.[user.id] || { active: true, onBreak: false })
     })
 
     socket.on('cookBreakStarted', (payload: any) => {
-      if (payload?.userId === user?.id && (payload?.channel === 'DELIVERY') === isDeliveryCook) {
+      if (payload?.userId === user?.id && (payload?.channel === 'DELIVERY') === isDeliveryCookRef.current) {
         setCookStatus(prev => ({
           ...(prev || {}),
           onBreak: true,
@@ -374,34 +483,39 @@ export default function KitchenPage() {
     })
 
     socket.on('cookBreakFinished', (payload: any) => {
-      if (payload?.userId === user?.id && (payload?.channel === 'DELIVERY') === isDeliveryCook) {
+      if (payload?.userId === user?.id && (payload?.channel === 'DELIVERY') === isDeliveryCookRef.current) {
         setCookStatus(prev => ({ ...(prev || {}), onBreak: false, breakUntil: null }))
       }
     })
 
     socket.on('cookBreakReincorporated', (payload: any) => {
-      if (payload?.userId === user?.id && (payload?.channel === 'DELIVERY') === isDeliveryCook) {
+      if (payload?.userId === user?.id && (payload?.channel === 'DELIVERY') === isDeliveryCookRef.current) {
         setCookStatus(prev => ({ ...(prev || {}), onBreak: false, breakUntil: null }))
       }
     })
 
-    // Sincronización en tiempo real inmediata ante nuevos pedidos o cambios de comandas
-    socket.on('tableOrderSubmitted', scheduleReload)
-    socket.on('tableOrderEdited', scheduleReload)
-    socket.on('newOrder', scheduleReload)
-    socket.on('orderUpdated', scheduleReload)
+    // Los payloads completos de kitchenTicket* son la fuente inmediata. Estos dos
+    // eventos generales solo detectan una omisión excepcional del evento específico.
+    socket.on('tableOrderSubmitted', reconcileMissingTicketEvent)
+    socket.on('tableOrderEdited', reconcileMissingTicketEvent)
 
-    // Cuando se abre o cierra la caja, recargar comandas para reiniciar contadores e historial a 0
-    socket.on('cashStatusChanged', scheduleReload)
+    // Un cambio de turno invalida el alcance currentShift y requiere una reconciliación completa.
+    socket.on('cashStatusChanged', () => {
+      recentTicketEventsRef.current.clear()
+      notifiedTicketVersionsRef.current.clear()
+      ticketEventOverridesRef.current.clear()
+      ticketVersionsRef.current.clear()
+      load(false)
+    })
 
     return () => {
-      if (reloadTimerRef.current !== null) {
-        clearTimeout(reloadTimerRef.current)
-        reloadTimerRef.current = null
+      for (const timer of pendingGapReloads.values()) {
+        clearTimeout(timer)
       }
+      pendingGapReloads.clear()
       socket.disconnect()
     }
-  }, [isDeliveryCook, load, scheduleReload, user?.id, user?.name, user?.role])
+  }, [applyTicketEvent, load, reconcileMissingTicketEvent, user?.id, user?.name, user?.role])
 
   const consolidatedTickets = useMemo(() => {
     // Mantener cada ticket por su ID único para nunca borrar tickets previos del historial

@@ -11,6 +11,7 @@ import { contentSecurityPolicyDirectives } from './common/security-headers';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 import { json, urlencoded } from 'express';
+import compression = require('compression');
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, {
@@ -46,6 +47,18 @@ async function bootstrap() {
     trafficService.observe(req, res);
     next();
   });
+
+  // Compress regular HTTP responses without touching the Socket.IO transport.
+  // TrafficService is registered first so it can preserve the logical body size
+  // before compression removes Content-Length.
+  instance.use(compression({
+    threshold: 1024,
+    filter: (req, res) => {
+      const path = req.path || req.url || '';
+      if (path === '/socket.io' || path.startsWith('/socket.io/')) return false;
+      return compression.filter(req, res);
+    },
+  }));
 
   // Middleware para enrutar cualquier variante de URL del puente local a /api/imprimir/cola
   instance.use((req: any, res: any, next: any) => {

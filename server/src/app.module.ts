@@ -20,18 +20,34 @@ import { CustomersModule } from './customers/customers.module';
 import { DeliveryDriversModule } from './delivery-drivers/delivery-drivers.module';
 import { AuditModule } from './audit/audit.module';
 import { ServeStaticModule } from '@nestjs/serve-static';
-import { join } from 'path';
+import { basename, isAbsolute, join, relative } from 'path';
 import { SuperadminModule } from './superadmin/superadmin.module';
 import { RolesModule } from './roles/roles.module';
 import { TablesModule } from './tables/tables.module';
 import { AppController } from './app.controller';
 
+const clientDistPath = join(__dirname, '..', '..', 'client', 'dist');
+const clientAssetsPath = join(clientDistPath, 'assets');
+
+export function isImmutableViteAsset(filePath: string): boolean {
+  const assetPath = relative(clientAssetsPath, filePath);
+  if (!assetPath || assetPath.startsWith('..') || isAbsolute(assetPath)) return false;
+  return /-[A-Za-z0-9_-]{8,}\.[A-Za-z0-9]+$/.test(basename(assetPath));
+}
+
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
     ServeStaticModule.forRoot({
-      rootPath: join(__dirname, '..', '..', 'client', 'dist'),
+      rootPath: clientDistPath,
       exclude: ['/api/{*path}', '/docs/{*path}', '/socket.io/{*path}', '/imprimir/{*path}', '/cola-impresion/{*path}'],
+      serveStaticOptions: {
+        setHeaders: (res, filePath) => {
+          if (isImmutableViteAsset(filePath)) {
+            res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+          }
+        },
+      },
     }),
     PrismaModule,
     CacheModule,

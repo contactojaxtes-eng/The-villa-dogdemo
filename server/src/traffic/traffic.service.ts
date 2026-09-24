@@ -109,12 +109,27 @@ export class TrafficService implements OnModuleInit, OnModuleDestroy {
   observe(req: Request, res: Response) {
     // The dashboard itself should not alter the totals while it is being inspected.
     if (req.path === '/api/superadmin/traffic') return;
+
+    // Compression removes Content-Length immediately before sending the headers.
+    // Keep that declared logical size so measurements remain comparable with
+    // snapshots collected before HTTP compression was enabled.
+    let logicalContentLength: unknown;
+    const originalRemoveHeader = res.removeHeader;
+    if (typeof originalRemoveHeader === 'function') {
+      res.removeHeader = function removeHeader(name: string) {
+        if (name.toLowerCase() === 'content-length' && this.getHeader('content-encoding')) {
+          logicalContentLength = this.getHeader('content-length');
+        }
+        return originalRemoveHeader.call(this, name);
+      };
+    }
+
     res.once('finish', () => {
       const now = new Date().toISOString();
       const date = now.slice(0, 10);
       const route = trafficRouteLabel(req.path, req.route?.path);
       const method = /^[A-Z]{1,10}$/.test(req.method) ? req.method : 'OTHER';
-      const length = responseBodyLength(method, res.statusCode, res.getHeader('content-length'));
+      const length = responseBodyLength(method, res.statusCode, res.getHeader('content-length') ?? logicalContentLength);
       const isError = res.statusCode >= 500;
       let day = this.days.get(date);
       if (!day) {
@@ -219,7 +234,7 @@ export class TrafficService implements OnModuleInit, OnModuleDestroy {
         ...day,
         routes: day.routes.sort((a, b) => b.bytes - a.bytes || b.requests - a.requests),
       })),
-      note: 'Medición desde que se despliega esta versión: bytes de respuestas HTTP con Content-Length conocido (sin cabeceras). Las respuestas sin longitud figuran como desconocidas; no incluye WebSocket, tráfico saliente hacia Meta/Gemini ni overhead del proxy Railway. Errores = respuestas HTTP 5xx. Fechas UTC.',
+      note: 'Medición desde que se despliega esta versión: tamaño lógico de respuestas HTTP con Content-Length conocido, antes de compresión y sin cabeceras. Las respuestas sin longitud figuran como desconocidas; no incluye WebSocket, tráfico saliente hacia Meta/Gemini ni overhead del proxy Railway. Errores = respuestas HTTP 5xx. Fechas UTC.',
     };
   }
 

@@ -44,4 +44,26 @@ describe('HTTP traffic measurements', () => {
     expect(afterSnapshot.days[0].requests).toBe(1);
     expect(afterSnapshot.days[0].bytes).toBe(128);
   });
+
+  it('keeps the logical body size when HTTP compression removes Content-Length', async () => {
+    const prisma = { appSetting: { findMany: jest.fn().mockResolvedValue([]) } } as any;
+    const traffic = new TrafficService(prisma);
+    const req = { path: '/api/orders', route: { path: '/api/orders' }, method: 'GET' } as any;
+    const response = new EventEmitter() as any;
+    const headers = new Map<string, unknown>();
+    response.statusCode = 200;
+    response.getHeader = (name: string) => headers.get(name.toLowerCase());
+    response.setHeader = (name: string, value: unknown) => headers.set(name.toLowerCase(), value);
+    response.removeHeader = (name: string) => headers.delete(name.toLowerCase());
+
+    traffic.observe(req, response);
+    response.setHeader('Content-Length', '4096');
+    response.setHeader('Content-Encoding', 'br');
+    response.removeHeader('Content-Length');
+    response.emit('finish');
+
+    const totals = await traffic.getLastSevenDays();
+    expect(totals.days[0].bytes).toBe(4096);
+    expect(totals.days[0].unknownBytesRequests).toBe(0);
+  });
 });

@@ -34,6 +34,7 @@ export default function DashboardPage() {
     let active = true
     let inFlight = false
     let queued = false
+    let pendingWhileHidden = false
     let timer: ReturnType<typeof setTimeout> | undefined
     const load = async () => {
       if (!active) return
@@ -63,26 +64,37 @@ export default function DashboardPage() {
       }
     }
     const schedule = () => {
-      if (!active || document.hidden) return
+      if (!active) return
+      if (document.hidden) {
+        pendingWhileHidden = true
+        return
+      }
       clearTimeout(timer)
       timer = setTimeout(() => void load(), 350)
+    }
+    const handleVisibilityChange = () => {
+      if (document.hidden || !pendingWhileHidden) return
+      pendingWhileHidden = false
+      schedule()
     }
     refresh.current = () => void load()
     void load()
     const socketUrl = import.meta.env.VITE_API_URL || window.location.origin
     const socket = io(`${socketUrl}/the-villa-dog`, { transports: ['websocket', 'polling'] })
-    socket.on('connect', () => { setConnected(true); schedule() })
+    let connectedOnce = false
+    socket.on('connect', () => {
+      setConnected(true)
+      if (connectedOnce) schedule()
+      connectedOnce = true
+    })
     socket.on('disconnect', () => setConnected(false))
     socket.on('connect_error', () => setConnected(false))
     for (const event of ['newOrder', 'orderUpdated', 'orderStatusChanged', 'tableUpdated', 'tableClosed', 'kitchenTicketUpdated', 'paymentSubmitted', 'paymentValidated', 'paymentRejected', 'cashStatusChanged', 'cashRegistersChanged']) socket.on(event, schedule)
-    document.addEventListener('visibilitychange', schedule)
-    // Fallback reconciliation, paused in background tabs; no overlapping requests.
-    const fallback = setInterval(schedule, 60_000)
+    document.addEventListener('visibilitychange', handleVisibilityChange)
     return () => {
       active = false
       clearTimeout(timer)
-      clearInterval(fallback)
-      document.removeEventListener('visibilitychange', schedule)
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
       socket.disconnect()
     }
   }, [range])
