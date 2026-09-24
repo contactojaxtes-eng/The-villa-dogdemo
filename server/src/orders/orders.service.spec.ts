@@ -16,7 +16,7 @@ describe('Delivery order boundaries', () => {
       $transaction: jest.fn((callback: (transaction: any) => unknown) => callback(tx)),
     };
     const socket: any = { emitNewOrder: jest.fn(), server: { emit: jest.fn() } };
-    const service = new OrdersService(prisma, socket, {} as any, {} as any);
+    const service = new OrdersService(prisma, socket, {} as any, {} as any, { notifyJobCreated: jest.fn() } as any);
 
     const result = await service.create({
       waiterId: 'advisor-1',
@@ -33,7 +33,7 @@ describe('Delivery order boundaries', () => {
     const prisma: any = {
       order: { findMany: jest.fn().mockResolvedValue([]) },
     };
-    const service = new OrdersService(prisma, {} as any, {} as any, {} as any);
+    const service = new OrdersService(prisma, {} as any, {} as any, {} as any, { notifyJobCreated: jest.fn() } as any);
 
     await service.findAll({ orderType: 'DELIVERY,PICKUP' });
 
@@ -46,7 +46,7 @@ describe('Delivery order boundaries', () => {
     const prisma: any = {
       order: { findMany: jest.fn().mockResolvedValue([]) },
     };
-    const service = new OrdersService(prisma, {} as any, {} as any, {} as any);
+    const service = new OrdersService(prisma, {} as any, {} as any, {} as any, { notifyJobCreated: jest.fn() } as any);
 
     await service.findAll({ chatSessionId: 'chat-107', orderType: 'DELIVERY,PICKUP', compact: true });
 
@@ -59,7 +59,7 @@ describe('Delivery order boundaries', () => {
     const prisma: any = {
       order: { findMany: jest.fn().mockResolvedValue([]) },
     };
-    const service = new OrdersService(prisma, {} as any, {} as any, {} as any);
+    const service = new OrdersService(prisma, {} as any, {} as any, {} as any, { notifyJobCreated: jest.fn() } as any);
 
     await service.findAll({ search: '3001234567', orderType: 'DELIVERY,PICKUP', compact: true, limit: 5 });
 
@@ -84,7 +84,7 @@ describe('Delivery order boundaries', () => {
         aggregate: jest.fn().mockResolvedValue({ _sum: { total: 238000 } }),
       },
     };
-    const service = new OrdersService(prisma, {} as any, {} as any, {} as any);
+    const service = new OrdersService(prisma, {} as any, {} as any, {} as any, { notifyJobCreated: jest.fn() } as any);
 
     const result = await service.findDeliveryHistory({
       orderType: 'DELIVERY,PICKUP',
@@ -111,7 +111,7 @@ describe('Delivery order boundaries', () => {
     const prisma: any = {
       order: { findMany: jest.fn().mockResolvedValue([]) },
     };
-    const service = new OrdersService(prisma, {} as any, {} as any, {} as any);
+    const service = new OrdersService(prisma, {} as any, {} as any, {} as any, { notifyJobCreated: jest.fn() } as any);
 
     await service.getActiveOrders();
 
@@ -143,7 +143,7 @@ describe('Delivery order boundaries', () => {
         }]),
       },
     };
-    const service = new OrdersService(prisma, {} as any, {} as any, {} as any);
+    const service = new OrdersService(prisma, {} as any, {} as any, {} as any, { notifyJobCreated: jest.fn() } as any);
 
     await expect(service.batchCollectPayments(
       [{ id: 'order-kitchen', method: 'CASH' }],
@@ -163,7 +163,7 @@ describe('Delivery order boundaries', () => {
         }]),
       },
     };
-    const service = new OrdersService(prisma, {} as any, {} as any, {} as any);
+    const service = new OrdersService(prisma, {} as any, {} as any, {} as any, { notifyJobCreated: jest.fn() } as any);
 
     await expect(service.batchCollectPayments(
       [{ id: 'delivery-ready', method: 'CASH' }],
@@ -188,7 +188,7 @@ describe('Delivery order boundaries', () => {
       cashClosing: { findFirst: jest.fn().mockResolvedValue({ id: 'closing-1' }) },
       order: { findMany: jest.fn().mockResolvedValue(pickupOrders) },
     };
-    const service = new OrdersService(prisma, {} as any, {} as any, {} as any);
+    const service = new OrdersService(prisma, {} as any, {} as any, {} as any, { notifyJobCreated: jest.fn() } as any);
     jest.spyOn(service, 'updatePayment').mockImplementation(async (id: string) => ({ id }) as any);
 
     const result = await service.batchCollectPayments(
@@ -210,7 +210,7 @@ describe('Delivery order boundaries', () => {
     const prisma: any = {
       order: { findMany: jest.fn().mockResolvedValue(pickupOrders) },
     };
-    const service = new OrdersService(prisma, {} as any, {} as any, {} as any);
+    const service = new OrdersService(prisma, {} as any, {} as any, {} as any, { notifyJobCreated: jest.fn() } as any);
     jest.spyOn(service, 'updateStatus').mockImplementation(async (id: string) => ({ id, status: 'READY' }) as any);
 
     const result = await service.batchMarkPickupReady(
@@ -240,7 +240,7 @@ describe('Delivery order boundaries', () => {
         }),
       },
     };
-    const service = new OrdersService(prisma, {} as any, {} as any, {} as any);
+    const service = new OrdersService(prisma, {} as any, {} as any, {} as any, { notifyJobCreated: jest.fn() } as any);
 
     await expect(service.updatePayment(
       'order-kitchen',
@@ -261,7 +261,7 @@ describe('Delivery order boundaries', () => {
         }]),
       },
     };
-    const service = new OrdersService(prisma, {} as any, {} as any, {} as any);
+    const service = new OrdersService(prisma, {} as any, {} as any, {} as any, { notifyJobCreated: jest.fn() } as any);
 
     await expect(service.batchCollectPayments(
       [{ id: 'transfer-order', method: 'TRANSFER' }],
@@ -291,7 +291,7 @@ describe('Delivery order boundaries', () => {
       order: { findMany: jest.fn().mockResolvedValue(orders) },
       $transaction: jest.fn((callback: (transaction: any) => unknown) => callback(tx)),
     };
-    const service = new OrdersService(prisma, {} as any, {} as any, {} as any);
+    const service = new OrdersService(prisma, {} as any, {} as any, {} as any, { notifyJobCreated: jest.fn() } as any);
     jest.spyOn(service, 'updatePayment').mockImplementation(async (id: string) => ({ id }) as any);
 
     const result = await service.batchCollectPayments(
@@ -341,7 +341,7 @@ describe('Delivery order boundaries', () => {
       order: { findMany: jest.fn().mockResolvedValue([order]) },
       $transaction: jest.fn((callback: (transaction: any) => unknown) => callback(tx)),
     };
-    const service = new OrdersService(prisma, {} as any, {} as any, {} as any);
+    const service = new OrdersService(prisma, {} as any, {} as any, {} as any, { notifyJobCreated: jest.fn() } as any);
     jest.spyOn(service, 'updatePayment').mockResolvedValue({ id: order.id } as any);
 
     const result = await service.batchCollectPayments(

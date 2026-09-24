@@ -7,12 +7,14 @@ const http = require('http');
 const https = require('https');
 const readline = require('readline');
 
-const BRIDGE_VERSION = '1.3.0';
+const BRIDGE_VERSION = '1.4.0';
 const DEFAULT_BACKEND_URL = 'https://the-villa-dog-backend-production.up.railway.app';
-const DEFAULT_BRIDGE_TOKEN = '1e855b5dc09473209300ce27a6203479ad5dcdd664ce8ccfa62d013b49100135';
+const DEFAULT_BRIDGE_TOKEN = '';
 const MAX_LOG_BYTES = 1024 * 1024;
 const MAX_LOCAL_RECEIPTS = 500;
 const HTTP_TIMEOUT_MS = 15000;
+const PRINT_LONG_POLL_MS = 25000;
+const PRINT_LONG_POLL_TIMEOUT_MS = 35000;
 
 // Determinar el directorio de configuración (sea modo .exe nativo, pkg, o script .js)
 const isPkg = typeof process.pkg !== 'undefined';
@@ -249,7 +251,7 @@ function makeRequest(urlString, options = {}) {
           'User-Agent': `TheVillaDog-PrinterBridge/${BRIDGE_VERSION}`,
           ...(options.headers || {}),
         },
-        timeout: HTTP_TIMEOUT_MS,
+        timeout: Number(options.timeoutMs) > 0 ? Number(options.timeoutMs) : HTTP_TIMEOUT_MS,
       };
 
       const req = protocol.request(requestOptions, (res) => {
@@ -530,9 +532,12 @@ async function printJob(job) {
 async function pollPrintQueue() {
   loadConfigFile();
   try {
-    const queueUrl = `${config.backendUrl}/api/imprimir/cola`;
+    const queueUrl = `${config.backendUrl}/api/imprimir/cola?waitMs=${PRINT_LONG_POLL_MS}`;
     const authHeaders = config.bridgeToken ? { 'x-print-token': config.bridgeToken } : {};
-    const jobs = await makeRequest(queueUrl, { headers: authHeaders });
+    const jobs = await makeRequest(queueUrl, {
+      headers: authHeaders,
+      timeoutMs: PRINT_LONG_POLL_TIMEOUT_MS,
+    });
 
     if (!Array.isArray(jobs)) throw new Error('El servidor devolvió una cola inválida');
     if (jobs.length > 0) {
@@ -619,7 +624,7 @@ async function start() {
   console.log(`      PUENTE DE IMPRESION - THE VILLA DOG v${BRIDGE_VERSION}`);
   console.log('==============================================================');
   console.log(`Servidor  : ${config.backendUrl}`);
-  console.log(`Consulta  : cada ${config.pollIntervalMs} ms`);
+  console.log(`Espera    : hasta ${PRINT_LONG_POLL_MS / 1000} s; reconexión en ${config.pollIntervalMs} ms`);
   console.log(`Carpeta   : ${configDir}`);
   console.log(`Clave     : [Configurada en Railway]`);
   if (config.printerOverride) {

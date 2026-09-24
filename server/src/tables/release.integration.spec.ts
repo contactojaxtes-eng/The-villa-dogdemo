@@ -28,7 +28,7 @@ integration('PostgreSQL: named accounts, kitchen and payments', () => {
     await db.cashClosing.create({ data: { userId: user.id, cashRegisterId: register.id, shiftStart: new Date(), isOpen: true } });
     const category = await db.menuCategory.create({ data: { name: 'Release test food' } });
     product = await db.menuItem.create({ data: { name: 'Release test item', price: 3500, categoryId: category.id } });
-    const orders = new OrdersService(db as any, socket, {} as any, { getPrinterSettings: async () => ({ autoPrint: false }) } as any);
+    const orders = new OrdersService(db as any, socket, {} as any, { getPrinterSettings: async () => ({ autoPrint: false }) } as any, { notifyJobCreated: jest.fn() } as any);
     tables = new TablesService(db as any, socket, orders);
   });
   afterAll(async () => { await db?.$disconnect(); });

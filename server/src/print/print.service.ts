@@ -3,6 +3,7 @@ import * as net from 'net';
 import { PrismaService } from '../prisma/prisma.service';
 import { SocketGateway } from '../socket/socket.gateway';
 import { OrdersService } from '../orders/orders.service';
+import { PrintQueueSignalService } from './print-queue-signal.service';
 
 @Injectable()
 export class PrintService {
@@ -13,6 +14,7 @@ export class PrintService {
     private socketGateway: SocketGateway,
     @Inject(forwardRef(() => OrdersService))
     private ordersService: OrdersService,
+    private printQueueSignal: PrintQueueSignalService,
   ) {}
 
   private isIpv4(value: string) {
@@ -1028,6 +1030,7 @@ export class PrintService {
           tipo: target,
         },
       });
+      this.printQueueSignal.notifyJobCreated();
       return { ok: true, mode: 'local_bridge', message: `Pedido encolado para impresión local (${target}).` };
     }
 
@@ -1416,6 +1419,7 @@ export class PrintService {
           tipo: 'caja',
         },
       });
+      this.printQueueSignal.notifyJobCreated();
       return { ok: true, mode: 'local_bridge', message: `Apertura de caja encolada para impresión local.` };
     }
 
@@ -1458,6 +1462,7 @@ export class PrintService {
           tipo: 'caja',
         },
       });
+      this.printQueueSignal.notifyJobCreated();
       return { ok: true, mode: 'local_bridge', message: `Cierre de caja encolado para impresión local.` };
     }
 
@@ -1512,6 +1517,7 @@ export class PrintService {
         tipo: target,
       },
     });
+    this.printQueueSignal.notifyJobCreated();
     return { ok: true, mode: 'local_bridge', message: `Prueba de impresion (${printerConfig.name || target}) enviada al puente local.` };
   }
 
@@ -1542,6 +1548,7 @@ export class PrintService {
           tipo: 'caja',
         },
       });
+      this.printQueueSignal.notifyJobCreated();
       return { ok: true, mode: 'local_bridge', message: 'Comando de apertura de monedero encolado para el puente local.' };
     }
 

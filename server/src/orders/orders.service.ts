@@ -9,6 +9,7 @@ import { PrintService } from '../print/print.service';
 import { TablesService } from '../tables/tables.service';
 import { DeliveryDriversService } from '../delivery-drivers/delivery-drivers.service';
 import { dashboardRange } from './dashboard-range';
+import { PrintQueueSignalService } from '../print/print-queue-signal.service';
 
 type OrderListParams = {
   status?: string;
@@ -36,6 +37,7 @@ export class OrdersService implements OnModuleInit {
     private socketGateway: SocketGateway,
     private whatsappService: WhatsappService,
     @Inject(forwardRef(() => PrintService)) private printService: PrintService,
+    private printQueueSignal: PrintQueueSignalService,
     @Optional() @Inject(forwardRef(() => TablesService)) private tablesService?: TablesService,
     @Optional() private deliveryDriverGateway?: DeliveryDriverGateway,
     @Optional() @Inject(forwardRef(() => DeliveryDriversService)) private deliveryDriversService?: DeliveryDriversService,
@@ -1061,6 +1063,7 @@ export class OrdersService implements OnModuleInit {
                   tipo: p.id || p.name,
                 },
               });
+              this.printQueueSignal.notifyJobCreated();
             }
           }
         }
@@ -1437,6 +1440,7 @@ export class OrdersService implements OnModuleInit {
                     tipo: p.id || p.name,
                   },
                 });
+                this.printQueueSignal.notifyJobCreated();
               }
             }
           }

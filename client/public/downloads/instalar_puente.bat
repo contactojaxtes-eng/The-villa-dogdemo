@@ -21,13 +21,9 @@ if not defined BRIDGE_BACKEND_URL (
   )
 )
 
-rem Token predeterminado si viene como argumento %1 o preconfigurado de Railway
+rem Token recibido como argumento %1; si falta, el instalador lo solicita
 if not defined BRIDGE_TOKEN (
-  if not "%~1"=="" (
-    set "BRIDGE_TOKEN=%~1"
-  ) else (
-    set "BRIDGE_TOKEN=1e855b5dc09473209300ce27a6203479ad5dcdd664ce8ccfa62d013b49100135"
-  )
+  if not "%~1"=="" set "BRIDGE_TOKEN=%~1"
 )
 
 echo ==============================================================

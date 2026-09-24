@@ -1,12 +1,20 @@
-import { ServiceUnavailableException, Controller, Get, Post, UseGuards, Body } from '@nestjs/common';
+import { ServiceUnavailableException, Controller, Get, Post, UseGuards, Body, Query, Req } from '@nestjs/common';
 import { ApiOperation, ApiTags, ApiBearerAuth } from '@nestjs/swagger';
+import type { Request } from 'express';
 import { PrintBridgeGuard } from './print/print-bridge.guard';
 import { PrismaService } from './prisma/prisma.service';
+import { PrintQueueSignalService } from './print/print-queue-signal.service';
+
+const MAX_PRINT_QUEUE_WAIT_MS = 25_000;
+const LEGACY_PRINT_QUEUE_WAIT_MS = 10_000;
 
 @ApiTags('Health')
 @Controller()
 export class AppController {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private printQueueSignal: PrintQueueSignalService,
+  ) {}
 
   @Get('health')
   @ApiOperation({ summary: 'Health check' })
@@ -35,15 +43,43 @@ export class AppController {
   @Get('api/imprimir/cola')
   @Get('api/cola-impresion')
   @ApiOperation({ summary: 'Consultar cola de impresión' })
-  async getPrintQueue() {
-    const jobs = await this.prisma.printJob.findMany({
+  async getPrintQueue(@Query('waitMs') waitMs?: string, @Req() request?: Request) {
+    // El valor por defecto también alivia los puentes ya instalados, cuyo timeout
+    // HTTP es 15 s. Un cliente puede usar waitMs=0 si requiere una lectura directa.
+    const requestedWaitMs = waitMs === undefined ? LEGACY_PRINT_QUEUE_WAIT_MS : Number(waitMs);
+    const boundedWaitMs = Number.isFinite(requestedWaitMs)
+      ? Math.min(Math.max(Math.trunc(requestedWaitMs), 0), MAX_PRINT_QUEUE_WAIT_MS)
+      : 0;
+    const revision = this.printQueueSignal.currentRevision();
+    let jobs = await this.prisma.printJob.findMany({
       where: { impreso: false },
       take: 100,
       orderBy: { id: 'asc' },
     });
 
-    // La impresora consulta esta ruta cada pocos segundos. Si no hay trabajos,
-    // evitamos leer también la configuración para mantener el sondeo liviano.
+    // Los puentes nuevos pueden mantener esta petición abierta. Si aparece un
+    // trabajo, la señal local los despierta al instante; los puentes antiguos
+    // usan la espera corta predeterminada, inferior a su timeout de 15 s.
+    if (jobs.length === 0 && boundedWaitMs > 0) {
+      const abortController = new AbortController();
+      const abortWait = () => abortController.abort();
+      if (request?.aborted) abortController.abort();
+      else request?.once('aborted', abortWait);
+      let changed = false;
+      try {
+        changed = await this.printQueueSignal.waitForChange(revision, boundedWaitMs, abortController.signal);
+      } finally {
+        request?.off('aborted', abortWait);
+      }
+      if (!changed) return [];
+      jobs = await this.prisma.printJob.findMany({
+        where: { impreso: false },
+        take: 100,
+        orderBy: { id: 'asc' },
+      });
+    }
+
+    // Si no hay trabajos, evitamos leer también la configuración.
     if (jobs.length === 0) return [];
 
     let customPrinters: any[] = [];

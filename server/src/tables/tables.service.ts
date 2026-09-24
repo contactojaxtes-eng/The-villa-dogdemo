@@ -12,20 +12,17 @@ import { OrdersService } from '../orders/orders.service';
 const ACTIVE_KITCHEN = ['NEW', 'PREPARING'];
 const ACTIVE_TABLE = ['OPEN'];
 const PENDING_PAYMENT = ['PENDING', 'PENDING_REVIEW'];
-// Los descansos ya programan un setTimeout exacto al crearse. Este intervalo
-// solo reconcilia reinicios del servidor o temporizadores perdidos, por lo que
-// no necesita consultar PostgreSQL cada pocos segundos.
-const COOK_BREAK_RECONCILIATION_MS = 30_000;
-// La alerta se activa después de 15 minutos; revisarla una vez por minuto
-// conserva su utilidad y evita una consulta profunda permanente cada 15 s.
-const DINING_DELAY_RECONCILIATION_MS = 60_000;
+const DINING_DELAY_MS = 15 * 60 * 1000;
+type KitchenChannel = 'DINING' | 'DELIVERY';
 
 @Injectable()
 export class TablesService implements OnModuleInit, OnModuleDestroy {
-  private cookTimerInterval?: NodeJS.Timeout;
-  private diningDelayTimerInterval?: NodeJS.Timeout;
+  private readonly cookBreakTimers = new Map<string, NodeJS.Timeout>();
+  private readonly deliveryCookBreakTimers = new Map<string, NodeJS.Timeout>();
+  private readonly diningDelayTimers = new Map<string, NodeJS.Timeout>();
   private delayedDiningTicketIds = new Set<string>();
-  private checkingDiningDelays = false;
+  private cookBreakCheckQueue: Promise<void> = Promise.resolve();
+  private deliveryCookBreakCheckQueue: Promise<void> = Promise.resolve();
 
   constructor(
     private prisma: PrismaService,
@@ -34,9 +31,9 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
     @Optional() private deliveryDriverGateway?: DeliveryDriverGateway,
   ) {}
 
-  onModuleInit() {
+  async onModuleInit() {
     // Purgar inmediatamente cualquier ticket de domicilio residual para que las tablets de cocina queden 100% limpias para mesas
-    this.prisma.kitchenTicket.deleteMany({
+    await this.prisma.kitchenTicket.deleteMany({
       where: {
         OR: [
           { tableId: null },
@@ -46,50 +43,147 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
       },
     }).catch(() => {});
 
-    this.cookTimerInterval = setInterval(() => {
-      this.checkExpiredCookBreaks().catch(() => {});
-      this.checkExpiredDeliveryCookBreaks().catch(() => {});
-    }, COOK_BREAK_RECONCILIATION_MS);
-    void this.checkDelayedDiningKitchenTickets();
-    this.diningDelayTimerInterval = setInterval(() => {
-      void this.checkDelayedDiningKitchenTickets();
-    }, DINING_DELAY_RECONCILIATION_MS);
+    // Una consulta compacta al arrancar restaura los temporizadores que hayan
+    // quedado en PostgreSQL tras un despliegue. Después cada cambio programa su
+    // propio vencimiento, sin sondear listas completas de forma periódica.
+    await Promise.all([
+      this.restoreCookBreakTimers('DINING').catch(() => {}),
+      this.restoreCookBreakTimers('DELIVERY').catch(() => {}),
+      this.restoreDiningDelayTimers().catch(() => {}),
+    ]);
   }
 
   onModuleDestroy() {
-    if (this.cookTimerInterval) clearInterval(this.cookTimerInterval);
-    if (this.diningDelayTimerInterval) clearInterval(this.diningDelayTimerInterval);
+    for (const timer of this.cookBreakTimers.values()) clearTimeout(timer);
+    for (const timer of this.deliveryCookBreakTimers.values()) clearTimeout(timer);
+    for (const timer of this.diningDelayTimers.values()) clearTimeout(timer);
+    this.cookBreakTimers.clear();
+    this.deliveryCookBreakTimers.clear();
+    this.diningDelayTimers.clear();
+    this.delayedDiningTicketIds.clear();
   }
 
-  private async checkDelayedDiningKitchenTickets() {
-    if (this.checkingDiningDelays) return;
-    this.checkingDiningDelays = true;
-    try {
-      const delayedTickets = await this.prisma.kitchenTicket.findMany({
-        where: {
-          status: { in: ACTIVE_KITCHEN },
-          createdAt: { lte: new Date(Date.now() - 15 * 60 * 1000) },
-          tableId: { not: null },
-          order: { orderType: 'LOCAL', tableId: { not: null } },
-        },
-        include: {
-          station: { include: { users: { select: { id: true, name: true, role: true } } } },
-          assignedTo: { select: { id: true, name: true } },
-          items: true,
-          order: { include: { waiter: true, diningTable: true } },
-        },
-      });
+  private async restoreDiningDelayTimers() {
+    const tickets = await this.prisma.kitchenTicket.findMany({
+      where: {
+        status: { in: ACTIVE_KITCHEN },
+        tableId: { not: null },
+        order: { orderType: 'LOCAL', tableId: { not: null } },
+      },
+      select: { id: true, createdAt: true },
+    });
+    for (const ticket of tickets) this.scheduleDiningDelay(ticket.id, ticket.createdAt);
+  }
 
-      const activeDelayedIds = new Set(delayedTickets.map(ticket => ticket.id));
-      for (const ticket of delayedTickets) {
-        if (!this.delayedDiningTicketIds.has(ticket.id)) {
-          this.socketGateway.emitDiningKitchenTicketDelayed(ticket);
-        }
-      }
-      this.delayedDiningTicketIds = activeDelayedIds;
-    } finally {
-      this.checkingDiningDelays = false;
+  private scheduleDiningDelay(ticketId: string, createdAt: Date | string | number) {
+    const previous = this.diningDelayTimers.get(ticketId);
+    if (previous) clearTimeout(previous);
+    this.diningDelayTimers.delete(ticketId);
+    if (this.delayedDiningTicketIds.has(ticketId)) return;
+
+    const delay = Math.max(25, new Date(createdAt).getTime() + DINING_DELAY_MS - Date.now() + 25);
+    const timer = setTimeout(() => {
+      this.diningDelayTimers.delete(ticketId);
+      void this.emitDiningDelayIfActive(ticketId).catch(() => {});
+    }, delay);
+    timer.unref?.();
+    this.diningDelayTimers.set(ticketId, timer);
+  }
+
+  private clearDiningDelay(ticketId: string) {
+    const timer = this.diningDelayTimers.get(ticketId);
+    if (timer) clearTimeout(timer);
+    this.diningDelayTimers.delete(ticketId);
+    this.delayedDiningTicketIds.delete(ticketId);
+  }
+
+  private syncDiningDelayTimer(ticket: any) {
+    const isDiningActive = Boolean(
+      ticket?.id &&
+      ticket?.tableId &&
+      ACTIVE_KITCHEN.includes(ticket.status) &&
+      (!ticket?.order?.orderType || ticket.order.orderType === 'LOCAL'),
+    );
+    if (isDiningActive) this.scheduleDiningDelay(ticket.id, ticket.createdAt);
+    else if (ticket?.id) this.clearDiningDelay(ticket.id);
+  }
+
+  private async emitDiningDelayIfActive(ticketId: string) {
+    const ticket = await this.prisma.kitchenTicket.findFirst({
+      where: {
+        id: ticketId,
+        status: { in: ACTIVE_KITCHEN },
+        tableId: { not: null },
+        order: { orderType: 'LOCAL', tableId: { not: null } },
+      },
+      include: {
+        station: { include: { users: { select: { id: true, name: true, role: true } } } },
+        assignedTo: { select: { id: true, name: true } },
+        items: true,
+        order: { include: { waiter: true, diningTable: true } },
+      },
+    });
+    if (!ticket) {
+      this.clearDiningDelay(ticketId);
+      return;
     }
+
+    const remaining = ticket.createdAt.getTime() + DINING_DELAY_MS - Date.now();
+    if (remaining > 0) {
+      this.scheduleDiningDelay(ticket.id, ticket.createdAt);
+      return;
+    }
+    if (this.delayedDiningTicketIds.has(ticket.id)) return;
+    this.delayedDiningTicketIds.add(ticket.id);
+    this.socketGateway.emitDiningKitchenTicketDelayed(ticket);
+  }
+
+  private async restoreCookBreakTimers(channel: KitchenChannel) {
+    const settingKey = channel === 'DELIVERY' ? 'delivery_kitchen_cook_status' : 'kitchen_cook_status';
+    const setting = await this.prisma.appSetting.findUnique({ where: { key: settingKey } });
+    if (!setting) return;
+
+    let statuses: Record<string, any> = {};
+    try {
+      statuses = JSON.parse(setting.value) || {};
+    } catch {
+      return;
+    }
+
+    let hasExpired = false;
+    const now = Date.now();
+    for (const [userId, status] of Object.entries(statuses)) {
+      if (!status?.onBreak || !status?.breakUntil) continue;
+      if (Number(status.breakUntil) <= now) hasExpired = true;
+      else this.scheduleCookBreakTimer(channel, userId, Number(status.breakUntil));
+    }
+    if (hasExpired) await this.enqueueCookBreakCheck(channel);
+  }
+
+  private scheduleCookBreakTimer(channel: KitchenChannel, userId: string, breakUntil?: number | null) {
+    const timers = channel === 'DELIVERY' ? this.deliveryCookBreakTimers : this.cookBreakTimers;
+    const previous = timers.get(userId);
+    if (previous) clearTimeout(previous);
+    timers.delete(userId);
+    if (!breakUntil) return;
+
+    const timer = setTimeout(() => {
+      timers.delete(userId);
+      void this.enqueueCookBreakCheck(channel).catch(() => {});
+    }, Math.max(25, breakUntil - Date.now() + 25));
+    timer.unref?.();
+    timers.set(userId, timer);
+  }
+
+  private enqueueCookBreakCheck(channel: KitchenChannel) {
+    if (channel === 'DELIVERY') {
+      const run = () => this.checkExpiredDeliveryCookBreaks();
+      this.deliveryCookBreakCheckQueue = this.deliveryCookBreakCheckQueue.then(run, run);
+      return this.deliveryCookBreakCheckQueue;
+    }
+    const run = () => this.checkExpiredCookBreaks();
+    this.cookBreakCheckQueue = this.cookBreakCheckQueue.then(run, run);
+    return this.cookBreakCheckQueue;
   }
 
   private async getActiveClosing(userId: string, cashRegisterId?: string, db: Prisma.TransactionClient = this.prisma) {
@@ -471,7 +565,10 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
       return { table: await this.findTable(table.id, tx), order, replay: false };
     }, operationTransaction);
     if (!result.replay) {
-      tickets.forEach(event => event.created ? this.socketGateway.emitKitchenTicketCreated(event.ticket) : this.socketGateway.emitKitchenTicketUpdated(event.ticket));
+      tickets.forEach(event => {
+        this.syncDiningDelayTimer(event.ticket);
+        event.created ? this.socketGateway.emitKitchenTicketCreated(event.ticket) : this.socketGateway.emitKitchenTicketUpdated(event.ticket);
+      });
       this.socketGateway.server.emit('tableOrderSubmitted', result);
       this.socketGateway.emitTableUpdated(result.table);
       this.socketGateway.server.emit('cashRegistersChanged');
@@ -570,6 +667,7 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
       return { table: await this.findTable(existing.tableId, tx), order: updated, changeSummary: summary };
     }, operationTransaction);
     tickets.forEach(event => {
+      this.syncDiningDelayTimer(event.ticket);
       if (event.isEdited) {
         this.socketGateway.emitKitchenTicketEdited(event.ticket);
       } else if (event.created) {
@@ -659,35 +757,43 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
     // Inicia desde la apertura de caja actual o el último cierre de caja (para reiniciar el conteo a 0 tras cerrar caja)
     const shiftWindow = await this.getShiftCutoff(db);
 
-    const loads = await Promise.all(users.map(async user => {
-      // 1. Historial de tickets asignados en este turno para equidad estricta 50/50
-      const todayTickets = await db.kitchenTicket.findMany({
+    const userIds = users.map(user => user.id);
+    // Dos agregaciones cubren a todos los cocineros de la estación. Antes se
+    // ejecutaban dos consultas por cocinero (N+1), aunque el criterio de reparto
+    // y sus desempates eran exactamente los mismos.
+    const [shiftLoads, activeLoads] = await Promise.all([
+      db.kitchenTicket.groupBy({
+        by: ['assignedToId'],
         where: {
           stationId,
-          assignedToId: user.id,
+          assignedToId: { in: userIds },
           createdAt: { gte: shiftWindow },
           status: { not: 'CANCELLED' },
         },
-        select: { id: true, createdAt: true },
-        orderBy: { createdAt: 'desc' },
-      });
-
-      // 2. Tickets activos inmediatos (para desempate)
-      const activeTickets = await db.kitchenTicket.findMany({
-        where: { stationId, assignedToId: user.id, status: { in: ACTIVE_KITCHEN } },
-        select: { id: true },
-      });
-
-      const totalShiftTickets = todayTickets.length;
-      const lastAssignedAt = todayTickets.length > 0 ? todayTickets[0].createdAt.getTime() : 0;
-
+        _count: { _all: true },
+        _max: { createdAt: true },
+      }),
+      db.kitchenTicket.groupBy({
+        by: ['assignedToId'],
+        where: {
+          stationId,
+          assignedToId: { in: userIds },
+          status: { in: ACTIVE_KITCHEN },
+        },
+        _count: { _all: true },
+      }),
+    ]);
+    const shiftByUser = new Map(shiftLoads.map(load => [load.assignedToId, load]));
+    const activeByUser = new Map(activeLoads.map(load => [load.assignedToId, load._count._all]));
+    const loads = users.map(user => {
+      const shiftLoad = shiftByUser.get(user.id);
       return {
         user,
-        activeCount: activeTickets.length,
-        totalShiftTickets,
-        lastAssignedAt,
+        activeCount: activeByUser.get(user.id) || 0,
+        totalShiftTickets: shiftLoad?._count._all || 0,
+        lastAssignedAt: shiftLoad?._max.createdAt?.getTime() || 0,
       };
-    }));
+    });
 
     loads.sort((a, b) => {
       // 1. Protección contra sobrecarga: si un cocinero tiene 2 o más comandas activas pendientes frente a otro desocupado
@@ -801,6 +907,7 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
     const now = Date.now();
     for (const [userId, status] of Object.entries(statuses)) {
       if (status && status.onBreak && status.breakUntil && now >= status.breakUntil) {
+        this.scheduleCookBreakTimer('DINING', userId, null);
         const u = await this.prisma.user.findUnique({ where: { id: userId }, select: { name: true } }).catch(() => null);
         const userName = u?.name || 'Cocinero';
         const breakReason = status.breakReason || 'Cena';
@@ -875,6 +982,7 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
     const now = Date.now();
     for (const [userId, status] of Object.entries(statuses)) {
       if (status && status.onBreak && status.breakUntil && now >= status.breakUntil) {
+        this.scheduleCookBreakTimer('DINING', userId, null);
         status.onBreak = false;
         status.notifiedFinished = true;
         changed = true;
@@ -907,6 +1015,7 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
     const now = Date.now();
     for (const [userId, status] of Object.entries(statuses)) {
       if (!status?.onBreak || !status?.breakUntil || now < status.breakUntil) continue;
+      this.scheduleCookBreakTimer('DELIVERY', userId, null);
       status.onBreak = false;
       status.notifiedFinished = true;
       changed = true;
@@ -952,8 +1061,9 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
 
     const now = Date.now();
     let changed = false;
-    for (const status of Object.values(statuses)) {
+    for (const [userId, status] of Object.entries(statuses)) {
       if (status?.onBreak && status?.breakUntil && now >= status.breakUntil) {
+        this.scheduleCookBreakTimer('DELIVERY', userId, null);
         status.onBreak = false;
         status.notifiedFinished = true;
         changed = true;
@@ -983,7 +1093,6 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
       existing.breakUntil = Date.now() + minutes * 60 * 1000;
       existing.breakReason = String(data.breakReason || 'Descanso').slice(0, 50);
       existing.notifiedFinished = false;
-      setTimeout(() => this.checkExpiredDeliveryCookBreaks().catch(() => {}), Math.max(500, minutes * 60 * 1000));
     } else if (data.onBreak === false) {
       existing.onBreak = false;
       existing.breakUntil = null;
@@ -997,6 +1106,7 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
       create: { key: 'delivery_kitchen_cook_status', value: JSON.stringify(statuses) },
     });
     const result = JSON.parse(updated.value);
+    this.scheduleCookBreakTimer('DELIVERY', userId, existing.onBreak ? existing.breakUntil : null);
     this.socketGateway.server.emit('deliveryKitchenCookStatusChanged', result);
 
     const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { name: true } });
@@ -1035,11 +1145,6 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
       existing.breakUntil = Date.now() + minutes * 60 * 1000;
       existing.breakReason = (data.breakReason || 'Cena').slice(0, 50);
       existing.notifiedFinished = false;
-
-      // Programar disparo exacto al segundo programado
-      setTimeout(() => {
-        this.checkExpiredCookBreaks().catch(() => {});
-      }, Math.max(500, minutes * 60 * 1000));
     } else if (data.onBreak === false) {
       existing.onBreak = false;
       existing.breakUntil = null;
@@ -1055,6 +1160,7 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
     });
 
     const result = JSON.parse(updated.value);
+    this.scheduleCookBreakTimer('DINING', userId, existing.onBreak ? existing.breakUntil : null);
     this.socketGateway.server.emit('kitchenCookStatusChanged', result);
 
     const u = await this.prisma.user.findUnique({ where: { id: userId }, select: { name: true } });
@@ -1521,6 +1627,9 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
       }
       if (!events) this.socketGateway.server.emit('tableOrderEdited', { orderId, changeSummary });
     }
+    if (!events) {
+      for (const ticket of tickets) this.syncDiningDelayTimer(ticket);
+    }
     return tickets;
   }
 
@@ -1556,6 +1665,7 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
       await tx.order.update({ where: { id: ticket.orderId }, data: { kitchenStatus: active ? 'ACTIVE' : 'READY' } });
       return { updated, table: ticket.tableId ? await this.finishPaidTable(ticket.tableId, tx) : null };
     }, operationTransaction);
+    this.syncDiningDelayTimer(result.updated);
     this.socketGateway.emitKitchenTicketUpdated(result.updated);
     if (status === 'READY') {
       const waiterId = (result.updated.order as any)?.waiterId || (result.updated.order as any)?.diningTable?.openedById || result.table?.openedById;

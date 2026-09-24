@@ -641,7 +641,7 @@ export default function ModuleSettingsPage() {
     document.body.appendChild(link)
     link.click()
     link.remove()
-    alerts.success('Descargando TheVillaDogBridge.exe', 'Ábrelo con doble clic. Es autónomo y no requiere tener Node.js instalado.')
+    alerts.success('Descargando TheVillaDogBridge.exe', 'Ejecutable técnico: usa una configuración local existente o solicita la vinculación inicial una sola vez.')
   }
 
   const downloadPortableZip = () => {
@@ -651,7 +651,7 @@ export default function ModuleSettingsPage() {
     document.body.appendChild(link)
     link.click()
     link.remove()
-    alerts.success('Descargando paquete portable', 'Incluye el .exe, instalador .bat, desinstalador y configuración listos.')
+    alerts.success('Descargando paquete portable', 'Paquete técnico sin credenciales embebidas. Para una instalación automática usa el botón recomendado.')
   }
 
   const downloadConfiguredBridge = async () => {
@@ -969,18 +969,18 @@ export default function ModuleSettingsPage() {
                   <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-sky-500/10 text-sky-600"><Download className="h-5 w-5" /></span>
                   <div>
                     <h2 className="font-black text-[var(--text-primary)]">Puente de impresión para Windows</h2>
-                    <p className="mt-0.5 max-w-2xl text-xs leading-5 text-[var(--text-muted)]">Componentes independientes para Windows. <strong>No requiere tener Node.js instalado en el computador</strong>. Elige si prefieres el ejecutable directo (.EXE) o el instalador automático en segundo plano (.BAT).</p>
+                    <p className="mt-0.5 max-w-2xl text-xs leading-5 text-[var(--text-muted)]">Instálalo en Windows sin Node.js. El instalador recomendado se descarga ya vinculado a este restaurante, queda en segundo plano y arranca automáticamente con el computador.</p>
                   </div>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
-                  <Button type="button" onClick={downloadStandaloneExe} className="h-10 rounded-xl bg-emerald-600 px-4 text-xs font-black text-white shadow-sm transition hover:bg-emerald-700">
-                    <Download className="mr-1.5 h-4 w-4" /> Descargar .EXE directo
-                  </Button>
                   <Button type="button" onClick={downloadConfiguredBridge} disabled={downloadingBridge} className="h-10 rounded-xl bg-sky-600 px-4 text-xs font-black text-white shadow-sm transition hover:bg-sky-700">
-                    {downloadingBridge ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Download className="mr-1.5 h-4 w-4" />} Descargar Instalador .BAT
+                    {downloadingBridge ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Download className="mr-1.5 h-4 w-4" />} Instalar automáticamente
+                  </Button>
+                  <Button type="button" onClick={downloadStandaloneExe} className="h-10 rounded-xl bg-emerald-600 px-4 text-xs font-black text-white shadow-sm transition hover:bg-emerald-700">
+                    <Download className="mr-1.5 h-4 w-4" /> .EXE manual
                   </Button>
                   <Button type="button" onClick={downloadPortableZip} variant="outline" className="h-10 rounded-xl border-[var(--border-subtle)] px-3 text-xs font-bold text-[var(--text-secondary)] hover:text-[var(--text-primary)]">
-                    <Package className="mr-1.5 h-4 w-4" /> Paquete ZIP portable
+                    <Package className="mr-1.5 h-4 w-4" /> ZIP técnico
                   </Button>
                 </div>
               </div>

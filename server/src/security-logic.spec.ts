@@ -7,6 +7,7 @@ import { PrismaService } from '../src/prisma/prisma.service';
 import { SocketGateway } from '../src/socket/socket.gateway';
 import { WhatsappService } from '../src/whatsapp/whatsapp.service';
 import { PrintService } from '../src/print/print.service';
+import { PrintQueueSignalService } from '../src/print/print-queue-signal.service';
 import { MailService } from '../src/mail/mail.service';
 import { CacheService } from '../src/cache/cache.service';
 
@@ -116,6 +117,7 @@ describe('Security & Logic Audit Tests', () => {
         { provide: SocketGateway, useValue: mockSocket },
         { provide: WhatsappService, useValue: mockWhatsapp },
         { provide: PrintService, useValue: mockPrint },
+        { provide: PrintQueueSignalService, useValue: { notifyJobCreated: jest.fn() } },
         { provide: MailService, useValue: mockMail },
         { provide: CacheService, useValue: mockCache },
       ],

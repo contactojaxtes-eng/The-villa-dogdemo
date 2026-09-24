@@ -557,6 +557,7 @@ model PrintJob {
   impreso     Boolean  @default(false)
   createdAt   DateTime @default(now()) @map("fecha_creacion")
 
+  @@index([impreso, id], map: "cola_impresion_impreso_id_idx")
   @@map("cola_impresion")
 }
 
