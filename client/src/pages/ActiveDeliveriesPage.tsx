@@ -136,8 +136,8 @@ function isWaitingForDispatch(order: Order): boolean {
 }
 
 function isReadyForCollection(order: Order): boolean {
-  if (order.orderType === 'DELIVERY') return order.status === 'IN_ROUTE'
-  if (order.orderType === 'PICKUP') return order.status === 'READY'
+  if (order.orderType === 'DELIVERY') return order.status === 'IN_ROUTE' || order.status === 'DELIVERED'
+  if (order.orderType === 'PICKUP') return order.status === 'READY' || order.status === 'DELIVERED'
   return false
 }
 
@@ -188,7 +188,7 @@ export default function ActiveDeliveriesPage() {
   const [searchQuery, setSearchQuery] = useState(() => searchParams.get('search') || '')
   const [submittedSearch, setSubmittedSearch] = useState(() => searchParams.get('search') || '')
   const [updatingId, setUpdatingId] = useState<string | null>(null)
-  const [statusFilter, setStatusFilter] = useState<'ALL' | 'PENDING' | 'READY' | 'IN_ROUTE'>('ALL')
+  const [statusFilter, setStatusFilter] = useState<'ALL' | 'PENDING' | 'READY' | 'IN_ROUTE' | 'DELIVERED'>('ALL')
   const [orderTypeFilter, setOrderTypeFilter] = useState<'ALL' | 'DELIVERY' | 'PICKUP'>('ALL')
   const [zoneFilter, setZoneFilter] = useState<string>('ALL')
   const [clockTick, setTick] = useState(0)
@@ -893,6 +893,7 @@ export default function ActiveDeliveriesPage() {
     if (statusFilter === 'PENDING') return visibleOrders.filter(o => o.status === 'RECEIVED' || o.status === 'PENDING')
     if (statusFilter === 'READY') return visibleOrders.filter(o => o.status === 'READY')
     if (statusFilter === 'IN_ROUTE') return visibleOrders.filter(o => o.status === 'IN_ROUTE')
+    if (statusFilter === 'DELIVERED') return visibleOrders.filter(o => o.status === 'DELIVERED')
     return visibleOrders
   }, [visibleOrders, statusFilter])
 
@@ -916,7 +917,7 @@ export default function ActiveDeliveriesPage() {
   }, [batchDriverSearch, drivers, driverQueueData])
 
   const selectableOrders = useMemo(() => {
-    return statusVisibleOrders.filter(o => !['DELIVERED', 'CANCELLED'].includes(o.status))
+    return statusVisibleOrders.filter(o => o.status !== 'CANCELLED' && !(o.status === 'DELIVERED' && o.paymentStatus === 'CONFIRMED'))
   }, [statusVisibleOrders])
 
   useEffect(() => {
@@ -1570,6 +1571,7 @@ export default function ActiveDeliveriesPage() {
                 { id: 'PENDING', label: 'En cocina', count: visibleOrders.filter(order => order.status === 'RECEIVED' || order.status === 'PENDING').length },
                 { id: 'READY', label: 'Listos', count: visibleOrders.filter(order => order.status === 'READY').length },
                 { id: 'IN_ROUTE', label: 'En ruta', count: visibleOrders.filter(order => order.status === 'IN_ROUTE').length },
+                { id: 'DELIVERED', label: 'Entregados', count: visibleOrders.filter(order => order.status === 'DELIVERED').length },
               ].map(tab => (
                 <button
                   key={tab.id}
@@ -1854,12 +1856,13 @@ export default function ActiveDeliveriesPage() {
             </Select>
           </div>
 
-          <div className="mt-3 flex items-center gap-2 overflow-x-auto pb-0.5 scrollbar-none sm:grid sm:grid-cols-4">
+          <div className="mt-3 flex items-center gap-2 overflow-x-auto pb-0.5 scrollbar-none sm:grid sm:grid-cols-5">
             {[
               { id: 'ALL', label: 'Todos', count: visibleOrders.length },
               { id: 'PENDING', label: 'En cocina', count: visibleOrders.filter(order => order.status === 'RECEIVED' || order.status === 'PENDING').length },
               { id: 'READY', label: 'Listos', count: visibleOrders.filter(order => order.status === 'READY').length },
               { id: 'IN_ROUTE', label: 'En ruta', count: visibleOrders.filter(order => order.status === 'IN_ROUTE').length },
+              { id: 'DELIVERED', label: 'Entregados', count: visibleOrders.filter(order => order.status === 'DELIVERED').length },
             ].map(tab => (
               <button
                 key={tab.id}
@@ -2221,16 +2224,18 @@ export default function ActiveDeliveriesPage() {
                 Marcar {selectedPickupWaitingOrders.length} recogida{selectedPickupWaitingOrders.length === 1 ? '' : 's'} lista{selectedPickupWaitingOrders.length === 1 ? '' : 's'}
               </Button>
             )}
-            {user?.role !== 'DELIVERY_MANAGER' && !isDeliveryStaff && selectedDeliveryOrders.some(order => order.status === 'IN_ROUTE') && (
+            {user?.role !== 'DELIVERY_MANAGER' && !isDeliveryStaff && selectedDeliveryOrders.some(order => order.status === 'IN_ROUTE' || (order.status === 'DELIVERED' && order.paymentStatus !== 'CONFIRMED')) && (
               <Button
                 size="sm"
                 onClick={() => {
-                   const inRouteIds = selectedDeliveryOrders.filter(order => order.status === 'IN_ROUTE').map(order => order.id)
-                  if (inRouteIds.length === 0) {
-                    alerts.warning('Sin pedidos en ruta', 'Solo se pueden liquidar pedidos que ya salieron con el domiciliario.')
+                   const inRouteOrDeliveredIds = selectedDeliveryOrders
+                     .filter(order => (order.status === 'IN_ROUTE' || order.status === 'DELIVERED') && order.paymentStatus !== 'CONFIRMED')
+                     .map(order => order.id)
+                  if (inRouteOrDeliveredIds.length === 0) {
+                    alerts.warning('Sin pedidos por liquidar', 'Solo se pueden liquidar pedidos que están en ruta o entregados pendientes de pago.')
                     return
                   }
-                  setSelectedOrderIds(inRouteIds)
+                  setSelectedOrderIds(inRouteOrDeliveredIds)
                   setBatchCollectError('')
                   setBatchCollectMode('AS_IS')
                   setReviewedTransferIds([])
@@ -2239,7 +2244,7 @@ export default function ActiveDeliveriesPage() {
                 className="h-9 px-4 text-xs font-black rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white shadow-lg flex items-center gap-2 cursor-pointer border border-emerald-400/40"
               >
                 <DollarSign className="h-4 w-4" />
-                <span>Liquidar pedidos en ruta</span>
+                <span>Liquidar pedidos en ruta o entregados</span>
               </Button>
             )}
             {user?.role !== 'DELIVERY_MANAGER' && !isDeliveryStaff && selectedPickupOrders.some(order => order.status === 'READY') && (
@@ -2363,7 +2368,7 @@ export default function ActiveDeliveriesPage() {
                       const isWarning = waitingForDispatch && !isUrgent && elapsedMinutes >= DISPATCH_WARNING_MINUTES
                       const queuePosition = visibleOrders.findIndex(item => item.id === order.id) + 1
                       const isSelectedRow = selectedOrderIds.includes(order.id)
-                      const isSelectable = ['DELIVERY', 'PICKUP'].includes(order.orderType) && !['DELIVERED', 'CANCELLED'].includes(order.status)
+                      const isSelectable = ['DELIVERY', 'PICKUP'].includes(order.orderType) && order.status !== 'CANCELLED' && !(order.status === 'DELIVERED' && order.paymentStatus === 'CONFIRMED')
                       return (
                         <motion.tr key={order.id} layout initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
                           className={`border-b transition-colors ${!isDeliveryStaff ? 'last:border-b-0' : ''} ${
@@ -2397,14 +2402,12 @@ export default function ActiveDeliveriesPage() {
                               </span>
                               <button
                                 type="button"
-                                onClick={() => isDeliveryStaff ? setDetailOrder(order) : setChatModalOrder(order)}
+                                onClick={() => setChatModalOrder(order)}
                                 className="font-black text-[var(--accent)] hover:underline text-sm cursor-pointer bg-transparent border-0 inline-flex items-center gap-1 group"
-                                title={isDeliveryStaff ? `Ver detalle de pedido #${order.orderNumber}` : `Abrir WhatsApp de pedido #${order.orderNumber} para ver chat real, comprobantes y rectificar pago`}
+                                title={`Abrir WhatsApp de pedido #${order.orderNumber} para ver chat real, comprobantes y validar pago`}
                               >
                                 <span>#{order.orderNumber}</span>
-                                {!isDeliveryStaff && (
-                                  <MessageSquare className="h-3.5 w-3.5 text-emerald-500 opacity-85 group-hover:opacity-100 group-hover:scale-115 transition-all shrink-0" />
-                                )}
+                                <MessageSquare className="h-3.5 w-3.5 text-emerald-500 opacity-85 group-hover:opacity-100 group-hover:scale-115 transition-all shrink-0" />
                               </button>
                             </div>
                           </td>
@@ -2663,7 +2666,7 @@ export default function ActiveDeliveriesPage() {
                           </td>
                           <td className="px-3 py-2.5">
                             <div className={cn('flex flex-col items-start', isDeliveryStaff ? 'gap-1' : 'gap-1.5')}>
-                              {!isDeliveryStaff && (
+                              {!isDeliveryStaff ? (
                                 <button
                                   type="button"
                                   onClick={() => setPaymentEditDialog(order)}
@@ -2683,6 +2686,18 @@ export default function ActiveDeliveriesPage() {
                                   </span>
                                   <Edit className="h-2.5 w-2.5 opacity-60 ml-0.5 text-[var(--accent)]" />
                                 </button>
+                              ) : (
+                                <span className="inline-flex max-w-full items-center gap-1 rounded-lg border border-[var(--border-default)] bg-[var(--bg-elevated)] px-2 py-1 text-[10px] font-extrabold text-[var(--text-primary)]">
+                                  {order.paymentMethod === 'CASH' ? '💵 Efectivo' :
+                                   order.paymentMethod === 'TRANSFER' ? '📱 Transferencia' :
+                                   order.paymentMethod === 'NEQUI' ? '💜 Nequi' :
+                                   order.paymentMethod === 'BANCOLOMBIA' ? '💛 Bancolombia' :
+                                   order.paymentMethod === 'DAVIPLATA' ? '❤️ Daviplata' :
+                                   order.paymentMethod === 'MIXED' ? '🔀 Mixto' :
+                                   order.paymentMethod === 'CREDIT' ? '💳 Crédito' :
+                                   order.paymentMethod === 'CORTESIA' ? '🎁 Cortesía' :
+                                   getStatusLabel(order.paymentMethod)}
+                                </span>
                               )}
                               {order.originalPaymentMethod && order.originalPaymentMethod !== order.paymentMethod && (
                                 <span className="max-w-[150px] text-[8px] font-bold leading-3 text-[var(--text-muted)]">
@@ -2694,9 +2709,11 @@ export default function ActiveDeliveriesPage() {
                                   ? 'text-emerald-600 bg-emerald-500/10'
                                   : order.paymentStatus === 'DRIVER_CASH_PENDING'
                                     ? 'text-purple-600 bg-purple-500/10'
-                                    : 'text-amber-600 bg-amber-500/10'
+                                    : order.paymentStatus === 'PENDING_REVIEW'
+                                      ? 'text-blue-600 bg-blue-500/10'
+                                      : 'text-amber-600 bg-amber-500/10'
                               }`}>
-                                {order.paymentStatus === 'CONFIRMED' ? '✓ Cobrado' : order.paymentStatus === 'DRIVER_CASH_PENDING' ? 'Con domiciliario' : 'Pendiente'}
+                                {order.paymentStatus === 'CONFIRMED' ? '✓ Cobrado' : order.paymentStatus === 'DRIVER_CASH_PENDING' ? 'Con domiciliario' : order.paymentStatus === 'PENDING_REVIEW' ? 'Por validar' : 'Pendiente'}
                               </span>
                             </div>
                           </td>
@@ -3852,20 +3869,18 @@ export default function ActiveDeliveriesPage() {
                         <Edit className="h-3.5 w-3.5" /> Editar Pedido
                       </Button>
                     )}
-                    {!isDeliveryStaff && (
-                      <Button 
-                        size="sm" 
-                        variant="outline" 
-                        className="h-9 px-4 text-xs font-bold rounded-xl gap-1.5 cursor-pointer border-emerald-500/30 text-emerald-600 hover:bg-emerald-500/10"
-                        onClick={() => {
-                          setDetailOrder(null)
-                          setChatModalOrder(o)
-                        }}
-                        title="Abrir chat real de WhatsApp para verificar pago y mensajes"
-                      >
-                        <MessageSquare className="h-3.5 w-3.5" /> Chat WhatsApp
-                      </Button>
-                    )}
+                    <Button 
+                      size="sm" 
+                      variant="outline" 
+                      className="h-9 px-4 text-xs font-bold rounded-xl gap-1.5 cursor-pointer border-emerald-500/30 text-emerald-600 hover:bg-emerald-500/10"
+                      onClick={() => {
+                        setDetailOrder(null)
+                        setChatModalOrder(o)
+                      }}
+                      title="Abrir chat real de WhatsApp para verificar comprobantes y mensajes"
+                    >
+                      <MessageSquare className="h-3.5 w-3.5" /> Chat WhatsApp / Comprobante
+                    </Button>
                     {activeStatuses.includes(o.status) && ['SUPERADMIN', 'ADMIN'].includes(user?.role || '') && (
                       <Button size="sm" variant="outline" className="h-9 px-4 text-xs font-bold rounded-xl gap-1.5 cursor-pointer border-red-500/30 text-red-500 hover:bg-red-500/10"
                         onClick={() => { setDetailOrder(null); setCancelDialog({ id: o.id, orderNumber: o.orderNumber }); setCancelConfirmStep(false); setCancelReason(''); }}>

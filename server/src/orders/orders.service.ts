@@ -1730,16 +1730,16 @@ export class OrdersService implements OnModuleInit {
 
     const invalidOrders = orders.filter(order => {
       if (order.orderType === 'DELIVERY') {
-        return order.status !== 'IN_ROUTE' || !order.deliveryDriverId;
+        return !['IN_ROUTE', 'DELIVERED'].includes(order.status) || !order.deliveryDriverId;
       }
       if (order.orderType === 'PICKUP') {
-        return order.status !== 'READY';
+        return !['READY', 'DELIVERED'].includes(order.status);
       }
       return true;
     });
     if (invalidOrders.length > 0) {
       const labels = invalidOrders.map(order => `#${order.orderNumber}`).join(', ');
-      throw new BadRequestException(`Solo se pueden liquidar domicilios en ruta o pedidos para recoger listos. Revisa: ${labels}.`);
+      throw new BadRequestException(`Solo se pueden liquidar domicilios en ruta o entregados, o pedidos para recoger listos. Revisa: ${labels}.`);
     }
 
     const allowedMethods = new Set(['CASH', 'TRANSFER', 'NEQUI', 'BANCOLOMBIA', 'DAVIPLATA', 'MIXED']);
@@ -2166,11 +2166,11 @@ export class OrdersService implements OnModuleInit {
     const order = await this.findOne(id);
 
     if (paymentStatus === 'CONFIRMED') {
-      if (order.orderType === 'DELIVERY' && order.status !== 'IN_ROUTE') {
-        throw new BadRequestException('El domicilio debe estar en ruta antes de liquidarlo.');
+      if (order.orderType === 'DELIVERY' && !['IN_ROUTE', 'DELIVERED'].includes(order.status)) {
+        throw new BadRequestException('El domicilio debe estar en ruta o entregado antes de liquidarlo.');
       }
-      if (order.orderType === 'PICKUP' && order.status !== 'READY') {
-        throw new BadRequestException('El pedido para recoger debe estar listo antes de cobrarlo.');
+      if (order.orderType === 'PICKUP' && !['READY', 'DELIVERED'].includes(order.status)) {
+        throw new BadRequestException('El pedido para recoger debe estar listo o entregado antes de cobrarlo.');
       }
     }
 
@@ -2307,10 +2307,20 @@ export class OrdersService implements OnModuleInit {
     }
 
     if (paymentStatus === 'CONFIRMED') {
-      return this.updateStatus(id, 'DELIVERED', user, undefined, false);
+      if (order.status !== 'DELIVERED') {
+        return this.updateStatus(id, 'DELIVERED', user, undefined, false);
+      }
+      this.socketGateway.emitOrderStatusChange(id, 'DELIVERED', updated);
+      this.socketGateway.server.emit('paymentUpdated', { orderId: id, status: 'CONFIRMED' });
+      await this.deliveryDriverGateway?.emitForDriver(updated.deliveryDriverId, {
+        reason: 'payment_confirmed',
+        orderId: id,
+      });
+      return updated;
     }
 
     this.socketGateway.emitOrderStatusChange(id, updated.status, updated);
+    this.socketGateway.server.emit('paymentUpdated', { orderId: id, status: paymentStatus });
     await this.deliveryDriverGateway?.emitForDriver(updated.deliveryDriverId, {
       reason: 'payment_changed',
       orderId: id,
@@ -2333,9 +2343,16 @@ export class OrdersService implements OnModuleInit {
     const orderTypes = requestedTypes.length > 0 ? Array.from(new Set(requestedTypes)) : ['DELIVERY', 'PICKUP'];
 
     const where: any = {
-      status: { notIn: ['DELIVERED', 'CANCELLED'] },
       tableId: null,
       orderType: isDeliveryStaff ? 'DELIVERY' : (orderTypes.length === 1 ? orderTypes[0] : { in: orderTypes }),
+      AND: [
+        {
+          OR: [
+            { status: { notIn: ['DELIVERED', 'CANCELLED'] } },
+            { status: 'DELIVERED', paymentStatus: { not: 'CONFIRMED' } },
+          ],
+        },
+      ],
     };
     if (cleanSearch) {
       const digitsOnly = cleanSearch.replace(/\D/g, '');
@@ -2352,7 +2369,7 @@ export class OrdersService implements OnModuleInit {
       if (Number.isSafeInteger(searchNumber) && searchNumber >= 0 && searchNumber <= 2147483647) {
         searchConditions.push({ orderNumber: searchNumber });
       }
-      where.OR = searchConditions;
+      where.AND.push({ OR: searchConditions });
     }
     return this.prisma.order.findMany({
       where,

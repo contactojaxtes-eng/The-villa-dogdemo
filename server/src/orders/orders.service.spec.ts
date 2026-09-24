@@ -248,7 +248,7 @@ describe('Delivery order boundaries', () => {
       'CONFIRMED',
       undefined,
       { id: 'admin-1', role: 'ADMIN' },
-    )).rejects.toThrow('El domicilio debe estar en ruta antes de liquidarlo');
+    )).rejects.toThrow('El domicilio debe estar en ruta o entregado antes de liquidarlo');
   });
 
   it('requires transfer review before batch liquidation', async () => {
