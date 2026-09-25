@@ -2070,12 +2070,16 @@ export default function ActiveDeliveriesPage() {
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
-            {user?.role !== 'DELIVERY_MANAGER' && !isDeliveryStaff && visibleOrders.some(order => order.status === 'IN_ROUTE') && (
+            {user?.role !== 'DELIVERY_MANAGER' && !isDeliveryStaff && visibleOrders.some(order =>
+              order.status === 'IN_ROUTE' || (order.status === 'DELIVERED' && order.paymentStatus !== 'CONFIRMED')
+            ) && (
               <Button
                 size="sm"
                 type="button"
                 onClick={() => {
-                  const driverOrderIds = visibleOrders.filter(order => order.status === 'IN_ROUTE').map(order => order.id)
+                  const driverOrderIds = visibleOrders
+                    .filter(order => order.status === 'IN_ROUTE' || (order.status === 'DELIVERED' && order.paymentStatus !== 'CONFIRMED'))
+                    .map(order => order.id)
                   setSelectedOrderIds(driverOrderIds)
                   setBatchCollectError('')
                   setBatchCollectMode('AS_IS')
@@ -2085,7 +2089,7 @@ export default function ActiveDeliveriesPage() {
                 className="h-9 flex-1 gap-1.5 rounded-xl border-0 bg-emerald-600 px-3 text-[11px] font-black text-white shadow-sm hover:bg-emerald-700 sm:flex-none"
               >
                 <DollarSign className="h-3.5 w-3.5" />
-                <span>Liquidar en ruta</span>
+                <span>Liquidar pedidos</span>
               </Button>
             )}
             <button
@@ -2250,9 +2254,9 @@ export default function ActiveDeliveriesPage() {
                         "text-[9px] font-bold px-1.5 py-0.5 rounded-md",
                         isFilterSelected ? "bg-black/20 text-white" : "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
                       )}
-                      title={`${deliveredOrders.length} pedido(s) entregados en espera de cierre de caja`}
+                      title={`${deliveredOrders.length} pedido(s) entregados pendientes de liquidar`}
                     >
-                      ✓ {deliveredOrders.length} ent.
+                      ✓ {deliveredOrders.length} por liquidar
                     </span>
                   ) : isOnBreak ? (
                     <span
@@ -3879,7 +3883,7 @@ export default function ActiveDeliveriesPage() {
                       {o.originalPaymentMethod && (
                         <p className="text-xs text-[var(--text-secondary)]">Método original: <span className="font-bold">{getStatusLabel(o.originalPaymentMethod)}</span></p>
                       )}
-                      <p className="text-xs text-[var(--text-secondary)]">Pago: <span className={`font-bold ${o.paymentStatus === 'CONFIRMED' ? 'text-emerald-600' : 'text-amber-600'}`}>{o.paymentStatus === 'CONFIRMED' ? '✓ Cobrado' : o.paymentStatus === 'DRIVER_CASH_PENDING' ? 'Efectivo con domiciliario' : 'Pendiente'}</span></p>
+                      <p className="text-xs text-[var(--text-secondary)]">Pago: <span className={`font-bold ${o.paymentStatus === 'CONFIRMED' ? 'text-emerald-600' : 'text-amber-600'}`}>{o.paymentStatus === 'CONFIRMED' ? '✓ Cobrado' : o.paymentStatus === 'DRIVER_CASH_PENDING' ? 'Efectivo con domiciliario' : o.paymentStatus === 'PENDING_REVIEW' ? 'Transferencia por liquidar' : 'Pendiente'}</span></p>
                       <p className="text-xs text-[var(--text-secondary)]">Creado: <span className="font-semibold">{formatDate(o.createdAt)}</span></p>
                       <p className="text-xs text-[var(--text-secondary)]">Tiempo: <span className="font-bold">{getElapsedTime(o.createdAt)}</span></p>
                     </div>

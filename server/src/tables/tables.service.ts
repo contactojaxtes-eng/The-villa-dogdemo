@@ -2012,33 +2012,17 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
     const methodFilter = method === 'CASH' ? { method: 'CASH' } : method === 'TRANSFER' ? { method: 'TRANSFER' } : method === 'MIXED' ? { method: 'MIXED' } : {};
 
     const whereClause: any = {
-      // Caja valida tanto las cuentas de salón como las transferencias que el
-      // domiciliario registró desde su portal privado.
       order: {
-        OR: [
-          { tableId: { not: null } },
-          { orderType: 'DELIVERY', deliveryDriverId: { not: null } },
-        ],
+        tableId: { not: null },
       },
       ...methodFilter,
     };
 
     const validatedDuringCurrentShift = {
+      order: { tableId: { not: null } },
       OR: [
-        {
-          order: { tableId: { not: null } },
-          OR: [
-            { confirmedAt: { gte: salonShiftStart } },
-            { createdAt: { gte: salonShiftStart } },
-          ],
-        },
-        {
-          order: { orderType: 'DELIVERY', deliveryDriverId: { not: null } },
-          OR: [
-            { confirmedAt: { gte: deliveryShiftStart } },
-            { createdAt: { gte: deliveryShiftStart } },
-          ],
-        },
+        { confirmedAt: { gte: salonShiftStart } },
+        { createdAt: { gte: salonShiftStart } },
       ],
     };
 
@@ -2174,65 +2158,10 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
       const payment = await tx.payment.findUnique({
         where: { id: paymentId },
         include: {
-          order: {
-            include: {
-              deliveryDriver: { select: { id: true, name: true, userId: true } },
-            },
-          },
+          order: true,
         },
       });
-      const isDeliveryPayment = Boolean(payment?.order?.orderType === 'DELIVERY' && payment?.order?.deliveryDriverId && !payment?.order?.tableId);
-      if (!payment || (!payment.order.tableId && !isDeliveryPayment)) throw new NotFoundException('Cobro no encontrado');
-
-      if (isDeliveryPayment) {
-        if (payment.status === action) return { payment, order: payment.order, delivery: true, replay: true };
-        const allowedFrom = ['PENDING_REVIEW'];
-        if (action === 'CONFIRMED') allowedFrom.push('REJECTED');
-        if (!allowedFrom.includes(payment.status)) throw new BadRequestException('Este pago ya fue procesado.');
-
-        const closing = payment.order.cashClosingId
-          ? await tx.cashClosing.findFirst({
-              where: {
-                id: payment.order.cashClosingId,
-                isOpen: true,
-                cashRegister: { purpose: 'DELIVERY', active: true },
-              },
-            })
-          : null;
-        if (!closing) throw new BadRequestException('El turno de Caja Domicilios de este pago ya cerró o no está disponible.');
-
-        const updatedPayment = await tx.payment.update({
-          where: { id: payment.id },
-          data: {
-            status: action,
-            confirmedBy: user.id,
-            confirmedAt: action === 'CONFIRMED' ? new Date() : null,
-          },
-        });
-        const updatedOrder = await tx.order.update({
-          where: { id: payment.orderId },
-          data: {
-            paymentStatus: action,
-          },
-          include: { deliveryDriver: { select: { id: true, name: true, userId: true } } },
-        });
-        await tx.transferProof.updateMany({
-          // Una foto sustituida queda en auditoría. Solo la foto vigente se
-          // revisa con este pago; si Caja decide confirmar una foto rechazada
-          // sin reemplazo, conserva la compatibilidad del flujo anterior.
-          where: {
-            paymentId: payment.id,
-            status: action === 'CONFIRMED' ? { in: ['PENDING', 'REJECTED'] } : 'PENDING',
-          },
-          data: {
-            status: action,
-            reviewedById: user.id,
-            reviewedAt: new Date(),
-            rejectionReason: action === 'REJECTED' ? String(reason || 'Rechazado por caja').slice(0, 500) : null,
-          },
-        });
-        return { payment: updatedPayment, order: updatedOrder, delivery: true, replay: false };
-      }
+      if (!payment || !payment.order.tableId) throw new NotFoundException('Cobro no encontrado');
 
       if (payment.status === action) return { payment, table: await this.findTable(payment.order.tableId, tx), delivery: false, replay: true };
 
@@ -2273,17 +2202,9 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
     }, operationTransaction);
     if (!result.replay) {
       if (action === 'CONFIRMED') this.socketGateway.emitPaymentValidated(result);
-      else if (result.delivery) this.socketGateway.emitPaymentRejected(result.order?.deliveryDriver?.userId || '', { ...result, reason });
       else this.socketGateway.emitPaymentRejected(result.table.openedById, { ...result, reason });
-      if (result.delivery) {
-        await this.deliveryDriverGateway?.emitToUser(result.order?.deliveryDriver?.userId, {
-          reason: action === 'CONFIRMED' ? 'payment_validated' : 'payment_rejected',
-          orderId: result.order?.id,
-        });
-      }
       this.socketGateway.server.emit('cashRegistersChanged');
-      this.socketGateway.server.emit('driversChanged');
-      if (!result.delivery) this.emitAccount(result.table);
+      this.emitAccount(result.table);
     }
     return result;
   }

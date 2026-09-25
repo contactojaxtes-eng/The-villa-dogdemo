@@ -661,9 +661,7 @@ export class DeliveryDriversService {
 
     this.socketGateway.emitOrderStatusChange(orderId, 'DELIVERED', result.order);
     this.socketGateway.server.emit('paymentUpdated', result.payment);
-    if (result.isTransfer) {
-      this.socketGateway.emitPaymentSubmitted({ ...result, source: 'DELIVERY_DRIVER' });
-    }
+// Las transferencias de domicilios se gestionan y liquidan en Despachos/Domicilios, no en la cola de mesas
     this.socketGateway.server.emit('driversChanged');
     await this.deliveryDriverGateway?.emitForOrder(result.order, {
       reason: 'delivery_completed',
@@ -934,7 +932,6 @@ export class DeliveryDriversService {
     }, operationTransaction);
 
     this.socketGateway.server.emit('paymentUpdated', result.payment);
-    this.socketGateway.emitPaymentSubmitted({ ...result, source: 'DELIVERY_DRIVER' });
     this.socketGateway.server.emit('driversChanged');
     await this.deliveryDriverGateway?.emitForOrder(result.order, {
       reason: 'proof_changed',

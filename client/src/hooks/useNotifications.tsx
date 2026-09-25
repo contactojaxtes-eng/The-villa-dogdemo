@@ -374,6 +374,8 @@ export function useNotifications() {
     socket.on('paymentSubmitted', (payload: any) => {
       if (isMuted()) return
       if (!['ADMIN', 'SUPERADMIN', 'CASHIER'].includes(user.role || '')) return
+      // Excluir cobros de domicilios: su liquidación ocurre en Despachos/Domicilios, no en mesas
+      if (payload?.source === 'DELIVERY_DRIVER' || payload?.order?.orderType === 'DELIVERY' || !payload?.table?.id) return
 
       const tableLabel = payload?.table?.label || payload?.table?.name || 'Mesa'
       const waiterName = payload?.waiterName || payload?.table?.openedBy?.name || ''

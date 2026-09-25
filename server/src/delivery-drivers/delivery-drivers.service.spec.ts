@@ -159,7 +159,7 @@ describe('DeliveryDriversService', () => {
       }),
     }));
     expect(tx.transferProof.create).not.toHaveBeenCalled();
-    expect(socket.emitPaymentSubmitted).toHaveBeenCalled();
+    expect(socket.emitPaymentSubmitted).not.toHaveBeenCalled();
   });
 
   it('records the exact cash and transfer portions of a mixed driver payment', async () => {
@@ -225,7 +225,7 @@ describe('DeliveryDriversService', () => {
       }),
     }));
     expect(tx.transferProof.create).not.toHaveBeenCalled();
-    expect(socket.emitPaymentSubmitted).toHaveBeenCalled();
+    expect(socket.emitPaymentSubmitted).not.toHaveBeenCalled();
   });
 
   it('never offers an operational account when configuring a driver portal', async () => {
