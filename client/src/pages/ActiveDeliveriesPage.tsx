@@ -146,7 +146,11 @@ function isOrderVisibleInDispatch(order: Partial<Order>, deliveryStaffOnly: bool
   if (order.orderType !== 'DELIVERY' && order.orderType !== 'PICKUP') return false
   if (deliveryStaffOnly && order.orderType !== 'DELIVERY') return false
   if (order.source === 'TABLE' || order.source === 'OFFLINE_TABLE') return false
-  return order.status !== 'DELIVERED' && order.status !== 'CANCELLED'
+  if (order.status === 'CANCELLED') return false
+  if (order.status === 'DELIVERED') {
+    return order.paymentStatus !== 'CONFIRMED'
+  }
+  return true
 }
 
 function matchesDispatchSearch(order: Partial<Order>, search: string): boolean {
