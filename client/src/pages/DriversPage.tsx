@@ -419,6 +419,20 @@ export default function DriversPage() {
     }
   }
 
+  const handleMergeDuplicates = async () => {
+    try {
+      setLoading(true)
+      await api.post('/delivery-drivers/merge-duplicates')
+      alerts.success('Duplicados unificados', 'Se unificaron los domiciliarios duplicados conservando el de mayor historial de entregas.')
+      await loadDrivers()
+      await loadDriverQueue()
+    } catch (err: any) {
+      alerts.error('Error al unificar', err.response?.data?.message || err.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
   const openAccessDialog = async (driver: Driver) => {
     setAccessDriver(driver)
     setAccessMode('CREATE')
@@ -736,12 +750,22 @@ export default function DriversPage() {
             </>
           )}
           {hasPermission('drivers.manage') && (
-            <Button 
-              onClick={openCreateDialog}
-              className="bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-fg)] font-extrabold rounded-xl h-11 px-5 gap-1.5 shadow-md shadow-[var(--accent)]/10 border-0 cursor-pointer text-xs uppercase tracking-wider"
-            >
-              <Plus className="h-4.5 w-4.5" /> Nuevo domiciliario
-            </Button>
+            <>
+              <Button
+                onClick={handleMergeDuplicates}
+                disabled={loading}
+                variant="outline"
+                className="border-amber-500/40 text-amber-500 hover:bg-amber-500/10 font-bold rounded-xl h-11 px-4 gap-1.5 cursor-pointer text-xs uppercase tracking-wider bg-[var(--bg-panel)]"
+              >
+                <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} /> Unificar duplicados
+              </Button>
+              <Button 
+                onClick={openCreateDialog}
+                className="bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-fg)] font-extrabold rounded-xl h-11 px-5 gap-1.5 shadow-md shadow-[var(--accent)]/10 border-0 cursor-pointer text-xs uppercase tracking-wider"
+              >
+                <Plus className="h-4.5 w-4.5" /> Nuevo domiciliario
+              </Button>
+            </>
           )}
         </div>
       </div>

@@ -38,6 +38,15 @@ export class DeliveryDriversController {
     return this.deliveryDriversService.findAll(active, filterType || 'CURRENT', cashClosingId, selectedDate, includePortalAccount);
   }
 
+  @Post('merge-duplicates')
+  @Roles('ADMIN', 'SUPERADMIN')
+  @UseGuards(RolesGuard)
+  @ApiOperation({ summary: 'Unificar manualmente domiciliarios duplicados conservando el de más entregas' })
+  async mergeDuplicates() {
+    await this.deliveryDriversService.autoMergeDuplicates();
+    return { success: true, message: 'Domiciliarios duplicados unificados exitosamente.' };
+  }
+
   @Get('settlements/pending')
   @Permissions('dispatch.view', 'cash.view')
   @UseGuards(PermissionsGuard)

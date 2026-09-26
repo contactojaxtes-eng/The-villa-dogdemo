@@ -247,7 +247,7 @@ export class DeliveryDriversService {
     return orderDateFilter;
   }
 
-  private async autoMergeDuplicates(): Promise<void> {
+  async autoMergeDuplicates(): Promise<void> {
     try {
       const allDrivers = await this.prisma.deliveryDriver.findMany({
         include: {
@@ -256,103 +256,131 @@ export class DeliveryDriversService {
         },
       });
 
+      // Agrupar por celular limpio (últimos 10 dígitos) o por nombre normalizado
       const groups = new Map<string, typeof allDrivers>();
       for (const d of allDrivers) {
-        const cleanPhone = (d.phone || '').replace(/\D/g, '');
+        const cleanPhone = (d.phone || '').replace(/\D/g, '').slice(-10);
         const normName = this.normalizeAccessIdentity(d.name);
-        // Si tiene celular válido de 10 dígitos, agrupar por celular; si no, por nombre normalizado
         const key = cleanPhone.length === 10 ? `phone:${cleanPhone}` : `name:${normName}`;
-        if (!key) continue;
+        if (!key || key === 'name:') continue;
         const list = groups.get(key) || [];
         list.push(d);
         groups.set(key, list);
       }
 
+      // Consolidar grupos que compartan celular o nombre normalizado
+      const mergedGroups: Array<typeof allDrivers> = [];
       for (const group of groups.values()) {
+        if (!group.length) continue;
+        const groupPhones = new Set(
+          group.map(d => (d.phone || '').replace(/\D/g, '').slice(-10)).filter(p => p.length === 10),
+        );
+        const groupNames = new Set(
+          group.map(d => this.normalizeAccessIdentity(d.name)).filter(Boolean),
+        );
+
+        const existing = mergedGroups.find(mg =>
+          mg.some(d => {
+            const p = (d.phone || '').replace(/\D/g, '').slice(-10);
+            const n = this.normalizeAccessIdentity(d.name);
+            return (p.length === 10 && groupPhones.has(p)) || (Boolean(n) && groupNames.has(n));
+          }),
+        );
+
+        if (existing) {
+          for (const d of group) {
+            if (!existing.some(e => e.id === d.id)) existing.push(d);
+          }
+        } else {
+          mergedGroups.push([...group]);
+        }
+      }
+
+      for (const group of mergedGroups) {
         if (group.length <= 1) continue;
 
         // Ordenar para dejar de primero (ganador) el que tenga MÁS pedidos totales
         group.sort((a, b) => {
           const diffOrders = (b._count?.orders || 0) - (a._count?.orders || 0);
           if (diffOrders !== 0) return diffOrders;
-          // En caso de empate en pedidos, priorizar el que ya tenga cuenta de acceso vinculada
-          if (b.userId && !a.userId) return 1;
-          if (a.userId && !b.userId) return -1;
           return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
         });
 
         const winner = group[0];
         const losers = group.slice(1);
         const loserIds = losers.map(l => l.id);
+        const loserUserIds = losers.map(l => l.userId).filter((id): id is string => Boolean(id));
 
-        await this.prisma.$transaction(async tx => {
-          // Reasignar pedidos y liquidaciones al ganador para no perder historial
-          await tx.order.updateMany({
-            where: { deliveryDriverId: { in: loserIds } },
-            data: { deliveryDriverId: winner.id },
-          });
+        console.log(`[autoMergeDuplicates] Unificando grupo. Ganador: "${winner.name}" (ID: ${winner.id}, Pedidos: ${winner._count?.orders || 0}). Eliminando ${loserIds.length} duplicados.`);
 
-          await tx.driverSettlement.updateMany({
-            where: { driverId: { in: loserIds } },
-            data: { driverId: winner.id },
-          });
-
-          // Si el ganador no tenía usuario pero alguno de los duplicados sí, transferirlo al ganador
-          if (!winner.userId) {
-            const loserWithUser = losers.find(l => Boolean(l.userId));
-            if (loserWithUser?.userId) {
-              await tx.deliveryDriver.update({
-                where: { id: loserWithUser.id },
-                data: { userId: null },
-              });
-              await tx.deliveryDriver.update({
-                where: { id: winner.id },
-                data: { userId: loserWithUser.userId, active: true },
-              });
-            }
-          } else {
-            await tx.deliveryDriver.update({
-              where: { id: winner.id },
-              data: { active: true },
-            });
-            if (winner.userId) {
-              await tx.user.update({
-                where: { id: winner.userId },
-                data: { active: true },
-              });
-            }
-          }
-
-          // Borrar cuentas huérfanas de los duplicados eliminados
-          for (const loser of losers) {
-            if (loser.userId && loser.userId !== winner.userId) {
-              const userOrders = await tx.order.count({ where: { waiterId: loser.userId } });
-              if (userOrders === 0) {
-                await tx.user.delete({ where: { id: loser.userId } }).catch(() => null);
-              }
-            }
-          }
-
-          // Eliminar definitivamente los duplicados menores
-          await tx.deliveryDriver.deleteMany({
-            where: { id: { in: loserIds } },
-          });
+        // 1. Reasignar pedidos al ganador
+        await this.prisma.order.updateMany({
+          where: { deliveryDriverId: { in: loserIds } },
+          data: { deliveryDriverId: winner.id },
         });
 
-        // Limpiar la fila de turnos de los eliminados
+        // 2. Reasignar liquidaciones al ganador
+        await this.prisma.driverSettlement.updateMany({
+          where: { driverId: { in: loserIds } },
+          data: { driverId: winner.id },
+        });
+
+        // 3. Desvincular usuarios de los duplicados para evitar conflictos de Foreign Key
+        await this.prisma.deliveryDriver.updateMany({
+          where: { id: { in: loserIds } },
+          data: { userId: null },
+        });
+
+        // 4. Inactivar y renombrar usuarios huérfanos de los duplicados para liberar el login
+        for (const uId of loserUserIds) {
+          try {
+            const u = await this.prisma.user.findUnique({ where: { id: uId } });
+            if (u) {
+              await this.prisma.user.update({
+                where: { id: uId },
+                data: {
+                  active: false,
+                  email: `deleted_${Date.now()}_${u.email}`,
+                  phone: null,
+                },
+              });
+            }
+          } catch (userErr) {
+            console.warn(`[autoMergeDuplicates] Error al actualizar usuario huérfano ${uId}:`, userErr);
+          }
+        }
+
+        // 5. Garantizar que el ganador quede activo
+        await this.prisma.deliveryDriver.update({
+          where: { id: winner.id },
+          data: { active: true },
+        });
+
+        // 6. Eliminar físicamente los duplicados de delivery_drivers
+        await this.prisma.deliveryDriver.deleteMany({
+          where: { id: { in: loserIds } },
+        });
+
+        // 7. Limpiar la fila de turnos
         const queueState = await this.getRawQueueState();
         let queueChanged = false;
         for (const id of loserIds) {
-          if (queueState.queue.includes(id) || queueState.breaks[id]) {
+          if (queueState.queue.includes(id) || queueState.breaks[id] || queueState.tripOrderCounts[id]) {
             queueState.queue = queueState.queue.filter(driverId => driverId !== id);
             delete queueState.breaks[id];
             delete queueState.tripOrderCounts[id];
             queueChanged = true;
           }
         }
+        if (!queueState.queue.includes(winner.id)) {
+          queueState.queue.push(winner.id);
+          queueChanged = true;
+        }
         if (queueChanged) {
           await this.saveQueueState(queueState);
         }
+
+        console.log(`[autoMergeDuplicates] Unificación completada exitosamente para ${winner.name}`);
       }
     } catch (err) {
       console.error('Error al unificar domiciliarios duplicados:', err);
@@ -1315,67 +1343,71 @@ export class DeliveryDriversService {
     }
 
     // Buscar si existe un domiciliario duplicado con el mismo teléfono o nombre para unificar
+    const cleanPhone = (driver.phone || '').replace(/\D/g, '').slice(-10);
     const duplicateDriver = await this.prisma.deliveryDriver.findFirst({
       where: {
         id: { not: id },
         OR: [
-          { phone: driver.phone },
+          ...(cleanPhone.length === 10 ? [{ phone: { contains: cleanPhone } }] : []),
           { name: { equals: driver.name, mode: 'insensitive' } },
         ],
       },
     });
 
-    await this.prisma.$transaction(async tx => {
-      if (duplicateDriver) {
-        // Reasignar los pedidos y liquidaciones al domiciliario duplicado para no perder trazabilidad
-        await tx.order.updateMany({
-          where: { deliveryDriverId: id },
-          data: { deliveryDriverId: duplicateDriver.id },
-        });
-        await tx.driverSettlement.updateMany({
-          where: { driverId: id },
-          data: { driverId: duplicateDriver.id },
-        });
-        // Si el que se va a borrar tenía usuario y el duplicado no, transferir el usuario
-        if (driver.userId && !duplicateDriver.userId) {
-          await tx.deliveryDriver.update({
-            where: { id: duplicateDriver.id },
-            data: { userId: driver.userId, active: true },
-          });
-        } else {
-          await tx.deliveryDriver.update({
-            where: { id: duplicateDriver.id },
-            data: { active: true },
+    if (duplicateDriver) {
+      // Reasignar los pedidos y liquidaciones al domiciliario duplicado para no perder trazabilidad
+      await this.prisma.order.updateMany({
+        where: { deliveryDriverId: id },
+        data: { deliveryDriverId: duplicateDriver.id },
+      });
+      await this.prisma.driverSettlement.updateMany({
+        where: { driverId: id },
+        data: { driverId: duplicateDriver.id },
+      });
+      await this.prisma.deliveryDriver.update({
+        where: { id: duplicateDriver.id },
+        data: { active: true },
+      });
+    } else {
+      // Si no hay duplicado, desvincular los pedidos históricos para no romper integridad foránea
+      await this.prisma.order.updateMany({
+        where: { deliveryDriverId: id },
+        data: { deliveryDriverId: null },
+      });
+      await this.prisma.driverSettlement.deleteMany({
+        where: { driverId: id },
+      });
+    }
+
+    // Desvincular usuario de este domiciliario para permitir eliminar el registro
+    if (driver.userId) {
+      await this.prisma.deliveryDriver.update({
+        where: { id },
+        data: { userId: null },
+      });
+      try {
+        const u = await this.prisma.user.findUnique({ where: { id: driver.userId } });
+        if (u) {
+          await this.prisma.user.update({
+            where: { id: driver.userId },
+            data: {
+              active: false,
+              email: `deleted_${Date.now()}_${u.email}`,
+              phone: null,
+            },
           });
         }
-      } else {
-        // Si no hay duplicado, desvincular los pedidos históricos para no romper integridad foránea
-        await tx.order.updateMany({
-          where: { deliveryDriverId: id },
-          data: { deliveryDriverId: null },
-        });
-        await tx.driverSettlement.deleteMany({
-          where: { driverId: id },
-        });
+      } catch (userErr) {
+        console.warn(`[remove] Error al inactivar usuario huérfano ${driver.userId}:`, userErr);
       }
+    }
 
-      // Eliminar el domiciliario de la tabla delivery_drivers
-      await tx.deliveryDriver.delete({ where: { id } });
-
-      // Si tenía usuario y no se transfirió al duplicado
-      if (driver.userId && (!duplicateDriver || duplicateDriver.userId !== driver.userId)) {
-        const userOrdersCount = await tx.order.count({ where: { waiterId: driver.userId } });
-        if (userOrdersCount === 0) {
-          await tx.user.delete({ where: { id: driver.userId } });
-        } else {
-          await tx.user.update({ where: { id: driver.userId }, data: { active: false } });
-        }
-      }
-    });
+    // Eliminar el domiciliario de la tabla delivery_drivers
+    await this.prisma.deliveryDriver.delete({ where: { id } });
 
     // Limpiar de la fila de turnos
     const queueState = await this.getRawQueueState();
-    if (queueState.queue.includes(id) || queueState.breaks[id]) {
+    if (queueState.queue.includes(id) || queueState.breaks[id] || queueState.tripOrderCounts[id]) {
       queueState.queue = queueState.queue.filter(driverId => driverId !== id);
       delete queueState.breaks[id];
       delete queueState.tripOrderCounts[id];
