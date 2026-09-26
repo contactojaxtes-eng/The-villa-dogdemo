@@ -23,6 +23,7 @@ import { api } from '@/lib/api'
 import { alerts } from '@/lib/alerts'
 import { useAuth } from '@/hooks/useAuth'
 import { WhatsAppMedia, WhatsAppDocument } from '@/components/whatsapp/WhatsAppMedia'
+import { ProtectedImage } from '@/components/ProtectedImage'
 import { type Socket } from 'socket.io-client'
 import { io } from '@/lib/socket'
 
@@ -60,6 +61,12 @@ export default function OrderWhatsAppModal({
   const [loading, setLoading] = useState(true)
   const [session, setSession] = useState<any | null>(null)
   const [messages, setMessages] = useState<ChatMessage[]>([])
+  const [messagePage, setMessagePage] = useState<{
+    hasPrevious?: boolean
+    before?: string | null
+    beforeId?: string | null
+  } | null>(null)
+  const [loadingOlderMessages, setLoadingOlderMessages] = useState(false)
   const [transferProofs, setTransferProofs] = useState<any[]>([])
   const [inputText, setInputText] = useState('')
   const [isSending, setIsSending] = useState(false)
@@ -75,7 +82,9 @@ export default function OrderWhatsAppModal({
   useEffect(() => {
     setSession(null)
     setMessages([])
+    setMessagePage(null)
     setTransferProofs([])
+    setFullScreenProof(null)
   }, [order?.id])
 
   useEffect(() => {
@@ -88,16 +97,17 @@ export default function OrderWhatsAppModal({
     }, 100)
   }
 
-  const loadChat = async (silent = false) => {
+  const loadChat = async (silent = false, force = false) => {
     if (!order?.id) return
     const requestId = ++loadRequestIdRef.current
     if (!silent) setLoading(true)
     try {
-      const data = await api.get<any>(`/whatsapp/order-chat/${order.id}`)
+      const data = await api.get<any>(`/whatsapp/order-chat/${order.id}?limit=40`, { force })
       if (data && requestId === loadRequestIdRef.current) {
         if (data.order) setCurrentOrder(data.order)
         setSession(data.session || null)
         setMessages(data.messages || [])
+        setMessagePage(data.messagePage || null)
         setTransferProofs(data.transferProofs || [])
       }
     } catch (err: any) {
@@ -118,6 +128,30 @@ export default function OrderWhatsAppModal({
       loadChat()
     }
   }, [isOpen, order?.id])
+
+  const loadOlderMessages = async () => {
+    if (!order?.id || loadingOlderMessages || !messagePage?.hasPrevious || !messagePage.before) return
+
+    setLoadingOlderMessages(true)
+    try {
+      const params = new URLSearchParams({
+        limit: '40',
+        before: messagePage.before,
+      })
+      if (messagePage.beforeId) params.set('beforeId', messagePage.beforeId)
+      const data = await api.get<any>(`/whatsapp/order-chat/${order.id}?${params.toString()}`, { force: true, ttlMs: 0 })
+      const olderMessages = Array.isArray(data.messages) ? data.messages : []
+      setMessages((current) => {
+        const currentIds = new Set(current.map(message => message.id))
+        return [...olderMessages.filter((message: ChatMessage) => !currentIds.has(message.id)), ...current]
+      })
+      setMessagePage(data.messagePage || null)
+    } catch (err: any) {
+      void alerts.error('No se pudo cargar el historial anterior', err.message || 'Intenta nuevamente.')
+    } finally {
+      setLoadingOlderMessages(false)
+    }
+  }
 
   // Socket listener para mensajes en tiempo real
   useEffect(() => {
@@ -273,7 +307,7 @@ export default function OrderWhatsAppModal({
               <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
                 <button
                   type="button"
-                  onClick={() => loadChat(false)}
+                  onClick={() => loadChat(false, true)}
                   className="p-2 rounded-xl text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)] transition-colors cursor-pointer"
                   aria-label="Actualizar conversación de WhatsApp"
                 >
@@ -431,14 +465,7 @@ export default function OrderWhatsAppModal({
                   <button
                     key={proof.id || idx}
                     type="button"
-                    onClick={() => {
-                      const src = proof.fileBase64
-                        ? proof.fileBase64.startsWith('data:')
-                          ? proof.fileBase64
-                          : `data:${proof.mimeType || 'image/jpeg'};base64,${proof.fileBase64}`
-                        : proof.filePath
-                      setFullScreenProof(src)
-                    }}
+                    onClick={() => setFullScreenProof(`/whatsapp/order-chat/${currentOrder?.id || order.id}/proofs/${proof.id}/image`)}
                     className="px-2.5 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-[10px] font-bold shadow-sm transition-all cursor-pointer flex items-center gap-1"
                   >
                     <Eye className="w-3 h-3" />
@@ -464,12 +491,13 @@ export default function OrderWhatsAppModal({
                 >
                   <X className="w-6 h-6" />
                 </button>
-                <img
-                  src={fullScreenProof}
-                  alt="Comprobante Transferencia"
-                  className="max-h-[82vh] max-w-[92vw] object-contain rounded-2xl shadow-2xl"
-                  onClick={(e) => e.stopPropagation()}
-                />
+                <div onClick={(e) => e.stopPropagation()}>
+                  <ProtectedImage
+                    endpoint={fullScreenProof}
+                    alt="Comprobante Transferencia"
+                    className="max-h-[82vh] max-w-[92vw] object-contain rounded-2xl shadow-2xl"
+                  />
+                </div>
               </div>
             </div>
           )}
@@ -506,6 +534,18 @@ export default function OrderWhatsAppModal({
               </div>
             ) : (
               <>
+                {messagePage?.hasPrevious && (
+                  <div className="flex justify-center pb-1">
+                    <button
+                      type="button"
+                      onClick={loadOlderMessages}
+                      disabled={loadingOlderMessages}
+                      className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] px-3 py-1.5 text-[11px] font-bold text-[var(--text-secondary)] hover:text-emerald-600 hover:border-emerald-500/40 disabled:opacity-60 transition-colors cursor-pointer"
+                    >
+                      {loadingOlderMessages ? 'Cargando mensajes anteriores...' : 'Cargar mensajes anteriores'}
+                    </button>
+                  </div>
+                )}
                 {messages.map((msg, index) => {
                   const isCustomer = msg.direction === 'IN'
                   const isImage = msg.messageType === 'image'

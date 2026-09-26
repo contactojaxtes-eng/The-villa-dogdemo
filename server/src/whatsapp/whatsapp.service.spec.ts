@@ -727,4 +727,114 @@ describe('WhatsApp order chat isolation', () => {
     expect(result.messages).toEqual([]);
     expect(prisma.order.updateMany).not.toHaveBeenCalled();
   });
+
+  it('does not treat a Colombian phone number as an order number query', async () => {
+    const prisma: any = {
+      cashClosing: { findFirst: jest.fn().mockResolvedValue(null) },
+      customer: { findMany: jest.fn().mockResolvedValue([]) },
+      order: { findMany: jest.fn().mockResolvedValue([]) },
+      whatsAppSession: {
+        updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+      whatsAppMessage: {
+        findMany: jest.fn().mockResolvedValue([]),
+        groupBy: jest.fn().mockResolvedValue([]),
+      },
+    };
+    const service = new WhatsappService(prisma, { get: jest.fn() } as any, { emitWhatsApp: jest.fn() } as any);
+
+    await expect(service.getSessions('3015932223', false, 20, undefined, 'ALL')).resolves.toEqual([]);
+
+    const orderNumberQueries = prisma.order.findMany.mock.calls.filter(([args]: any[]) => args?.where?.orderNumber !== undefined);
+    expect(orderNumberQueries).toHaveLength(0);
+    expect((service as any).parseOrderNumberFromSearch('#243')).toBe(243);
+    expect((service as any).parseOrderNumberFromSearch('pedido 3015932223')).toBeNull();
+  });
+
+  it('keeps the order chat bounded and never returns receipt bytes in its payload', async () => {
+    const messageStart = Date.parse('2026-09-20T12:00:00.000Z');
+    const messages = Array.from({ length: 41 }, (_, index) => ({
+      id: `message-${41 - index}`,
+      createdAt: new Date(messageStart + (40 - index) * 60_000),
+    }));
+    const prisma: any = {
+      order: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: 'order-1',
+          orderNumber: 243,
+          customerName: 'Cliente',
+          customerPhone: '3001234567',
+          customerAddress: 'Calle 1',
+          total: 12000,
+          status: 'PENDING',
+          orderType: 'DELIVERY',
+          paymentMethod: 'TRANSFER',
+          paymentStatus: 'PENDING',
+          cashAmount: 0,
+          transferAmount: 12000,
+          chatSessionId: 'session-1',
+          transferProofs: [{
+            id: 'proof-1',
+            status: 'PENDING',
+            method: 'TRANSFER',
+            amount: 12000,
+            fileBase64: 'must-not-leak',
+            filePath: '/private/proof.jpg',
+            originalName: 'proof.jpg',
+            mimeType: 'image/jpeg',
+            fileSize: 100,
+            paymentId: 'payment-1',
+            orderId: 'order-1',
+            tableId: null,
+            cashClosingId: null,
+            submittedById: 'user-1',
+            reviewedById: null,
+            rejectionReason: null,
+            purgedAt: null,
+            reviewedAt: null,
+            createdAt: new Date('2026-09-20T12:00:00.000Z'),
+          }],
+        }),
+      },
+      whatsAppSession: { findUnique: jest.fn().mockResolvedValue({ id: 'session-1', phone: '573001234567' }) },
+      whatsAppMessage: { findMany: jest.fn().mockResolvedValue(messages) },
+    };
+    const service = new WhatsappService(prisma, { get: jest.fn() } as any, { emitWhatsApp: jest.fn() } as any);
+
+    const result: any = await service.getOrderChat('order-1');
+
+    expect(result.messages).toHaveLength(40);
+    expect(result.messagePage).toEqual(expect.objectContaining({ hasPrevious: true, beforeId: 'message-2', limit: 40 }));
+    expect(result.order.transferProofs).toBeUndefined();
+    expect(result.transferProofs[0]).not.toHaveProperty('fileBase64');
+    expect(result.transferProofs[0]).not.toHaveProperty('filePath');
+    expect(prisma.order.findUnique).toHaveBeenCalledWith(expect.objectContaining({
+      select: expect.objectContaining({
+        transferProofs: expect.objectContaining({
+          select: expect.not.objectContaining({ fileBase64: expect.anything(), filePath: expect.anything() }),
+        }),
+      }),
+    }));
+  });
+
+  it('only resolves a proof when it belongs to the requested order', async () => {
+    const prisma: any = {
+      transferProof: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: 'proof-1',
+          method: 'TRANSFER',
+          mimeType: 'image/jpeg',
+          fileBase64: 'private-bytes',
+          filePath: null,
+        }),
+      },
+    };
+    const service = new WhatsappService(prisma, { get: jest.fn() } as any, { emitWhatsApp: jest.fn() } as any);
+
+    await expect(service.getOrderChatProof('order-1', 'proof-1')).resolves.toEqual(expect.objectContaining({ id: 'proof-1' }));
+    expect(prisma.transferProof.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: 'proof-1', orderId: 'order-1' },
+    }));
+  });
 });

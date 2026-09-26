@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Put, Delete, Body, Param, Query, UseGuards, Req, Res, Request, BadRequestException, UseInterceptors, UploadedFile } from '@nestjs/common';
+import { Controller, Get, Post, Put, Delete, Body, Param, Query, UseGuards, Req, Res, Request, BadRequestException, NotFoundException, UseInterceptors, UploadedFile } from '@nestjs/common';
 import { ApiTags, ApiOperation } from '@nestjs/swagger';
 import { WhatsappService } from './whatsapp.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -6,11 +6,55 @@ import { RolesGuard, Roles } from '../auth/guards/roles.guard';
 import { PermissionsGuard, Permissions } from '../auth/guards/permissions.guard';
 import { FileInterceptor } from '@nestjs/platform-express';
 import * as express from 'express';
+import { existsSync, readFileSync } from 'fs';
+import { detectReceiptMime } from '../tables/receipt';
 
 @ApiTags('WhatsApp')
 @Controller('whatsapp')
 export class WhatsappController {
   constructor(private whatsappService: WhatsappService) {}
+
+  private sendPrivateOrderChatProof(res: express.Response, proof: {
+    method: string;
+    fileBase64: string | null;
+    filePath: string | null;
+  }) {
+    const applyPrivateHeaders = () => {
+      res.setHeader('Cache-Control', 'private, no-store, max-age=0');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+    };
+
+    if (proof.fileBase64) {
+      let rawBase64 = proof.fileBase64.trim();
+      if (rawBase64.startsWith('data:')) rawBase64 = rawBase64.split(',')[1] || '';
+      try {
+        const buffer = Buffer.from(rawBase64, 'base64');
+        const mime = detectReceiptMime(buffer);
+        if (buffer.length > 0 && mime) {
+          applyPrivateHeaders();
+          res.setHeader('Content-Type', mime);
+          res.setHeader('Content-Length', buffer.length);
+          return res.end(buffer);
+        }
+      } catch {
+        // Continúa con filePath para comprobantes antiguos que lo tengan.
+      }
+    }
+
+    if (proof.filePath && existsSync(proof.filePath)) {
+      const buffer = readFileSync(proof.filePath);
+      const mime = detectReceiptMime(buffer);
+      if (mime) {
+        applyPrivateHeaders();
+        res.setHeader('Content-Type', mime);
+        res.setHeader('Content-Length', buffer.length);
+        return res.end(buffer);
+      }
+    }
+
+    throw new NotFoundException('La imagen del comprobante no está disponible');
+  }
 
   @Get('webhook')
   @ApiOperation({ summary: 'Verificación webhook Meta' })
@@ -438,8 +482,31 @@ export class WhatsappController {
   @UseGuards(JwtAuthGuard, PermissionsGuard)
   @Permissions('whatsapp.view', 'dispatch.view', 'orders.view')
   @ApiOperation({ summary: 'Obtener el chat real de WhatsApp asociado a un pedido' })
-  async getOrderChat(@Param('orderId') orderId: string) {
-    return this.whatsappService.getOrderChat(orderId);
+  async getOrderChat(
+    @Param('orderId') orderId: string,
+    @Query('before') before?: string,
+    @Query('beforeId') beforeId?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.whatsappService.getOrderChat(
+      orderId,
+      before,
+      limit ? Number.parseInt(limit, 10) : undefined,
+      beforeId,
+    );
+  }
+
+  @Get('order-chat/:orderId/proofs/:proofId/image')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @Permissions('whatsapp.view', 'dispatch.view', 'orders.view')
+  @ApiOperation({ summary: 'Ver un comprobante del pedido sin incluirlo en el chat' })
+  async getOrderChatProofImage(
+    @Param('orderId') orderId: string,
+    @Param('proofId') proofId: string,
+    @Res() res: express.Response,
+  ) {
+    const proof = await this.whatsappService.getOrderChatProof(orderId, proofId);
+    return this.sendPrivateOrderChatProof(res, proof);
   }
 
   @Post('order-chat/:orderId/send')

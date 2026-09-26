@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { SocketGateway } from '../socket/socket.gateway';
 import { buildMessagingMenuText } from '../menu/menu-text';
+import { receiptSummary } from '../tables/receipt';
 
 type CachedMedia = {
   buffer: Buffer;
@@ -75,6 +76,36 @@ export class WhatsappService implements OnModuleInit {
       .replace(/[^a-z0-9]+/g, ' ')
       .replace(/\s+/g, ' ')
       .trim();
+  }
+
+  /**
+   * Los pedidos usan un entero de PostgreSQL. Una búsqueda por teléfono no
+   * puede terminar en esa columna: además de no ser un pedido, números como
+   * 3015932223 superan el rango INT4 y hacían fallar toda la búsqueda.
+   *
+   * Los números cortos siguen funcionando como búsqueda rápida de pedido.
+   * Para un número largo se exige #, "pedido", "orden" o "factura".
+   */
+  private parseOrderNumberFromSearch(cleanSearch: string): number | null {
+    if (!cleanSearch) return null;
+
+    const isExplicitOrderSearch = cleanSearch.startsWith('#')
+      || cleanSearch.includes('pedido')
+      || cleanSearch.includes('orden')
+      || cleanSearch.includes('factura');
+    const isShortPlainNumber = /^\d{1,6}$/.test(cleanSearch);
+
+    if (!isExplicitOrderSearch && !isShortPlainNumber) return null;
+
+    const digits = cleanSearch.replace(/\D/g, '');
+    if (!digits) return null;
+
+    const orderNumber = Number(digits);
+    return Number.isSafeInteger(orderNumber)
+      && orderNumber > 0
+      && orderNumber <= 2_147_483_647
+      ? orderNumber
+      : null;
   }
 
   private isBeverageMenuItem(item: { category?: { name?: string | null } | null }): boolean {
@@ -1749,13 +1780,12 @@ export class WhatsappService implements OnModuleInit {
 
     if (cleanSearch) {
       const searchDigits = cleanSearch.replace(/\D/g, '');
-      const searchNum = searchDigits ? parseInt(searchDigits, 10) : NaN;
       let orderPhones: string[] = [];
       let orderNames: string[] = [];
 
       // 1. Check if search is an order number (e.g. "23", "#23", "pedido 23", "orden 23")
       const isExplicitOrderSearch = cleanSearch.startsWith('#') || cleanSearch.includes('pedido') || cleanSearch.includes('orden') || cleanSearch.includes('factura');
-      const orderSearchNum = !isNaN(searchNum) && searchNum > 0 ? searchNum : null;
+      const orderSearchNum = this.parseOrderNumberFromSearch(cleanSearch);
 
       if (orderSearchNum !== null) {
         const bogotaDateStr = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Bogota' });
@@ -2237,14 +2267,14 @@ export class WhatsappService implements OnModuleInit {
     // Ordenamiento inteligente por relevancia cuando hay búsqueda activa
     if (cleanSearch) {
       const searchDigits = cleanSearch.replace(/\D/g, '');
-      const searchNum = searchDigits ? parseInt(searchDigits, 10) : NaN;
+      const orderSearchNum = this.parseOrderNumberFromSearch(cleanSearch);
 
       deduplicatedSessions.sort((a, b) => {
         // Prioridad 1: Coincidencia exacta de número de pedido (ej. #23)
         const aOrderNum = a.activeOrder?.orderNumber;
         const bOrderNum = b.activeOrder?.orderNumber;
-        const aExactOrder = !isNaN(searchNum) && aOrderNum === searchNum;
-        const bExactOrder = !isNaN(searchNum) && bOrderNum === searchNum;
+        const aExactOrder = orderSearchNum !== null && aOrderNum === orderSearchNum;
+        const bExactOrder = orderSearchNum !== null && bOrderNum === orderSearchNum;
         if (aExactOrder && !bExactOrder) return -1;
         if (!aExactOrder && bExactOrder) return 1;
 
@@ -6019,15 +6049,26 @@ ${menuSummary}
     }
   }
 
-  async getOrderChat(orderId: string) {
+  async getOrderChat(orderId: string, before?: string, requestedLimit?: number, beforeId?: string) {
     const order = await this.prisma.order.findUnique({
       where: { id: orderId },
-      include: {
-        items: { include: { menuItem: true } },
-        deliveryDriver: true,
-        zone: true,
+      select: {
+        id: true,
+        orderNumber: true,
+        customerName: true,
+        customerPhone: true,
+        customerAddress: true,
+        total: true,
+        status: true,
+        orderType: true,
+        paymentMethod: true,
+        paymentStatus: true,
+        cashAmount: true,
+        transferAmount: true,
+        chatSessionId: true,
         transferProofs: {
           orderBy: { createdAt: 'desc' },
+          select: receiptSummary,
         },
       },
     });
@@ -6077,17 +6118,74 @@ ${menuSummary}
       }
     }
 
+    const pageSize = Number.isFinite(requestedLimit)
+      ? Math.min(80, Math.max(20, Math.trunc(requestedLimit!)))
+      : 40;
     let messages: any[] = [];
+    let hasPreviousMessages = false;
     if (session) {
-      messages = await this.getSessionMessages(session.id, undefined, 100);
+      // Pedimos una fila adicional para saber si hay historial anterior, sin
+      // cargar las 100 burbujas y archivos asociados al abrir el modal.
+      const messagePage = await this.getSessionMessages(session.id, before, pageSize + 1, beforeId);
+      hasPreviousMessages = messagePage.length > pageSize;
+      messages = hasPreviousMessages ? messagePage.slice(1) : messagePage;
     }
 
+    // La respuesta conserva los campos que usa el modal, pero los bytes del
+    // comprobante solo se sirven al pulsar "Ver comprobante".
+    const transferProofs = (order.transferProofs || []).map((proof: any) => ({
+      id: proof.id,
+      status: proof.status,
+      method: proof.method,
+      amount: proof.amount,
+      originalName: proof.originalName,
+      mimeType: proof.mimeType,
+      fileSize: proof.fileSize,
+      rejectionReason: proof.rejectionReason,
+      purgedAt: proof.purgedAt,
+      reviewedAt: proof.reviewedAt,
+      createdAt: proof.createdAt,
+      paymentId: proof.paymentId,
+      orderId: proof.orderId,
+      tableId: proof.tableId,
+      cashClosingId: proof.cashClosingId,
+      submittedById: proof.submittedById,
+      reviewedById: proof.reviewedById,
+    }));
+    const { transferProofs: _ignoredTransferProofs, ...orderSummary } = order;
+    const oldestMessage = messages[0];
+
     return {
-      order,
+      order: orderSummary,
       session,
       messages,
-      transferProofs: order.transferProofs || [],
+      transferProofs,
+      messagePage: {
+        hasPrevious: hasPreviousMessages,
+        before: hasPreviousMessages && oldestMessage?.createdAt
+          ? new Date(oldestMessage.createdAt).toISOString()
+          : null,
+        beforeId: hasPreviousMessages ? oldestMessage?.id || null : null,
+        limit: pageSize,
+      },
     };
+  }
+
+  async getOrderChatProof(orderId: string, proofId: string) {
+    const proof = await this.prisma.transferProof.findFirst({
+      where: { id: proofId, orderId },
+      select: {
+        id: true,
+        method: true,
+        mimeType: true,
+        fileBase64: true,
+        filePath: true,
+      },
+    });
+    if (!proof) {
+      throw new NotFoundException('Comprobante no encontrado en este pedido');
+    }
+    return proof;
   }
 
   async sendOrderChatMessage(orderId: string, text: string) {
