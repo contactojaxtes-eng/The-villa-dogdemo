@@ -247,7 +247,122 @@ export class DeliveryDriversService {
     return orderDateFilter;
   }
 
+  private async autoMergeDuplicates(): Promise<void> {
+    try {
+      const allDrivers = await this.prisma.deliveryDriver.findMany({
+        include: {
+          user: { select: { id: true, email: true } },
+          _count: { select: { orders: true, settlements: true } },
+        },
+      });
+
+      const groups = new Map<string, typeof allDrivers>();
+      for (const d of allDrivers) {
+        const cleanPhone = (d.phone || '').replace(/\D/g, '');
+        const normName = this.normalizeAccessIdentity(d.name);
+        // Si tiene celular válido de 10 dígitos, agrupar por celular; si no, por nombre normalizado
+        const key = cleanPhone.length === 10 ? `phone:${cleanPhone}` : `name:${normName}`;
+        if (!key) continue;
+        const list = groups.get(key) || [];
+        list.push(d);
+        groups.set(key, list);
+      }
+
+      for (const group of groups.values()) {
+        if (group.length <= 1) continue;
+
+        // Ordenar para dejar de primero (ganador) el que tenga MÁS pedidos totales
+        group.sort((a, b) => {
+          const diffOrders = (b._count?.orders || 0) - (a._count?.orders || 0);
+          if (diffOrders !== 0) return diffOrders;
+          // En caso de empate en pedidos, priorizar el que ya tenga cuenta de acceso vinculada
+          if (b.userId && !a.userId) return 1;
+          if (a.userId && !b.userId) return -1;
+          return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+        });
+
+        const winner = group[0];
+        const losers = group.slice(1);
+        const loserIds = losers.map(l => l.id);
+
+        await this.prisma.$transaction(async tx => {
+          // Reasignar pedidos y liquidaciones al ganador para no perder historial
+          await tx.order.updateMany({
+            where: { deliveryDriverId: { in: loserIds } },
+            data: { deliveryDriverId: winner.id },
+          });
+
+          await tx.driverSettlement.updateMany({
+            where: { driverId: { in: loserIds } },
+            data: { driverId: winner.id },
+          });
+
+          // Si el ganador no tenía usuario pero alguno de los duplicados sí, transferirlo al ganador
+          if (!winner.userId) {
+            const loserWithUser = losers.find(l => Boolean(l.userId));
+            if (loserWithUser?.userId) {
+              await tx.deliveryDriver.update({
+                where: { id: loserWithUser.id },
+                data: { userId: null },
+              });
+              await tx.deliveryDriver.update({
+                where: { id: winner.id },
+                data: { userId: loserWithUser.userId, active: true },
+              });
+            }
+          } else {
+            await tx.deliveryDriver.update({
+              where: { id: winner.id },
+              data: { active: true },
+            });
+            if (winner.userId) {
+              await tx.user.update({
+                where: { id: winner.userId },
+                data: { active: true },
+              });
+            }
+          }
+
+          // Borrar cuentas huérfanas de los duplicados eliminados
+          for (const loser of losers) {
+            if (loser.userId && loser.userId !== winner.userId) {
+              const userOrders = await tx.order.count({ where: { waiterId: loser.userId } });
+              if (userOrders === 0) {
+                await tx.user.delete({ where: { id: loser.userId } }).catch(() => null);
+              }
+            }
+          }
+
+          // Eliminar definitivamente los duplicados menores
+          await tx.deliveryDriver.deleteMany({
+            where: { id: { in: loserIds } },
+          });
+        });
+
+        // Limpiar la fila de turnos de los eliminados
+        const queueState = await this.getRawQueueState();
+        let queueChanged = false;
+        for (const id of loserIds) {
+          if (queueState.queue.includes(id) || queueState.breaks[id]) {
+            queueState.queue = queueState.queue.filter(driverId => driverId !== id);
+            delete queueState.breaks[id];
+            delete queueState.tripOrderCounts[id];
+            queueChanged = true;
+          }
+        }
+        if (queueChanged) {
+          await this.saveQueueState(queueState);
+        }
+      }
+    } catch (err) {
+      console.error('Error al unificar domiciliarios duplicados:', err);
+    }
+  }
+
   async findAll(activeOnly = false, filterType = 'CURRENT', cashClosingId?: string, selectedDate?: string, includePortalAccount = false) {
+    // Unificar duplicados automáticamente manteniendo siempre el que tiene más domicilios
+    await this.autoMergeDuplicates();
+
     const driverWhere: any = activeOnly ? { active: true } : {};
     const orderDateFilter = await this.buildOrderFilter(filterType, cashClosingId, selectedDate);
 
@@ -255,6 +370,7 @@ export class DeliveryDriversService {
       where: driverWhere,
       include: {
         user: { select: this.portalUserSelect },
+        _count: { select: { orders: true, settlements: true } },
         orders: {
           where: orderDateFilter,
           select: {
@@ -305,6 +421,7 @@ export class DeliveryDriversService {
         ...(includePortalAccount ? { portalUser: driver.user } : {}),
         completedDeliveries: completedOrders,
         activeDeliveries: activeOrders,
+        totalHistoricalOrders: driver._count?.orders ?? completedOrders,
         totalDeliveryEarnings: totalEarnings,
         totalDeliveredSales,
         pendingCash,

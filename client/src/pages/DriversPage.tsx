@@ -43,6 +43,7 @@ interface Driver {
   createdAt: string
   completedDeliveries: number
   activeDeliveries?: number
+  totalHistoricalOrders?: number
   totalDeliveryEarnings: number
   totalDeliveredSales?: number
   pendingCash?: number
@@ -1007,9 +1008,14 @@ export default function DriversPage() {
                         <Separator className="bg-[var(--border-subtle)]/50" />
 
                         <div className="grid grid-cols-3 gap-2 text-center">
-                          <div className="rounded-xl border border-[var(--border-subtle)]/40 bg-[var(--bg-elevated)]/50 p-2">
+                          <div className="rounded-xl border border-[var(--border-subtle)]/40 bg-[var(--bg-elevated)]/50 p-2" title="Entregas del período actual">
                             <p className="text-[9px] font-bold uppercase tracking-wider text-[var(--text-secondary)]">Entregas</p>
                             <p className="mt-0.5 text-base font-black text-[var(--text-primary)]">{d.completedDeliveries}</p>
+                            {typeof d.totalHistoricalOrders === 'number' && (
+                              <p className="mt-0.5 text-[8px] font-bold text-[var(--text-muted)]" title="Total histórico de domicilios en el sistema">
+                                Total: {d.totalHistoricalOrders}
+                              </p>
+                            )}
                           </div>
                           <div className="rounded-xl border border-[var(--border-subtle)]/40 bg-[var(--bg-elevated)]/50 p-2">
                             <p className="text-[9px] font-bold uppercase tracking-wider text-[var(--text-secondary)]">En ruta</p>
