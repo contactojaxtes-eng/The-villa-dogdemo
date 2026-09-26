@@ -108,6 +108,7 @@ export default function DriversPage() {
   const [editId, setEditId] = useState<string | null>(null)
   const [driverName, setDriverName] = useState('')
   const [driverPhone, setDriverPhone] = useState('')
+  const [driverActive, setDriverActive] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [settlementDriver, setSettlementDriver] = useState<Driver | null>(null)
@@ -331,6 +332,7 @@ export default function DriversPage() {
     setEditId(null)
     setDriverName('')
     setDriverPhone('')
+    setDriverActive(true)
     setError('')
     setDialogOpen(true)
   }
@@ -339,6 +341,7 @@ export default function DriversPage() {
     setEditId(driver.id)
     setDriverName(driver.name)
     setDriverPhone(driver.phone)
+    setDriverActive(driver.active)
     setError('')
     setDialogOpen(true)
   }
@@ -355,9 +358,10 @@ export default function DriversPage() {
     setSaving(true)
     setError('')
     try {
-      const payload = { name: driverName.trim(), phone: phoneClean }
+      const payload = { name: driverName.trim(), phone: phoneClean, active: driverActive }
       if (editId) {
         await api.put(`/delivery-drivers/${editId}`, payload)
+        alerts.success('Domiciliario actualizado', `Los datos de "${driverName.trim()}" fueron guardados correctamente.`)
         setDialogOpen(false)
         void loadDrivers()
       } else {
@@ -373,26 +377,53 @@ export default function DriversPage() {
           orders: [],
           portalUser: null,
         }
+        alerts.success('Domiciliario creado', `"${driverName.trim()}" fue registrado exitosamente.`)
         setDialogOpen(false)
         void openAccessDialog(newDriver)
         void loadDrivers()
       }
     } catch (err: any) {
-      setError(err.message || 'Ocurrió un error al guardar')
+      setError(err.response?.data?.message || err.message || 'Ocurrió un error al guardar')
     } finally {
       setSaving(false)
     }
   }
 
+  const handleToggleActive = async (driver: Driver) => {
+    const nextState = !driver.active
+    const actionText = nextState ? 'activar' : 'desactivar'
+    if (!window.confirm(`¿Deseas ${actionText} al domiciliario "${driver.name}"?`)) return
+    try {
+      await api.put(`/delivery-drivers/${driver.id}`, { active: nextState })
+      alerts.success('Estado actualizado', `Domiciliario "${driver.name}" fue ${nextState ? 'activado' : 'desactivado'} correctamente.`)
+      void loadDrivers()
+      void loadDriverQueue()
+    } catch (err: any) {
+      console.error('Error al cambiar estado:', err)
+      alerts.error('Error al actualizar estado', err.response?.data?.message || err.message || 'Error al cambiar estado')
+    }
+  }
+
   const handleDeleteDriver = async (driver: Driver) => {
-    const confirm = window.confirm(`¿Deseas desactivar al domiciliario "${driver.name}"? Su historial y liquidaciones se conservarán.`)
+    const hasHistory = (driver.completedDeliveries || 0) > 0 || (driver.activeDeliveries || 0) > 0
+    const confirmMsg = hasHistory
+      ? `El domiciliario "${driver.name}" tiene historial de entregas. Se desactivará para conservar los registros contables. ¿Deseas desactivarlo?`
+      : `¿Deseas eliminar definitivamente al domiciliario "${driver.name}"? Esta acción borrará el registro de la base de datos.`
+    
+    const confirm = window.confirm(confirmMsg)
     if (!confirm) return
     try {
-      await api.delete(`/delivery-drivers/${driver.id}`)
-      loadDrivers()
+      const res: any = await api.delete(`/delivery-drivers/${driver.id}`)
+      if (res?.deleted) {
+        alerts.success('Domiciliario eliminado', `El domiciliario "${driver.name}" fue eliminado definitivamente.`)
+      } else {
+        alerts.info('Domiciliario desactivado', `El domiciliario "${driver.name}" fue desactivado correctamente.`)
+      }
+      void loadDrivers()
+      void loadDriverQueue()
     } catch (err: any) {
       console.error('Error al eliminar domiciliario:', err)
-      alert(err.response?.data?.message || err.message || 'Error al eliminar domiciliario')
+      alerts.error('No se pudo eliminar', err.response?.data?.message || err.message || 'Error al eliminar domiciliario')
     }
   }
 
@@ -969,7 +1000,13 @@ export default function DriversPage() {
                             )}
                             <Badge
                               variant="outline"
-                              className={`shrink-0 rounded-full px-2 py-0.5 text-[9px] font-extrabold uppercase ${d.active ? 'border-emerald-500/20 bg-emerald-500/10 text-emerald-500' : 'border-zinc-500/20 bg-zinc-500/10 text-zinc-400'}`}
+                              onClick={() => void handleToggleActive(d)}
+                              className={`shrink-0 cursor-pointer rounded-full px-2.5 py-1 text-[9px] font-extrabold uppercase transition-all hover:scale-105 active:scale-95 ${
+                                d.active
+                                  ? 'border-emerald-500/20 bg-emerald-500/10 text-emerald-500 hover:bg-emerald-500/20'
+                                  : 'border-zinc-500/20 bg-zinc-500/10 text-zinc-400 hover:bg-zinc-500/20'
+                              }`}
+                              title={d.active ? 'Clic para desactivar' : 'Clic para activar'}
                             >
                               <span className="mr-1">●</span>{d.active ? 'Activo' : 'Inactivo'}
                             </Badge>
@@ -1064,6 +1101,17 @@ export default function DriversPage() {
                               title={d.portalUser ? 'Restablecer acceso' : 'Crear acceso individual'}
                             >
                               <User className="mr-1 h-3.5 w-3.5" /> {d.portalUser ? 'Acceso' : 'Crear acceso'}
+                            </Button>
+                            )}
+                            {hasPermission('drivers.manage') && (
+                            <Button
+                              size="icon"
+                              variant="ghost"
+                              onClick={() => void handleToggleActive(d)}
+                              className={`h-8 w-8 rounded-lg ${d.active ? 'text-amber-600 hover:bg-amber-500/10' : 'text-emerald-600 hover:bg-emerald-500/10'}`}
+                              title={d.active ? 'Desactivar domiciliario' : 'Activar domiciliario'}
+                            >
+                              {d.active ? <XCircle className="h-3.5 w-3.5" /> : <CheckCircle2 className="h-3.5 w-3.5" />}
                             </Button>
                             )}
                             {hasPermission('drivers.manage') && (
@@ -1288,6 +1336,25 @@ export default function DriversPage() {
                   placeholder="Ej: 3001234567"
                   className="bg-[var(--bg-input)] border-[var(--border-default)] rounded-xl text-xs h-10 focus:border-[var(--accent)] font-semibold"
                 />
+              </div>
+
+              <div className="flex items-center justify-between rounded-xl border border-[var(--border-default)] bg-[var(--bg-input)] p-3">
+                <div>
+                  <Label className="text-xs font-bold text-[var(--text-primary)]">Estado: {driverActive ? 'Activo' : 'Inactivo'}</Label>
+                  <p className="text-[10px] text-[var(--text-secondary)]">
+                    {driverActive ? 'Puede recibir pedidos y turnos' : 'Inactivo (no disponible para despachos)'}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setDriverActive(prev => !prev)}
+                  className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${driverActive ? 'bg-emerald-500' : 'bg-zinc-400'}`}
+                  title={driverActive ? 'Desactivar' : 'Activar'}
+                >
+                  <span
+                    className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-lg ring-0 transition duration-200 ease-in-out ${driverActive ? 'translate-x-5' : 'translate-x-0'}`}
+                  />
+                </button>
               </div>
 
               {error && (

@@ -389,11 +389,12 @@ export class DeliveryDriversService {
             password,
             phone: driver.phone,
             permissions: [],
-            active: driver.active,
+            active: true,
             mustVerifyEmail: false,
             emailVerified: true,
           },
         });
+        await this.prisma.deliveryDriver.update({ where: { id: driver.id }, data: { active: true } });
       } else {
         const account = await this.prisma.user.create({
           data: {
@@ -403,13 +404,13 @@ export class DeliveryDriversService {
             phone: driver.phone,
             role: 'DELIVERY_DRIVER',
             permissions: [],
-            active: driver.active,
+            active: true,
             mustVerifyEmail: false,
             emailVerified: true,
           },
           select: { id: true },
         });
-        await this.prisma.deliveryDriver.update({ where: { id: driver.id }, data: { userId: account.id } });
+        await this.prisma.deliveryDriver.update({ where: { id: driver.id }, data: { userId: account.id, active: true } });
       }
     } else {
       if (!data.userId) throw new BadRequestException('Selecciona el usuario que vas a vincular.');
@@ -436,10 +437,10 @@ export class DeliveryDriversService {
             name: driver.name,
             phone: driver.phone,
             permissions: [],
-            active: driver.active,
+            active: true,
           },
         }),
-        this.prisma.deliveryDriver.update({ where: { id: driver.id }, data: { userId: account.id } }),
+        this.prisma.deliveryDriver.update({ where: { id: driver.id }, data: { userId: account.id, active: true } }),
       ]);
     }
 
@@ -1160,12 +1161,30 @@ export class DeliveryDriversService {
       });
       this.socketGateway.server.emit('usersChanged');
     }
+
+    if (payload.active === false) {
+      const queueState = await this.getRawQueueState();
+      if (queueState.queue.includes(id) || queueState.breaks[id]) {
+        queueState.queue = queueState.queue.filter(driverId => driverId !== id);
+        delete queueState.breaks[id];
+        delete queueState.tripOrderCounts[id];
+        await this.saveQueueState(queueState);
+      }
+    }
+
     this.socketGateway.server.emit('driversChanged');
     return updated;
   }
 
   async remove(id: string) {
-    const driver = await this.prisma.deliveryDriver.findUnique({ where: { id } });
+    const driver = await this.prisma.deliveryDriver.findUnique({
+      where: { id },
+      include: {
+        _count: {
+          select: { orders: true, settlements: true },
+        },
+      },
+    });
     if (!driver) throw new NotFoundException('Domiciliario no encontrado');
     const activeOrder = await this.prisma.order.findFirst({
       where: {
@@ -1176,7 +1195,41 @@ export class DeliveryDriversService {
       select: { orderNumber: true },
     });
     if (activeOrder) {
-      throw new BadRequestException(`Reasigna primero el pedido #${activeOrder.orderNumber} antes de desactivar al domiciliario.`);
+      throw new BadRequestException(`Reasigna primero el pedido #${activeOrder.orderNumber} antes de eliminar o desactivar al domiciliario.`);
+    }
+
+    // Si no tiene pedidos ni liquidaciones asociadas (por ejemplo un duplicado o error al registrar):
+    // Se elimina definitivamente de la base de datos para no dejar registros huérfanos ni "hardcodeados".
+    if (driver._count.orders === 0 && driver._count.settlements === 0) {
+      await this.prisma.$transaction(async tx => {
+        await tx.deliveryDriver.delete({ where: { id } });
+        if (driver.userId) {
+          const userOrdersCount = await tx.order.count({ where: { waiterId: driver.userId } });
+          if (userOrdersCount === 0) {
+            await tx.user.delete({ where: { id: driver.userId } });
+          } else {
+            await tx.user.update({ where: { id: driver.userId }, data: { active: false } });
+          }
+        }
+      });
+
+      const queueState = await this.getRawQueueState();
+      if (queueState.queue.includes(id) || queueState.breaks[id]) {
+        queueState.queue = queueState.queue.filter(driverId => driverId !== id);
+        delete queueState.breaks[id];
+        delete queueState.tripOrderCounts[id];
+        await this.saveQueueState(queueState);
+      }
+
+      if (driver.userId) this.socketGateway.server.emit('usersChanged');
+      this.socketGateway.server.emit('driversChanged');
+      return { message: 'Domiciliario eliminado definitivamente.', deleted: true };
+    }
+
+    // Si tiene pedidos o liquidaciones históricas:
+    // Si ya está inactivo, informamos que se conserva por integridad contable
+    if (!driver.active) {
+      throw new BadRequestException('Este domiciliario ya está inactivo. No se puede borrar físicamente porque cuenta con historial de entregas contables.');
     }
 
     // El historial y las liquidaciones son contables: desactivamos en lugar de
@@ -1188,6 +1241,15 @@ export class DeliveryDriversService {
       }
       return updated;
     });
+
+    const queueState = await this.getRawQueueState();
+    if (queueState.queue.includes(id) || queueState.breaks[id]) {
+      queueState.queue = queueState.queue.filter(driverId => driverId !== id);
+      delete queueState.breaks[id];
+      delete queueState.tripOrderCounts[id];
+      await this.saveQueueState(queueState);
+    }
+
     if (driver.userId) this.socketGateway.server.emit('usersChanged');
     this.socketGateway.server.emit('driversChanged');
     return deactivated;
