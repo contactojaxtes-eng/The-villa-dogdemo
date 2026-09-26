@@ -258,7 +258,7 @@ export default function ActiveDeliveriesPage() {
   const [updatingId, setUpdatingId] = useState<string | null>(null)
   const [statusFilter, setStatusFilter] = useState<'ALL' | 'PENDING' | 'READY' | 'IN_ROUTE' | 'DELIVERED'>('ALL')
   const [orderTypeFilter, setOrderTypeFilter] = useState<'ALL' | 'DELIVERY' | 'PICKUP'>('ALL')
-  const [zoneFilter, setZoneFilter] = useState<string>('ALL')
+  const [paymentMethodFilter, setPaymentMethodFilter] = useState<'ALL' | 'CASH' | 'TRANSFER'>('ALL')
   const [clockTick, setTick] = useState(0)
   const [activeOperators, setActiveOperators] = useState<Record<string, { userId: string; userName: string }>>({})
   const [cancelDialog, setCancelDialog] = useState<{ id: string; orderNumber: number } | null>(null)
@@ -956,10 +956,15 @@ export default function ActiveDeliveriesPage() {
       // Filtrar por tipo sin esconder las recogidas al asignador.
       if (orderTypeFilter !== 'ALL' && order.orderType !== orderTypeFilter) return false
 
-      if (zoneFilter === 'NO_ZONE') {
-        if (order.zone?.name) return false
-      } else if (zoneFilter !== 'ALL' && order.zone?.name !== zoneFilter) {
-        return false
+      if (paymentMethodFilter === 'CASH') {
+        const method = (order.paymentMethod || 'CASH').toUpperCase()
+        if (method !== 'CASH' && method !== 'MIXED') return false
+        if (method === 'MIXED' && (order.cashAmount ?? 0) <= 0) return false
+      } else if (paymentMethodFilter === 'TRANSFER') {
+        const method = (order.paymentMethod || '').toUpperCase()
+        const isTransfer = ['TRANSFER', 'NEQUI', 'BANCOLOMBIA', 'DAVIPLATA'].includes(method) ||
+          (method === 'MIXED' && (order.transferAmount ?? 0) > 0)
+        if (!isTransfer) return false
       }
 
       // 1. Filtro por dropdown de repartidor
@@ -996,7 +1001,7 @@ export default function ActiveDeliveriesPage() {
       const byTime = new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
       return byTime || a.orderNumber - b.orderNumber
     })
-  }, [orders, searchQuery, selectedDriverFilter, isDeliveryStaff, orderTypeFilter, zoneFilter])
+  }, [orders, searchQuery, selectedDriverFilter, isDeliveryStaff, orderTypeFilter, paymentMethodFilter])
 
   const driverActiveOrdersMap = useMemo(() => {
     const map = new Map<string, Order[]>()
@@ -1011,14 +1016,6 @@ export default function ActiveDeliveriesPage() {
     return map
   }, [orders])
 
-  const availableZones = useMemo(() => {
-    return Array.from(new Set(
-      orders
-        .filter(order => order.orderType === 'DELIVERY')
-        .map(order => order.zone?.name)
-        .filter((name): name is string => Boolean(name))
-    )).sort((a, b) => a.localeCompare(b, 'es'))
-  }, [orders])
 
   const statusVisibleOrders = useMemo(() => {
     if (statusFilter === 'PENDING') return visibleOrders.filter(o => o.status === 'RECEIVED' || o.status === 'PENDING')
@@ -1589,7 +1586,7 @@ export default function ActiveDeliveriesPage() {
                   setSubmittedSearch('')
                   setSelectedDriverFilter('ALL')
                   setStatusFilter('ALL')
-                  setZoneFilter('ALL')
+                  setPaymentMethodFilter('ALL')
                 }}
                 title="Limpiar búsqueda y filtros"
                 aria-label="Limpiar búsqueda y filtros"
@@ -1653,17 +1650,17 @@ export default function ActiveDeliveriesPage() {
               </div>
 
               <div className="w-full shrink-0 sm:w-52">
-                <Select value={zoneFilter} onValueChange={setZoneFilter}>
+                <Select value={paymentMethodFilter} onValueChange={(val: 'ALL' | 'CASH' | 'TRANSFER') => setPaymentMethodFilter(val)}>
                   <SelectTrigger className="h-9 rounded-xl border-[var(--border-subtle)] bg-[var(--bg-panel)] text-xs font-bold">
                     <div className="flex min-w-0 items-center gap-1.5">
-                      <MapPin className="h-3.5 w-3.5 shrink-0 text-[var(--accent)]" />
-                      <SelectValue placeholder="Todos los barrios" />
+                      <DollarSign className="h-3.5 w-3.5 shrink-0 text-[var(--accent)]" />
+                      <SelectValue placeholder="Método de pago" />
                     </div>
                   </SelectTrigger>
-                  <SelectContent className="max-h-64">
-                    <SelectItem value="ALL">Todos los barrios</SelectItem>
-                    <SelectItem value="NO_ZONE">Sin barrio registrado</SelectItem>
-                    {availableZones.map(zone => <SelectItem key={zone} value={zone}>{zone}</SelectItem>)}
+                  <SelectContent>
+                    <SelectItem value="ALL">Todos los métodos</SelectItem>
+                    <SelectItem value="CASH">Efectivo</SelectItem>
+                    <SelectItem value="TRANSFER">Transferencia</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -1760,7 +1757,7 @@ export default function ActiveDeliveriesPage() {
                 setStatusFilter('ALL')
                 setDriverFilterQuery('')
                 setOrderTypeFilter('ALL')
-                setZoneFilter('ALL')
+                setPaymentMethodFilter('ALL')
                 loadOrders(false, true)
               }}
               title="Actualizar datos y limpiar filtros"
@@ -1972,17 +1969,17 @@ export default function ActiveDeliveriesPage() {
               </SelectContent>
             </Select>
 
-            <Select value={zoneFilter} onValueChange={setZoneFilter}>
+            <Select value={paymentMethodFilter} onValueChange={(value: 'ALL' | 'CASH' | 'TRANSFER') => setPaymentMethodFilter(value)}>
               <SelectTrigger className="h-11 rounded-xl border-[var(--border-subtle)] bg-[var(--bg-panel)] text-xs font-black">
                 <div className="flex min-w-0 items-center gap-2">
-                  <MapPin className="h-4 w-4 shrink-0 text-[var(--accent)]" />
-                  <SelectValue placeholder="Barrio" />
+                  <DollarSign className="h-4 w-4 shrink-0 text-[var(--accent)]" />
+                  <SelectValue placeholder="Método de pago" />
                 </div>
               </SelectTrigger>
-              <SelectContent className="max-h-72">
-                <SelectItem value="ALL">Todos los barrios</SelectItem>
-                <SelectItem value="NO_ZONE">Sin barrio registrado</SelectItem>
-                {availableZones.map(zone => <SelectItem key={zone} value={zone}>{zone}</SelectItem>)}
+              <SelectContent>
+                <SelectItem value="ALL">Todos los métodos</SelectItem>
+                <SelectItem value="CASH">Efectivo</SelectItem>
+                <SelectItem value="TRANSFER">Transferencia</SelectItem>
               </SelectContent>
             </Select>
           </div>
