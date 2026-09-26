@@ -405,20 +405,11 @@ export default function DriversPage() {
   }
 
   const handleDeleteDriver = async (driver: Driver) => {
-    const hasHistory = (driver.completedDeliveries || 0) > 0 || (driver.activeDeliveries || 0) > 0
-    const confirmMsg = hasHistory
-      ? `El domiciliario "${driver.name}" tiene historial de entregas. Se desactivará para conservar los registros contables. ¿Deseas desactivarlo?`
-      : `¿Deseas eliminar definitivamente al domiciliario "${driver.name}"? Esta acción borrará el registro de la base de datos.`
-    
-    const confirm = window.confirm(confirmMsg)
+    const confirm = window.confirm(`¿Deseas eliminar al domiciliario "${driver.name}"? Si existen registros históricos o un duplicado, se unificarán y se eliminará este perfil definitivamente.`)
     if (!confirm) return
     try {
-      const res: any = await api.delete(`/delivery-drivers/${driver.id}`)
-      if (res?.deleted) {
-        alerts.success('Domiciliario eliminado', `El domiciliario "${driver.name}" fue eliminado definitivamente.`)
-      } else {
-        alerts.info('Domiciliario desactivado', `El domiciliario "${driver.name}" fue desactivado correctamente.`)
-      }
+      await api.delete(`/delivery-drivers/${driver.id}`)
+      alerts.success('Domiciliario eliminado', `El domiciliario "${driver.name}" fue eliminado correctamente.`)
       void loadDrivers()
       void loadDriverQueue()
     } catch (err: any) {

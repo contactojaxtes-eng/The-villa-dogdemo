@@ -51,21 +51,20 @@ export class DeliveryDriversService {
     driver: { id: string; name: string; userId?: string | null },
     email: string,
   ) {
-    const requestedKeys = new Set([
-      this.normalizeAccessIdentity(email),
-      this.normalizeAccessIdentity(driver.name),
-    ].filter(Boolean));
+    const requestedEmailKey = this.normalizeAccessIdentity(email);
+    const requestedNameKey = this.normalizeAccessIdentity(driver.name);
 
     const users = await this.prisma.user.findMany({
       select: { id: true, name: true, email: true, role: true },
     });
     const duplicate = users.find(user => {
       if (user.id === driver.userId || user.email.toLowerCase().startsWith('deleted_')) return false;
-      const existingKeys = [
-        this.normalizeAccessIdentity(user.email),
-        this.normalizeAccessIdentity(user.name),
-      ].filter(Boolean);
-      return existingKeys.some(key => requestedKeys.has(key));
+      const existingEmailKey = this.normalizeAccessIdentity(user.email);
+      const existingNameKey = this.normalizeAccessIdentity(user.name);
+
+      if (existingEmailKey === requestedEmailKey) return true;
+      if (existingNameKey === requestedNameKey && user.role !== 'DELIVERY_DRIVER') return true;
+      return false;
     });
 
     if (duplicate) {
@@ -1195,53 +1194,69 @@ export class DeliveryDriversService {
       select: { orderNumber: true },
     });
     if (activeOrder) {
-      throw new BadRequestException(`Reasigna primero el pedido #${activeOrder.orderNumber} antes de eliminar o desactivar al domiciliario.`);
+      throw new BadRequestException(`Reasigna primero el pedido #${activeOrder.orderNumber} antes de eliminar al domiciliario.`);
     }
 
-    // Si no tiene pedidos ni liquidaciones asociadas (por ejemplo un duplicado o error al registrar):
-    // Se elimina definitivamente de la base de datos para no dejar registros huérfanos ni "hardcodeados".
-    if (driver._count.orders === 0 && driver._count.settlements === 0) {
-      await this.prisma.$transaction(async tx => {
-        await tx.deliveryDriver.delete({ where: { id } });
-        if (driver.userId) {
-          const userOrdersCount = await tx.order.count({ where: { waiterId: driver.userId } });
-          if (userOrdersCount === 0) {
-            await tx.user.delete({ where: { id: driver.userId } });
-          } else {
-            await tx.user.update({ where: { id: driver.userId }, data: { active: false } });
-          }
-        }
-      });
-
-      const queueState = await this.getRawQueueState();
-      if (queueState.queue.includes(id) || queueState.breaks[id]) {
-        queueState.queue = queueState.queue.filter(driverId => driverId !== id);
-        delete queueState.breaks[id];
-        delete queueState.tripOrderCounts[id];
-        await this.saveQueueState(queueState);
-      }
-
-      if (driver.userId) this.socketGateway.server.emit('usersChanged');
-      this.socketGateway.server.emit('driversChanged');
-      return { message: 'Domiciliario eliminado definitivamente.', deleted: true };
-    }
-
-    // Si tiene pedidos o liquidaciones históricas:
-    // Si ya está inactivo, informamos que se conserva por integridad contable
-    if (!driver.active) {
-      throw new BadRequestException('Este domiciliario ya está inactivo. No se puede borrar físicamente porque cuenta con historial de entregas contables.');
-    }
-
-    // El historial y las liquidaciones son contables: desactivamos en lugar de
-    // borrar para no perder la trazabilidad ni romper relaciones existentes.
-    const deactivated = await this.prisma.$transaction(async tx => {
-      const updated = await tx.deliveryDriver.update({ where: { id }, data: { active: false } });
-      if (driver.userId) {
-        await tx.user.update({ where: { id: driver.userId }, data: { active: false } });
-      }
-      return updated;
+    // Buscar si existe un domiciliario duplicado con el mismo teléfono o nombre para unificar
+    const duplicateDriver = await this.prisma.deliveryDriver.findFirst({
+      where: {
+        id: { not: id },
+        OR: [
+          { phone: driver.phone },
+          { name: { equals: driver.name, mode: 'insensitive' } },
+        ],
+      },
     });
 
+    await this.prisma.$transaction(async tx => {
+      if (duplicateDriver) {
+        // Reasignar los pedidos y liquidaciones al domiciliario duplicado para no perder trazabilidad
+        await tx.order.updateMany({
+          where: { deliveryDriverId: id },
+          data: { deliveryDriverId: duplicateDriver.id },
+        });
+        await tx.driverSettlement.updateMany({
+          where: { driverId: id },
+          data: { driverId: duplicateDriver.id },
+        });
+        // Si el que se va a borrar tenía usuario y el duplicado no, transferir el usuario
+        if (driver.userId && !duplicateDriver.userId) {
+          await tx.deliveryDriver.update({
+            where: { id: duplicateDriver.id },
+            data: { userId: driver.userId, active: true },
+          });
+        } else {
+          await tx.deliveryDriver.update({
+            where: { id: duplicateDriver.id },
+            data: { active: true },
+          });
+        }
+      } else {
+        // Si no hay duplicado, desvincular los pedidos históricos para no romper integridad foránea
+        await tx.order.updateMany({
+          where: { deliveryDriverId: id },
+          data: { deliveryDriverId: null },
+        });
+        await tx.driverSettlement.deleteMany({
+          where: { driverId: id },
+        });
+      }
+
+      // Eliminar el domiciliario de la tabla delivery_drivers
+      await tx.deliveryDriver.delete({ where: { id } });
+
+      // Si tenía usuario y no se transfirió al duplicado
+      if (driver.userId && (!duplicateDriver || duplicateDriver.userId !== driver.userId)) {
+        const userOrdersCount = await tx.order.count({ where: { waiterId: driver.userId } });
+        if (userOrdersCount === 0) {
+          await tx.user.delete({ where: { id: driver.userId } });
+        } else {
+          await tx.user.update({ where: { id: driver.userId }, data: { active: false } });
+        }
+      }
+    });
+
+    // Limpiar de la fila de turnos
     const queueState = await this.getRawQueueState();
     if (queueState.queue.includes(id) || queueState.breaks[id]) {
       queueState.queue = queueState.queue.filter(driverId => driverId !== id);
@@ -1252,7 +1267,7 @@ export class DeliveryDriversService {
 
     if (driver.userId) this.socketGateway.server.emit('usersChanged');
     this.socketGateway.server.emit('driversChanged');
-    return deactivated;
+    return { message: 'Domiciliario eliminado definitivamente.', deleted: true };
   }
 
   // ── Queue & Break Management (Cola de Turnos Equitativa & Cena/Descanso) ──
