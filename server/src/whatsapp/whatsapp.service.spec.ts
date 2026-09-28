@@ -918,6 +918,7 @@ describe('WhatsApp order chat isolation', () => {
           cashAmount: 0,
           transferAmount: 12000,
           chatSessionId: 'session-1',
+          createdAt: new Date('2026-09-20T20:00:00.000Z'),
           transferProofs: [{
             id: 'proof-1',
             status: 'PENDING',
@@ -940,11 +941,13 @@ describe('WhatsApp order chat isolation', () => {
             createdAt: new Date('2026-09-20T12:00:00.000Z'),
           }],
         }),
+        findFirst: jest.fn().mockResolvedValue(null),
       },
       whatsAppSession: { findUnique: jest.fn().mockResolvedValue({ id: 'session-1', phone: '573001234567' }) },
       whatsAppMessage: {
         count: jest.fn().mockResolvedValue(1),
         findMany: jest.fn().mockResolvedValue(messages),
+        updateMany: jest.fn(),
       },
     };
     const service = new WhatsappService(prisma, { get: jest.fn() } as any, { emitWhatsApp: jest.fn() } as any);
@@ -985,17 +988,28 @@ describe('WhatsApp order chat isolation', () => {
     }));
   });
 
-  it('keeps an unquoted message unlinked instead of guessing an active order', async () => {
+  it('keeps an unquoted message unlinked when there are no active orders or multiple active orders', async () => {
     const prisma: any = {
-      order: { findMany: jest.fn() },
+      order: { findMany: jest.fn().mockResolvedValue([]) },
       whatsAppMessage: { findFirst: jest.fn() },
     };
     const service = new WhatsappService(prisma, { get: jest.fn() } as any, { emitWhatsApp: jest.fn() } as any);
 
     await expect((service as any).resolveMessageOrderId('session-1')).resolves.toBeNull();
 
-    expect(prisma.order.findMany).not.toHaveBeenCalled();
-    expect(prisma.whatsAppMessage.findFirst).not.toHaveBeenCalled();
+    // With multiple active orders, remain unlinked to prevent guessing
+    prisma.order.findMany.mockResolvedValueOnce([{ id: 'order-1' }, { id: 'order-2' }]);
+    await expect((service as any).resolveMessageOrderId('session-1')).resolves.toBeNull();
+  });
+
+  it('links an unquoted message when there is exactly one active delivery/pickup order', async () => {
+    const prisma: any = {
+      order: { findMany: jest.fn().mockResolvedValue([{ id: 'order-active-1' }]) },
+      whatsAppMessage: { findFirst: jest.fn() },
+    };
+    const service = new WhatsappService(prisma, { get: jest.fn() } as any, { emitWhatsApp: jest.fn() } as any);
+
+    await expect((service as any).resolveMessageOrderId('session-1')).resolves.toBe('order-active-1');
   });
 
   it('inherits the exact order from the replied message without scanning another chat', async () => {
@@ -1018,38 +1032,10 @@ describe('WhatsApp order chat isolation', () => {
     expect(prisma.order.findMany).not.toHaveBeenCalled();
   });
 
-  it('does not backfill legacy messages when two orders share the same session and shift', async () => {
-    const prisma: any = {
-      order: {
-        findUnique: jest.fn().mockResolvedValue({
-          id: 'order-1',
-          chatSessionId: 'session-1',
-          cashClosingId: 'shift-1',
-          createdAt: new Date('2026-09-20T20:00:00.000Z'),
-          cashClosing: { shiftStart: new Date('2026-09-20T16:00:00.000Z'), shiftEnd: null, isOpen: true },
-        }),
-        count: jest.fn().mockResolvedValue(2),
-      },
-      whatsAppMessage: {
-        count: jest.fn().mockResolvedValue(0),
-        updateMany: jest.fn(),
-      },
-    };
-    const service = new WhatsappService(prisma, { get: jest.fn() } as any, { emitWhatsApp: jest.fn() } as any);
-
-    await service.ensureLegacyOrderMessageLinks('order-1');
-
-    expect(prisma.order.count).toHaveBeenCalledWith({
-      where: {
-        chatSessionId: 'session-1',
-        orderType: { in: ['DELIVERY', 'PICKUP'] },
-      },
-    });
-    expect(prisma.whatsAppMessage.updateMany).not.toHaveBeenCalled();
-  });
-
-  it('backfills only unassigned messages created before the sole legacy order', async () => {
+  it('bounds legacy message backfilling between adjacent orders in the same session', async () => {
     const orderCreatedAt = new Date('2026-09-20T20:00:00.000Z');
+    const prevOrderCreatedAt = new Date('2026-09-20T19:00:00.000Z');
+    const nextOrderCreatedAt = new Date('2026-09-20T21:30:00.000Z');
     const prisma: any = {
       order: {
         findUnique: jest.fn().mockResolvedValue({
@@ -1057,10 +1043,11 @@ describe('WhatsApp order chat isolation', () => {
           chatSessionId: 'session-1',
           createdAt: orderCreatedAt,
         }),
-        count: jest.fn().mockResolvedValue(1),
+        findFirst: jest.fn()
+          .mockResolvedValueOnce({ createdAt: prevOrderCreatedAt })
+          .mockResolvedValueOnce({ createdAt: nextOrderCreatedAt }),
       },
       whatsAppMessage: {
-        count: jest.fn().mockResolvedValue(0),
         updateMany: jest.fn().mockResolvedValue({ count: 2 }),
       },
     };
@@ -1073,14 +1060,13 @@ describe('WhatsApp order chat isolation', () => {
         sessionId: 'session-1',
         orderId: null,
         createdAt: {
-          gte: new Date('2026-09-20T18:00:00.000Z'),
-          lte: orderCreatedAt,
+          gte: prevOrderCreatedAt,
+          lte: nextOrderCreatedAt,
         },
       },
       data: { orderId: 'order-1' },
     });
   });
-
 
   it('never backfills before the delivery shift started', async () => {
     const orderCreatedAt = new Date('2026-09-20T20:00:00.000Z');
@@ -1093,10 +1079,9 @@ describe('WhatsApp order chat isolation', () => {
           createdAt: orderCreatedAt,
           cashClosing: { shiftStart },
         }),
-        count: jest.fn().mockResolvedValue(1),
+        findFirst: jest.fn().mockResolvedValue(null),
       },
       whatsAppMessage: {
-        count: jest.fn().mockResolvedValue(0),
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       },
     };
@@ -1106,7 +1091,7 @@ describe('WhatsApp order chat isolation', () => {
 
     expect(prisma.whatsAppMessage.updateMany).toHaveBeenCalledWith(expect.objectContaining({
       where: expect.objectContaining({
-        createdAt: { gte: shiftStart, lte: orderCreatedAt },
+        createdAt: { gte: shiftStart, lte: expect.any(Date) },
       }),
     }));
   });

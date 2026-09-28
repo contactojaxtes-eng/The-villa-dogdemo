@@ -1810,8 +1810,11 @@ export default function NewOrderPage({
 
     const chatParseKey = chatSessionId ? `${chatSessionId}:${chatTranscriptRevision}` : null
     if (chatSessionId && categories.length > 0 && lastParsedSessionIdRef.current !== chatParseKey) {
+      const isDifferentSession = !lastParsedSessionIdRef.current || !lastParsedSessionIdRef.current.startsWith(chatSessionId + ':')
       lastParsedSessionIdRef.current = chatParseKey
-      orderChatMessageIdsRef.current = []
+      if (isDifferentSession) {
+        orderChatMessageIdsRef.current = []
+      }
       userInteractedWithCartRef.current = false
       userClearedDraftRef.current = false
       

@@ -319,8 +319,8 @@ export class WhatsappController {
   @Post('send')
   @UseGuards(JwtAuthGuard, PermissionsGuard)
   @Permissions('whatsapp.reply')
-  async sendMessage(@Body() body: { phone: string; text: string; replyToWaMessageId?: string; replyToContent?: string; sessionId?: string }) {
-    const result = await this.whatsappService.sendMessage(body.phone, body.text, body.replyToWaMessageId, body.replyToContent, body.sessionId);
+  async sendMessage(@Body() body: { phone: string; text: string; replyToWaMessageId?: string; replyToContent?: string; sessionId?: string; orderId?: string }) {
+    const result = await this.whatsappService.sendMessage(body.phone, body.text, body.replyToWaMessageId, body.replyToContent, body.sessionId, body.orderId);
     if (!result.sent) {
       const resAny = result as any;
       const errorMsg = resAny.error?.message 
@@ -374,12 +374,14 @@ export class WhatsappController {
     @Body('phone') phone: string,
     @Body('type') type: 'image' | 'audio' | 'document' | 'video',
     @Body('caption') caption: string,
-    @UploadedFile() file: any,
+    @Body('sessionId') sessionId?: string,
+    @Body('orderId') orderId?: string,
+    @UploadedFile() file?: any,
   ) {
     if (!file) {
       throw new BadRequestException('Archivo no provisto');
     }
-    const result = await this.whatsappService.sendMediaMessage(phone, file.buffer, file.originalname, file.mimetype, type, caption);
+    const result = await this.whatsappService.sendMediaMessage(phone, file.buffer, file.originalname, file.mimetype, type, caption, sessionId, orderId);
     if (!result.sent) {
       throw new BadRequestException(result.reason || 'Error al enviar multimedia');
     }
@@ -403,11 +405,15 @@ export class WhatsappController {
   @Post('send-payment-qr')
   @UseGuards(JwtAuthGuard, PermissionsGuard)
   @Permissions('whatsapp.media', 'whatsapp.reply')
-  async sendPaymentQr(@Body('phone') phone: string) {
+  async sendPaymentQr(
+    @Body('phone') phone: string,
+    @Body('orderId') orderId?: string,
+    @Body('sessionId') sessionId?: string,
+  ) {
     if (!phone) {
       throw new BadRequestException('Teléfono no provisto');
     }
-    const result: any = await this.whatsappService.sendPaymentQr(phone);
+    const result: any = await this.whatsappService.sendPaymentQr(phone, orderId, sessionId);
     if (!result.sent) {
       throw new BadRequestException(result.reason || result.error || 'Error al enviar el QR de pago');
     }

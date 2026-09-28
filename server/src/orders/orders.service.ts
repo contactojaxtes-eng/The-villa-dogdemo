@@ -969,24 +969,40 @@ export class OrdersService implements OnModuleInit {
     sessionId?: string,
     rawMessageIds?: string[],
   ): Promise<void> {
-    if (!sessionId || !Array.isArray(rawMessageIds)) return;
+    if (!sessionId) return;
 
-    const messageIds = [...new Set(
-      rawMessageIds
-        .map(id => String(id || '').trim())
-        .filter(id => id.length > 0 && id.length <= 128),
-    )].slice(-200);
-    if (messageIds.length === 0) return;
+    const messageIds = Array.isArray(rawMessageIds)
+      ? [...new Set(
+          rawMessageIds
+            .map(id => String(id || '').trim())
+            .filter(id => id.length > 0 && id.length <= 128),
+        )].slice(-200)
+      : [];
 
-    // Nuevo pedido solo selecciona el tramo reciente de la conversación. El
-    // servidor repite ese límite para que un cliente modificado no pueda
-    // vincular historial antiguo aunque conozca sus IDs.
+    if (messageIds.length > 0) {
+      // Nuevo pedido solo selecciona el tramo reciente de la conversación. El
+      // servidor repite ese límite para que un cliente modificado no pueda
+      // vincular historial antiguo aunque conozca sus IDs.
+      await tx.whatsAppMessage.updateMany({
+        where: {
+          id: { in: messageIds },
+          sessionId,
+          orderId: null,
+          createdAt: { gte: new Date(Date.now() - 2 * 60 * 60 * 1000) },
+        },
+        data: { orderId },
+      });
+      return;
+    }
+
+    // Respaldo de seguridad: si no llegaron IDs seleccionados (ej. pedido creado
+    // antes de terminar el parseo del chat), vincular mensajes huérfanos de los
+    // últimos 45 minutos para que el domiciliario no pierda el contexto.
     await tx.whatsAppMessage.updateMany({
       where: {
-        id: { in: messageIds },
         sessionId,
         orderId: null,
-        createdAt: { gte: new Date(Date.now() - 2 * 60 * 60 * 1000) },
+        createdAt: { gte: new Date(Date.now() - 45 * 60 * 1000) },
       },
       data: { orderId },
     });

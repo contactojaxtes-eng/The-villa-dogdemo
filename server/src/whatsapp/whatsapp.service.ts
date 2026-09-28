@@ -71,9 +71,25 @@ export class WhatsappService implements OnModuleInit {
       if (replied?.orderId) return replied.orderId;
     }
 
-    // Sin una señal explícita no se adivina el pedido por estado o por
-    // teléfono. Un cliente puede iniciar otro pedido mientras el anterior aún
-    // está activo; vincularlo por ser el único candidato mezclaría ambos chats.
+    // Si el cliente escribe sin citar un mensaje anterior (ej. envía un comprobante,
+    // una nota de entrega o aclaración), asociar al pedido activo cuando exista
+    // exactamente UN pedido en curso para esta sesión.
+    // Esto permite que el domiciliario reciba en tiempo real los mensajes del cliente
+    // (comprobantes de pago, indicaciones de entrega, notas, etc.).
+    const activeOrders = await this.prisma.order.findMany({
+      where: {
+        chatSessionId: sessionId,
+        orderType: { in: ['DELIVERY', 'PICKUP'] },
+        status: { in: ['PENDING', 'CONFIRMED', 'PREPARING', 'IN_ROUTE'] },
+      },
+      select: { id: true },
+      take: 2,
+    });
+
+    if (activeOrders.length === 1) {
+      return activeOrders[0].id;
+    }
+
     return null;
   }
 
@@ -86,10 +102,9 @@ export class WhatsappService implements OnModuleInit {
   }
 
   /**
-   * Recupera contexto anterior al despliegue solo cuando la conversación no
-   * ha tenido ningún otro domicilio o pedido para recoger. El límite superior
-   * es la creación del pedido: nunca reclama mensajes posteriores que podrían
-   * corresponder a una compra nueva aún no creada.
+   * Recupera contexto de mensajes para el chat del pedido delimitando
+   * la ventana temporal entre pedidos contiguos de la misma sesión.
+   * Vincula tanto mensajes de creación como aclaraciones posteriores.
    */
   async ensureLegacyOrderMessageLinks(orderId: string): Promise<void> {
     const order = await this.prisma.order.findUnique({
@@ -98,32 +113,49 @@ export class WhatsappService implements OnModuleInit {
         id: true,
         chatSessionId: true,
         createdAt: true,
+        status: true,
         cashClosing: { select: { shiftStart: true } },
       },
     });
-    if (!order?.chatSessionId) return;
+    if (!order?.chatSessionId || !order?.createdAt) return;
 
-    const alreadyLinked = await this.prisma.whatsAppMessage.count({ where: { orderId: order.id } });
-    if (alreadyLinked > 0) return;
-
-    const sameSessionOrders = await this.prisma.order.count({
-      where: {
-        chatSessionId: order.chatSessionId,
-        orderType: { in: ['DELIVERY', 'PICKUP'] },
-      },
-    });
-    if (sameSessionOrders !== 1) return;
+    // Buscar el pedido anterior y posterior en la misma sesión para delimitar la ventana
+    const [prevOrder, nextOrder] = await Promise.all([
+      this.prisma.order.findFirst({
+        where: {
+          chatSessionId: order.chatSessionId,
+          orderType: { in: ['DELIVERY', 'PICKUP'] },
+          createdAt: { lt: order.createdAt },
+        },
+        orderBy: { createdAt: 'desc' },
+        select: { createdAt: true },
+      }),
+      this.prisma.order.findFirst({
+        where: {
+          chatSessionId: order.chatSessionId,
+          orderType: { in: ['DELIVERY', 'PICKUP'] },
+          createdAt: { gt: order.createdAt },
+        },
+        orderBy: { createdAt: 'asc' },
+        select: { createdAt: true },
+      }),
+    ]);
 
     const twoHoursBefore = new Date(order.createdAt.getTime() - 2 * 60 * 60 * 1000);
     const shiftStart = order.cashClosing?.shiftStart;
-    const start = shiftStart && shiftStart > twoHoursBefore ? shiftStart : twoHoursBefore;
-    if (start > order.createdAt) return;
+    const earliestAllowed = shiftStart && shiftStart > twoHoursBefore ? shiftStart : twoHoursBefore;
+    const start = prevOrder && prevOrder.createdAt > earliestAllowed ? prevOrder.createdAt : earliestAllowed;
+
+    const fourHoursAfter = new Date(order.createdAt.getTime() + 4 * 60 * 60 * 1000);
+    const end = nextOrder && nextOrder.createdAt < fourHoursAfter ? nextOrder.createdAt : fourHoursAfter;
+
+    if (start >= end) return;
 
     await this.prisma.whatsAppMessage.updateMany({
       where: {
         sessionId: order.chatSessionId,
         orderId: null,
-        createdAt: { gte: start, lte: order.createdAt },
+        createdAt: { gte: start, lte: end },
       },
       data: { orderId: order.id },
     });
@@ -836,8 +868,10 @@ export class WhatsappService implements OnModuleInit {
     this.socketGateway.emitWhatsApp('whatsappSettingsUpdated', await this.getSettings());
   }
 
-  async sendPaymentQr(phone: string) {
-    const targetSession = await this.resolveSessionForDispatch(phone);
+  async sendPaymentQr(phone: string, orderId?: string, sessionId?: string) {
+    const targetSession = sessionId
+      ? await this.prisma.whatsAppSession.findUnique({ where: { id: sessionId } })
+      : await this.resolveSessionForDispatch(phone);
     const { recipientPhone, lastInWaId, isId } = await this.resolveActiveRecipient(targetSession, phone);
     const cleanPhone = this.formatRecipient(recipientPhone);
     const now = Date.now();
@@ -871,12 +905,12 @@ export class WhatsappService implements OnModuleInit {
       if (!accountText) {
         throw new BadRequestException('Configura primero los datos de la cuenta en Configuración > WhatsApp y envíos.');
       }
-      return this.sendMessage(cleanPhone, accountText);
+      return this.sendMessage(cleanPhone, accountText, undefined, undefined, sessionId, orderId);
     }
 
     const fileValue = qrSettings.chatbot_payment_qr_base64;
     if (!fileValue) {
-      if (accountText) return this.sendMessage(cleanPhone, accountText);
+      if (accountText) return this.sendMessage(cleanPhone, accountText, undefined, undefined, sessionId, orderId);
       throw new BadRequestException('Configura primero una imagen QR o los datos de la cuenta.');
     }
 
@@ -927,7 +961,7 @@ export class WhatsappService implements OnModuleInit {
 
           const msgContent = caption ? `${mediaId}|${caption}` : mediaId;
 
-          const linkedOrderId = await this.resolveMessageOrderId(session.id);
+          const linkedOrderId = await this.resolveMessageOrderId(session.id, { explicitOrderId: orderId });
           const newMsg = await this.prisma.whatsAppMessage.create({
             data: {
               waMessageId: sendData.messages?.[0]?.id || `out-${Date.now()}`,
@@ -964,7 +998,7 @@ export class WhatsappService implements OnModuleInit {
 
     // 2. Si no estaba cacheado, subirlo y guardar ID
     const buffer = Buffer.from(fileValue, 'base64');
-    return this.sendMediaMessage(cleanPhone, buffer, fileName, mimeType, 'image', caption);
+    return this.sendMediaMessage(cleanPhone, buffer, fileName, mimeType, 'image', caption, sessionId, orderId);
   }
 
   private menuSendingLocks = new Map<string, number>();
@@ -3449,6 +3483,8 @@ The Villa Dog • Montería`;
     mimeType: string,
     type: 'image' | 'audio' | 'document' | 'video',
     caption?: string,
+    sessionId?: string,
+    orderId?: string,
   ) {
     const phoneId = await this.getSetting('whatsapp_phone_id');
     const token = await this.getSetting('whatsapp_token');
@@ -3457,7 +3493,9 @@ The Villa Dog • Montería`;
       return { sent: false, reason: 'not_configured' };
     }
 
-    const targetSession = await this.resolveSessionForDispatch(phone);
+    const targetSession = sessionId
+      ? await this.prisma.whatsAppSession.findUnique({ where: { id: sessionId }, include: { assignedTo: { select: { id: true, name: true } } } })
+      : await this.resolveSessionForDispatch(phone);
     const { recipientPhone, lastInWaId, isId } = await this.resolveActiveRecipient(targetSession, phone);
     const formattedPhone = this.formatRecipient(recipientPhone);
 
@@ -3532,7 +3570,7 @@ The Villa Dog • Montería`;
 
         const msgContent = caption ? `${mediaId}|${caption}` : mediaId;
 
-        const linkedOrderId = await this.resolveMessageOrderId(session.id);
+        const linkedOrderId = await this.resolveMessageOrderId(session.id, { explicitOrderId: orderId });
         const newMsg = await this.prisma.whatsAppMessage.create({
           data: {
             waMessageId: sendData.messages?.[0]?.id || `out-${Date.now()}`,

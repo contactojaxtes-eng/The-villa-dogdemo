@@ -1408,6 +1408,8 @@ function ChatPage() {
       formData.append('file', file)
       formData.append('phone', activeSession!.phone)
       formData.append('type', 'audio')
+      if (activeSession?.id) formData.append('sessionId', activeSession.id)
+      if (activeOrder?.id) formData.append('orderId', activeOrder.id)
 
       await api.post('/whatsapp/send-media', formData)
       setActiveSession(prev => prev && prev.id === activeSession!.id ? { ...prev, unreadCount: 0 } : prev)
@@ -2238,6 +2240,8 @@ function ChatPage() {
     if (captionText?.trim()) {
       formData.append('caption', captionText.trim())
     }
+    if (currentSession?.id) formData.append('sessionId', currentSession.id)
+    if (activeOrder?.id) formData.append('orderId', activeOrder.id)
 
     try {
       await api.post('/whatsapp/send-media', formData)
@@ -2402,6 +2406,7 @@ function ChatPage() {
         phone: activeSession.phone,
         text: cleanText,
         sessionId: activeSession.id,
+        orderId: activeOrder?.id || undefined,
         ...(replyWaId ? { replyToWaMessageId: replyWaId, replyToContent: replyContent } : {})
       })
 
@@ -2461,6 +2466,7 @@ function ChatPage() {
           phone: activeSession.phone,
           text: text,
           sessionId: activeSession.id,
+          orderId: activeOrder?.id || undefined,
         })
         if (result.message) {
           const persisted = result.message
@@ -2528,7 +2534,11 @@ function ChatPage() {
 
     setSendingPaymentQr(true)
     try {
-      await api.post('/whatsapp/send-payment-qr', { phone: activeSession.phone })
+      await api.post('/whatsapp/send-payment-qr', {
+        phone: activeSession.phone,
+        orderId: activeOrder?.id || undefined,
+        sessionId: activeSession.id,
+      })
       setActiveSession(prev => prev && prev.id === activeSession.id ? { ...prev, unreadCount: 0 } : prev)
       setSessions(prev => prev.map(s => s.id === activeSession.id ? { ...s, unreadCount: 0 } : s))
     } catch (err: any) {
