@@ -24,6 +24,8 @@ export class WhatsappService implements OnModuleInit {
   private readonly maxMediaCacheBytes = 32 * 1024 * 1024;
   private readonly maxMediaCacheItems = 50;
   private readonly mediaCacheTtlMs = 6 * 60 * 60 * 1000;
+  private readonly geminiKeyCursors = new Map<string, number>();
+  private readonly geminiKeyCooldownUntil = new Map<string, number>();
 
   constructor(
     private prisma: PrismaService,
@@ -3784,12 +3786,14 @@ Restaurante (Tú):
           menuFollowupRule, session, paymentInstruction, conversationPrompt,
         });
 
-      let lastError = null;
-      let data = null;
+      let lastError: any = null;
+      let data: any = null;
       const modelsToTry = await this.getGeminiModels();
 
-      for (const key of apiKeys) {
+      for (const key of this.getGeminiKeyCandidates(apiKeys)) {
+        if (this.isGeminiKeyOnCooldown(key)) continue;
         for (const model of modelsToTry) {
+          if (this.isGeminiKeyOnCooldown(key)) break;
           const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`;
           const payload = {
             contents: [{
@@ -3814,20 +3818,28 @@ Restaurante (Tú):
 
             if (!response.ok) {
               if (response.status === 429 || response.status === 403) {
-                this.logger.warn(`API Key (...${key.slice(-4)}) arrojó HTTP ${response.status} (límite alcanzado). Conmutando de inmediato a la siguiente clave API...`);
-                break; // Conmuta de inmediato a la siguiente clave API sin perder tiempo
+                await this.putGeminiKeyOnCooldown(key, response);
+                lastError = new Error(`Gemini no puede usar temporalmente la llave ...${key.slice(-4)}`);
+                break;
               }
               throw new Error(`Gemini API returned status ${response.status}`);
             }
-            data = await response.json();
+            const candidateData: any = await response.json();
+            const candidateReply = String(candidateData?.candidates?.[0]?.content?.parts?.[0]?.text || '').trim();
+            if (!this.isMeaningfulGeminiReply(candidateReply)) {
+              lastError = new Error('Gemini no devolvió texto para este mensaje');
+              continue;
+            }
+            data = candidateData;
             await this.incrementGeminiUsage();
-            break; // Si funciona, salimos del ciclo de modelos y continuamos
+            break;
           } catch (e: any) {
-            this.logger.warn(`Error con modelo ${model} y API key (...${key.slice(-4)}): ${e.message}. Probando siguiente opción...`);
+            const safeError = this.sanitizeGeminiError(e, apiKeys);
+            this.logger.warn(`Error con modelo ${model} y API key (...${key.slice(-4)}): ${safeError}. Probando siguiente opción...`);
             lastError = e;
           }
         }
-        if (data) break; // Si ya obtuvimos respuesta exitosa, salimos del ciclo de llaves
+        if (data) break;
       }
 
       if (!data) {
@@ -4455,6 +4467,118 @@ Restaurante (Tú):
     return Array.from(new Set(resolved));
   }
 
+  /**
+   * Returns the keys in the order a single Gemini operation must try them.
+   * The first key advances on every operation, so configured projects share
+   * traffic evenly instead of exhausting the first key before using the next.
+   */
+  private getGeminiKeyCandidates(rawKeys: string[], now = Date.now()): string[] {
+    const keys = Array.from(new Set(rawKeys.map(key => String(key || '').trim()).filter(Boolean)));
+    if (keys.length === 0) return [];
+
+    for (const [key, cooldownUntil] of this.geminiKeyCooldownUntil.entries()) {
+      if (cooldownUntil <= now) this.geminiKeyCooldownUntil.delete(key);
+    }
+
+    const poolId = keys.join('\u001f');
+    const cursor = this.geminiKeyCursors.get(poolId) || 0;
+    const startIndex = ((cursor % keys.length) + keys.length) % keys.length;
+    const candidates: string[] = [];
+    for (let offset = 0; offset < keys.length; offset += 1) {
+      const keyIndex = (startIndex + offset) % keys.length;
+      const key = keys[keyIndex];
+      if ((this.geminiKeyCooldownUntil.get(key) || 0) > now) continue;
+      candidates.push(key);
+    }
+
+    if (candidates.length > 0) {
+      this.advanceGeminiKeyCursor(keys, candidates[0]);
+    }
+
+    return candidates;
+  }
+
+  private advanceGeminiKeyCursor(rawKeys: string[], apiKey: string): void {
+    const keys = Array.from(new Set(rawKeys.map(key => String(key || '').trim()).filter(Boolean)));
+    const usedIndex = keys.indexOf(apiKey);
+    if (usedIndex < 0) return;
+    this.geminiKeyCursors.set(keys.join('\u001f'), (usedIndex + 1) % keys.length);
+  }
+
+  private isGeminiKeyOnCooldown(apiKey: string, now = Date.now()): boolean {
+    const cooldownUntil = this.geminiKeyCooldownUntil.get(apiKey) || 0;
+    if (cooldownUntil > now) return true;
+    if (cooldownUntil) this.geminiKeyCooldownUntil.delete(apiKey);
+    return false;
+  }
+
+  private geminiRetryDelayMs(status: number, response?: any, errorBody?: unknown): number {
+    const defaultDelay = status === 403 ? 5 * 60_000 : 60_000;
+    const retryAfter = response?.headers?.get?.('retry-after');
+    let requestedDelay = 0;
+
+    if (retryAfter) {
+      const seconds = Number(retryAfter);
+      if (Number.isFinite(seconds) && seconds >= 0) {
+        requestedDelay = seconds * 1000;
+      } else {
+        const retryAt = Date.parse(retryAfter);
+        if (Number.isFinite(retryAt)) requestedDelay = Math.max(0, retryAt - Date.now());
+      }
+    }
+
+    let serializedBody = '';
+    try {
+      serializedBody = typeof errorBody === 'string' ? errorBody : JSON.stringify(errorBody || '');
+    } catch {
+      serializedBody = '';
+    }
+    const retryDelayMatch = serializedBody.match(/retryDelay["']?\s*:\s*["']?([\d.]+)s/i)
+      || serializedBody.match(/retry(?:\s+in|\s+after)?\s+([\d.]+)\s*(?:s|sec|second)/i);
+    if (retryDelayMatch) {
+      requestedDelay = Math.max(requestedDelay, Number(retryDelayMatch[1]) * 1000);
+    }
+
+    const effectiveDelay = requestedDelay > 0 ? requestedDelay : defaultDelay;
+    return Math.min(24 * 60 * 60_000, Math.max(5_000, effectiveDelay));
+  }
+
+  private async putGeminiKeyOnCooldown(apiKey: string, response: any): Promise<unknown> {
+    const status = Number(response?.status || 429);
+    const receivedAt = Date.now();
+    const initialDelayMs = this.geminiRetryDelayMs(status, response);
+    this.geminiKeyCooldownUntil.set(
+      apiKey,
+      Math.max(this.geminiKeyCooldownUntil.get(apiKey) || 0, receivedAt + initialDelayMs),
+    );
+
+    let errorBody: unknown = null;
+    try {
+      if (typeof response?.text === 'function') {
+        const errorText = await response.text();
+        try {
+          errorBody = JSON.parse(errorText);
+        } catch {
+          errorBody = errorText;
+        }
+      } else if (typeof response?.json === 'function') {
+        errorBody = await response.json();
+      }
+    } catch {
+      errorBody = null;
+    }
+
+    const delayMs = this.geminiRetryDelayMs(status, response, errorBody);
+    this.geminiKeyCooldownUntil.set(
+      apiKey,
+      Math.max(this.geminiKeyCooldownUntil.get(apiKey) || 0, receivedAt + delayMs),
+    );
+    this.logger.warn(
+      `Gemini key (...${apiKey.slice(-4)}) quedó en pausa ${Math.ceil(delayMs / 1000)} s tras HTTP ${status}; se usará la siguiente llave.`,
+    );
+    return errorBody;
+  }
+
   private isValidGeminiModel(model: string): boolean {
     return /^[a-zA-Z0-9._-]{3,100}$/.test(model);
   }
@@ -4735,6 +4859,10 @@ Restaurante (Tú):
           if (res.ok) {
             const data: any = await res.json();
             const reply = String(data?.candidates?.[0]?.content?.parts?.[0]?.text || '').trim();
+            if (!this.isMeaningfulGeminiReply(reply)) {
+              lastError = 'Gemini no devolvió texto para esta prueba';
+              continue;
+            }
             await this.incrementGeminiUsage();
             result = {
               key: `••••${apiKey.slice(-4)}`,
@@ -4746,7 +4874,9 @@ Restaurante (Tú):
             break;
           }
 
-          const errJson: any = await res.json().catch(() => null);
+          const errJson: any = res.status === 403 || res.status === 429
+            ? await this.putGeminiKeyOnCooldown(apiKey, res)
+            : await res.json().catch(() => null);
           lastError = this.sanitizeGeminiError(
             errJson?.error?.message || `Gemini respondió HTTP ${res.status}`,
             keysToTest,
@@ -4933,9 +5063,15 @@ Restaurante (Tú):
     });
     const modelsToTry = await this.getGeminiModels(model);
     let lastError = 'El proveedor no devolvió una respuesta válida';
+    const keyCandidates = this.getGeminiKeyCandidates(apiKeys);
+    if (keyCandidates.length === 0) {
+      lastError = 'Todas las llaves están temporalmente en pausa por cuota';
+    }
 
-    for (const apiKey of apiKeys) {
+    for (const apiKey of keyCandidates) {
+      if (this.isGeminiKeyOnCooldown(apiKey)) continue;
       for (const candidateModel of modelsToTry) {
+        if (this.isGeminiKeyOnCooldown(apiKey)) break;
         const startedAt = Date.now();
         try {
           const url = `https://generativelanguage.googleapis.com/v1beta/models/${candidateModel}:generateContent?key=${apiKey}`;
@@ -4953,7 +5089,9 @@ Restaurante (Tú):
           });
 
           if (!response.ok) {
-            const errorBody: any = await response.json().catch(() => null);
+            const errorBody: any = response.status === 403 || response.status === 429
+              ? await this.putGeminiKeyOnCooldown(apiKey, response)
+              : await response.json().catch(() => null);
             lastError = this.sanitizeGeminiError(
               errorBody?.error?.message || `Gemini respondió HTTP ${response.status}`,
               apiKeys,
@@ -5197,8 +5335,10 @@ Responde solo con JSON válido.`;
       // otros modelos se usan únicamente como contingencia si el elegido falla.
       const modelsToTry = await this.getGeminiModels();
 
-      for (const key of apiKeys) {
+      for (const key of this.getGeminiKeyCandidates(apiKeys)) {
+        if (this.isGeminiKeyOnCooldown(key)) continue;
         for (const model of modelsToTry) {
+          if (this.isGeminiKeyOnCooldown(key)) break;
           try {
             const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`;
             const payload = {
@@ -5226,21 +5366,25 @@ Responde solo con JSON válido.`;
 
             if (!response.ok) {
               if (response.status === 429 || response.status === 403) {
-                this.logger.warn(`API Key (...${key.slice(-4)}) arrojó HTTP ${response.status} en parseOrder. Conmutando de inmediato a la siguiente clave API...`);
+                await this.putGeminiKeyOnCooldown(key, response);
+                lastError = new Error(`Gemini no puede usar temporalmente la llave ...${key.slice(-4)}`);
                 break;
               }
               const errText = await response.text();
               throw new Error(`Gemini API (${model}) error: ${response.status} - ${errText}`);
             }
 
-            await this.incrementGeminiUsage();
-            data = await response.json();
-            if (data?.candidates?.[0]?.content?.parts?.[0]?.text) {
+            const candidateData: any = await response.json();
+            if (candidateData?.candidates?.[0]?.content?.parts?.[0]?.text) {
+              data = candidateData;
               modelUsed = model;
+              await this.incrementGeminiUsage();
               break;
             }
+            lastError = new Error('Gemini no devolvió contenido para interpretar el pedido');
           } catch (e: any) {
-            this.logger.warn(`Error con modelo ${model} y Gemini key (...${key.slice(-4)}): ${e.message}. Probando siguiente opción...`);
+            const safeError = this.sanitizeGeminiError(e, apiKeys);
+            this.logger.warn(`Error con modelo ${model} y Gemini key (...${key.slice(-4)}): ${safeError}. Probando siguiente opción...`);
             lastError = e;
           }
         }
@@ -5673,8 +5817,10 @@ Devuelve únicamente la transcripción, sin saludo, sin resumen, sin markdown y 
     let modelUsed = '';
     const modelsToTry = await this.getGeminiModels();
 
-    for (const key of apiKeys) {
+    for (const key of this.getGeminiKeyCandidates(apiKeys)) {
+      if (this.isGeminiKeyOnCooldown(key)) continue;
       for (const model of modelsToTry) {
+        if (this.isGeminiKeyOnCooldown(key)) break;
         try {
           const response = await fetch(
             `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`,
@@ -5696,7 +5842,7 @@ Devuelve únicamente la transcripción, sin saludo, sin resumen, sin markdown y 
 
           if (!response.ok) {
             if (response.status === 429 || response.status === 403) {
-              this.logger.warn(`API Key (...${key.slice(-4)}) devolvió HTTP ${response.status} al transcribir audio. Se usará la siguiente llave.`);
+              await this.putGeminiKeyOnCooldown(key, response);
               break;
             }
             this.logger.warn(`Modelo ${model} no pudo transcribir audio: HTTP ${response.status}.`);
@@ -5714,7 +5860,8 @@ Devuelve únicamente la transcripción, sin saludo, sin resumen, sin markdown y 
             break;
           }
         } catch (error: any) {
-          this.logger.warn(`Error transcribiendo audio con ${model} y la llave (...${key.slice(-4)}): ${error?.message || error}`);
+          const safeError = this.sanitizeGeminiError(error, apiKeys);
+          this.logger.warn(`Error transcribiendo audio con ${model} y la llave (...${key.slice(-4)}): ${safeError}`);
         }
       }
       if (transcript) break;
@@ -5822,8 +5969,10 @@ ${menuSummary}
       let replyText: string | null = null;
       const modelsToTry = await this.getGeminiModels();
 
-      for (const key of apiKeys) {
+      for (const key of this.getGeminiKeyCandidates(apiKeys)) {
+        if (this.isGeminiKeyOnCooldown(key)) continue;
         for (const model of modelsToTry) {
+          if (this.isGeminiKeyOnCooldown(key)) break;
           try {
             const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`;
             const payload = {
@@ -5854,20 +6003,25 @@ ${menuSummary}
           });
 
           if (res.ok) {
-            await this.incrementGeminiUsage();
             const data = await res.json();
-            replyText = data?.candidates?.[0]?.content?.parts?.[0]?.text || null;
-            if (replyText) break;
+            const candidateReply = String(data?.candidates?.[0]?.content?.parts?.[0]?.text || '').trim();
+            if (this.isMeaningfulGeminiReply(candidateReply)) {
+              replyText = candidateReply;
+              await this.incrementGeminiUsage();
+              break;
+            }
           } else {
             if (res.status === 429 || res.status === 403) {
-              this.logger.warn(`API Key (...${key.slice(-4)}) arrojó HTTP ${res.status} en audio. Conmutando de inmediato a la siguiente clave API...`);
+              await this.putGeminiKeyOnCooldown(key, res);
               break;
             }
             const errBody = await res.text();
-            this.logger.warn(`Modelo ${model} devolvió HTTP ${res.status}: ${errBody}`);
+            const safeError = this.sanitizeGeminiError(errBody, apiKeys);
+            this.logger.warn(`Modelo ${model} devolvió HTTP ${res.status}: ${safeError}`);
           }
         } catch (e: any) {
-          this.logger.warn(`Error procesando audio con modelo ${model} y Gemini key (...${key.slice(-4)}): ${e.message || e}`);
+          const safeError = this.sanitizeGeminiError(e, apiKeys);
+          this.logger.warn(`Error procesando audio con modelo ${model} y Gemini key (...${key.slice(-4)}): ${safeError}`);
         }
       }
       if (replyText) break;

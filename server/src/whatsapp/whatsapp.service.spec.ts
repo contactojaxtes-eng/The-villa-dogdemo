@@ -459,6 +459,145 @@ describe('WhatsApp Gemini settings', () => {
     expect(resolved).toEqual(['second-secret-CD34', 'new-secret-EF56', 'first-secret-AB12']);
   });
 
+  it('rotates the first Gemini key evenly across configured projects', () => {
+    const service = createService();
+    const keys = ['project-key-A', 'project-key-B', 'project-key-C'];
+
+    const firstKeys = Array.from({ length: 9 }, () => (
+      (service as any).getGeminiKeyCandidates(keys)[0]
+    ));
+
+    expect(firstKeys).toEqual([
+      'project-key-A', 'project-key-B', 'project-key-C',
+      'project-key-A', 'project-key-B', 'project-key-C',
+      'project-key-A', 'project-key-B', 'project-key-C',
+    ]);
+  });
+
+  it('skips a limited Gemini key and returns it to rotation after its cooldown', () => {
+    const service = createService();
+    const keys = ['project-key-A', 'project-key-B', 'project-key-C'];
+    const now = 1_000_000;
+
+    expect((service as any).getGeminiKeyCandidates(keys, now)[0]).toBe('project-key-A');
+    (service as any).geminiKeyCooldownUntil.set('project-key-B', now + 60_000);
+
+    expect((service as any).getGeminiKeyCandidates(keys, now + 1)[0]).toBe('project-key-C');
+    expect((service as any).getGeminiKeyCandidates(keys, now + 2)[0]).toBe('project-key-A');
+    expect((service as any).getGeminiKeyCandidates(keys, now + 60_001)[0]).toBe('project-key-B');
+  });
+
+  it('keeps concurrent reservations fair even when requests finish out of order', () => {
+    const service = createService();
+    const keys = ['project-key-A', 'project-key-B', 'project-key-C'];
+
+    const firstOperation = (service as any).getGeminiKeyCandidates(keys)[0];
+    const secondOperation = (service as any).getGeminiKeyCandidates(keys)[0];
+    (service as any).geminiKeyCooldownUntil.set('project-key-A', Date.now() + 60_000);
+    const thirdOperation = (service as any).getGeminiKeyCandidates(keys)[0];
+
+    expect([firstOperation, secondOperation, thirdOperation]).toEqual([
+      'project-key-A',
+      'project-key-B',
+      'project-key-C',
+    ]);
+    expect((service as any).isGeminiKeyOnCooldown('project-key-A')).toBe(true);
+  });
+
+  it('keeps sandbox key pools from moving the production cursor', () => {
+    const service = createService();
+    const productionKeys = ['project-key-A', 'project-key-B', 'project-key-C'];
+
+    expect((service as any).getGeminiKeyCandidates(productionKeys)[0]).toBe('project-key-A');
+    expect((service as any).getGeminiKeyCandidates(['sandbox-key-X'])[0]).toBe('sandbox-key-X');
+    expect((service as any).getGeminiKeyCandidates(productionKeys)[0]).toBe('project-key-B');
+  });
+
+  it('puts a limited key on cooldown before waiting for the provider error body', async () => {
+    const service = createService();
+    let releaseBody: ((value: string) => void) | undefined;
+    const body = new Promise<string>(resolve => {
+      releaseBody = resolve;
+    });
+    const response = {
+      status: 429,
+      headers: { get: jest.fn().mockReturnValue(null) },
+      text: jest.fn().mockReturnValue(body),
+    };
+
+    const pending = (service as any).putGeminiKeyOnCooldown('project-key-A', response);
+    expect((service as any).isGeminiKeyOnCooldown('project-key-A')).toBe(true);
+
+    releaseBody?.('Please retry in 600s');
+    await pending;
+    expect((service as any).geminiKeyCooldownUntil.get('project-key-A'))
+      .toBeGreaterThan(Date.now() + 9 * 60_000);
+  });
+
+  it('fails over on quota without losing the next operation reservation', async () => {
+    const keys = ['project-secret-A', 'project-secret-B', 'project-secret-C'];
+    const prisma: any = {
+      appSetting: {
+        findUnique: jest.fn().mockImplementation(({ where }: any) => {
+          if (where.key === 'gemini_api_key') return { value: keys.join(',') };
+          return null;
+        }),
+      },
+      menuItem: { findMany: jest.fn().mockResolvedValue([]) },
+      deliveryZone: { findMany: jest.fn().mockResolvedValue([]) },
+    };
+    const service = new WhatsappService(
+      prisma,
+      { get: jest.fn() } as any,
+      { emitWhatsApp: jest.fn() } as any,
+    );
+    jest.spyOn(service as any, 'getSetting').mockResolvedValue(null);
+    jest.spyOn(service as any, 'getGeminiModels').mockResolvedValue(['gemini-test-model']);
+    jest.spyOn(service as any, 'incrementGeminiUsage').mockResolvedValue(undefined);
+    jest.spyOn(service as any, 'getGeminiUsageToday').mockResolvedValue(2);
+
+    const fetchSpy = jest.spyOn(global, 'fetch')
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 429,
+        headers: { get: jest.fn().mockReturnValue(null) },
+        json: jest.fn().mockResolvedValue({ error: { message: 'quota reached', retryDelay: '600s' } }),
+      } as any)
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: jest.fn().mockResolvedValue({ candidates: [{ content: { parts: [{ text: 'Respuesta B' }] } }] }),
+      } as any)
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: jest.fn().mockResolvedValue({ candidates: [{ content: { parts: [{ text: 'Respuesta B siguiente' }] } }] }),
+      } as any)
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: jest.fn().mockResolvedValue({ candidates: [{ content: { parts: [{ text: 'Respuesta C' }] } }] }),
+      } as any);
+
+    try {
+      const first = await service.testGeminiChat([{ role: 'user', text: 'Hola' }]);
+      const second = await service.testGeminiChat([{ role: 'user', text: 'Hola otra vez' }]);
+      const third = await service.testGeminiChat([{ role: 'user', text: 'Tercer mensaje' }]);
+
+      expect(first).toEqual(expect.objectContaining({ success: true, reply: 'Respuesta B' }));
+      expect(second).toEqual(expect.objectContaining({ success: true, reply: 'Respuesta B siguiente' }));
+      expect(third).toEqual(expect.objectContaining({ success: true, reply: 'Respuesta C' }));
+      expect(fetchSpy.mock.calls.map(call => String(call[0]))).toEqual([
+        expect.stringContaining('key=project-secret-A'),
+        expect.stringContaining('key=project-secret-B'),
+        expect.stringContaining('key=project-secret-B'),
+        expect.stringContaining('key=project-secret-C'),
+      ]);
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
   it('rejects model names that could alter the provider URL', () => {
     const service = createService();
 
@@ -543,6 +682,7 @@ describe('WhatsApp Gemini settings', () => {
     };
     const socketGateway = { emitWhatsApp: jest.fn() };
     const service = new WhatsappService(prisma, { get: jest.fn() } as any, socketGateway as any);
+    jest.spyOn(service as any, 'incrementGeminiUsage').mockResolvedValue(undefined);
     const send = jest.spyOn(service, 'sendMessage').mockResolvedValue({ sent: true } as any);
     const fetchSpy = jest.spyOn(global, 'fetch').mockResolvedValue({
       ok: true,
@@ -591,6 +731,7 @@ describe('WhatsApp Gemini settings', () => {
       { get: jest.fn() } as any,
       { emitWhatsApp: jest.fn() } as any,
     );
+    jest.spyOn(service as any, 'incrementGeminiUsage').mockResolvedValue(undefined);
     const fetchSpy = jest.spyOn(global, 'fetch').mockResolvedValue({
       ok: true,
       json: jest.fn().mockResolvedValue({
