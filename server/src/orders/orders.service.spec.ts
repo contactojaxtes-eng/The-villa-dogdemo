@@ -55,6 +55,35 @@ describe('Delivery order boundaries', () => {
     }));
   });
 
+  it('links only recent selected messages from the exact session to the new order', async () => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-09-27T18:00:00.000Z'));
+    const tx: any = {
+      whatsAppMessage: { updateMany: jest.fn().mockResolvedValue({ count: 2 }) },
+    };
+    const service = new OrdersService({} as any, {} as any, {} as any, {} as any, { notifyJobCreated: jest.fn() } as any);
+
+    try {
+      await (service as any).linkSelectedChatMessages(
+        tx,
+        'order-1',
+        'session-1',
+        ['message-1', 'message-1', '', 'x'.repeat(129), 'message-2'],
+      );
+
+      expect(tx.whatsAppMessage.updateMany).toHaveBeenCalledWith({
+        where: {
+          id: { in: ['message-1', 'message-2'] },
+          sessionId: 'session-1',
+          orderId: null,
+          createdAt: { gte: new Date('2026-09-27T16:00:00.000Z') },
+        },
+        data: { orderId: 'order-1' },
+      });
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
   it('honors compact lookup limits without returning stored media blobs', async () => {
     const prisma: any = {
       order: { findMany: jest.fn().mockResolvedValue([]) },

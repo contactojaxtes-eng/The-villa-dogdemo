@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Put, Delete, Body, Param, Query, UseGuards, Request, UploadedFiles, UseInterceptors } from '@nestjs/common';
+import { Controller, Get, Post, Put, Delete, Body, Param, Query, UseGuards, Request, UploadedFiles, UseInterceptors, Res } from '@nestjs/common';
 import { AnyFilesInterceptor } from '@nestjs/platform-express';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { DeliveryDriversService } from './delivery-drivers.service';
@@ -6,6 +6,7 @@ import { CompleteDriverDeliveryDto, ConfigureDriverAccessDto, CreateDriverDto, U
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard, Roles } from '../auth/guards/roles.guard';
 import { PermissionsGuard, Permissions } from '../auth/guards/permissions.guard';
+import * as express from 'express';
 
 @ApiTags('Delivery Drivers')
 @ApiBearerAuth()
@@ -69,6 +70,80 @@ export class DeliveryDriversController {
   @ApiOperation({ summary: 'Portal privado del domiciliario autenticado' })
   getMyPortal(@Request() req: any) {
     return this.deliveryDriversService.getMyPortal(req.user.id);
+  }
+
+  @Get('me/orders/:orderId/snapshot')
+  @Roles('DELIVERY_DRIVER')
+  @UseGuards(RolesGuard)
+  @ApiOperation({ summary: 'Sincronizar únicamente un pedido del portal del domiciliario' })
+  getMyOrderSnapshot(
+    @Param('orderId') orderId: string,
+    @Request() req: any,
+  ) {
+    return this.deliveryDriversService.getMyOrderSnapshot(req.user.id, orderId);
+  }
+
+  @Get('me/orders/:orderId/chat')
+  @Roles('DELIVERY_DRIVER')
+  @UseGuards(RolesGuard)
+  @ApiOperation({ summary: 'Consultar el chat de un pedido propio sin modificarlo' })
+  getMyOrderChat(
+    @Param('orderId') orderId: string,
+    @Query('before') before: string | undefined,
+    @Query('beforeId') beforeId: string | undefined,
+    @Query('limit') limit: string | undefined,
+    @Request() req: any,
+  ) {
+    return this.deliveryDriversService.getMyOrderChat(
+      req.user.id,
+      orderId,
+      before,
+      limit ? Number.parseInt(limit, 10) : undefined,
+      beforeId,
+    );
+  }
+
+  @Get('me/orders/:orderId/chat/messages/:messageId/media')
+  @Roles('DELIVERY_DRIVER')
+  @UseGuards(RolesGuard)
+  @ApiOperation({ summary: 'Abrir multimedia de un mensaje vinculado a un pedido propio' })
+  async getMyOrderChatMedia(
+    @Param('orderId') orderId: string,
+    @Param('messageId') messageId: string,
+    @Request() req: any,
+    @Res() res: express.Response,
+  ) {
+    const media = await this.deliveryDriversService.getMyOrderChatMedia(req.user.id, orderId, messageId);
+    return this.sendPrivateFile(res, media);
+  }
+
+  @Get('me/orders/:orderId/proofs/:proofId/image')
+  @Roles('DELIVERY_DRIVER')
+  @UseGuards(RolesGuard)
+  @ApiOperation({ summary: 'Abrir un comprobante vinculado a un pedido propio' })
+  async getMyOrderProofImage(
+    @Param('orderId') orderId: string,
+    @Param('proofId') proofId: string,
+    @Request() req: any,
+    @Res() res: express.Response,
+  ) {
+    const proof = await this.deliveryDriversService.getMyOrderProofImage(req.user.id, orderId, proofId);
+    return this.sendPrivateFile(res, proof);
+  }
+
+  private sendPrivateFile(
+    res: express.Response,
+    file: { buffer: Buffer; contentType: string },
+  ) {
+    res.setHeader('Cache-Control', 'private, no-store, max-age=0');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Content-Type', file.contentType);
+    if (file.contentType === 'application/octet-stream') {
+      res.setHeader('Content-Disposition', 'attachment');
+    }
+    res.setHeader('Content-Length', String(file.buffer.length));
+    return res.end(file.buffer);
   }
 
   @Post('me/orders/:orderId/complete')

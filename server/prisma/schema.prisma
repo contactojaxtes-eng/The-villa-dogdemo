@@ -229,6 +229,7 @@ model Order {
   kitchenTickets    KitchenTicket[]
   changeLogs        OrderChangeLog[]
   transferProofs    TransferProof[]
+  chatMessages      WhatsAppMessage[]
 
   @@index([createdAt])
   @@index([status])
@@ -532,10 +533,13 @@ model WhatsAppMessage {
 
   sessionId   String
   session     WhatsAppSession @relation(fields: [sessionId], references: [id])
+  orderId     String?
+  order       Order? @relation(fields: [orderId], references: [id], onDelete: SetNull)
 
   @@index([sessionId])
   @@index([createdAt])
   @@index([sessionId, createdAt])
+  @@index([orderId, createdAt])
   @@index([direction, status, createdAt])
   @@map("whatsapp_messages")
 }

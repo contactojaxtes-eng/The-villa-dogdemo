@@ -239,9 +239,15 @@ export default function DriversPage() {
       query: { userId: user?.id, userName: user?.name },
     })
 
+    let realtimeRefreshTimer: number | null = null
     const handleUpdate = () => {
-      loadDrivers()
-      loadDriverQueue()
+      api.invalidateCache('/delivery-drivers')
+      if (realtimeRefreshTimer !== null) window.clearTimeout(realtimeRefreshTimer)
+      realtimeRefreshTimer = window.setTimeout(() => {
+        realtimeRefreshTimer = null
+        void loadDrivers()
+        void loadDriverQueue()
+      }, 150)
     }
 
     socket.on('newOrder', handleUpdate)
@@ -252,16 +258,11 @@ export default function DriversPage() {
     socket.on('driverQueueUpdated', (data: any) => {
       setDriverQueueData(data)
     })
-    socket.on('driverBreakStarted', () => {
-      loadDriverQueue()
-      loadDrivers()
-    })
-    socket.on('driverBreakFinished', () => {
-      loadDriverQueue()
-      loadDrivers()
-    })
+    socket.on('driverBreakStarted', handleUpdate)
+    socket.on('driverBreakFinished', handleUpdate)
 
     return () => {
+      if (realtimeRefreshTimer !== null) window.clearTimeout(realtimeRefreshTimer)
       socket.disconnect()
     }
   }, [user, loadDrivers, loadDriverQueue])

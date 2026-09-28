@@ -16,6 +16,21 @@ export type DriverPortalUpdate = {
   at?: string;
 };
 
+export type DriverOrderChatUpdate = {
+  orderId: string;
+  message: {
+    id: string;
+    direction: string;
+    content: string;
+    messageType: string;
+    status: string;
+    createdAt: Date | string;
+    replyToContent: string | null;
+    replyToDirection: string | null;
+    hasMedia: boolean;
+  };
+};
+
 /**
  * Canal exclusivo del portal del domiciliario.
  *
@@ -171,5 +186,34 @@ export class DeliveryDriverGateway implements OnGatewayInit, OnGatewayConnection
     if (directUserId) return this.emitToUser(directUserId, payload);
     const driverId = orderOrId.deliveryDriverId || orderOrId.deliveryDriver?.id;
     return this.emitForDriver(driverId, payload);
+  }
+
+  async emitChatMessageForOrder(orderId: string, message: DriverOrderChatUpdate['message']): Promise<boolean> {
+    if (!orderId || !message?.id || !this.server) return false;
+    try {
+      const order = await this.prisma.order.findFirst({
+        where: {
+          id: orderId,
+          orderType: 'DELIVERY',
+          OR: [
+            { status: { notIn: ['DELIVERED', 'CANCELLED'] } },
+            {
+              status: 'DELIVERED',
+              cashClosing: {
+                isOpen: true,
+                cashRegister: { purpose: 'DELIVERY', active: true },
+              },
+            },
+          ],
+        },
+        select: { deliveryDriver: { select: { userId: true, active: true } } },
+      });
+      const userId = order?.deliveryDriver?.active ? order.deliveryDriver.userId : null;
+      if (!userId) return false;
+      this.server.to(`driver-user:${userId}`).emit('driverOrderChatMessage', { orderId, message });
+      return true;
+    } catch {
+      return false;
+    }
   }
 }

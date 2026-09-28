@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent } from '@/components/ui/card'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { DriverOrderChatDialog, type DriverChatLiveEvent } from '@/components/drivers/DriverOrderChatDialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { cleanNotes, cn, formatCurrency, formatDate, groupOrderItems } from '@/lib/utils'
@@ -20,6 +21,7 @@ import {
   History,
   Loader2,
   MapPin,
+  MessageSquare,
   PackageCheck,
   Phone,
   Smartphone,
@@ -79,6 +81,17 @@ interface DriverPortalData {
   summary: { activeOrders: number; deliveredThisShift: number; pendingCash: number; pendingTransfers: number }
 }
 
+interface DriverPortalUpdateEvent {
+  reason?: string
+  orderId?: string
+}
+
+interface DriverPortalOrderSnapshot {
+  orderId: string
+  bucket: 'ACTIVE' | 'HISTORY' | 'NONE'
+  order: PortalOrder | null
+}
+
 const paymentOptions: Array<{ value: PaymentMethod; label: string }> = [
   { value: 'CASH', label: 'Efectivo' },
   { value: 'TRANSFER', label: 'Transferencia' },
@@ -96,6 +109,44 @@ const paymentLabel: Record<string, string> = {
 
 function isTransferMethod(method?: string) {
   return ['TRANSFER', 'NEQUI', 'BANCOLOMBIA', 'DAVIPLATA', 'MIXED'].includes(String(method || '').toUpperCase())
+}
+
+function withPortalOrderSnapshot(current: DriverPortalData, snapshot: DriverPortalOrderSnapshot): DriverPortalData {
+  const activeOrders = current.activeOrders.filter(order => order.id !== snapshot.orderId)
+  const history = current.history.filter(order => order.id !== snapshot.orderId)
+
+  if (snapshot.order && snapshot.bucket === 'ACTIVE') {
+    activeOrders.push(snapshot.order)
+    activeOrders.sort((left, right) => new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime())
+  } else if (snapshot.order && snapshot.bucket === 'HISTORY') {
+    history.push(snapshot.order)
+    history.sort((left, right) => new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime())
+    history.splice(100)
+  }
+
+  const pendingCash = history
+    .filter(order => !order.driverSettlementId && (
+      order.paymentMethod === 'MIXED'
+      || (order.paymentMethod === 'CASH' && order.paymentStatus !== 'CONFIRMED')
+    ))
+    .reduce((total, order) => total + Number(order.paymentMethod === 'MIXED' ? order.cashAmount || 0 : order.total || 0), 0)
+  const pendingTransfers = history.filter(order => (
+    order.paymentStatus === 'PENDING_REVIEW'
+    && isTransferMethod(order.paymentMethod)
+    && Number(order.transferAmount || order.total || 0) > 0
+  )).length
+
+  return {
+    ...current,
+    activeOrders,
+    history,
+    summary: {
+      activeOrders: activeOrders.length,
+      deliveredThisShift: history.length,
+      pendingCash,
+      pendingTransfers,
+    },
+  }
 }
 
 function normalizeDriverPaymentMethod(method?: string): PaymentMethod {
@@ -173,7 +224,12 @@ export default function DriverPortalPage() {
   const [reference, setReference] = useState('')
   const [proof, setProof] = useState<File | null>(null)
   const [saving, setSaving] = useState(false)
+  const [chatOrder, setChatOrder] = useState<PortalOrder | null>(null)
+  const [chatLiveEvents, setChatLiveEvents] = useState<DriverChatLiveEvent[]>([])
   const realtimeTimer = useRef<number | null>(null)
+  const incrementalTimer = useRef<number | null>(null)
+  const pendingOrderIds = useRef(new Set<string>())
+  const orderEventRevisions = useRef(new Map<string, number>())
   const realtimeConnected = useRef(false)
 
   const load = useCallback(async (quiet = false) => {
@@ -182,6 +238,11 @@ export default function DriverPortalPage() {
     try {
       const result = await api.get<DriverPortalData>('/delivery-drivers/me', { force: true, ttlMs: 0 })
       setData(result)
+      const ownedOrderIds = new Set([
+        ...(result.activeOrders || []),
+        ...(result.history || []),
+      ].map(order => order.id))
+      setChatOrder(current => current && !ownedOrderIds.has(current.id) ? null : current)
     } catch (err: any) {
       setError(err?.message || 'No se pudieron cargar tus pedidos. Intenta nuevamente.')
     } finally {
@@ -189,9 +250,22 @@ export default function DriverPortalPage() {
     }
   }, [])
 
+  const applyOrderSnapshot = useCallback((snapshot: DriverPortalOrderSnapshot) => {
+    setData(current => current ? withPortalOrderSnapshot(current, snapshot) : current)
+    setTargetOrder(current => current?.id === snapshot.orderId
+      ? (snapshot.bucket === 'NONE' ? null : snapshot.order)
+      : current)
+    setChatOrder(current => current?.id === snapshot.orderId
+      ? (snapshot.bucket === 'NONE' ? null : snapshot.order)
+      : current)
+  }, [])
+
   useEffect(() => { void load() }, [load])
 
   useEffect(() => {
+    let stopped = false
+    const queuedOrderIds = pendingOrderIds.current
+    const revisionsByOrder = orderEventRevisions.current
     const socketUrl = import.meta.env.VITE_API_URL || window.location.origin
     const socket = io(`${socketUrl}/delivery-driver`, {
       transports: ['websocket', 'polling'],
@@ -199,6 +273,43 @@ export default function DriverPortalPage() {
     const refreshPortal = () => {
       if (realtimeTimer.current !== null) window.clearTimeout(realtimeTimer.current)
       realtimeTimer.current = window.setTimeout(() => { void load(true) }, 120)
+    }
+    const flushOrderRefreshes = async () => {
+      incrementalTimer.current = null
+      const ids = [...queuedOrderIds]
+      queuedOrderIds.clear()
+      const revisions = new Map(ids.map(id => [id, revisionsByOrder.get(id) || 0]))
+      const results = await Promise.allSettled(ids.map(async orderId => ({
+        orderId,
+        snapshot: await api.get<DriverPortalOrderSnapshot>(
+          `/delivery-drivers/me/orders/${orderId}/snapshot`,
+          { force: true, ttlMs: 0 },
+        ),
+      })))
+      if (stopped) return
+
+      let requiresFullRefresh = false
+      results.forEach(result => {
+        if (result.status === 'rejected') {
+          requiresFullRefresh = true
+          return
+        }
+        const { orderId, snapshot } = result.value
+        if ((revisionsByOrder.get(orderId) || 0) !== revisions.get(orderId)) return
+        applyOrderSnapshot(snapshot)
+      })
+      if (requiresFullRefresh) refreshPortal()
+    }
+    const queueOrderRefresh = (payload?: DriverPortalUpdateEvent) => {
+      const orderId = typeof payload?.orderId === 'string' ? payload.orderId.trim() : ''
+      if (!orderId) {
+        refreshPortal()
+        return
+      }
+      revisionsByOrder.set(orderId, (revisionsByOrder.get(orderId) || 0) + 1)
+      queuedOrderIds.add(orderId)
+      if (incrementalTimer.current !== null) window.clearTimeout(incrementalTimer.current)
+      incrementalTimer.current = window.setTimeout(() => { void flushOrderRefreshes() }, 120)
     }
     const handleConnect = () => {
       realtimeConnected.current = true
@@ -210,11 +321,16 @@ export default function DriverPortalPage() {
     const handleVisibility = () => {
       if (document.visibilityState === 'visible') void load(true)
     }
+    const handleDriverOrderChatMessage = (payload: DriverChatLiveEvent) => {
+      if (!payload?.orderId || !payload?.message?.id) return
+      setChatLiveEvents(current => [...current, payload].slice(-50))
+    }
 
-    // El evento no transporta pedidos: solo avisa a esta cuenta para volver a
-    // consultar su endpoint privado. El intervalo consulta únicamente si el
-    // socket está caído; al volver a la pestaña se reconcilia una sola vez.
-    socket.on('driverPortalUpdated', refreshPortal)
+    // Los cambios normales consultan únicamente el pedido indicado. Un cambio
+    // global de turno o liquidación conserva la sincronización completa, igual
+    // que una reconexión, para reparar cualquier evento que se hubiera perdido.
+    socket.on('driverPortalUpdated', queueOrderRefresh)
+    socket.on('driverOrderChatMessage', handleDriverOrderChatMessage)
     socket.on('connect', handleConnect)
     socket.on('disconnect', handleDisconnect)
     socket.on('connect_error', handleDisconnect)
@@ -223,6 +339,7 @@ export default function DriverPortalPage() {
     }, 60_000)
     document.addEventListener('visibilitychange', handleVisibility)
     return () => {
+      stopped = true
       realtimeConnected.current = false
       socket.disconnect()
       window.clearInterval(refreshTimer)
@@ -231,8 +348,14 @@ export default function DriverPortalPage() {
         window.clearTimeout(realtimeTimer.current)
         realtimeTimer.current = null
       }
+      if (incrementalTimer.current !== null) {
+        window.clearTimeout(incrementalTimer.current)
+        incrementalTimer.current = null
+      }
+      queuedOrderIds.clear()
+      revisionsByOrder.clear()
     }
-  }, [load])
+  }, [applyOrderSnapshot, load])
 
   const openCompletion = (order: PortalOrder) => {
     setTargetOrder(order)
@@ -292,8 +415,9 @@ export default function DriverPortalPage() {
     }
     setSaving(true)
     try {
+      let result: { order?: PortalOrder } | null = null
       if (dialogMode === 'PAYMENT') {
-        await api.put(`/delivery-drivers/me/orders/${targetOrder.id}/payment`, {
+        result = await api.put<{ order?: PortalOrder }>(`/delivery-drivers/me/orders/${targetOrder.id}/payment`, {
           method,
           reference: reference.trim() || undefined,
           ...(method === 'MIXED' ? { cashAmount: cash, transferAmount: transfer } : {}),
@@ -310,7 +434,7 @@ export default function DriverPortalPage() {
         const endpoint = dialogMode === 'COMPLETE'
           ? `/delivery-drivers/me/orders/${targetOrder.id}/complete`
           : `/delivery-drivers/me/orders/${targetOrder.id}/proof`
-        await api.post(endpoint, form)
+        result = await api.post<{ order?: PortalOrder }>(endpoint, form)
       }
       alerts.success(
         dialogMode === 'COMPLETE' ? 'Entrega registrada' : dialogMode === 'PAYMENT' ? 'Método de pago corregido' : 'Comprobante adjuntado',
@@ -324,7 +448,15 @@ export default function DriverPortalPage() {
       setProof(null)
       setCashAmount('')
       setTransferAmount('')
-      await load(true)
+      if (result?.order) {
+        applyOrderSnapshot({
+          orderId: result.order.id,
+          bucket: result.order.status === 'DELIVERED' ? 'HISTORY' : 'ACTIVE',
+          order: result.order,
+        })
+      } else {
+        await load(true)
+      }
       setTab('HISTORY')
     } catch (err: any) {
       alerts.error('No se pudo guardar', err?.message || 'Intenta nuevamente.')
@@ -412,7 +544,10 @@ export default function DriverPortalPage() {
                     </div>
                     <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-subtle)] p-3"><p className="flex items-start gap-2 text-sm font-bold text-[var(--text-primary)]"><MapPin className="mt-0.5 h-4 w-4 shrink-0 text-rose-500" /><span>{order.customerAddress || 'Dirección pendiente'}{order.zone?.name && <span className="ml-1 text-[var(--text-secondary)]">· {order.zone.name}</span>}</span></p>{order.addressReference && <p className="ml-6 mt-1 text-xs italic text-[var(--text-secondary)]">Ref: {order.addressReference}</p>}</div>
                     <OrderItems order={order} />
-                    {canComplete ? <Button onClick={() => openCompletion(order)} disabled={!data?.currentShift} className="h-12 rounded-xl bg-emerald-600 text-sm font-black text-white hover:bg-emerald-700"><CheckCircle2 className="mr-2 h-5 w-5" /> Entregar pedido</Button> : <div className="flex items-center gap-2 rounded-xl bg-amber-500/10 px-3 py-2.5 text-xs font-bold text-amber-800 dark:text-amber-200"><Clock className="h-4 w-4" /> Espera a que el pedido salga a ruta para registrar la entrega.</div>}
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      <Button variant="outline" onClick={() => setChatOrder(order)} className="h-12 rounded-xl text-sm font-black"><MessageSquare className="mr-2 h-4.5 w-4.5 text-emerald-600" /> Ver chat y comprobantes</Button>
+                      {canComplete ? <Button onClick={() => openCompletion(order)} disabled={!data?.currentShift} className="h-12 rounded-xl bg-emerald-600 text-sm font-black text-white hover:bg-emerald-700"><CheckCircle2 className="mr-2 h-5 w-5" /> Entregar pedido</Button> : <div className="flex items-center gap-2 rounded-xl bg-amber-500/10 px-3 py-2.5 text-xs font-bold text-amber-800 dark:text-amber-200"><Clock className="h-4 w-4" /> Espera a que el pedido salga a ruta para registrar la entrega.</div>}
+                    </div>
                   </div>
                 </CardContent>
               </Card>
@@ -472,7 +607,7 @@ export default function DriverPortalPage() {
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between"><div><div className="flex flex-wrap items-center gap-2"><Badge className="bg-[var(--bg-elevated)] text-[10px] font-black text-[var(--text-primary)]">Pedido #{order.orderNumber}</Badge><StatusPill order={order} /></div><p className="mt-2 font-black text-[var(--text-primary)]">{order.customerName}</p><p className="mt-1 flex items-center gap-1 text-xs text-[var(--text-secondary)]"><Clock className="h-3.5 w-3.5" /> Entregado {formatDate(order.updatedAt)}</p></div><div className="sm:text-right"><p className="text-lg font-black text-[var(--accent)]">{formatCurrency(order.total)}</p><p className="text-xs font-bold text-[var(--text-primary)]">Recibido: {receivedPaymentLabel(order)}</p><p className="mt-0.5 text-[11px] text-[var(--text-muted)]">Original: {originalPaymentLabel(order)}</p></div></div>
                 <div className="mt-3 flex flex-wrap items-center gap-2 text-xs"><span className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--bg-elevated)] px-2.5 py-1 font-bold text-[var(--text-secondary)]"><MapPin className="h-3.5 w-3.5 text-rose-500" /> {order.customerAddress}</span>{lastProof ? <span className="inline-flex items-center gap-1.5 rounded-lg bg-blue-500/10 px-2.5 py-1 font-bold text-blue-700 dark:text-blue-300"><Camera className="h-3.5 w-3.5" /> {proofs.length} comprobante{proofs.length !== 1 ? 's' : ''}</span> : isTransferMethod(order.paymentMethod) ? <span className="inline-flex items-center gap-1.5 rounded-lg bg-amber-500/10 px-2.5 py-1 font-bold text-amber-700 dark:text-amber-300"><AlertTriangle className="h-3.5 w-3.5" /> Sin foto</span> : null}</div>
                 {lastProof?.rejectionReason && <div className="mt-3 rounded-xl border border-rose-500/25 bg-rose-500/10 px-3 py-2 text-xs text-rose-700 dark:text-rose-200"><strong>Caja indicó:</strong> {lastProof.rejectionReason}</div>}
-                {canCorrectPayment && <div className="mt-4 flex flex-wrap gap-2 border-t border-[var(--border-subtle)] pt-3"><Button variant="outline" onClick={() => openPaymentCorrection(order)} className="h-9 rounded-xl text-xs font-black"><Wallet className="mr-1.5 h-4 w-4" /> Corregir método de pago</Button>{canUpload && <Button variant="outline" onClick={() => openProofUpload(order)} className="h-9 rounded-xl border-blue-500/30 text-xs font-black text-blue-700 hover:bg-blue-500/10 dark:text-blue-300"><Upload className="mr-1.5 h-4 w-4" /> {lastProof ? 'Subir otra foto' : 'Adjuntar comprobante'}</Button>}</div>}
+                <div className="mt-4 flex flex-wrap gap-2 border-t border-[var(--border-subtle)] pt-3"><Button variant="outline" onClick={() => setChatOrder(order)} className="h-9 rounded-xl text-xs font-black"><MessageSquare className="mr-1.5 h-4 w-4 text-emerald-600" /> Ver chat y comprobantes</Button>{canCorrectPayment && <Button variant="outline" onClick={() => openPaymentCorrection(order)} className="h-9 rounded-xl text-xs font-black"><Wallet className="mr-1.5 h-4 w-4" /> Corregir método de pago</Button>}{canUpload && <Button variant="outline" onClick={() => openProofUpload(order)} className="h-9 rounded-xl border-blue-500/30 text-xs font-black text-blue-700 hover:bg-blue-500/10 dark:text-blue-300"><Upload className="mr-1.5 h-4 w-4" /> {lastProof ? 'Subir otra foto' : 'Adjuntar comprobante'}</Button>}</div>
               </CardContent></Card>
             )
           })}
@@ -503,6 +638,11 @@ export default function DriverPortalPage() {
           </div>
         </DialogContent>
       </Dialog>
+      <DriverOrderChatDialog
+        order={chatOrder}
+        liveEvents={chatLiveEvents}
+        onClose={() => setChatOrder(null)}
+      />
     </div>
   )
 }

@@ -33,6 +33,9 @@ describe('DeliveryDriverGateway private channel', () => {
         findUnique: jest.fn().mockResolvedValue({
           deliveryDriver: { userId: 'driver-user-1' },
         }),
+        findFirst: jest.fn().mockResolvedValue({
+          deliveryDriver: { userId: 'driver-user-1', active: true },
+        }),
       },
     };
     roomEmitter = { emit: jest.fn() };
@@ -118,4 +121,64 @@ describe('DeliveryDriverGateway private channel', () => {
     ]);
     expect(gateway.server.emit).not.toHaveBeenCalled();
   });
+
+  it('emits an order chat message only to the currently assigned driver private room', async () => {
+    const message = {
+      id: 'message-1',
+      direction: 'IN',
+      content: 'Ya hice la transferencia',
+      messageType: 'text',
+      status: 'received',
+      createdAt: '2026-09-27T18:00:00.000Z',
+      replyToContent: null,
+      replyToDirection: null,
+      hasMedia: false,
+    };
+
+    await expect(gateway.emitChatMessageForOrder('order-1', message)).resolves.toBe(true);
+
+    expect(prisma.order.findFirst).toHaveBeenCalledWith({
+      where: {
+        id: 'order-1',
+        orderType: 'DELIVERY',
+        OR: [
+          { status: { notIn: ['DELIVERED', 'CANCELLED'] } },
+          {
+            status: 'DELIVERED',
+            cashClosing: {
+              isOpen: true,
+              cashRegister: { purpose: 'DELIVERY', active: true },
+            },
+          },
+        ],
+      },
+      select: { deliveryDriver: { select: { userId: true, active: true } } },
+    });
+    expect(gateway.server.to).toHaveBeenCalledWith('driver-user:driver-user-1');
+    expect(roomEmitter.emit).toHaveBeenCalledWith('driverOrderChatMessage', {
+      orderId: 'order-1',
+      message,
+    });
+    expect(gateway.server.emit).not.toHaveBeenCalled();
+  });
+
+  it('does not emit chat messages for orders outside the driver current view', async () => {
+    prisma.order.findFirst.mockResolvedValue(null);
+
+    await expect(gateway.emitChatMessageForOrder('old-order', {
+      id: 'message-old',
+      direction: 'IN',
+      content: 'Comprobante anterior',
+      messageType: 'image',
+      status: 'received',
+      createdAt: '2026-09-27T18:00:00.000Z',
+      replyToContent: null,
+      replyToDirection: null,
+      hasMedia: true,
+    })).resolves.toBe(false);
+
+    expect(gateway.server.to).not.toHaveBeenCalled();
+    expect(roomEmitter.emit).not.toHaveBeenCalled();
+  });
+
 });

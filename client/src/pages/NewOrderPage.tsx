@@ -673,6 +673,7 @@ export default function NewOrderPage({
   const chatDrawerSessionRef = useRef(chatDrawerSession)
   const customerPhoneRef = useRef(customerPhone)
   const chatSessionIdRef = useRef(chatSessionId)
+  const orderChatMessageIdsRef = useRef<string[]>([])
 
   useEffect(() => {
     showChatDrawerRef.current = showChatDrawer
@@ -821,6 +822,12 @@ export default function NewOrderPage({
 
       if (isMatch) {
         const msgId = data.id || data.waMessageId || `msg-${Date.now()}`
+        if (targetSessionId && data.sessionId === targetSessionId && data.id) {
+          orderChatMessageIdsRef.current = [
+            ...orderChatMessageIdsRef.current.filter(id => id !== String(data.id)),
+            String(data.id),
+          ].slice(-200)
+        }
         const newMsgItem = {
           id: msgId,
           waMessageId: data.waMessageId,
@@ -1804,6 +1811,7 @@ export default function NewOrderPage({
     const chatParseKey = chatSessionId ? `${chatSessionId}:${chatTranscriptRevision}` : null
     if (chatSessionId && categories.length > 0 && lastParsedSessionIdRef.current !== chatParseKey) {
       lastParsedSessionIdRef.current = chatParseKey
+      orderChatMessageIdsRef.current = []
       userInteractedWithCartRef.current = false
       userClearedDraftRef.current = false
       
@@ -1894,6 +1902,14 @@ export default function NewOrderPage({
           } else {
             relevantSlice = messages.filter(isWithinRecentContext)
           }
+          const relevantMessageIds = relevantSlice
+            .slice(-200)
+            .map(message => String(message?.id || '').trim())
+            .filter(Boolean)
+          orderChatMessageIdsRef.current = [...new Set([
+            ...relevantMessageIds,
+            ...orderChatMessageIdsRef.current,
+          ])].slice(-200)
 
           const getAudioTranscript = (content: unknown) => {
             const raw = String(content || '')
@@ -3161,6 +3177,7 @@ export default function NewOrderPage({
         longitude: isPickup ? undefined : (longitude || undefined),
         customerId: customerId || undefined,
         chatSessionId: chatSessionId || undefined,
+        chatMessageIds: (!editOrderId && chatSessionId) ? orderChatMessageIdsRef.current : undefined,
         notifyCustomer,
         source: chatSessionId ? 'WHATSAPP' : undefined,
         clientMutationId: editOrderId ? undefined : clientMutationId,

@@ -191,7 +191,7 @@ export class OrdersService implements OnModuleInit {
           where: { id: order.chatSessionId },
         });
         if (session) {
-          await this.whatsappService.sendDirectToSession(session.id, text);
+          await this.whatsappService.sendDirectToSession(session.id, text, order.id);
           return;
         }
       }
@@ -618,6 +618,7 @@ export class OrdersService implements OnModuleInit {
     tax?: number;
     customerId?: string;
     chatSessionId?: string;
+    chatMessageIds?: string[];
     tableId?: string;
     clientMutationId?: string;
     notifyCustomer?: boolean;
@@ -928,6 +929,13 @@ export class OrdersService implements OnModuleInit {
       },
     });
 
+    await this.linkSelectedChatMessages(
+      tx,
+      order.id,
+      data.chatSessionId,
+      data.chatMessageIds,
+    );
+
     if (data.chatSessionId) {
       try {
         await tx.whatsAppSession.update({
@@ -953,6 +961,35 @@ export class OrdersService implements OnModuleInit {
     });
 
     return order;
+  }
+
+  private async linkSelectedChatMessages(
+    tx: Prisma.TransactionClient,
+    orderId: string,
+    sessionId?: string,
+    rawMessageIds?: string[],
+  ): Promise<void> {
+    if (!sessionId || !Array.isArray(rawMessageIds)) return;
+
+    const messageIds = [...new Set(
+      rawMessageIds
+        .map(id => String(id || '').trim())
+        .filter(id => id.length > 0 && id.length <= 128),
+    )].slice(-200);
+    if (messageIds.length === 0) return;
+
+    // Nuevo pedido solo selecciona el tramo reciente de la conversación. El
+    // servidor repite ese límite para que un cliente modificado no pueda
+    // vincular historial antiguo aunque conozca sus IDs.
+    await tx.whatsAppMessage.updateMany({
+      where: {
+        id: { in: messageIds },
+        sessionId,
+        orderId: null,
+        createdAt: { gte: new Date(Date.now() - 2 * 60 * 60 * 1000) },
+      },
+      data: { orderId },
+    });
   }
 
   async notifyCreated(order: any, notifyCustomer = true) {

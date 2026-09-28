@@ -2,6 +2,165 @@ import { DeliveryDriversService } from './delivery-drivers.service';
 import { validateReceipt } from '../tables/receipt';
 
 describe('DeliveryDriversService', () => {
+  it('lists drivers without running the duplicate merge maintenance task', async () => {
+    const prisma: any = {
+      deliveryDriver: {
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+    };
+    const service = new DeliveryDriversService(prisma, { server: { emit: jest.fn() } } as any);
+    const mergeSpy = jest.spyOn(service, 'autoMergeDuplicates').mockResolvedValue();
+
+    await expect(service.findAll(false, 'ALL')).resolves.toEqual([]);
+
+    expect(mergeSpy).not.toHaveBeenCalled();
+    expect(prisma.deliveryDriver.findMany).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns one lightweight portal snapshot and never exposes an order owned by another driver', async () => {
+    const prisma: any = {
+      deliveryDriver: {
+        findUnique: jest.fn().mockResolvedValue({ id: 'driver-1', active: true }),
+      },
+      cashClosing: {
+        findFirst: jest.fn().mockResolvedValue({ id: 'shift-1' }),
+      },
+      order: {
+        findFirst: jest
+          .fn()
+          .mockResolvedValueOnce({
+            id: 'order-1',
+            status: 'DELIVERED',
+            cashClosingId: 'shift-1',
+            transferProofs: [],
+            items: [],
+          })
+          .mockResolvedValueOnce(null),
+      },
+    };
+    const service = new DeliveryDriversService(prisma, {} as any);
+
+    await expect(service.getMyOrderSnapshot('driver-user-1', 'order-1')).resolves.toEqual({
+      orderId: 'order-1',
+      bucket: 'HISTORY',
+      order: expect.objectContaining({ id: 'order-1' }),
+    });
+    await expect(service.getMyOrderSnapshot('driver-user-1', 'foreign-order')).resolves.toEqual({
+      orderId: 'foreign-order',
+      bucket: 'NONE',
+      order: null,
+    });
+    expect(prisma.order.findFirst).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      where: {
+        id: 'foreign-order',
+        deliveryDriverId: 'driver-1',
+        orderType: 'DELIVERY',
+      },
+    }));
+    expect(prisma.cashClosing.findFirst).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns only messages linked to the driver own order and hides Meta media IDs', async () => {
+    const prisma: any = {
+      deliveryDriver: {
+        findUnique: jest.fn().mockResolvedValue({ id: 'driver-1', active: true }),
+      },
+      order: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: 'order-1',
+          orderNumber: 501,
+          customerName: 'Cliente',
+          status: 'IN_ROUTE',
+          paymentMethod: 'TRANSFER',
+          paymentStatus: 'PENDING',
+          createdAt: new Date('2026-09-27T16:00:00.000Z'),
+          updatedAt: new Date('2026-09-27T16:10:00.000Z'),
+          chatSessionId: 'session-1',
+          transferProofs: [],
+        }),
+      },
+      whatsAppMessage: {
+        findMany: jest.fn().mockResolvedValue([{
+          id: 'message-1',
+          direction: 'IN',
+          content: '/api/whatsapp/media/private-meta-id|Te envié el comprobante',
+          messageType: 'image',
+          status: 'received',
+          createdAt: new Date('2026-09-27T16:05:00.000Z'),
+          replyToContent: '/api/whatsapp/media/quoted-private-meta-id',
+          replyToDirection: null,
+        }]),
+      },
+    };
+    const whatsapp: any = { ensureLegacyOrderMessageLinks: jest.fn().mockResolvedValue(undefined) };
+    const service = new DeliveryDriversService(prisma, {} as any, undefined, whatsapp);
+
+    const result: any = await service.getMyOrderChat('driver-user-1', 'order-1');
+
+    expect(prisma.order.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        id: 'order-1',
+        deliveryDriverId: 'driver-1',
+        orderType: 'DELIVERY',
+      }),
+    }));
+    expect(prisma.whatsAppMessage.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ orderId: 'order-1', sessionId: 'session-1' }),
+      take: 21,
+    }));
+    expect(result.messages).toEqual([expect.objectContaining({
+      id: 'message-1',
+      content: 'Te envié el comprobante',
+      replyToContent: 'Archivo multimedia',
+      hasMedia: true,
+    })]);
+    expect(JSON.stringify(result)).not.toContain('private-meta-id');
+  });
+
+  it('never reveals whether an order assigned to another driver exists', async () => {
+    const prisma: any = {
+      deliveryDriver: {
+        findUnique: jest.fn().mockResolvedValue({ id: 'driver-1', active: true }),
+      },
+      order: { findFirst: jest.fn().mockResolvedValue(null) },
+      whatsAppMessage: { findMany: jest.fn() },
+    };
+    const service = new DeliveryDriversService(prisma, {} as any);
+
+    await expect(service.getMyOrderChat('driver-user-1', 'order-for-driver-2'))
+      .rejects.toThrow('No puedes consultar este pedido.');
+    expect(prisma.whatsAppMessage.findMany).not.toHaveBeenCalled();
+  });
+
+  it('loads media only after validating both the order and the exact linked message', async () => {
+    const media = { buffer: Buffer.from([0xff, 0xd8, 0xff, 0xd9]), contentType: 'image/jpeg' };
+    const prisma: any = {
+      deliveryDriver: {
+        findUnique: jest.fn().mockResolvedValue({ id: 'driver-1', active: true }),
+      },
+      order: {
+        findFirst: jest.fn().mockResolvedValue({ id: 'order-1', chatSessionId: 'session-1' }),
+      },
+      whatsAppMessage: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: 'message-1',
+          messageType: 'image',
+          content: '/api/whatsapp/media/media-1|Comprobante',
+        }),
+      },
+    };
+    const whatsapp: any = { getMediaBuffer: jest.fn().mockResolvedValue(media) };
+    const service = new DeliveryDriversService(prisma, {} as any, undefined, whatsapp);
+
+    await expect(service.getMyOrderChatMedia('driver-user-1', 'order-1', 'message-1'))
+      .resolves.toEqual(media);
+    expect(prisma.whatsAppMessage.findFirst).toHaveBeenCalledWith({
+      where: { id: 'message-1', orderId: 'order-1', sessionId: 'session-1' },
+      select: { id: true, messageType: true, content: true },
+    });
+    expect(whatsapp.getMediaBuffer).toHaveBeenCalledWith('media-1');
+  });
+
   it('settles delivered cash orders in the active delivery shift', async () => {
     const tx: any = {
       cashClosing: {

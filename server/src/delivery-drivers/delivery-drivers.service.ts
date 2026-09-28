@@ -1,10 +1,13 @@
 import { Injectable, NotFoundException, BadRequestException, ConflictException, ForbiddenException, Optional } from '@nestjs/common';
 import * as bcrypt from 'bcryptjs';
+import { existsSync, readFileSync } from 'node:fs';
 import { lockOperation, operationTransaction } from '../common/operation-lock';
 import { PrismaService } from '../prisma/prisma.service';
 import { SocketGateway } from '../socket/socket.gateway';
 import { DeliveryDriverGateway } from '../socket/delivery-driver.gateway';
-import { receiptSummary, validateReceipt } from '../tables/receipt';
+import { detectReceiptMime, receiptSummary, validateReceipt } from '../tables/receipt';
+import { WhatsappService } from '../whatsapp/whatsapp.service';
+import { extractDriverChatMediaId, toDriverOrderChatMessage } from '../whatsapp/order-chat-message';
 import { CompleteDriverDeliveryDto, ConfigureDriverAccessDto, CreateDriverDto, UpdateDriverDto } from './dto';
 
 @Injectable()
@@ -13,6 +16,7 @@ export class DeliveryDriversService {
     private prisma: PrismaService,
     private socketGateway: SocketGateway,
     @Optional() private deliveryDriverGateway?: DeliveryDriverGateway,
+    @Optional() private whatsappService?: WhatsappService,
   ) {}
 
   private readonly portalUserSelect = {
@@ -388,9 +392,6 @@ export class DeliveryDriversService {
   }
 
   async findAll(activeOnly = false, filterType = 'CURRENT', cashClosingId?: string, selectedDate?: string, includePortalAccount = false) {
-    // Unificar duplicados automáticamente manteniendo siempre el que tiene más domicilios
-    await this.autoMergeDuplicates();
-
     const driverWhere: any = activeOnly ? { active: true } : {};
     const orderDateFilter = await this.buildOrderFilter(filterType, cashClosingId, selectedDate);
 
@@ -679,6 +680,236 @@ export class DeliveryDriversService {
         pendingTransfers,
       },
     };
+  }
+
+  async getMyOrderSnapshot(userId: string, orderId: string) {
+    const driver = await this.prisma.deliveryDriver.findUnique({
+      where: { userId },
+      select: { id: true, active: true },
+    });
+    if (!driver?.active) {
+      throw new ForbiddenException('Tu cuenta no tiene un domiciliario activo asociado.');
+    }
+
+    const order = await this.prisma.order.findFirst({
+      where: {
+        id: orderId,
+        deliveryDriverId: driver.id,
+        orderType: 'DELIVERY',
+      },
+      include: this.portalOrderInclude(),
+    });
+
+    // La misma respuesta se usa cuando el pedido ya no pertenece a esta cuenta,
+    // fue cancelado o salió del turno visible. Así no se revela información de
+    // pedidos de otros domiciliarios y el cliente puede retirar su copia local.
+    if (!order || order.status === 'CANCELLED') {
+      return { orderId, bucket: 'NONE', order: null };
+    }
+    if (order.status === 'DELIVERED') {
+      const activeClosing = await this.prisma.cashClosing.findFirst({
+        where: { isOpen: true, cashRegister: { purpose: 'DELIVERY', active: true } },
+        select: { id: true },
+        orderBy: { shiftStart: 'desc' },
+      });
+      return order.cashClosingId && order.cashClosingId === activeClosing?.id
+        ? { orderId, bucket: 'HISTORY', order }
+        : { orderId, bucket: 'NONE', order: null };
+    }
+    return { orderId, bucket: 'ACTIVE', order };
+  }
+
+  private async getOwnedDeliveryOrder(userId: string, orderId: string, select: any) {
+    const driver = await this.prisma.deliveryDriver.findUnique({
+      where: { userId },
+      select: { id: true, active: true },
+    });
+    if (!driver?.active) {
+      throw new ForbiddenException('Tu cuenta no tiene un domiciliario activo asociado.');
+    }
+
+    const order = await this.prisma.order.findFirst({
+      where: {
+        id: orderId,
+        deliveryDriverId: driver.id,
+        orderType: 'DELIVERY',
+        OR: [
+          { status: { notIn: ['DELIVERED', 'CANCELLED'] } },
+          {
+            status: 'DELIVERED',
+            cashClosing: {
+              isOpen: true,
+              cashRegister: { purpose: 'DELIVERY', active: true },
+            },
+          },
+        ],
+      },
+      select,
+    });
+    if (!order) {
+      // No revelamos si el ID existe cuando pertenece a otro domiciliario.
+      throw new NotFoundException('No puedes consultar este pedido.');
+    }
+    return order;
+  }
+
+  async getMyOrderChat(
+    userId: string,
+    orderId: string,
+    before?: string,
+    requestedLimit?: number,
+    beforeId?: string,
+  ) {
+    let beforeDate: Date | undefined;
+    if (before) {
+      beforeDate = new Date(before);
+      if (Number.isNaN(beforeDate.getTime()) || (beforeId && beforeId.length > 128)) {
+        throw new BadRequestException('Cursor de mensajes inválido.');
+      }
+    }
+
+    const pageSize = Number.isFinite(requestedLimit)
+      ? Math.min(40, Math.max(1, Math.trunc(requestedLimit!)))
+      : 20;
+    const order: any = await this.getOwnedDeliveryOrder(userId, orderId, {
+      id: true,
+      orderNumber: true,
+      customerName: true,
+      status: true,
+      paymentMethod: true,
+      paymentStatus: true,
+      createdAt: true,
+      updatedAt: true,
+      chatSessionId: true,
+      transferProofs: {
+        orderBy: { createdAt: 'desc' },
+        select: {
+          id: true,
+          status: true,
+          method: true,
+          amount: true,
+          originalName: true,
+          mimeType: true,
+          fileSize: true,
+          rejectionReason: true,
+          purgedAt: true,
+          reviewedAt: true,
+          createdAt: true,
+        },
+      },
+    });
+
+    const messageCursor = beforeDate
+      ? beforeId
+        ? {
+            OR: [
+              { createdAt: { lt: beforeDate } },
+              { createdAt: beforeDate, id: { lt: beforeId } },
+            ],
+          }
+        : { createdAt: { lt: beforeDate } }
+      : {};
+
+    await this.whatsappService?.ensureLegacyOrderMessageLinks(order.id);
+
+    const rows = order.chatSessionId
+      ? await this.prisma.whatsAppMessage.findMany({
+          where: {
+            orderId: order.id,
+            sessionId: order.chatSessionId,
+            ...messageCursor,
+          },
+          select: {
+            id: true,
+            direction: true,
+            content: true,
+            messageType: true,
+            status: true,
+            createdAt: true,
+            replyToContent: true,
+            replyToDirection: true,
+          },
+          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+          take: pageSize + 1,
+        })
+      : [];
+    const hasPrevious = rows.length > pageSize;
+    const messages = rows.slice(0, pageSize).reverse().map(toDriverOrderChatMessage);
+    const oldestMessage = messages[0];
+    const { chatSessionId: _privateSessionId, transferProofs, ...orderSummary } = order;
+
+    return {
+      order: orderSummary,
+      messages,
+      transferProofs,
+      messagePage: {
+        hasPrevious,
+        before: hasPrevious && oldestMessage?.createdAt
+          ? new Date(oldestMessage.createdAt).toISOString()
+          : null,
+        beforeId: hasPrevious ? oldestMessage?.id || null : null,
+        limit: pageSize,
+      },
+    };
+  }
+
+  async getMyOrderChatMedia(userId: string, orderId: string, messageId: string) {
+    const order: any = await this.getOwnedDeliveryOrder(userId, orderId, {
+      id: true,
+      chatSessionId: true,
+    });
+    if (!order.chatSessionId) throw new NotFoundException('Este pedido no tiene chat asociado.');
+
+    const message = await this.prisma.whatsAppMessage.findFirst({
+      where: {
+        id: messageId,
+        orderId: order.id,
+        sessionId: order.chatSessionId,
+      },
+      select: { id: true, messageType: true, content: true },
+    });
+    const mediaId = extractDriverChatMediaId(message);
+    if (!mediaId) throw new NotFoundException('Este mensaje no contiene multimedia disponible.');
+    if (!this.whatsappService) throw new BadRequestException('El servicio de multimedia no está disponible.');
+
+    const media = await this.whatsappService.getMediaBuffer(mediaId);
+    if (!media?.buffer?.length) throw new NotFoundException('La multimedia ya no está disponible.');
+    const normalizedType = String(media.contentType || '').split(';')[0].trim().toLowerCase();
+    const safeRasterTypes = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif']);
+    const contentType = safeRasterTypes.has(normalizedType)
+      || normalizedType.startsWith('audio/')
+      || normalizedType.startsWith('video/')
+      || normalizedType === 'application/pdf'
+      ? normalizedType
+      : 'application/octet-stream';
+    return { buffer: media.buffer, contentType };
+  }
+
+  async getMyOrderProofImage(userId: string, orderId: string, proofId: string) {
+    await this.getOwnedDeliveryOrder(userId, orderId, { id: true });
+    const proof = await this.prisma.transferProof.findFirst({
+      where: { id: proofId, orderId },
+      select: { fileBase64: true, filePath: true },
+    });
+    if (!proof) throw new NotFoundException('Comprobante no encontrado en este pedido.');
+
+    if (proof.fileBase64) {
+      try {
+        const encoded = String(proof.fileBase64).trim().replace(/^data:[^,]+,/, '');
+        const buffer = Buffer.from(encoded, 'base64');
+        const contentType = detectReceiptMime(buffer);
+        if (buffer.length > 0 && contentType) return { buffer, contentType };
+      } catch {
+        // Los comprobantes antiguos pueden conservar únicamente filePath.
+      }
+    }
+
+    if (proof.filePath && existsSync(proof.filePath)) {
+      const buffer = readFileSync(proof.filePath);
+      const contentType = detectReceiptMime(buffer);
+      if (contentType) return { buffer, contentType };
+    }
+    throw new NotFoundException('La imagen del comprobante no está disponible.');
   }
 
   async completeMyOrder(userId: string, orderId: string, data: CompleteDriverDeliveryDto, files?: any[]) {
