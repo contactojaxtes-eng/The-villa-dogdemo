@@ -790,6 +790,16 @@ describe('WhatsApp Gemini settings', () => {
     expect(accept('Coca Cola 400 ml', 'Cliente: Dame una Coca Cola 400 ml y una Pepsi 400 ml')).toBe(true);
     expect(accept('Pepsi 400 ml', 'Cliente: Dame una Coca Cola 400 ml y una Pepsi 400 ml')).toBe(true);
     expect(accept('Coca Cola 400 ml', 'Cliente: Dame una Coca Cola 400 ml\nCliente: Sí, para domicilio')).toBe(true);
+    // Si una bebida está marcada como Solo Salón (availableForDelivery: false), la IA NO la debe halar
+    const catalogWithDeliveryFlag = [
+      { name: 'Colombiana 400 ml', category: { name: 'Gaseosas y Bebidas' }, availableForDelivery: false },
+      { name: 'Colombiana 1.5 L', category: { name: 'Gaseosas y Bebidas' }, availableForDelivery: true },
+    ];
+    const acceptDelivery = (name: string, chat: string) => (service as any).isBeverageSelectionUnambiguous(
+      catalogWithDeliveryFlag.find(item => item.name === name), catalogWithDeliveryFlag, chat,
+    );
+    expect(acceptDelivery('Colombiana 400 ml', 'Cliente: Dame una Colombiana')).toBe(false);
+    expect(acceptDelivery('Colombiana 1.5 L', 'Cliente: Dame una Colombiana')).toBe(true);
   });
 
   it('tests a multi-turn chat with the current menu without sending a WhatsApp message', async () => {

@@ -258,13 +258,13 @@ export class WhatsappService implements OnModuleInit {
   }
 
   private isBeverageSelectionUnambiguous(
-    selected: { name: string; category?: { name?: string | null } | null },
-    catalog: Array<{ name: string; category?: { name?: string | null } | null }>,
+    selected: { name: string; category?: { name?: string | null } | null; availableForDelivery?: boolean },
+    catalog: Array<{ name: string; category?: { name?: string | null } | null; availableForDelivery?: boolean }>,
     conversation: string,
   ): boolean {
     if (!this.isBeverageMenuItem(selected)) return true;
-    // REGLA CRÍTICA: Las únicas bebidas que la IA NUNCA debe halar son las de vidrio
-    if (/\bvidrio\b/i.test(selected.name)) return false;
+    // REGLA CRÍTICA: Las únicas bebidas que la IA NUNCA debe halar son las de vidrio o no habilitadas para domicilio
+    if (/\bvidrio\b/i.test(selected.name) || selected.availableForDelivery === false) return false;
 
     const core = this.beverageCore(selected.name);
     if (!core) return false;
@@ -310,11 +310,12 @@ export class WhatsappService implements OnModuleInit {
     const mentionsGlass = /\bvidrio\b/.test(normalizedMention);
     if (mentionsGlass) return false;
 
-    // Solo se consideran presentaciones no-vidrio
+    // Solo se consideran presentaciones no-vidrio y disponibles para domicilio
     const nonGlassVariants = catalog.filter(item =>
       this.isBeverageMenuItem(item) &&
       this.beverageCore(item.name) === core &&
-      !/\bvidrio\b/i.test(item.name),
+      !/\bvidrio\b/i.test(item.name) &&
+      item.availableForDelivery !== false,
     );
     if (nonGlassVariants.length === 0) return false;
 
@@ -3798,7 +3799,7 @@ ${dynamicCategoriesString}
     5A. BEBIDAS Y PRESENTACIONES:
        - Usa únicamente el nombre exacto de las bebidas del menú vigente. No cambies una marca, sabor, tamaño o empaque por otro parecido.
        - Si el cliente dice solo “gaseosa”, “jugo”, “agua”, “manzana” o una marca con varias presentaciones, pregunta cuál presentación quiere antes de resumirla como producto confirmado.
-       - Las bebidas cuyo nombre incluya “vidrio” NO se ofrecen ni se confirman para domicilio. Si el cliente quiere domicilio y pide una de vidrio, indícale brevemente que debe elegir otra presentación. Solo se permiten para recoger o consumir en el restaurante.
+       - Las bebidas cuyo nombre incluya “vidrio” o no disponibles para domicilio NO se ofrecen ni se confirman para domicilio. Si el cliente quiere domicilio y pide una de vidrio, indícale brevemente que debe elegir otra presentación. Solo se permiten para recoger o consumir en el restaurante.
        - Si cambia una bebida, confirma la última elección y no mantengas en el resumen la bebida anterior.
 
     5B. RESUMEN DEL PEDIDO:
@@ -3847,7 +3848,7 @@ Restaurante (Tú):
           take: 16,
         }),
         this.prisma.menuItem.findMany({
-          where: { active: true },
+          where: { active: true, availableForDelivery: { not: false }, code: { not: null } },
           include: { category: { select: { name: true } } },
           orderBy: [{ category: { name: 'asc' } }, { price: 'asc' }],
         }),
@@ -5148,7 +5149,7 @@ Restaurante (Tú):
 
     const [dbItems, dbZones, configuredMenuUrl, restaurantHours, configuredInstructions, paymentQrMode, paymentAccountText] = await Promise.all([
       this.prisma.menuItem.findMany({
-        where: { active: true },
+        where: { active: true, availableForDelivery: { not: false }, code: { not: null } },
         include: { category: { select: { name: true } } },
         orderBy: [{ category: { name: 'asc' } }, { price: 'asc' }],
       }),
@@ -5345,7 +5346,7 @@ Restaurante (Tú):
     try {
       const [dbItems, dbZones] = await Promise.all([
         this.prisma.menuItem.findMany({
-          where: { active: true },
+          where: { active: true, availableForDelivery: { not: false } },
           include: {
             category: {
               select: { name: true }
@@ -5429,7 +5430,7 @@ REGLAS DE RECONOCIMIENTO Y RELACIÓN DE PRODUCTOS (THE VILLA DOG):
 - BEBIDAS:
   * "coca cola", "postobon manzana", "kola roman", "quatro", "jugo hit", "agua", "hatsu", "bretaña".
   * ¡IMPORTANTE! LA IA SÍ DEBE HALAR / AGREGAR LAS BEBIDAS AL CARRITO ("items"):
-    - Las ÚNICAS bebidas que la IA NUNCA debe agregar a "items" son las BEBIDAS DE VIDRIO (las que incluyan "vidrio" en el nombre, como "Coca Cola Vidrio 250 ml", "Manzana Vidrio 250 ml", etc.). NUNCA selecciones ni agregues bebidas de vidrio a "items". Si el cliente pide bebida en vidrio, no la agregues a "items" y déjala en "unresolvedBeverages".
+    - Las ÚNICAS bebidas que la IA NUNCA debe agregar a "items" son las BEBIDAS DE VIDRIO o no disponibles para domicilio (las que incluyan "vidrio" en el nombre, como "Coca Cola Vidrio 250 ml", "Manzana Vidrio 250 ml", o solo salón). NUNCA selecciones ni agregues bebidas de vidrio a "items". Si el cliente pide bebida en vidrio, no la agregues a "items" y déjala en "unresolvedBeverages".
     - Para todas las demás bebidas (plásticas, personales, 1.5 L, 2.5 L, jugos, agua):
       * Si el cliente NO especifica el tamaño (ej: "una coca cola", "dos manzanas", "una colombiana", "un jugo hit mora", "un agua"), asigna por defecto la presentación personal plástica correspondiente (400 ml o 300 ml para agua). NUNCA asignes vidrio.
       * Si el cliente especifica tamaño (ej: "1.5 L", "2.5 L", "400 ml"), asigna esa presentación exacta.
@@ -5599,10 +5600,10 @@ Responde solo con JSON válido.`;
             menuItem = nameMatch;
           } else {
             // Si rawId corresponde a una bebida (ej: Gemini envió "Coca Cola" o "Manzana"),
-            // buscar entre las variantes no-vidrio
+            // buscar entre las variantes no-vidrio y disponibles para domicilio
             const beverageMatch = dbItems.find(i => {
               if (!this.isBeverageMenuItem(i)) return false;
-              if (/\bvidrio\b/i.test(i.name)) return false;
+              if (/\bvidrio\b/i.test(i.name) || (i as any).availableForDelivery === false) return false;
               const core = this.beverageCore(i.name);
               return core && (core === normalizedRawId || normalizedRawId.includes(core) || core.includes(normalizedRawId));
             });
@@ -5611,7 +5612,8 @@ Responde solo con JSON válido.`;
               const nonGlassVariants = dbItems.filter(i =>
                 this.isBeverageMenuItem(i) &&
                 this.beverageCore(i.name) === core &&
-                !/\bvidrio\b/i.test(i.name),
+                !/\bvidrio\b/i.test(i.name) &&
+                (i as any).availableForDelivery !== false,
               );
               const sizeInText = this.beverageSizeInMl(text);
               const matchedBySize = sizeInText ? nonGlassVariants.find(i => this.beverageSizeInMl(i.name) === sizeInText) : null;
@@ -5637,9 +5639,9 @@ Responde solo con JSON válido.`;
             }
           }
         }
-        // REGLA CRÍTICA: Las únicas bebidas que la IA NUNCA debe halar son las de vidrio.
+        // REGLA CRÍTICA: Las únicas bebidas que la IA NUNCA debe halar son las de vidrio o no disponibles para domicilio.
         // Si el modelo devolvió una bebida de vidrio por error, verificar si el cliente pidió vidrio:
-        if (menuItem && /\bvidrio\b/i.test(menuItem.name)) {
+        if (menuItem && (/\bvidrio\b/i.test(menuItem.name) || (menuItem as any).availableForDelivery === false)) {
           const core = this.beverageCore(menuItem.name);
           const mentionsGlass = /\bvidrio\b/i.test(this.normalizeSpanishLookup(text));
           if (!mentionsGlass) {
@@ -5648,14 +5650,15 @@ Responde solo con JSON válido.`;
               this.isBeverageMenuItem(i) &&
               this.beverageCore(i.name) === core &&
               !/\bvidrio\b/i.test(i.name) &&
+              (i as any).availableForDelivery !== false &&
               (this.beverageSizeInMl(i.name) || 0) <= 600,
             );
             if (nonGlassEquivalent) {
-              this.logger.log(`[parseOrder] Corrigiendo bebida de vidrio a presentación plástica personal: ${menuItem.name} -> ${nonGlassEquivalent.name}`);
+              this.logger.log(`[parseOrder] Corrigiendo bebida de vidrio/solo salón a presentación plástica personal: ${menuItem.name} -> ${nonGlassEquivalent.name}`);
               menuItem = nonGlassEquivalent;
             } else {
-              this.logger.warn(`[parseOrder] Bebida en vidrio no admitida por IA: ${menuItem.name}`);
-              unresolvedBeverages.push(`${menuItem.name} (no disponible en vidrio)`);
+              this.logger.warn(`[parseOrder] Bebida no admitida para domicilio por IA: ${menuItem.name}`);
+              unresolvedBeverages.push(`${menuItem.name} (no disponible para domicilio)`);
               continue;
             }
           } else {
@@ -6082,7 +6085,7 @@ ${transcriptLabel}`
         : '';
 
       const dbItems = await this.prisma.menuItem.findMany({
-        where: { active: true },
+        where: { active: true, availableForDelivery: { not: false }, code: { not: null } },
         include: { category: { select: { name: true } } },
         orderBy: [{ category: { name: 'asc' } }, { price: 'asc' }]
       });
