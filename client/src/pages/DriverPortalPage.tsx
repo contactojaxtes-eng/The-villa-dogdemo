@@ -222,7 +222,7 @@ export default function DriverPortalPage() {
   const [cashAmount, setCashAmount] = useState('')
   const [transferAmount, setTransferAmount] = useState('')
   const [reference, setReference] = useState('')
-  const [proof, setProof] = useState<File | null>(null)
+  const [proofs, setProofs] = useState<File[]>([])
   const [saving, setSaving] = useState(false)
   const [chatOrder, setChatOrder] = useState<PortalOrder | null>(null)
   const [chatLiveEvents, setChatLiveEvents] = useState<DriverChatLiveEvent[]>([])
@@ -396,6 +396,24 @@ export default function DriverPortalPage() {
     setTransferAmount('')
   }
 
+  useEffect(() => {
+    if (!targetOrder) return
+    const onPop = () => {
+      setTargetOrder(null)
+      setProofs([])
+      setCashAmount('')
+      setTransferAmount('')
+    }
+    window.history.pushState({ driverOrderDialog: true }, '')
+    window.addEventListener('popstate', onPop)
+    return () => {
+      window.removeEventListener('popstate', onPop)
+      if (window.history.state?.driverOrderDialog) {
+        window.history.back()
+      }
+    }
+  }, [targetOrder?.id])
+
   const submitCollection = async () => {
     if (!targetOrder) return
     if (dialogMode === 'PROOF' && !proof) {
@@ -430,7 +448,9 @@ export default function DriverPortalPage() {
           form.append('cashAmount', String(cash))
           form.append('transferAmount', String(transfer))
         }
-        if (proof) form.append('proof', proof)
+        proofs.forEach(file => {
+          form.append('proofs', file)
+        })
         const endpoint = dialogMode === 'COMPLETE'
           ? `/delivery-drivers/me/orders/${targetOrder.id}/complete`
           : `/delivery-drivers/me/orders/${targetOrder.id}/proof`
@@ -620,7 +640,7 @@ export default function DriverPortalPage() {
           <div className="border-b border-[var(--border-subtle)] p-5"><DialogHeader><DialogTitle className="flex items-center gap-2 text-lg font-black"><Wallet className="h-5 w-5 text-[var(--accent)]" />{dialogMode === 'COMPLETE' ? `Entregar pedido #${targetOrder?.orderNumber}` : dialogMode === 'PAYMENT' ? `Corregir pago #${targetOrder?.orderNumber}` : `Adjuntar comprobante #${targetOrder?.orderNumber}`}</DialogTitle><DialogDescription>{dialogMode === 'COMPLETE' ? 'Elige cómo pagó realmente el cliente y confirma la entrega. La foto es opcional.' : dialogMode === 'PAYMENT' ? 'Corrige cómo pagó el cliente. El método original seguirá visible para control.' : 'Sube la foto cuando la tengas. El pedido puede haberse entregado sin comprobante.'}</DialogDescription></DialogHeader></div>
           <div className="space-y-4 p-5">
             <div className="flex items-center justify-between rounded-2xl bg-[var(--bg-elevated)] p-3"><div><p className="text-xs font-bold text-[var(--text-secondary)]">Total del pedido</p><p className="text-xl font-black text-[var(--accent)]">{formatCurrency(targetOrder?.total || 0)}</p><p className="mt-1 text-[11px] font-semibold text-[var(--text-muted)]">Método original: {originalPaymentLabel(targetOrder)}</p></div><Badge className="bg-[var(--bg-panel)] text-xs font-black text-[var(--text-primary)]">#{targetOrder?.orderNumber}</Badge></div>
-            <div className="space-y-1.5"><Label className="text-xs font-black text-[var(--text-secondary)]">Método de pago recibido</Label><select value={method} onChange={event => { const next = event.target.value as PaymentMethod; setMethod(next); if (next === 'CASH') setProof(null); if (next === 'MIXED' && targetOrder) { const half = Math.round(Number(targetOrder.total || 0) / 2); if (!cashAmount) setCashAmount(String(half)); if (!transferAmount) setTransferAmount(String(Number(targetOrder.total || 0) - half)) } }} className="flex h-11 w-full rounded-xl border border-[var(--border-default)] bg-[var(--bg-input)] px-3 text-sm font-semibold text-[var(--text-primary)] outline-none focus:border-[var(--accent)]">{dialogMode !== 'PROOF' && <option value="CASH">Efectivo</option>}{paymentOptions.filter(option => option.value !== 'CASH').map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</select></div>
+            <div className="space-y-1.5"><Label className="text-xs font-black text-[var(--text-secondary)]">Método de pago recibido</Label><select value={method} onChange={event => { const next = event.target.value as PaymentMethod; setMethod(next); if (next === 'CASH') setProofs([]); if (next === 'MIXED' && targetOrder) { const half = Math.round(Number(targetOrder.total || 0) / 2); if (!cashAmount) setCashAmount(String(half)); if (!transferAmount) setTransferAmount(String(Number(targetOrder.total || 0) - half)) } }} className="flex h-11 w-full rounded-xl border border-[var(--border-default)] bg-[var(--bg-input)] px-3 text-sm font-semibold text-[var(--text-primary)] outline-none focus:border-[var(--accent)]">{dialogMode !== 'PROOF' && <option value="CASH">Efectivo</option>}{paymentOptions.filter(option => option.value !== 'CASH').map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</select></div>
             {method === 'MIXED' && (
               <div className="rounded-2xl border border-violet-500/25 bg-violet-500/[0.06] p-3.5">
                 <p className="mb-2 text-xs font-black text-violet-800 dark:text-violet-200">Distribuye el total entre efectivo y transferencia</p>
@@ -632,7 +652,89 @@ export default function DriverPortalPage() {
               </div>
             )}
             <div className="space-y-1.5"><Label className="text-xs font-black text-[var(--text-secondary)]">Referencia de pago <span className="font-medium text-[var(--text-muted)]">(opcional)</span></Label><Input value={reference} onChange={event => setReference(event.target.value)} maxLength={300} placeholder="Ej: comprobante, últimos dígitos" className="h-11 rounded-xl" /></div>
-            {isTransferMethod(method) && dialogMode !== 'PAYMENT' && <div className="rounded-2xl border border-blue-500/25 bg-blue-500/[0.06] p-3.5"><div className="flex gap-2"><Camera className="mt-0.5 h-4 w-4 shrink-0 text-blue-600" /><div><p className="text-xs font-black text-blue-800 dark:text-blue-200">Foto del comprobante {dialogMode === 'PROOF' ? '' : '(opcional)'}</p><p className="mt-0.5 text-[11px] leading-4 text-blue-700/80 dark:text-blue-200/75">Puedes entregar primero y subirla desde el historial cuando la tengas. Máximo 8 MB.</p></div></div><label className="mt-3 flex h-10 cursor-pointer items-center justify-center gap-2 rounded-xl border border-dashed border-blue-500/40 bg-[var(--bg-panel)] px-3 text-xs font-black text-blue-700 transition hover:bg-blue-500/10 dark:text-blue-300"><Upload className="h-4 w-4" />{proof ? proof.name : 'Seleccionar foto'}<input type="file" accept="image/jpeg,image/png,image/webp,image/heic,image/heif" className="hidden" onChange={event => setProof(event.target.files?.[0] || null)} /></label>{proof && <button type="button" onClick={() => setProof(null)} className="mt-2 text-[11px] font-bold text-rose-600 hover:underline">Quitar foto</button>}</div>}
+            {isTransferMethod(method) && dialogMode !== 'PAYMENT' && (
+              <div className="rounded-2xl border border-blue-500/25 bg-blue-500/[0.06] p-3.5 space-y-3">
+                <div className="flex gap-2">
+                  <Camera className="mt-0.5 h-4 w-4 shrink-0 text-blue-600" />
+                  <div>
+                    <p className="text-xs font-black text-blue-800 dark:text-blue-200">
+                      Comprobante(s) de transferencia {dialogMode === 'PROOF' ? '' : '(opcional)'}
+                    </p>
+                    <p className="mt-0.5 text-[11px] leading-4 text-blue-700/80 dark:text-blue-200/75">
+                      Puedes subir varias fotos si pagaron en 2 o más transferencias. Máximo 5 fotos, 8 MB c/u.
+                    </p>
+                  </div>
+                </div>
+
+                {proofs.length > 0 && (
+                  <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
+                    {proofs.map((file, idx) => (
+                      <div
+                        key={`${file.name}-${file.size}-${idx}`}
+                        className="flex items-center justify-between gap-2 rounded-xl border border-blue-500/30 bg-[var(--bg-panel)] p-2 text-xs"
+                      >
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-blue-500/15 text-[10px] font-black text-blue-700 dark:text-blue-300">
+                            {idx + 1}
+                          </span>
+                          <div className="min-w-0">
+                            <p className="truncate font-bold text-[var(--text-primary)] text-xs">{file.name}</p>
+                            <p className="text-[10px] text-[var(--text-secondary)]">{(file.size / (1024 * 1024)).toFixed(2)} MB</p>
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setProofs(prev => prev.filter((_, i) => i !== idx))}
+                          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-rose-600 hover:bg-rose-500/10 dark:text-rose-400"
+                          title="Eliminar esta foto"
+                        >
+                          <X className="h-4 w-4" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {proofs.length < 5 && (
+                  <label className="flex h-11 cursor-pointer items-center justify-center gap-2 rounded-xl border border-dashed border-blue-500/40 bg-[var(--bg-panel)] px-3 text-xs font-black text-blue-700 transition hover:bg-blue-500/10 dark:text-blue-300">
+                    <Upload className="h-4 w-4" />
+                    <span>{proofs.length === 0 ? 'Seleccionar foto(s)' : '+ Agregar otra foto / transferencia'}</span>
+                    <input
+                      type="file"
+                      multiple
+                      accept="image/jpeg,image/png,image/webp,image/heic,image/heif"
+                      className="hidden"
+                      onChange={event => {
+                        const files = event.target.files
+                        if (files && files.length > 0) {
+                          const incoming = Array.from(files)
+                          setProofs(prev => {
+                            const next = [...prev]
+                            for (const f of incoming) {
+                              if (!next.some(existing => existing.name === f.name && existing.size === f.size)) {
+                                next.push(f)
+                              }
+                            }
+                            return next.slice(0, 5)
+                          })
+                        }
+                        event.target.value = ''
+                      }}
+                    />
+                  </label>
+                )}
+
+                {proofs.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setProofs([])}
+                    className="text-[11px] font-bold text-rose-600 hover:underline"
+                  >
+                    Quitar todas las fotos ({proofs.length})
+                  </button>
+                )}
+              </div>
+            )}
             {dialogMode === 'PAYMENT' && isTransferMethod(method) && <p className="rounded-xl bg-blue-500/[0.08] px-3 py-2 text-xs text-blue-700 dark:text-blue-200">La foto sigue siendo opcional. Después de guardar podrás adjuntarla desde este historial.</p>}
             <Button onClick={() => void submitCollection()} disabled={saving || !data?.currentShift} className="h-12 w-full rounded-xl bg-[var(--accent)] text-sm font-black text-white"><>{saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : dialogMode === 'COMPLETE' ? <CheckCircle2 className="mr-2 h-4 w-4" /> : dialogMode === 'PAYMENT' ? <Wallet className="mr-2 h-4 w-4" /> : <Upload className="mr-2 h-4 w-4" />}{dialogMode === 'COMPLETE' ? 'Confirmar entrega' : dialogMode === 'PAYMENT' ? 'Guardar método recibido' : 'Subir comprobante'}</></Button>
           </div>

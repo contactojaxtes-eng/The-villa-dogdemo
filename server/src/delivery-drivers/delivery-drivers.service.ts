@@ -79,10 +79,14 @@ export class DeliveryDriversService {
     }
   }
 
+  private getProofFiles(files?: any[]): any[] {
+    if (!Array.isArray(files) || files.length === 0) return [];
+    return files.filter(file => Boolean(file?.buffer && Buffer.isBuffer(file.buffer) && file.buffer.length > 0)).slice(0, 5);
+  }
+
   private getProofFile(files?: any[]) {
-    return Array.isArray(files)
-      ? files.find(file => ['proof', 'comprobante', 'file'].includes(String(file?.fieldname || '').toLowerCase())) || files[0]
-      : undefined;
+    const list = this.getProofFiles(files);
+    return list.find(file => ['proof', 'comprobante', 'file'].includes(String(file?.fieldname || '').toLowerCase())) || list[0];
   }
 
   private getDriverPaymentMethod(value?: string): CompleteDriverDeliveryDto['method'] {
@@ -914,10 +918,11 @@ export class DeliveryDriversService {
 
   async completeMyOrder(userId: string, orderId: string, data: CompleteDriverDeliveryDto, files?: any[]) {
     const method = this.getDriverPaymentMethod(data.method);
-    const proofFile = this.getProofFile(files);
-    // Una foto de recibo se conserva solamente durante el turno. Limitamos el
-    // tamaño para que varios domiciliarios no saturen la base temporal.
-    const receipt = proofFile ? await validateReceipt(proofFile, 8 * 1024 * 1024) : null;
+    const proofFiles = this.getProofFiles(files);
+    // Fotos de comprobantes de transferencia (pueden ser 1, 2 o más si pagaron en partes).
+    const validatedReceipts = await Promise.all(
+      proofFiles.map(file => validateReceipt(file, 8 * 1024 * 1024))
+    );
 
     const result = await this.prisma.$transaction(async tx => {
       await lockOperation(tx);
@@ -986,23 +991,28 @@ export class DeliveryDriversService {
       });
 
       let proof: any = null;
-      if (hasTransferPart && receipt) {
-        proof = await tx.transferProof.create({
-          data: {
-            paymentId: payment.id,
-            orderId: order.id,
-            cashClosingId: closing.id,
-            submittedById: userId,
-            amount: transferAmount,
-            method,
-            status: 'PENDING',
-            filePath: null,
-            fileBase64: `data:${receipt.mime};base64,${receipt.bytes.toString('base64')}`,
-            mimeType: receipt.mime,
-            fileSize: receipt.bytes.length,
-            originalName: String(proofFile?.originalname || 'comprobante.jpg').slice(0, 200),
-          },
-        });
+      if (hasTransferPart && validatedReceipts.length > 0) {
+        for (let i = 0; i < validatedReceipts.length; i++) {
+          const receiptItem = validatedReceipts[i];
+          const fileItem = proofFiles[i];
+          const created = await tx.transferProof.create({
+            data: {
+              paymentId: payment.id,
+              orderId: order.id,
+              cashClosingId: closing.id,
+              submittedById: userId,
+              amount: transferAmount,
+              method,
+              status: 'PENDING',
+              filePath: null,
+              fileBase64: `data:${receiptItem.mime};base64,${receiptItem.bytes.toString('base64')}`,
+              mimeType: receiptItem.mime,
+              fileSize: receiptItem.bytes.length,
+              originalName: String(fileItem?.originalname || `comprobante_${i + 1}.jpg`).slice(0, 200),
+            },
+          });
+          if (!proof) proof = created;
+        }
       }
 
       await tx.orderChangeLog.create({
@@ -1016,7 +1026,7 @@ export class DeliveryDriversService {
             paymentStatus: { before: order.paymentStatus, after: paymentStatus },
             cashAmount: { before: order.cashAmount || 0, after: cashAmount },
             transferAmount: { before: order.transferAmount || 0, after: transferAmount },
-            proofAttached: Boolean(hasTransferPart && receipt),
+            proofAttached: Boolean(hasTransferPart && validatedReceipts.length > 0),
           },
         },
       });
@@ -1165,8 +1175,13 @@ export class DeliveryDriversService {
   async uploadMyProof(userId: string, orderId: string, data: CompleteDriverDeliveryDto, files?: any[]) {
     const method = this.getDriverPaymentMethod(data.method);
     if (method === 'CASH') throw new BadRequestException('El comprobante solo aplica a pagos por transferencia.');
-    const proofFile = this.getProofFile(files);
-    const receipt = await validateReceipt(proofFile, 8 * 1024 * 1024);
+    const proofFiles = this.getProofFiles(files);
+    if (proofFiles.length === 0) {
+      throw new BadRequestException('Adjunta la foto del comprobante.');
+    }
+    const validatedReceipts = await Promise.all(
+      proofFiles.map(file => validateReceipt(file, 8 * 1024 * 1024))
+    );
 
     const result = await this.prisma.$transaction(async tx => {
       await lockOperation(tx);
@@ -1254,32 +1269,38 @@ export class DeliveryDriversService {
           cashRegisterId: closing.cashRegisterId,
         },
       });
-      // Si el domiciliario sube una foto corregida, Caja revisa únicamente la
-      // última. Conservamos el registro anterior para auditoría y liberamos
-      // sus bytes inmediatamente, sin acumular imágenes en la base temporal.
+      // Si había comprobantes rechazados por caja, esos se marcan como superseded.
+      // Los comprobantes pendientes existentes se conservan para soportar pagos con múltiples transferencias.
       await tx.transferProof.updateMany({
         where: {
           paymentId: payment.id,
-          status: { in: ['PENDING', 'REJECTED'] },
+          status: 'REJECTED',
         },
         data: { status: 'SUPERSEDED', fileBase64: null, purgedAt: new Date() },
       });
-      const proof = await tx.transferProof.create({
-        data: {
-          paymentId: payment.id,
-          orderId: order.id,
-          cashClosingId: closing.id,
-          submittedById: userId,
-          amount: transferAmount,
-          method,
-          status: 'PENDING',
-          filePath: null,
-          fileBase64: `data:${receipt.mime};base64,${receipt.bytes.toString('base64')}`,
-          mimeType: receipt.mime,
-          fileSize: receipt.bytes.length,
-          originalName: String(proofFile?.originalname || 'comprobante.jpg').slice(0, 200),
-        },
-      });
+
+      let proof: any = null;
+      for (let i = 0; i < validatedReceipts.length; i++) {
+        const receiptItem = validatedReceipts[i];
+        const fileItem = proofFiles[i];
+        const created = await tx.transferProof.create({
+          data: {
+            paymentId: payment.id,
+            orderId: order.id,
+            cashClosingId: closing.id,
+            submittedById: userId,
+            amount: transferAmount,
+            method,
+            status: 'PENDING',
+            filePath: null,
+            fileBase64: `data:${receiptItem.mime};base64,${receiptItem.bytes.toString('base64')}`,
+            mimeType: receiptItem.mime,
+            fileSize: receiptItem.bytes.length,
+            originalName: String(fileItem?.originalname || `comprobante_${i + 1}.jpg`).slice(0, 200),
+          },
+        });
+        if (!proof) proof = created;
+      }
       await tx.orderChangeLog.create({
         data: {
           orderId: order.id,

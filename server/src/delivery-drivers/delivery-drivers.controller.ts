@@ -152,7 +152,7 @@ export class DeliveryDriversController {
   @UseInterceptors(AnyFilesInterceptor({
     limits: {
       fileSize: 8 * 1024 * 1024,
-      files: 1,
+      files: 5,
       fieldSize: 2 * 1024 * 1024,
     },
   }))
@@ -172,7 +172,7 @@ export class DeliveryDriversController {
   @UseInterceptors(AnyFilesInterceptor({
     limits: {
       fileSize: 8 * 1024 * 1024,
-      files: 1,
+      files: 5,
       fieldSize: 2 * 1024 * 1024,
     },
   }))

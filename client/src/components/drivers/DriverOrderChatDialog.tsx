@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { AlertTriangle, Eye, FileText, Image as ImageIcon, Loader2, MessageSquare, RefreshCw, X } from 'lucide-react'
+import { AlertTriangle, ArrowLeft, Eye, FileText, Image as ImageIcon, Loader2, MessageSquare, RefreshCw, X } from 'lucide-react'
 import { api } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
@@ -305,6 +305,40 @@ export function DriverOrderChatDialog({
   const [loadingOlder, setLoadingOlder] = useState(false)
   const [error, setError] = useState('')
   const [preview, setPreview] = useState<{ endpoint: string; alt: string } | null>(null)
+
+  const closePreview = useCallback(() => {
+    setPreview(null)
+  }, [])
+
+  useEffect(() => {
+    if (!order) return
+    const onPop = () => {
+      onClose()
+    }
+    window.history.pushState({ driverOrderChat: true }, '')
+    window.addEventListener('popstate', onPop)
+    return () => {
+      window.removeEventListener('popstate', onPop)
+      if (window.history.state?.driverOrderChat) {
+        window.history.back()
+      }
+    }
+  }, [order?.id, onClose])
+
+  useEffect(() => {
+    if (!preview) return
+    const onPop = () => {
+      setPreview(null)
+    }
+    window.history.pushState({ driverProofPreview: true }, '')
+    window.addEventListener('popstate', onPop)
+    return () => {
+      window.removeEventListener('popstate', onPop)
+      if (window.history.state?.driverProofPreview) {
+        window.history.back()
+      }
+    }
+  }, [preview])
   const requestIdRef = useRef(0)
   const viewportRef = useRef<HTMLDivElement>(null)
   const [imageCache] = useState<ImageCacheState>(() => ({ entries: new Map(), pending: new Map() }))
@@ -470,10 +504,65 @@ export function DriverOrderChatDialog({
       </Dialog>
 
       {preview && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/90 p-4 backdrop-blur-sm" onClick={() => setPreview(null)}>
-          <button type="button" onClick={() => setPreview(null)} className="absolute right-4 top-4 rounded-xl bg-white/15 p-2 text-white hover:bg-rose-600" aria-label="Cerrar imagen"><X className="h-6 w-6" /></button>
-          <div className="max-h-[90vh] max-w-[94vw]" onClick={event => event.stopPropagation()}>
-            <LazyPrivateImage endpoint={preview.endpoint} alt={preview.alt} cache={imageCache} eager className="max-h-[88vh] min-h-48 w-[min(92vw,900px)] rounded-2xl bg-black/30" />
+        <div
+          className="fixed inset-0 z-[200] flex flex-col items-center justify-center bg-black/95 p-2 sm:p-4 backdrop-blur-md select-none touch-manipulation"
+          onClick={closePreview}
+        >
+          {/* Barra superior fija con botón Volver y botón Cerrar */}
+          <div
+            className="fixed top-0 left-0 right-0 z-[210] flex items-center justify-between border-b border-white/10 bg-black/85 px-4 py-3 text-white backdrop-blur-lg pt-[max(0.75rem,env(safe-area-inset-top))]"
+            onClick={e => e.stopPropagation()}
+          >
+            <button
+              type="button"
+              onClick={closePreview}
+              className="flex items-center gap-2 rounded-xl bg-white/15 px-3.5 py-2 text-xs sm:text-sm font-black text-white shadow-sm transition hover:bg-white/25 active:scale-95"
+            >
+              <ArrowLeft className="h-4.5 w-4.5" />
+              <span>Volver al chat</span>
+            </button>
+
+            <span className="text-xs font-bold text-white/80 max-w-[180px] sm:max-w-xs truncate text-center">
+              {preview.alt}
+            </span>
+
+            <button
+              type="button"
+              onClick={closePreview}
+              className="flex h-9 w-9 items-center justify-center rounded-xl bg-rose-600 text-white shadow-sm transition hover:bg-rose-700 active:scale-95"
+              aria-label="Cerrar imagen"
+            >
+              <X className="h-5 w-5" />
+            </button>
+          </div>
+
+          {/* Contenedor de la imagen */}
+          <div
+            className="mt-14 mb-16 flex max-h-[calc(100vh-8rem)] max-w-[96vw] items-center justify-center overflow-auto"
+            onClick={e => e.stopPropagation()}
+          >
+            <LazyPrivateImage
+              endpoint={preview.endpoint}
+              alt={preview.alt}
+              cache={imageCache}
+              eager
+              className="max-h-[calc(85vh-4rem)] min-h-48 w-auto max-w-full rounded-2xl object-contain shadow-2xl bg-black/40"
+            />
+          </div>
+
+          {/* Barra inferior flotante de cierre rápido */}
+          <div
+            className="fixed bottom-3 left-0 right-0 z-[210] flex justify-center px-4 pb-[max(0.5rem,env(safe-area-inset-bottom))]"
+            onClick={e => e.stopPropagation()}
+          >
+            <button
+              type="button"
+              onClick={closePreview}
+              className="flex items-center gap-2 rounded-full border border-white/20 bg-black/80 px-5 py-2.5 text-xs font-black text-white shadow-lg backdrop-blur-md transition hover:bg-white/10 active:scale-95"
+            >
+              <X className="h-3.5 w-3.5 text-rose-400" />
+              <span>Cerrar comprobante (o toca afuera)</span>
+            </button>
           </div>
         </div>
       )}
