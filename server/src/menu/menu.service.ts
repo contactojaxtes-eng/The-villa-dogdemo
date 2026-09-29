@@ -25,13 +25,16 @@ export class MenuService implements OnModuleInit {
     }
   }
 
-  async findAllCategories(includeInactive = false) {
-    const key = `menu_categories_inactive_${includeInactive}`;
+  async findAllCategories(includeInactive = false, onlyDelivery = false) {
+    const key = `menu_categories_inactive_${includeInactive}_delivery_${onlyDelivery}`;
     return this.cache.getOrSet(key, async () => {
       const whereCategory = includeInactive ? {} : { active: true };
-      const whereItems = includeInactive 
+      const whereItems: any = includeInactive 
         ? { code: { not: null } } 
         : { active: true, code: { not: null } };
+      if (onlyDelivery) {
+        whereItems.availableForDelivery = { not: false };
+      }
       return this.prisma.menuCategory.findMany({
         where: whereCategory,
         include: {
@@ -85,7 +88,7 @@ export class MenuService implements OnModuleInit {
       where: { active: true },
       include: {
         items: {
-          where: { active: true, code: { not: null } },
+          where: { active: true, availableForDelivery: { not: false }, code: { not: null } },
           orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
           select: { name: true, price: true },
         },

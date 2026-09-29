@@ -10,15 +10,15 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Badge } from '@/components/ui/badge'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { api } from '@/lib/api'
-import { formatCurrency } from '@/lib/utils'
+import { cn, formatCurrency } from '@/lib/utils'
 import { SearchableSelect } from '@/components/ui/searchable-select'
 import { toast } from 'sonner'
 import { alerts } from '@/lib/alerts'
 import {
-  Plus, Edit, Trash2, UtensilsCrossed, FolderPlus, Search, Tags, ImageIcon,
+  Plus, Edit, Trash2, UtensilsCrossed, FolderPlus, Search, Tags, ImageIcon, Bike,
   X, Loader2, Layers, ChefHat, Sparkles, Save, PackagePlus, Barcode, Scale,
   TrendingUp, DollarSign, Box, Percent, Layers2, PlusCircle, AlertCircle,
-  ChevronLeft, ChevronRight
+  ChevronLeft, ChevronRight, Clock
 } from 'lucide-react'
 
 interface MenuItem {
@@ -29,6 +29,7 @@ interface MenuItem {
   price: number
   image: string | null
   active: boolean
+  availableForDelivery?: boolean
   categoryId: string
   type?: string
   comboItems?: { itemId: string; quantity: number }[] | null
@@ -106,6 +107,7 @@ export default function ProductsPage() {
   const [prodImage, setProdImage] = useState<string | null>(null)
   const [prodPrepTime, setProdPrepTime] = useState('10')
   const [prodSaving, setProdSaving] = useState(false)
+  const [prodAvailableForDelivery, setProdAvailableForDelivery] = useState(true)
   
   // Combo items sub-state
   const [comboItemsList, setComboItemsList] = useState<{ itemId: string; quantity: string }[]>([])
@@ -343,7 +345,7 @@ export default function ProductsPage() {
 
   const deleteCategory = async (id: string) => {
     const ok = await alerts.confirm(
-      '🗑️ ¿Eliminar Categoría?',
+      '¿Eliminar Categoría?',
       '¿Estás seguro de que deseas eliminar permanentemente esta categoría del menú?',
       'Sí, eliminar',
       'Cancelar'
@@ -403,6 +405,7 @@ export default function ProductsPage() {
     setProdCatId(categories[0]?.id || '')
     setProdImage(null)
     setProdPrepTime('10')
+    setProdAvailableForDelivery(true)
     setDialogTab('DETAILS')
     setComboItemsList([])
     setRecipeItems([{ ingredientId: '', quantity: '1', wastePercentage: '0', unit: 'unidad' }])
@@ -439,6 +442,7 @@ export default function ProductsPage() {
     setProdCatId(item.categoryId)
     setProdImage(item.image || null)
     setProdPrepTime(String((item as any).prepTime ?? 10))
+    setProdAvailableForDelivery(item.availableForDelivery !== false)
     setDialogTab('DETAILS')
 
     if (item.comboItems && Array.isArray(item.comboItems)) {
@@ -507,7 +511,8 @@ export default function ProductsPage() {
         categoryId: prodCatId,
         type: prodType,
         comboItems: validComboItems,
-        prepTime: parseInt(prodPrepTime) || 10
+        prepTime: parseInt(prodPrepTime) || 10,
+        availableForDelivery: prodAvailableForDelivery
       }
       if (prodImage !== undefined) payload.image = prodImage
 
@@ -529,9 +534,29 @@ export default function ProductsPage() {
     }
   }
 
+
+  const toggleDeliveryAvailability = async (product: MenuItem) => {
+    const nextValue = !(product.availableForDelivery !== false)
+    try {
+      await api.put(`/menu/items/${product.id}`, { availableForDelivery: nextValue })
+      setCategories(current => current.map(cat => ({
+        ...cat,
+        items: cat.items.map(it => it.id === product.id ? { ...it, availableForDelivery: nextValue } : it)
+      })))
+      alerts.success(
+        nextValue ? 'Habilitado para domicilio' : 'Configurado como solo salón',
+        nextValue
+          ? `"${product.name}" ahora aparecerá en la carta de WhatsApp y domicilios.`
+          : `"${product.name}" se removió de la carta de WhatsApp y domicilios.`
+      )
+    } catch (err: any) {
+      alerts.error('Error al actualizar disponibilidad', err?.message || 'No se pudo guardar el cambio.')
+    }
+  }
+
   const deleteProduct = async (id: string) => {
     const ok = await alerts.confirm(
-      '🗑️ ¿Eliminar Producto?',
+      '¿Eliminar Producto?',
       '¿Estás seguro de que deseas eliminar permanentemente este producto del menú?',
       'Sí, eliminar',
       'Cancelar'
@@ -818,8 +843,13 @@ export default function ProductsPage() {
                                         </span>
                                       )}
                                       <span className="text-[9px] font-bold text-blue-500 bg-blue-500/10 px-1 py-0.2 rounded-md shrink-0 flex items-center gap-0.5" title="Tiempo de preparación">
-                                        ⏱️ {product.prepTime || 10} min
+                                        <Clock className="h-2.5 w-2.5" /> {product.prepTime || 10} min
                                       </span>
+                                      {product.availableForDelivery === false && (
+                                        <span className="text-[9px] font-black uppercase tracking-wider text-rose-600 dark:text-rose-400 bg-rose-500/10 px-1.5 py-0.2 rounded-md shrink-0 flex items-center gap-0.5" title="Exclusivo salón - No se incluye en carta de WhatsApp ni domicilios">
+                                          Solo Salón
+                                        </span>
+                                      )}
                                       {product.description && (
                                         <span className="text-[10px] text-[var(--text-muted)] truncate block" title={product.description}>
                                           {product.description}
@@ -866,6 +896,24 @@ export default function ProductsPage() {
                               {/* Column 7: Actions */}
                               <td className="px-3.5 py-3 text-center">
                                 <div className="flex items-center justify-center gap-1">
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    onClick={() => void toggleDeliveryAvailability(product)}
+                                    className={cn(
+                                      "h-7 w-7 p-0 rounded-lg cursor-pointer transition-colors",
+                                      product.availableForDelivery !== false
+                                        ? "text-emerald-600 hover:bg-emerald-500/15"
+                                        : "text-amber-600 hover:bg-amber-500/15 bg-amber-500/10"
+                                    )}
+                                    title={
+                                      product.availableForDelivery !== false
+                                        ? "Habilitado en domicilios (clic para marcar como solo salón)"
+                                        : "Solo salón / No domicilio (clic para habilitar en domicilios)"
+                                    }
+                                  >
+                                    <Bike className="h-3.5 w-3.5" />
+                                  </Button>
                                   <Button size="sm" variant="ghost" onClick={() => openEditProduct(product)} className="h-7 w-7 p-0 rounded-lg text-[var(--accent)] hover:bg-[var(--accent-muted)] cursor-pointer">
                                     <Edit className="h-3.5 w-3.5" />
                                   </Button>
@@ -1125,6 +1173,36 @@ export default function ProductsPage() {
                         placeholder="10"
                         className="mt-1 bg-[var(--bg-panel)] border-[var(--border-subtle)] rounded-xl text-xs h-9 font-bold focus:border-[var(--accent)]"
                       />
+                    </div>
+
+                    <div>
+                      <div className="flex items-center justify-between gap-3 p-2.5 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-panel)]">
+                        <div className="space-y-0.5 min-w-0">
+                          <div className="flex items-center gap-1.5">
+                            <Bike className="h-3.5 w-3.5 text-[var(--accent)] shrink-0" />
+                            <Label className="text-xs font-bold text-[var(--text-primary)] cursor-pointer" onClick={() => setProdAvailableForDelivery(v => !v)}>
+                              Disponible para Domicilio
+                            </Label>
+                          </div>
+                          <p className="text-[9px] text-[var(--text-muted)] leading-tight">
+                            Incluir en carta de WhatsApp y domicilios. Desmárcalo si es de vidrio o solo salón.
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          role="switch"
+                          aria-checked={prodAvailableForDelivery}
+                          onClick={() => setProdAvailableForDelivery(v => !v)}
+                          className={cn(
+                            'h-6 px-2.5 rounded-lg text-[10px] font-black transition shrink-0 border cursor-pointer',
+                            prodAvailableForDelivery
+                              ? 'border-emerald-500/35 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300'
+                              : 'border-slate-400/30 bg-slate-500/10 text-[var(--text-secondary)]'
+                          )}
+                        >
+                          {prodAvailableForDelivery ? 'Sí (Domicilio)' : 'No (Solo Salón)'}
+                        </button>
+                      </div>
                     </div>
 
                     <div>

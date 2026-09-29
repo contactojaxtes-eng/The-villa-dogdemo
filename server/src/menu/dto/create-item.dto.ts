@@ -39,6 +39,11 @@ export class CreateItemDto {
   @IsOptional()
   active?: boolean;
 
+  @ApiPropertyOptional({ description: 'Disponible para domicilios y carta de WhatsApp', default: true })
+  @IsBoolean()
+  @IsOptional()
+  availableForDelivery?: boolean;
+
   @ApiPropertyOptional({ description: 'Tipo de producto: NORMAL, COMBO, ADICION', default: 'NORMAL' })
   @IsString()
   @IsOptional()

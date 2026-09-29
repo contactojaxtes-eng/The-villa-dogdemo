@@ -494,7 +494,7 @@ export class WhatsappService implements OnModuleInit {
       where: { active: true },
       include: {
         items: {
-          where: { active: true },
+          where: { active: true, availableForDelivery: { not: false } },
           orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
         },
       },

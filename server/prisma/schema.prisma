@@ -114,6 +114,7 @@ model MenuItem {
   price       Float        @default(0)
   image       String?
   active      Boolean      @default(true)
+  availableForDelivery Boolean @default(true)
   sortOrder   Int          @default(0)
   categoryId  String
   type        String       @default("NORMAL")

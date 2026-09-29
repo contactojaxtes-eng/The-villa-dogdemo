@@ -20,6 +20,7 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
     // repartidores registrados. Garantizamos la relación de acceso antes de
     // ejecutar cualquier consulta del módulo, sin borrar ni recrear datos.
     await this.ensureDriverPortalSchema();
+    await this.ensureMenuItemDeliverySchema();
     // Production schema changes must run through reviewed migrations.
     if (process.env.NODE_ENV === 'production') {
       await this.ensureDeliveryFoundation();
@@ -175,6 +176,17 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
       `);
     } catch (error: any) {
       console.warn('Driver portal schema note:', error?.message || error);
+    }
+  }
+
+  private async ensureMenuItemDeliverySchema() {
+    try {
+      await this.$executeRawUnsafe(`
+        ALTER TABLE "menu_items"
+        ADD COLUMN IF NOT EXISTS "availableForDelivery" BOOLEAN NOT NULL DEFAULT true;
+      `);
+    } catch (error: any) {
+      console.warn('MenuItem delivery schema note:', error?.message || error);
     }
   }
 

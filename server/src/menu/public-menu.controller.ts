@@ -16,9 +16,9 @@ export class PublicMenuController {
   ) {}
 
   @Get('categories')
-  @ApiOperation({ summary: 'Listar categorías públicas con items activos' })
+  @ApiOperation({ summary: 'Listar categorías públicas con items activos para domicilios' })
   findAllCategories() {
-    return this.menuService.findAllCategories(false);
+    return this.menuService.findAllCategories(false, true);
   }
 
   @Get('info')
