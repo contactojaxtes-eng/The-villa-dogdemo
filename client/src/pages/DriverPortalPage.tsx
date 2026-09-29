@@ -27,6 +27,7 @@ import {
   Smartphone,
   Upload,
   Wallet,
+  X,
 } from 'lucide-react'
 
 type PaymentMethod = 'CASH' | 'TRANSFER' | 'NEQUI' | 'BANCOLOMBIA' | 'DAVIPLATA' | 'MIXED'
@@ -364,7 +365,7 @@ export default function DriverPortalPage() {
     setReference(order.paymentReference || '')
     setCashAmount(order.cashAmount != null ? String(order.cashAmount) : '')
     setTransferAmount(order.transferAmount != null ? String(order.transferAmount) : '')
-    setProof(null)
+    setProofs([])
   }
 
   const openProofUpload = (order: PortalOrder) => {
@@ -375,7 +376,7 @@ export default function DriverPortalPage() {
     setReference(order.paymentReference || '')
     setCashAmount(order.cashAmount != null ? String(order.cashAmount) : '')
     setTransferAmount(order.transferAmount != null ? String(order.transferAmount) : '')
-    setProof(null)
+    setProofs([])
   }
 
   const openPaymentCorrection = (order: PortalOrder) => {
@@ -385,13 +386,13 @@ export default function DriverPortalPage() {
     setReference(order.paymentReference || '')
     setCashAmount(order.cashAmount != null ? String(order.cashAmount) : '')
     setTransferAmount(order.transferAmount != null ? String(order.transferAmount) : '')
-    setProof(null)
+    setProofs([])
   }
 
   const closeDialog = () => {
     if (saving) return
     setTargetOrder(null)
-    setProof(null)
+    setProofs([])
     setCashAmount('')
     setTransferAmount('')
   }
@@ -416,11 +417,11 @@ export default function DriverPortalPage() {
 
   const submitCollection = async () => {
     if (!targetOrder) return
-    if (dialogMode === 'PROOF' && !proof) {
+    if (dialogMode === 'PROOF' && proofs.length === 0) {
       alerts.warning('Foto requerida', 'Selecciona la foto del comprobante para subirla al pedido.')
       return
     }
-    if (proof && proof.size > 8 * 1024 * 1024) {
+    if (proofs.some(file => file.size > 8 * 1024 * 1024)) {
       alerts.warning('Foto muy pesada', 'El comprobante puede pesar máximo 8 MB. Toma una foto más liviana o comprímela antes de subirla.')
       return
     }
@@ -465,7 +466,7 @@ export default function DriverPortalPage() {
             : 'Caja ya puede revisar el comprobante.'
       )
       setTargetOrder(null)
-      setProof(null)
+      setProofs([])
       setCashAmount('')
       setTransferAmount('')
       if (result?.order) {
