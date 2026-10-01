@@ -461,9 +461,18 @@ export class WhatsappController {
     key?: string;
     model?: string;
     instructions?: string;
+    useCandidates?: boolean;
+    candidateExamples?: unknown;
     messages?: Array<{ role?: string; text?: string }>;
   }) {
-    return this.whatsappService.testGeminiChat(body?.messages, body?.key, body?.model, body?.instructions);
+    return this.whatsappService.testGeminiChat(
+      body?.messages,
+      body?.key,
+      body?.model,
+      body?.instructions,
+      body?.useCandidates === true,
+      body?.candidateExamples,
+    );
   }
 
   @Post('gemini-models')
@@ -496,7 +505,21 @@ export class WhatsappController {
   @Roles('SUPERADMIN')
   @ApiOperation({ summary: 'Activar o pausar el auto-entrenamiento nocturno' })
   async toggleAutoTraining(@Body() body: { enabled?: boolean }) {
-    return this.whatsappService.toggleAutoTraining(Boolean(body?.enabled));
+    if (typeof body?.enabled !== 'boolean') {
+      throw new BadRequestException('El estado de la programación debe ser verdadero o falso.');
+    }
+    return this.whatsappService.toggleAutoTraining(body.enabled);
+  }
+
+  @Post('auto-training/examples/toggle')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('SUPERADMIN')
+  @ApiOperation({ summary: 'Activar o pausar el uso de ejemplos aprobados en la IA' })
+  async toggleAutoTrainingExamples(@Body() body: { enabled?: boolean; approvedVersionId?: string }) {
+    if (typeof body?.enabled !== 'boolean') {
+      throw new BadRequestException('El estado de los ejemplos debe ser verdadero o falso.');
+    }
+    return this.whatsappService.toggleAutoTrainingExamples(body.enabled, body.approvedVersionId);
   }
 
   @Post('auto-training/run')
@@ -505,6 +528,30 @@ export class WhatsappController {
   @ApiOperation({ summary: 'Ejecutar auto-entrenamiento manualmente con chats recientes' })
   async runAutoTraining() {
     return this.whatsappService.runAutoTrainingNow();
+  }
+
+  @Post('auto-training/approve')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('SUPERADMIN')
+  @ApiOperation({ summary: 'Aprobar ejemplos revisados y guardar una versión reversible' })
+  async approveAutoTraining(@Body() body: { examples?: unknown; candidateSetId?: string }) {
+    return this.whatsappService.approveAutoTrainingExamples(body?.examples, body?.candidateSetId);
+  }
+
+  @Post('auto-training/reject')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('SUPERADMIN')
+  @ApiOperation({ summary: 'Descartar los candidatos pendientes sin cambiar los aprobados' })
+  async rejectAutoTraining(@Body() body?: { candidateSetId?: string }) {
+    return this.whatsappService.rejectAutoTrainingCandidates(body?.candidateSetId);
+  }
+
+  @Post('auto-training/rollback')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('SUPERADMIN')
+  @ApiOperation({ summary: 'Restaurar una versión aprobada anterior' })
+  async rollbackAutoTraining(@Body() body: { versionId?: string }) {
+    return this.whatsappService.rollbackAutoTrainingVersion(body?.versionId);
   }
 
   @Get('gemini-metrics')

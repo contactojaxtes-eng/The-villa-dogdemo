@@ -63,6 +63,7 @@ interface GeminiKeyResult {
 
 interface GeminiTestResult {
   success: boolean
+  partialSuccess?: boolean
   message: string
   testedKeys: number
   validKeys: number
@@ -108,15 +109,59 @@ interface AutoTrainingExample {
 
 interface AutoTrainingConfig {
   enabled: boolean
+  examplesEnabled: boolean
+  approvedIsActive: boolean
+  approvedVersionId: string | null
+  activeVersionId: string | null
+  candidateSetId: string | null
   lastRun: string | null
   examples: AutoTrainingExample[]
+  candidates: AutoTrainingExample[]
   stats?: {
-    ordersAnalyzed: number
-    sessionsAnalyzed: number
-    examplesCount: number
-    updatedAt: string
+    ordersAnalyzed?: number
+    sessionsAnalyzed?: number
+    examplesCount?: number
+    candidatesCount?: number
+    updatedAt?: string
   }
+  versions: Array<{
+    id: string
+    createdAt: string
+    count: number
+    source: string
+  }>
 }
+
+const emptyAutoTrainingConfig: AutoTrainingConfig = {
+  enabled: false,
+  examplesEnabled: false,
+  approvedIsActive: false,
+  approvedVersionId: null,
+  activeVersionId: null,
+  candidateSetId: null,
+  lastRun: null,
+  examples: [],
+  candidates: [],
+  versions: [],
+}
+
+const normalizeAutoTrainingConfig = (
+  value: Partial<AutoTrainingConfig> | null | undefined,
+  current: AutoTrainingConfig = emptyAutoTrainingConfig,
+): AutoTrainingConfig => ({
+  ...current,
+  ...value,
+  enabled: value?.enabled ?? current.enabled ?? false,
+  examplesEnabled: value?.examplesEnabled ?? current.examplesEnabled ?? false,
+  approvedIsActive: value?.approvedIsActive ?? current.approvedIsActive ?? false,
+  approvedVersionId: value?.approvedVersionId ?? current.approvedVersionId ?? null,
+  activeVersionId: value?.activeVersionId ?? current.activeVersionId ?? null,
+  candidateSetId: value?.candidateSetId ?? current.candidateSetId ?? null,
+  lastRun: value?.lastRun ?? current.lastRun ?? null,
+  examples: Array.isArray(value?.examples) ? value.examples : current.examples,
+  candidates: Array.isArray(value?.candidates) ? value.candidates : current.candidates,
+  versions: Array.isArray(value?.versions) ? value.versions : current.versions,
+})
 
 interface GeminiModelInfo {
   provider: string
@@ -281,7 +326,13 @@ export default function SuperAdminConfigPage() {
   const [autoTraining, setAutoTraining] = useState<AutoTrainingConfig | null>(null)
   const [runningAutoTraining, setRunningAutoTraining] = useState(false)
   const [togglingAutoTraining, setTogglingAutoTraining] = useState(false)
+  const [togglingTrainingExamples, setTogglingTrainingExamples] = useState(false)
+  const [approvingTrainingCandidates, setApprovingTrainingCandidates] = useState(false)
+  const [rejectingTrainingCandidates, setRejectingTrainingCandidates] = useState(false)
+  const [restoringTrainingVersionId, setRestoringTrainingVersionId] = useState<string | null>(null)
+  const [autoTrainingError, setAutoTrainingError] = useState('')
   const [sandboxMessages, setSandboxMessages] = useState<SandboxMessage[]>([])
+  const [sandboxUseCandidates, setSandboxUseCandidates] = useState(true)
   const [sandboxError, setSandboxError] = useState('')
   const [sendingSandbox, setSendingSandbox] = useState(false)
   const [modelInfo, setModelInfo] = useState<GeminiModelInfo | null>(null)
@@ -308,13 +359,19 @@ export default function SuperAdminConfigPage() {
     Promise.all([
       api.get<SmtpConfig>('/superadmin/config/smtp'),
       api.get<WhatsappCoreConfig>('/whatsapp/settings'),
-      api.get<AutoTrainingConfig>('/whatsapp/auto-training').catch(() => null),
+      api.get<AutoTrainingConfig>('/whatsapp/auto-training').catch(error => {
+        if (active) setAutoTrainingError(getErrorMessage(error, 'No se pudo cargar el aprendizaje supervisado.'))
+        return null
+      }),
     ])
       .then(([smtpData, whatsappData, trainingData]) => {
         if (!active) return
         setSmtp(smtpData)
         setWhatsappResponse(whatsappData)
-        if (trainingData) setAutoTraining(trainingData)
+        if (trainingData) {
+          setAutoTraining(normalizeAutoTrainingConfig(trainingData))
+          setAutoTrainingError('')
+        }
       })
       .catch(error => alerts.error('No se pudo cargar la configuración', getErrorMessage(error, 'Inténtalo nuevamente.')))
       .finally(() => active && setLoading(false))
@@ -334,6 +391,16 @@ export default function SuperAdminConfigPage() {
   const usageDaysShown = usageHistoryExpanded ? geminiUsageDaily : geminiUsageDaily.slice(0, 7)
   const highestUsageDay = Math.max(1, ...geminiUsageDaily.map(day => day.success))
   const utcToday = new Date().toISOString().slice(0, 10)
+  const trainingActionBusy = runningAutoTraining
+    || togglingAutoTraining
+    || togglingTrainingExamples
+    || approvingTrainingCandidates
+    || rejectingTrainingCandidates
+    || restoringTrainingVersionId !== null
+  const trainingCandidatesComplete = (autoTraining?.candidates.length ?? 0) > 0
+    && autoTraining!.candidates.every(example => (
+      example.context.trim() && example.clientPrompt.trim() && example.advisorResponse.trim()
+    ))
 
   const updateUsageToday = (requestsToday: number) => {
     setWa(current => ({ ...current, geminiRequestsToday: requestsToday }))
@@ -402,6 +469,16 @@ export default function SuperAdminConfigPage() {
   const toggleChatbot = async () => {
     if (savingChatbot) return
     const next = !wa.chatbotEnabled
+    if (next) {
+      const confirmed = await alerts.confirm(
+        '¿Activar respuestas reales de IA?',
+        'La IA podrá responder conversaciones nuevas o sin asignar en WhatsApp. Primero conviene completar una prueba en el simulador.',
+        'Activar IA',
+        'Cancelar',
+        'warning',
+      )
+      if (!confirmed) return
+    }
     setSavingChatbot(true)
     try {
       const updated = await api.put<WhatsappCoreConfig>('/whatsapp/settings', { chatbotEnabled: next })
@@ -461,7 +538,7 @@ export default function SuperAdminConfigPage() {
       }
       if (result.success) {
         alerts.success(`Todas las ${result.testedKeys} llaves respondieron correctamente`)
-      } else if ((result as any).partialSuccess || (result.validKeys > 0 && result.validKeys < result.testedKeys)) {
+      } else if (result.partialSuccess || (result.validKeys > 0 && result.validKeys < result.testedKeys)) {
         alerts.warning(
           `${result.validKeys} de ${result.testedKeys} llaves funcionan`,
           `${result.testedKeys - result.validKeys} llave(s) tienen error (cuenta o llave deshabilitada en Google). Revisa la lista abajo.`
@@ -500,6 +577,10 @@ export default function SuperAdminConfigPage() {
         model: wa.geminiModel,
         instructions: wa.aiInstructions,
         messages: nextMessages.map(({ role, text }) => ({ role, text })),
+        useCandidates: sandboxUseCandidates && (autoTraining?.candidates.length ?? 0) > 0,
+        candidateExamples: sandboxUseCandidates && (autoTraining?.candidates.length ?? 0) > 0
+          ? autoTraining?.candidates
+          : undefined,
       })
       if (!result.success || !result.reply) throw new Error(result.message || 'La IA no devolvió una respuesta.')
       setSandboxMessages(current => [...current, {
@@ -541,50 +622,210 @@ export default function SuperAdminConfigPage() {
     }
   }
 
+  const applyAutoTrainingResponse = (response: Partial<AutoTrainingConfig>) => {
+    setAutoTraining(current => normalizeAutoTrainingConfig(response, current ?? emptyAutoTrainingConfig))
+    setAutoTrainingError('')
+  }
+
   const toggleAutoTraining = async () => {
-    if (togglingAutoTraining) return
-    const nextState = !autoTraining?.enabled
+    if (togglingAutoTraining || !autoTraining) return
+    const nextState = !(autoTraining?.enabled ?? false)
+    if (nextState) {
+      const confirmed = await alerts.confirm(
+        '¿Programar análisis nocturno?',
+        'A las 3:00 a. m. se analizará una muestra limitada y anonimizada con Gemini. Solo generará candidatos para revisión y consumirá algunas solicitudes.',
+        'Activar programación',
+        'Cancelar',
+        'warning',
+      )
+      if (!confirmed) return
+    }
     setTogglingAutoTraining(true)
+    setAutoTrainingError('')
     try {
-      await api.post('/whatsapp/auto-training/toggle', { enabled: nextState })
-      setAutoTraining(current => current ? { ...current, enabled: nextState } : { enabled: nextState, lastRun: null, examples: [] })
-      alerts.success(nextState ? 'Auto-entrenamiento nocturno activado' : 'Auto-entrenamiento nocturno pausado')
+      const response = await api.post<AutoTrainingConfig>('/whatsapp/auto-training/toggle', { enabled: nextState })
+      applyAutoTrainingResponse(response)
+      alerts.success(nextState ? 'Programación nocturna activada' : 'Programación nocturna pausada')
     } catch (error) {
-      alerts.error('Error al cambiar auto-entrenamiento', getErrorMessage(error, 'Inténtalo de nuevo.'))
+      const message = getErrorMessage(error, 'Inténtalo de nuevo.')
+      setAutoTrainingError(message)
+      alerts.error('No se pudo cambiar la programación', message)
     } finally {
       setTogglingAutoTraining(false)
     }
   }
 
-  const runAutoTrainingNow = async () => {
-    if (runningAutoTraining) return
-    setRunningAutoTraining(true)
+  const toggleTrainingExamples = async (desiredState?: boolean) => {
+    if (togglingTrainingExamples || !autoTraining) return
+    const nextState = desiredState ?? !(autoTraining?.examplesEnabled ?? false)
+    if (nextState) {
+      const confirmed = await alerts.confirm(
+        autoTraining?.examplesEnabled ? '¿Publicar la nueva versión?' : '¿Usar la versión aprobada?',
+        autoTraining?.examplesEnabled
+          ? 'La versión aprobada pasará a orientar las próximas respuestas del chatbot si este se encuentra encendido.'
+          : 'Los ejemplos aprobados pasarán a orientar las próximas respuestas del chatbot si este se encuentra encendido.',
+        autoTraining?.examplesEnabled ? 'Publicar versión' : 'Usar ejemplos',
+        'Cancelar',
+        'warning',
+      )
+      if (!confirmed) return
+    }
+    setTogglingTrainingExamples(true)
+    setAutoTrainingError('')
     try {
-      const res = await api.post<{
-        success: boolean
-        examples: AutoTrainingExample[]
-        ordersAnalyzed: number
-        sessionsAnalyzed: number
-        updatedAt: string
-      }>('/whatsapp/auto-training/run')
-      if (res.success) {
-        setAutoTraining({
-          enabled: autoTraining?.enabled ?? true,
-          lastRun: res.updatedAt,
-          examples: res.examples,
-          stats: {
-            ordersAnalyzed: res.ordersAnalyzed,
-            sessionsAnalyzed: res.sessionsAnalyzed,
-            examplesCount: res.examples.length,
-            updatedAt: res.updatedAt,
-          }
-        })
-        alerts.success('¡Entrenamiento completado!', `Se actualizaron ${res.examples.length} ejemplos maestros a partir de ${res.ordersAnalyzed} pedidos y chats reales.`)
-      }
+      const response = await api.post<AutoTrainingConfig>('/whatsapp/auto-training/examples/toggle', {
+        enabled: nextState,
+        approvedVersionId: nextState ? autoTraining.approvedVersionId : undefined,
+      })
+      applyAutoTrainingResponse(response)
+      alerts.success(nextState ? 'Ejemplos aprobados activados' : 'Ejemplos aprobados desactivados', nextState
+        ? 'La versión aprobada quedó publicada. Activar el chatbot sigue siendo una acción aparte.'
+        : 'Los ejemplos siguen guardados, pero no se incluirán en las respuestas.')
     } catch (error) {
-      alerts.error('No se pudo completar el entrenamiento', getErrorMessage(error, 'Verifica las llaves de Gemini e inténtalo nuevamente.'))
+      const message = getErrorMessage(error, 'Inténtalo de nuevo.')
+      setAutoTrainingError(message)
+      alerts.error('No se pudo cambiar el uso de ejemplos', message)
+    } finally {
+      setTogglingTrainingExamples(false)
+    }
+  }
+
+  const runAutoTrainingNow = async () => {
+    if (runningAutoTraining || !autoTraining) return
+    if ((autoTraining?.candidates.length ?? 0) > 0) {
+      const confirmed = await alerts.confirm(
+        '¿Generar candidatos nuevos?',
+        'Los candidatos pendientes actuales serán reemplazados. Los ejemplos ya aprobados no cambiarán.',
+        'Generar nuevos',
+        'Conservar actuales',
+        'warning',
+      )
+      if (!confirmed) return
+    }
+    setRunningAutoTraining(true)
+    setAutoTrainingError('')
+    try {
+      const response = await api.post<AutoTrainingConfig & { success?: boolean }>('/whatsapp/auto-training/run')
+      applyAutoTrainingResponse(response)
+      setSandboxUseCandidates(true)
+      const candidateCount = response.candidates?.length ?? 0
+      alerts.success(
+        'Candidatos generados',
+        candidateCount > 0
+          ? `Se generaron ${candidateCount} candidatos para revisar. Todavía no se usan en las respuestas.`
+          : 'El análisis terminó sin candidatos nuevos. Los ejemplos aprobados no cambiaron.',
+      )
+    } catch (error) {
+      const message = getErrorMessage(error, 'Verifica las llaves de Gemini e inténtalo nuevamente.')
+      setAutoTrainingError(message)
+      alerts.error('No se pudieron generar candidatos', message)
     } finally {
       setRunningAutoTraining(false)
+    }
+  }
+
+  const updateTrainingCandidate = (index: number, field: keyof AutoTrainingExample, value: string) => {
+    setAutoTraining(current => {
+      if (!current) return current
+      const candidates = current.candidates.map((candidate, candidateIndex) => (
+        candidateIndex === index ? { ...candidate, [field]: value } : candidate
+      ))
+      return { ...current, candidates }
+    })
+  }
+
+  const removeTrainingCandidate = (index: number) => {
+    setAutoTraining(current => current
+      ? { ...current, candidates: current.candidates.filter((_, candidateIndex) => candidateIndex !== index) }
+      : current)
+  }
+
+  const approveTrainingCandidates = async () => {
+    if (approvingTrainingCandidates || !autoTraining?.candidates.length) return
+    const examples = autoTraining.candidates.map(example => ({
+      context: example.context.trim(),
+      clientPrompt: example.clientPrompt.trim(),
+      advisorResponse: example.advisorResponse.trim(),
+    }))
+    if (examples.some(example => !example.context || !example.clientPrompt || !example.advisorResponse)) {
+      alerts.warning('Completa los candidatos', 'Cada candidato necesita contexto, mensaje del cliente y respuesta ideal antes de aprobarlo.')
+      return
+    }
+    const confirmed = await alerts.confirm(
+      '¿Aprobar esta versión?',
+      `Se guardarán ${examples.length} ejemplos como la nueva versión aprobada. No se activará el chatbot ni el uso de ejemplos.`,
+      'Aprobar versión',
+      'Seguir revisando',
+    )
+    if (!confirmed) return
+    setApprovingTrainingCandidates(true)
+    setAutoTrainingError('')
+    try {
+      const response = await api.post<AutoTrainingConfig>('/whatsapp/auto-training/approve', {
+        examples,
+        candidateSetId: autoTraining.candidateSetId,
+      })
+      applyAutoTrainingResponse(response)
+      alerts.success('Versión aprobada', 'Los ejemplos quedaron guardados. Decide por separado cuándo activar “Usar ejemplos aprobados”.')
+    } catch (error) {
+      const message = getErrorMessage(error, 'Inténtalo nuevamente.')
+      setAutoTrainingError(message)
+      alerts.error('No se pudieron aprobar los candidatos', message)
+    } finally {
+      setApprovingTrainingCandidates(false)
+    }
+  }
+
+  const rejectTrainingCandidates = async () => {
+    if (rejectingTrainingCandidates || !autoTraining?.candidates.length) return
+    const confirmed = await alerts.confirm(
+      '¿Descartar todos los candidatos?',
+      'Esta revisión pendiente se eliminará. Los ejemplos aprobados seguirán iguales.',
+      'Descartar todos',
+      'Cancelar',
+      'warning',
+    )
+    if (!confirmed) return
+    setRejectingTrainingCandidates(true)
+    setAutoTrainingError('')
+    try {
+      const response = await api.post<AutoTrainingConfig>('/whatsapp/auto-training/reject', {
+        candidateSetId: autoTraining.candidateSetId,
+      })
+      applyAutoTrainingResponse(response)
+      alerts.success('Candidatos descartados', 'La versión aprobada no cambió.')
+    } catch (error) {
+      const message = getErrorMessage(error, 'Inténtalo nuevamente.')
+      setAutoTrainingError(message)
+      alerts.error('No se pudieron descartar los candidatos', message)
+    } finally {
+      setRejectingTrainingCandidates(false)
+    }
+  }
+
+  const restoreTrainingVersion = async (versionId: string) => {
+    if (restoringTrainingVersionId) return
+    const version = autoTraining?.versions.find(item => item.id === versionId)
+    const confirmed = await alerts.confirm(
+      '¿Restaurar esta versión?',
+      `La versión del ${version ? new Date(version.createdAt).toLocaleString('es-CO') : 'historial'} pasará a ser la aprobada. La programación y el chatbot no se activarán.`,
+      'Restaurar versión',
+      'Cancelar',
+      'warning',
+    )
+    if (!confirmed) return
+    setRestoringTrainingVersionId(versionId)
+    setAutoTrainingError('')
+    try {
+      const response = await api.post<AutoTrainingConfig>('/whatsapp/auto-training/rollback', { versionId })
+      applyAutoTrainingResponse(response)
+      alerts.success('Versión restaurada', 'Los ejemplos aprobados se actualizaron sin cambiar el estado del chatbot.')
+    } catch (error) {
+      const message = getErrorMessage(error, 'Inténtalo nuevamente.')
+      setAutoTrainingError(message)
+      alerts.error('No se pudo restaurar la versión', message)
+    } finally {
+      setRestoringTrainingVersionId(null)
     }
   }
 
@@ -871,8 +1112,17 @@ export default function SuperAdminConfigPage() {
               <Button type="button" variant="outline" onClick={() => { setSandboxMessages([]); setSandboxDraft(''); setSandboxError('') }} disabled={sendingSandbox || sandboxMessages.length === 0} className="h-9 rounded-xl text-xs font-bold">Nueva conversación</Button>
             </div>
             <p className="mt-4 rounded-xl border border-emerald-500/25 bg-emerald-500/5 p-3 text-[11px] leading-5 text-[var(--text-secondary)]">
-              Entorno aislado: no envía WhatsApp, no crea pedidos ni afecta chats reales. Usa el modelo y las instrucciones que ves en el formulario, aunque todavía no los hayas guardado. La prueba sí consume solicitudes de Gemini.
+              Entorno aislado: no envía WhatsApp, no crea pedidos ni afecta chats reales. Usa el modelo y las instrucciones que ves en el formulario, aunque todavía no los hayas guardado. La prueba sí consume solicitudes de Gemini. No pegues nombres, teléfonos, direcciones ni comprobantes reales.
             </p>
+            {(autoTraining?.candidates.length ?? 0) > 0 && (
+              <div className="mt-2 rounded-xl border border-amber-500/25 bg-amber-500/5 p-3 text-[11px] leading-5 text-amber-700 dark:text-amber-300">
+                <p><strong>Modo revisión:</strong> puedes probar las ediciones visibles de los {autoTraining!.candidates.length} candidatos o compararlas con la versión aprobada. Nada se envía a WhatsApp.</p>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  <button type="button" onClick={() => setSandboxUseCandidates(true)} className={cn('rounded-lg border px-2.5 py-1 text-[10px] font-black', sandboxUseCandidates ? 'border-amber-500 bg-amber-500/15' : 'border-amber-500/25 bg-[var(--bg-panel)]')}>Probar candidatos</button>
+                  <button type="button" onClick={() => setSandboxUseCandidates(false)} disabled={!(autoTraining?.examples.length)} className={cn('rounded-lg border px-2.5 py-1 text-[10px] font-black disabled:cursor-not-allowed disabled:opacity-50', !sandboxUseCandidates ? 'border-amber-500 bg-amber-500/15' : 'border-amber-500/25 bg-[var(--bg-panel)]')}>Comparar aprobados</button>
+                </div>
+              </div>
+            )}
             <div className="mt-4 flex min-h-64 max-h-[34rem] flex-col gap-3 overflow-y-auto rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-3" role="log" aria-label="Conversación de prueba con la IA" aria-live="polite">
               {sandboxMessages.length === 0 && <div className="m-auto max-w-xs text-center"><MessageCircle className="mx-auto mb-2 h-7 w-7 text-[var(--text-muted)]" /><p className="text-sm font-black text-[var(--text-primary)]">Inicia una conversación de prueba</p><p className="mt-1 text-xs text-[var(--text-muted)]">Prueba bebidas, cantidades, notas, cambios de pedido o domicilios.</p></div>}
               {sandboxMessages.map((message, index) => <div key={`${index}-${message.role}`} className={cn('max-w-[90%] rounded-2xl px-3 py-2.5 text-sm shadow-sm', message.role === 'user' ? 'ml-auto bg-[var(--accent)] text-[var(--accent-fg)]' : 'mr-auto border border-[var(--border-subtle)] bg-[var(--bg-panel)] text-[var(--text-primary)]')}>
@@ -897,7 +1147,7 @@ export default function SuperAdminConfigPage() {
             <div className="mt-4 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-3.5">
               <label className="block">
                 <span className="mb-1.5 flex items-center justify-between text-xs font-black text-[var(--text-primary)]">
-                  <span>¿Qué debería hacer mejor la IA? (Escribe o pega chat)</span>
+                  <span>¿Qué debería hacer mejor la IA?</span>
                   <span className="text-[10px] font-normal text-[var(--text-muted)]">{sandboxRule.length}/700</span>
                 </span>
                 <textarea
@@ -905,7 +1155,7 @@ export default function SuperAdminConfigPage() {
                   maxLength={700}
                   onChange={event => setSandboxRule(event.target.value)}
                   className={cn(textAreaClass, 'min-h-20')}
-                  placeholder="Escribe una regla informal, queja o pega un fragmento de chat. Ejemplo: el cliente pidió hamburguesa sin tártara y le puso tártara."
+                  placeholder="Escribe una regla sin nombres, teléfonos, direcciones ni comprobantes. Ejemplo: si el cliente pide un producto sin salsa, confirma esa modificación."
                 />
               </label>
               <div className="mt-2.5 flex flex-wrap items-center gap-2">
@@ -931,7 +1181,7 @@ export default function SuperAdminConfigPage() {
                 </Button>
               </div>
               <p className="mt-2 text-[11px] leading-relaxed text-[var(--text-muted)]">
-                Escribe en tus propias palabras o pega un chat. Pulsa <strong>Pulir con IA</strong> para formular una regla concisa y luego <strong>Agregar y guardar regla</strong> para protegerla permanentemente en el servidor.
+                Escribe una regla operativa sin datos personales. Pulsa <strong>Pulir con IA</strong> para formularla de forma concisa y luego <strong>Agregar y guardar regla</strong> para guardarla en el servidor. El servidor anonimiza el contenido y rechaza información sensible detectada.
               </p>
             </div>
             <div className="mt-5 border-t border-[var(--border-subtle)] pt-4">
@@ -977,94 +1227,243 @@ export default function SuperAdminConfigPage() {
             </div>
           </Card>
           <Card className="min-w-0 rounded-2xl border-[var(--border-subtle)] bg-[var(--bg-panel)] p-4 shadow-sm sm:p-5 xl:col-span-2">
-            <div className="flex flex-col gap-3 border-b border-[var(--border-subtle)] pb-4 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex flex-col gap-3 border-b border-[var(--border-subtle)] pb-4 lg:flex-row lg:items-center lg:justify-between">
               <SectionTitle
-                icon={Sparkles}
-                title="Auto-entrenamiento diario inteligente (3:00 AM)"
-                description="Revisa los pedidos entregados del día y refresca los 5 mejores ejemplos de atención real para que la IA amanezca más inteligente."
+                icon={ShieldCheck}
+                title="Aprendizaje supervisado"
+                description="Genera candidatos a partir de casos anonimizados, revísalos y decide qué versión puede orientar a la IA."
               />
-              <div className="flex flex-wrap items-center gap-2">
-                <button
-                  type="button"
-                  role="switch"
-                  aria-checked={autoTraining?.enabled ?? true}
-                  onClick={() => void toggleAutoTraining()}
-                  disabled={togglingAutoTraining}
-                  className={cn(
-                    'inline-flex h-9 shrink-0 items-center gap-2 rounded-xl border px-3 text-xs font-bold transition disabled:opacity-50',
-                    autoTraining?.enabled
-                      ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-600'
-                      : 'border-[var(--border-subtle)] bg-[var(--bg-elevated)] text-[var(--text-secondary)]'
-                  )}
-                >
-                  {togglingAutoTraining ? <Loader2 className="h-4 w-4 animate-spin" /> : <span className={cn('h-2.5 w-2.5 rounded-full', autoTraining?.enabled ? 'bg-emerald-500' : 'bg-slate-400')} />}
-                  {autoTraining?.enabled ? 'Entrenamiento activo (3:00 AM)' : 'Entrenamiento pausado'}
-                </button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => void runAutoTrainingNow()}
-                  disabled={runningAutoTraining}
-                  className="h-9 rounded-xl border-[var(--accent)]/30 text-xs font-bold text-[var(--accent)] hover:bg-[var(--accent)]/10"
-                >
-                  {runningAutoTraining ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-1.5 h-4 w-4" />}
-                  {runningAutoTraining ? 'Analizando chats…' : 'Entrenar con chats ahora'}
-                </Button>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => void runAutoTrainingNow()}
+                disabled={trainingActionBusy || !autoTraining}
+                className="h-10 rounded-xl border-[var(--accent)]/30 text-xs font-bold text-[var(--accent)] hover:bg-[var(--accent)]/10"
+              >
+                {runningAutoTraining ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-1.5 h-4 w-4" />}
+                {runningAutoTraining ? 'Generando candidatos…' : 'Generar candidatos ahora'}
+              </Button>
+            </div>
+
+            <div className="mt-4 rounded-xl border border-blue-500/25 bg-blue-500/5 p-3 text-xs leading-relaxed text-blue-700 dark:text-blue-300">
+              <div className="flex items-start gap-2">
+                <Info className="mt-0.5 h-4 w-4 shrink-0" />
+                <p><strong>Generar candidatos no activa el chatbot ni cambia sus respuestas.</strong> Solo crea una propuesta editable. Publicarla y usarla son decisiones separadas.</p>
               </div>
             </div>
 
-            <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-[11px] text-[var(--text-muted)]">
-              <p>
-                {autoTraining?.lastRun
-                  ? `Última actualización: ${new Date(autoTraining.lastRun).toLocaleString('es-CO')} · ${autoTraining.stats?.ordersAnalyzed || 0} pedidos entregados analizados`
-                  : 'Aún no se ha ejecutado el primer ciclo nocturno. Pulsa "Entrenar con chats ahora" para generar los primeros 5 ejemplos a partir de la base de datos.'}
+            {autoTrainingError && (
+              <p role="alert" className="mt-3 rounded-xl border border-red-500/25 bg-red-500/5 p-3 text-xs font-medium text-red-600">
+                {autoTrainingError}
               </p>
-              <span className="rounded-md bg-emerald-500/10 px-2 py-0.5 text-[10px] font-black text-emerald-600">
-                Few-Shot Learning activo
-              </span>
+            )}
+
+            <div className="mt-4 grid gap-3 lg:grid-cols-2">
+              <div className="flex items-center justify-between gap-3 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-3">
+                <div className="min-w-0">
+                  <p className="text-xs font-black text-[var(--text-primary)]">Programación nocturna</p>
+                  <p className="mt-1 text-[11px] leading-relaxed text-[var(--text-muted)]">Genera candidatos para revisar. Nunca los aprueba ni los publica automáticamente.</p>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-label="Programación nocturna de candidatos"
+                  aria-checked={autoTraining?.enabled ?? false}
+                  onClick={() => void toggleAutoTraining()}
+                  disabled={trainingActionBusy || !autoTraining}
+                  className={cn(
+                    'inline-flex h-9 shrink-0 items-center gap-2 rounded-xl border px-3 text-xs font-bold transition disabled:cursor-not-allowed disabled:opacity-50',
+                    autoTraining?.enabled
+                      ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-600'
+                      : 'border-[var(--border-subtle)] bg-[var(--bg-panel)] text-[var(--text-secondary)]',
+                  )}
+                >
+                  {togglingAutoTraining ? <Loader2 className="h-4 w-4 animate-spin" /> : <span aria-hidden="true" className={cn('h-2.5 w-2.5 rounded-full', autoTraining?.enabled ? 'bg-emerald-500' : 'bg-slate-400')} />}
+                  {autoTraining?.enabled ? 'Activa' : 'Pausada'}
+                </button>
+              </div>
+
+              <div className="flex items-center justify-between gap-3 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-3">
+                <div className="min-w-0">
+                  <p className="text-xs font-black text-[var(--text-primary)]">Usar ejemplos aprobados</p>
+                  <p className="mt-1 text-[11px] leading-relaxed text-[var(--text-muted)]">Publica la versión aprobada en el contexto. El chatbot real se enciende o apaga en su propio control.</p>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-label="Usar ejemplos aprobados en las respuestas"
+                  aria-checked={autoTraining?.examplesEnabled ?? false}
+                  onClick={() => void toggleTrainingExamples()}
+                  disabled={trainingActionBusy || !autoTraining || !(autoTraining?.examples.length)}
+                  className={cn(
+                    'inline-flex h-9 shrink-0 items-center gap-2 rounded-xl border px-3 text-xs font-bold transition disabled:cursor-not-allowed disabled:opacity-50',
+                    autoTraining?.examplesEnabled
+                      ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-600'
+                      : 'border-[var(--border-subtle)] bg-[var(--bg-panel)] text-[var(--text-secondary)]',
+                  )}
+                >
+                  {togglingTrainingExamples ? <Loader2 className="h-4 w-4 animate-spin" /> : <span aria-hidden="true" className={cn('h-2.5 w-2.5 rounded-full', autoTraining?.examplesEnabled ? 'bg-emerald-500' : 'bg-slate-400')} />}
+                  {autoTraining?.examplesEnabled ? 'En uso' : 'Inactivos'}
+                </button>
+              </div>
             </div>
 
-            <div className="mt-4">
-              <p className="text-xs font-black text-[var(--text-primary)]">
-                Ejemplos maestros aprendidos ({autoTraining?.examples?.length || 0}/5)
-              </p>
-              {(!autoTraining?.examples || autoTraining.examples.length === 0) ? (
-                <div className="mt-2 rounded-xl border border-dashed border-[var(--border-subtle)] bg-[var(--bg-elevated)]/50 p-6 text-center">
-                  <Sparkles className="mx-auto mb-2 h-6 w-6 text-amber-500" />
-                  <p className="text-xs font-bold text-[var(--text-primary)]">Sin ejemplos entrenados aún</p>
-                  <p className="mt-1 text-[11px] text-[var(--text-muted)]">
-                    Pulsa "Entrenar con chats ahora" para que Gemini extraiga los mejores casos de la base de datos.
-                  </p>
+            {autoTraining?.examplesEnabled && !autoTraining.approvedIsActive && (autoTraining.examples.length > 0) && (
+              <div className="mt-3 flex flex-col gap-2 rounded-xl border border-amber-500/25 bg-amber-500/5 p-3 sm:flex-row sm:items-center sm:justify-between">
+                <p className="text-xs leading-relaxed text-amber-700 dark:text-amber-300">
+                  Hay una versión aprobada más reciente. La versión que ya estaba publicada continúa funcionando hasta que decidas reemplazarla.
+                </p>
+                <Button type="button" variant="outline" onClick={() => void toggleTrainingExamples(true)} disabled={trainingActionBusy} className="h-9 shrink-0 rounded-xl border-amber-500/30 text-xs font-bold text-amber-700 dark:text-amber-300">
+                  Publicar nueva versión
+                </Button>
+              </div>
+            )}
+
+            <p className="mt-3 text-[11px] leading-relaxed text-[var(--text-muted)]">
+              {autoTraining?.lastRun
+                ? `Última generación: ${new Date(autoTraining.lastRun).toLocaleString('es-CO')}${autoTraining.stats?.ordersAnalyzed !== undefined ? ` · ${autoTraining.stats.ordersAnalyzed} pedidos analizados` : ''}${autoTraining.stats?.sessionsAnalyzed !== undefined ? ` · ${autoTraining.stats.sessionsAnalyzed} conversaciones analizadas` : ''}`
+                : 'Todavía no se han generado candidatos.'}
+            </p>
+
+            <section className="mt-5" aria-labelledby="training-candidates-title">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <h3 id="training-candidates-title" className="text-sm font-black text-[var(--text-primary)]">Candidatos pendientes ({autoTraining?.candidates.length ?? 0})</h3>
+                  <p className="mt-0.5 text-[11px] text-[var(--text-muted)]">Revísalos y corrige cualquier dato antes de aprobar una versión.</p>
+                </div>
+                {(autoTraining?.candidates.length ?? 0) > 0 && (
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => void rejectTrainingCandidates()}
+                      disabled={trainingActionBusy}
+                      className="h-9 rounded-xl border-red-500/25 text-xs font-bold text-red-600 hover:bg-red-500/10"
+                    >
+                      {rejectingTrainingCandidates ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <XCircle className="mr-1.5 h-4 w-4" />}
+                      Descartar todos
+                    </Button>
+                    <Button
+                      type="button"
+                      onClick={() => void approveTrainingCandidates()}
+                      disabled={trainingActionBusy || !trainingCandidatesComplete}
+                      className="h-9 rounded-xl bg-emerald-600 text-xs font-black text-white hover:bg-emerald-700"
+                    >
+                      {approvingTrainingCandidates ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <CheckCircle2 className="mr-1.5 h-4 w-4" />}
+                      Aprobar los restantes
+                    </Button>
+                  </div>
+                )}
+              </div>
+
+              {(!autoTraining?.candidates.length) ? (
+                <div className="mt-3 rounded-xl border border-dashed border-[var(--border-subtle)] bg-[var(--bg-elevated)]/50 p-5 text-center">
+                  <p className="text-xs font-bold text-[var(--text-primary)]">No hay candidatos pendientes</p>
+                  <p className="mt-1 text-[11px] text-[var(--text-muted)]">Puedes generarlos ahora o dejar que la programación nocturna prepare una propuesta.</p>
                 </div>
               ) : (
-                <div className="mt-2 grid gap-2.5 sm:grid-cols-2 lg:grid-cols-3">
-                  {autoTraining.examples.map((item, index) => (
-                    <div key={index} className="flex flex-col justify-between rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-3">
-                      <div>
-                        <div className="flex items-center justify-between gap-2 mb-1.5">
-                          <span className="rounded-md bg-[var(--accent)]/10 px-1.5 py-0.5 text-[9px] font-black text-[var(--accent)]">
-                            Ejemplo #{index + 1}
-                          </span>
-                          <span className="truncate text-[10px] font-bold text-[var(--text-muted)]">
-                            {item.context || 'Atención'}
-                          </span>
-                        </div>
-                        <div className="space-y-1.5 text-[11px]">
-                          <div className="rounded-lg bg-[var(--bg-panel)] p-2">
-                            <span className="block text-[9px] font-black uppercase text-[var(--text-muted)]">Cliente:</span>
-                            <p className="text-[var(--text-primary)] italic">"{item.clientPrompt}"</p>
-                          </div>
-                          <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-2">
-                            <span className="block text-[9px] font-black uppercase text-emerald-600">Restaurante (The Villa Dog):</span>
-                            <p className="text-[var(--text-primary)]">{item.advisorResponse}</p>
-                          </div>
-                        </div>
+                <div className="mt-3 grid gap-3 lg:grid-cols-2">
+                  {autoTraining.candidates.map((item, index) => (
+                    <article key={index} className="rounded-xl border border-amber-500/25 bg-amber-500/5 p-3">
+                      <div className="mb-3 flex items-center justify-between gap-2">
+                        <span className="text-xs font-black text-amber-700 dark:text-amber-300">Candidato {index + 1}</span>
+                        <button
+                          type="button"
+                          onClick={() => removeTrainingCandidate(index)}
+                          disabled={trainingActionBusy}
+                          className="flex h-8 w-8 items-center justify-center rounded-lg text-red-500 transition hover:bg-red-500/10 disabled:opacity-50"
+                          aria-label={`Quitar candidato ${index + 1}`}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
                       </div>
+                      <div className="space-y-3">
+                        <label className="block">
+                          <span className="mb-1 block text-[11px] font-bold text-[var(--text-secondary)]">Contexto</span>
+                          <input value={item.context} maxLength={80} onChange={event => updateTrainingCandidate(index, 'context', event.target.value)} disabled={trainingActionBusy} className={fieldClass} placeholder="Ejemplo: confirmar modificación" />
+                        </label>
+                        <label className="block">
+                          <span className="mb-1 block text-[11px] font-bold text-[var(--text-secondary)]">Mensaje del cliente</span>
+                          <textarea value={item.clientPrompt} maxLength={500} onChange={event => updateTrainingCandidate(index, 'clientPrompt', event.target.value)} disabled={trainingActionBusy} className={cn(textAreaClass, 'min-h-20')} />
+                        </label>
+                        <label className="block">
+                          <span className="mb-1 block text-[11px] font-bold text-[var(--text-secondary)]">Respuesta ideal</span>
+                          <textarea value={item.advisorResponse} maxLength={800} onChange={event => updateTrainingCandidate(index, 'advisorResponse', event.target.value)} disabled={trainingActionBusy} className={cn(textAreaClass, 'min-h-24')} />
+                        </label>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              )}
+            </section>
+
+            <section className="mt-6 border-t border-[var(--border-subtle)] pt-5" aria-labelledby="approved-examples-title">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <h3 id="approved-examples-title" className="text-sm font-black text-[var(--text-primary)]">Ejemplos aprobados ({autoTraining?.examples.length ?? 0})</h3>
+                  <p className="mt-0.5 text-[11px] text-[var(--text-muted)]">Esta es la versión revisada que permanece guardada.</p>
+                </div>
+                <span className={cn(
+                  'rounded-lg px-2.5 py-1 text-[10px] font-black',
+                  autoTraining?.examplesEnabled ? 'bg-emerald-500/10 text-emerald-600' : 'bg-slate-500/10 text-[var(--text-muted)]',
+                )}>
+                  {autoTraining?.examplesEnabled && autoTraining.approvedIsActive
+                    ? 'Esta versión está publicada'
+                    : autoTraining?.examplesEnabled
+                      ? 'Aprobada; publicación pendiente'
+                      : 'Guardados e inactivos'}
+                </span>
+              </div>
+
+              {(!autoTraining?.examples.length) ? (
+                <p className="mt-3 rounded-xl bg-[var(--bg-elevated)] p-4 text-xs text-[var(--text-muted)]">Aún no existe una versión aprobada.</p>
+              ) : (
+                <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                  {autoTraining.examples.map((item, index) => (
+                    <article key={index} className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-3 text-[11px]">
+                      <p className="truncate text-xs font-black text-[var(--text-primary)]">{item.context || `Ejemplo ${index + 1}`}</p>
+                      <div className="mt-2 rounded-lg bg-[var(--bg-panel)] p-2">
+                        <span className="block text-[9px] font-black uppercase text-[var(--text-muted)]">Cliente</span>
+                        <p className="mt-0.5 whitespace-pre-wrap text-[var(--text-primary)]">{item.clientPrompt}</p>
+                      </div>
+                      <div className="mt-2 rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-2">
+                        <span className="block text-[9px] font-black uppercase text-emerald-600">Respuesta ideal</span>
+                        <p className="mt-0.5 whitespace-pre-wrap text-[var(--text-primary)]">{item.advisorResponse}</p>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              )}
+            </section>
+
+            <section className="mt-6 border-t border-[var(--border-subtle)] pt-5" aria-labelledby="training-versions-title">
+              <h3 id="training-versions-title" className="text-sm font-black text-[var(--text-primary)]">Historial de versiones</h3>
+              <p className="mt-0.5 text-[11px] text-[var(--text-muted)]">Restaura una versión anterior sin encender el chatbot ni cambiar la programación.</p>
+              {(!autoTraining?.versions.length) ? (
+                <p className="mt-3 rounded-xl bg-[var(--bg-elevated)] p-4 text-xs text-[var(--text-muted)]">El historial aparecerá cuando apruebes la primera versión.</p>
+              ) : (
+                <div className="mt-3 space-y-2">
+                  {autoTraining.versions.map(version => (
+                    <div key={version.id} className="flex flex-col gap-3 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-3 sm:flex-row sm:items-center sm:justify-between">
+                      <div className="min-w-0">
+                        <p className="text-xs font-bold text-[var(--text-primary)]">{new Date(version.createdAt).toLocaleString('es-CO')}</p>
+                        <p className="mt-0.5 truncate text-[11px] text-[var(--text-muted)]">{version.count} ejemplos · Origen: {version.source || 'Aprobación manual'}</p>
+                      </div>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => void restoreTrainingVersion(version.id)}
+                        disabled={trainingActionBusy}
+                        className="h-9 shrink-0 rounded-xl text-xs font-bold"
+                      >
+                        {restoringTrainingVersionId === version.id ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-1.5 h-4 w-4" />}
+                        Restaurar
+                      </Button>
                     </div>
                   ))}
                 </div>
               )}
-            </div>
+            </section>
           </Card>
 
           <Card className="min-w-0 rounded-2xl border-[var(--border-subtle)] bg-[var(--bg-panel)] p-4 shadow-sm sm:p-5 xl:col-span-2">
