@@ -37,6 +37,7 @@ type Session = {
   assignedToId: string | null
   assignedTo: { id: string; name: string } | null
   unreadCount?: number
+  waitingForAdvisor?: boolean
   /** Query for which the server confirmed a historical message match. */
   searchMatchedFor?: string | null
   /** The latest message that matched the active global search query. */
@@ -48,12 +49,18 @@ type Session = {
 type ChatFilter = 'TODAY' | 'ALL' | 'UNREAD' | 'WAITING' | 'MINE' | 'UNASSIGNED'
 
 const orderSessionsForFilter = (items: Session[], filter: ChatFilter) => {
-  if (filter !== 'UNREAD') return items
-  return [...items].sort((a, b) => {
-    const aTime = new Date(a.lastMessageAt || 0).getTime() || 0
-    const bTime = new Date(b.lastMessageAt || 0).getTime() || 0
-    return aTime - bTime
-  })
+  return items
+    .map((item, index) => ({ item, index }))
+    .sort((a, b) => {
+      const waitingDiff = Number(b.item.waitingForAdvisor === true) - Number(a.item.waitingForAdvisor === true)
+      if (waitingDiff !== 0) return waitingDiff
+      if (filter !== 'UNREAD') return a.index - b.index
+
+      const aTime = new Date(a.item.lastMessageAt || 0).getTime() || 0
+      const bTime = new Date(b.item.lastMessageAt || 0).getTime() || 0
+      return aTime - bTime
+    })
+    .map(({ item }) => item)
 }
 
 type SearchMatch = {
@@ -67,6 +74,19 @@ type SearchMatch = {
 type SessionPage = {
   items: Session[]
   nextCursor: string | null
+}
+
+type RealtimeSessionPayload = {
+  sessionId: string
+  phone?: string
+  customerPhone?: string | null
+  customerName?: string | null
+  lastMessageAt?: string
+  unreadCount?: number
+  totalUnread?: number
+  waitingForAdvisor?: boolean
+  assignedToId?: string | null
+  assignedTo?: { id: string; name: string } | null
 }
 
 type Message = {
@@ -724,9 +744,34 @@ function ChatPage() {
   const sessionCursorRef = useRef<string | null>(null)
   const hasMoreRef = useRef(true)
   const loadingMoreRef = useRef(false)
+  const waitingStateBySessionRef = useRef<Map<string, boolean>>(new Map(
+    (globalSessionsCache || []).map(session => [session.id, session.waitingForAdvisor === true]),
+  ))
+  // Solo contiene transiciones recibidas en vivo o confirmadas por una acción
+  // local. Sirve para que una respuesta HTTP iniciada antes del evento no vuelva
+  // a pintar el estado anterior encima de Socket.IO.
+  const realtimeWaitingStateRef = useRef<Map<string, boolean>>(new Map())
+  const waitingEventVersionRef = useRef(0)
   const messagesCacheRef = useRef<Record<string, Message[]>>(globalMessagesCache)
   const messagesRequestIdRef = useRef(0)
   const olderMessagesRequestIdRef = useRef(0)
+
+  const updateWaitingCounter = (sessionId: string, waitingForAdvisor: boolean, knownPrevious?: boolean) => {
+    const trackedPrevious = waitingStateBySessionRef.current.get(sessionId)
+    const previous = trackedPrevious ?? knownPrevious
+    waitingStateBySessionRef.current.set(sessionId, waitingForAdvisor)
+    realtimeWaitingStateRef.current.set(sessionId, waitingForAdvisor)
+
+    if (previous === waitingForAdvisor) return
+    // An unknown session becoming waiting is a new escalation. An unknown
+    // non-waiting session does not prove there was anything to subtract.
+    if (previous === undefined && !waitingForAdvisor) return
+    waitingEventVersionRef.current += 1
+    setStats(current => ({
+      ...current,
+      waiting: Math.max(0, current.waiting + (waitingForAdvisor ? 1 : -1)),
+    }))
+  }
 
   useEffect(() => {
     chatSearchRef.current = chatSearch
@@ -739,6 +784,9 @@ function ChatPage() {
   useEffect(() => {
     const query = sessionQueryRef.current
     setCachedSessions(query.search, query.filter, sessions)
+    for (const session of sessions) {
+      waitingStateBySessionRef.current.set(session.id, session.waitingForAdvisor === true)
+    }
   }, [sessions])
 
   const scrollTabs = (direction: 'left' | 'right') => {
@@ -841,7 +889,7 @@ function ChatPage() {
           return !assignedId
         })
       } else if (chatFilter === 'WAITING') {
-        baseList = baseList.filter(s => (s as any).waitingForAdvisor === true)
+        baseList = baseList.filter(s => s.waitingForAdvisor === true)
       } else if (chatFilter === 'UNREAD') {
         baseList = baseList.filter(s => (s.unreadCount || 0) > 0)
       } else if (chatFilter === 'TODAY') {
@@ -1120,10 +1168,20 @@ function ChatPage() {
     }
   }
 
-  const loadStats = async () => {
+  const loadStats = async (remainingRaceRetries = 1) => {
+    const waitingVersionAtStart = waitingEventVersionRef.current
     try {
       const res = await api.get<any>('/whatsapp/sessions/stats')
-      if (res) setStats(res)
+      if (res) {
+        if (waitingEventVersionRef.current === waitingVersionAtStart) {
+          setStats(res)
+        } else {
+          // Conserva el delta en vivo y realiza una sola lectura de cierre. Esto
+          // ocurre solo si un escalado/reclamo cruzó exactamente esta petición.
+          setStats(current => ({ ...res, waiting: current.waiting }))
+          if (remainingRaceRetries > 0) void loadStats(remainingRaceRetries - 1)
+        }
+      }
     } catch (e) {}
   }
 
@@ -1175,13 +1233,18 @@ function ChatPage() {
       const seen = new Set<string>()
       const uniqueSessions: Session[] = []
       for (const s of safeData) {
-        const cleanDigits = (s.phone || '').replace(/\D/g, '')
+        const sessionWithRealtimeState = realtimeWaitingStateRef.current.has(s.id)
+          ? { ...s, waitingForAdvisor: realtimeWaitingStateRef.current.get(s.id) === true }
+          : s
+        const cleanDigits = (sessionWithRealtimeState.phone || '').replace(/\D/g, '')
         const isStd = (cleanDigits.length === 10 || (cleanDigits.length === 12 && cleanDigits.startsWith('57'))) && cleanDigits !== '3000000000' && cleanDigits !== '0000000000' && !/^0+$/.test(cleanDigits)
         const phone10 = isStd ? (cleanDigits.length === 12 ? cleanDigits.slice(2) : cleanDigits) : null
-        const key = phone10 || s.id
+        const key = phone10 || sessionWithRealtimeState.id
         if (!seen.has(key)) {
           seen.add(key)
-          uniqueSessions.push(searchMarker ? { ...s, searchMatchedFor: searchMarker } : { ...s, searchMatchedFor: null })
+          uniqueSessions.push(searchMarker
+            ? { ...sessionWithRealtimeState, searchMatchedFor: searchMarker }
+            : { ...sessionWithRealtimeState, searchMatchedFor: null })
         }
       }
       if (selectId && !uniqueSessions.some(session => session.id === selectId)) {
@@ -1204,7 +1267,7 @@ function ChatPage() {
             if (updatedPrev.customerName === prevActive.customerName &&
                 updatedPrev.assignedToId === prevActive.assignedToId &&
                 updatedPrev.phone === prevActive.phone &&
-                (updatedPrev as any).waitingForAdvisor === (prevActive as any).waitingForAdvisor &&
+                updatedPrev.waitingForAdvisor === prevActive.waitingForAdvisor &&
                 JSON.stringify(updatedPrev.assignedTo) === JSON.stringify(prevActive.assignedTo)) {
               return prevActive
             }
@@ -1420,15 +1483,20 @@ function ChatPage() {
 
     let connectedOnce = false
     socket.on('connect', () => {
+      const isReconnect = connectedOnce
       setRealtimeStatus('connected')
       socket.emit('joinRoom', 'whatsapp')
       socket.emit('getChatViewers')
       if (activeSessionRef.current?.id) {
         socket.emit('chatViewJoin', { sessionId: activeSessionRef.current.id })
       }
-      if (connectedOnce) {
-        loadSessions()
-        loadStats()
+      // La lectura posterior a joinRoom cierra la ventana entre el GET inicial y
+      // la suscripción Socket.IO. Se ejecuta una vez al conectar o reconectar;
+      // no es un sondeo periódico.
+      realtimeWaitingStateRef.current.clear()
+      loadSessions(isReconnect ? undefined : (requestedSessionId || undefined))
+      loadStats()
+      if (isReconnect) {
         const currentSession = activeSessionRef.current
         if (currentSession?.id) loadMessages(currentSession.id, currentSession, true)
       }
@@ -1460,33 +1528,74 @@ function ChatPage() {
     socket.on('whatsappSettingsUpdated', (settings: { chatbotEnabled?: boolean }) => {
       if (typeof settings?.chatbotEnabled === 'boolean') setChatbotEnabled(settings.chatbotEnabled)
     })
-    socket.on('chatSessionAssigned', (payload: any) => {
+
+    const applyRealtimeSessionUpdate = (payload: RealtimeSessionPayload) => {
       if (!payload || !payload.sessionId) return
-      setSessions(prev => prev.map(s => {
-        const isMatch = s.id === payload.sessionId
-        return isMatch ? {
-          ...s,
-          assignedToId: payload.assignedToId,
-          assignedTo: payload.assignedTo,
-          waitingForAdvisor: payload.waitingForAdvisor ?? false
-        } : s
-      }))
+
+      if (typeof payload.waitingForAdvisor === 'boolean') {
+        const current = waitingStateBySessionRef.current.get(payload.sessionId)
+        updateWaitingCounter(payload.sessionId, payload.waitingForAdvisor, current)
+      }
+
+      setSessions(previous => {
+        const index = previous.findIndex(session => session.id === payload.sessionId)
+        const current = index >= 0 ? previous[index] : null
+        const merged: Session = {
+          ...(current || {
+            id: payload.sessionId,
+            phone: payload.phone || '',
+            customerName: payload.customerName || payload.phone || 'Cliente',
+            lastMessageAt: payload.lastMessageAt || new Date().toISOString(),
+            assignedToId: null,
+            assignedTo: null,
+            unreadCount: 0,
+            messages: [],
+          }),
+          ...(payload.phone ? { phone: payload.phone } : {}),
+          ...(payload.customerPhone !== undefined ? { customerPhone: payload.customerPhone } : {}),
+          ...(payload.customerName ? { customerName: payload.customerName } : {}),
+          ...(payload.lastMessageAt ? { lastMessageAt: payload.lastMessageAt } : {}),
+          ...(typeof payload.unreadCount === 'number' ? { unreadCount: payload.unreadCount } : {}),
+          ...(payload.assignedToId !== undefined ? { assignedToId: payload.assignedToId } : {}),
+          ...(payload.assignedTo !== undefined ? { assignedTo: payload.assignedTo } : {}),
+          ...(typeof payload.waitingForAdvisor === 'boolean' ? { waitingForAdvisor: payload.waitingForAdvisor } : {}),
+        }
+
+        if (index < 0) return [merged, ...previous]
+        const next = [...previous]
+        next[index] = merged
+        return next
+      })
 
       setActiveSession(curr => {
         if (!curr) return null
         const isMatch = curr.id === payload.sessionId
         return isMatch ? {
           ...curr,
-          assignedToId: payload.assignedToId,
-          assignedTo: payload.assignedTo,
-          waitingForAdvisor: payload.waitingForAdvisor ?? false
+          ...(payload.phone ? { phone: payload.phone } : {}),
+          ...(payload.customerPhone !== undefined ? { customerPhone: payload.customerPhone } : {}),
+          ...(payload.customerName ? { customerName: payload.customerName } : {}),
+          ...(payload.lastMessageAt ? { lastMessageAt: payload.lastMessageAt } : {}),
+          ...(typeof payload.unreadCount === 'number' ? { unreadCount: payload.unreadCount } : {}),
+          ...(payload.assignedToId !== undefined ? { assignedToId: payload.assignedToId } : {}),
+          ...(payload.assignedTo !== undefined ? { assignedTo: payload.assignedTo } : {}),
+          ...(typeof payload.waitingForAdvisor === 'boolean' ? { waitingForAdvisor: payload.waitingForAdvisor } : {}),
         } : curr
       })
+    }
+
+    socket.on('chatSessionAssigned', (payload: RealtimeSessionPayload) => {
+      applyRealtimeSessionUpdate(payload)
     })
 
-    socket.on('whatsappSessionUpdated', (payload: any) => {
+    socket.on('whatsappAgentRequest', (payload: RealtimeSessionPayload) => {
+      applyRealtimeSessionUpdate({ ...payload, waitingForAdvisor: true })
+    })
+
+    socket.on('whatsappSessionUpdated', (payload: RealtimeSessionPayload & { unassignedAll?: boolean; cashClosed?: boolean; cashOpened?: boolean; orderCreated?: boolean; orderUpdated?: boolean }) => {
       if (typeof payload?.totalUnread === 'number') {
-        setStats(prev => ({ ...prev, unread: payload.totalUnread }))
+        const totalUnread = payload.totalUnread
+        setStats(prev => ({ ...prev, unread: totalUnread }))
       }
 
       if (payload?.unassignedAll || payload?.cashClosed || payload?.cashOpened) {
@@ -1511,40 +1620,7 @@ function ChatPage() {
       }
 
       if (!payload || !payload.sessionId) return
-      setSessions(prev => {
-        return prev.map(s => {
-          const isMatch = s.id === payload.sessionId
-          
-          if (!isMatch) return s
-          return {
-            ...s,
-            ...(payload.customerName ? { customerName: payload.customerName } : {}),
-            ...(payload.lastMessageAt ? { lastMessageAt: payload.lastMessageAt } : {}),
-            ...(typeof payload.unreadCount === 'number' ? { unreadCount: payload.unreadCount } : {}),
-            ...(payload.assignedToId !== undefined ? { assignedToId: payload.assignedToId } : {}),
-            ...(payload.assignedTo !== undefined ? { assignedTo: payload.assignedTo } : {}),
-            ...(payload.waitingForAdvisor !== undefined ? { waitingForAdvisor: payload.waitingForAdvisor } : {}),
-          }
-        })
-      })
-
-      setActiveSession(current => {
-        if (!current) return null
-        const isMatch = current.id === payload.sessionId
-
-        if (isMatch) {
-          return {
-            ...current,
-            ...(payload.customerName ? { customerName: payload.customerName } : {}),
-            ...(payload.lastMessageAt ? { lastMessageAt: payload.lastMessageAt } : {}),
-            ...(typeof payload.unreadCount === 'number' ? { unreadCount: payload.unreadCount } : {}),
-            ...(payload.assignedToId !== undefined ? { assignedToId: payload.assignedToId } : {}),
-            ...(payload.assignedTo !== undefined ? { assignedTo: payload.assignedTo } : {}),
-            ...(payload.waitingForAdvisor !== undefined ? { waitingForAdvisor: payload.waitingForAdvisor } : {}),
-          }
-        }
-        return current
-      })
+      applyRealtimeSessionUpdate(payload)
     })
 
     socket.on('whatsappMessage', (payload: {
@@ -2386,6 +2462,7 @@ function ChatPage() {
         userId: user.id
       })
       const assignedTo = updated?.assignedTo || { id: user.id, name: user.name }
+      updateWaitingCounter(targetSession.id, false, targetSession.waitingForAdvisor === true)
       setActiveSession(prev => {
         if (!prev || prev.id !== targetSession.id) return prev
         return {
@@ -2440,6 +2517,9 @@ function ChatPage() {
       const updated = await api.put<Session>(`/whatsapp/sessions/${target.id}/assign`, {
         userId: null
       })
+      if (typeof updated?.waitingForAdvisor === 'boolean') {
+        updateWaitingCounter(target.id, updated.waitingForAdvisor, target.waitingForAdvisor === true)
+      }
       setActiveSession(prev => {
         if (!prev || prev.id !== target.id) return prev
         return {
@@ -3030,8 +3110,9 @@ function ChatPage() {
                   
                   const assignedInfo = getAssignedInfo(s, user)
                   
-                  const isRecent = new Date(s.lastMessageAt).getTime() >= Date.now() - 4 * 60 * 60 * 1000
-                  const isWaiting = (s as any).waitingForAdvisor === true && isRecent
+                  // La alerta se mantiene hasta que alguien reclame el chat.
+                  // Su antigüedad no debe ocultar una solicitud humana pendiente.
+                  const isWaiting = s.waitingForAdvisor === true
 
                   const isUnreadIncoming = (s.unreadCount || 0) > 0
                   const displayUnread = s.unreadCount || 0
@@ -3465,7 +3546,25 @@ function ChatPage() {
               </div>
 
               {/* LIVE ATTENTION STATUS BANNER */}
-              {activeAssignedInfo.isMine ? (
+              {activeSession.waitingForAdvisor === true && !activeAssignedInfo.isAssigned ? (
+                <div className="px-3 sm:px-4 py-2 bg-red-500/15 border-b border-red-500/35 flex flex-wrap items-center justify-between gap-2 text-xs font-bold text-red-700 dark:text-red-300 shrink-0 animate-in fade-in duration-150">
+                  <div className="flex items-start sm:items-center gap-2 min-w-0 flex-1">
+                    <span className="relative mt-0.5 sm:mt-0 flex h-2.5 w-2.5 shrink-0">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75" />
+                      <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-red-500" />
+                    </span>
+                    <span>Esperando asesor: el cliente pidió atención humana. Reclama el chat para responderle.</span>
+                  </div>
+                  <Button
+                    size="sm"
+                    onClick={() => handleClaimSession()}
+                    className="h-7 px-3 text-[11px] font-extrabold bg-red-600 hover:bg-red-700 text-white rounded-md cursor-pointer flex items-center gap-1.5 shrink-0"
+                  >
+                    <UserPlus className="h-3.5 w-3.5" />
+                    <span>Reclamar Chat</span>
+                  </Button>
+                </div>
+              ) : activeAssignedInfo.isMine ? (
                 <div className="px-3 sm:px-4 py-1.5 sm:py-2 bg-emerald-500/10 border-b border-emerald-500/20 flex items-center justify-between gap-2 text-xs font-bold text-emerald-600 dark:text-emerald-400 shrink-0 animate-in fade-in duration-150">
                   <div className="flex items-center gap-1.5 min-w-0 flex-1 truncate">
                     <span className="relative flex h-2 w-2 shrink-0">

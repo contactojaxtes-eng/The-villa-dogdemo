@@ -163,6 +163,72 @@ describe('WhatsApp voice-note transcription for order intake', () => {
     expect(mediaSpy).not.toHaveBeenCalled();
     expect(prisma.whatsAppMessage.update).not.toHaveBeenCalled();
   });
+
+  it('strips the internal marker and requests an advisor for a Gemini audio reply', async () => {
+    const prisma: any = {
+      menuItem: { findMany: jest.fn().mockResolvedValue([]) },
+      whatsAppSession: {
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        findUnique: jest.fn().mockResolvedValue({
+          id: 'session-audio',
+          phone: '573001234567',
+          customerName: 'Cliente audio',
+          assignedToId: null,
+          assignedTo: null,
+          waitingForAdvisor: true,
+        }),
+      },
+    };
+    const socketGateway = { emitWhatsApp: jest.fn() };
+    const service = new WhatsappService(prisma, { get: jest.fn() } as any, socketGateway as any);
+    const settings: Record<string, string> = {
+      gemini_api_key: 'test-key',
+      gemini_model: 'gemini-3.5-flash-lite',
+      chatbot_ai_instructions: 'Si el cliente pide una excepción, deriva a un asesor.',
+    };
+    jest.spyOn(service as any, 'getSetting').mockImplementation(async (key: string) => settings[key] || null);
+    jest.spyOn(service as any, 'getMediaBuffer').mockResolvedValue({
+      buffer: Buffer.from('voice-note'),
+      contentType: 'audio/ogg; codecs=opus',
+    });
+    jest.spyOn(service as any, 'getGeminiModels').mockResolvedValue(['gemini-3.5-flash-lite']);
+    jest.spyOn(service as any, 'incrementGeminiUsage').mockResolvedValue(undefined);
+    const send = jest.spyOn(service, 'sendMessage').mockResolvedValue({ sent: true } as any);
+    const fetchSpy = jest.spyOn(global, 'fetch' as any).mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        candidates: [{ content: { parts: [{ text: 'Claro. Un asesor revisará tu caso. [TRANSFERIR_ASESOR]' }] } }],
+      }),
+    } as any);
+
+    try {
+      await expect((service as any).handleAudioWithGemini({
+        id: 'session-audio',
+        phone: '573001234567',
+        customerName: 'Cliente audio',
+        assignedToId: null,
+        waitingForAdvisor: false,
+      }, 'media-audio')).resolves.toBe(true);
+    } finally {
+      fetchSpy.mockRestore();
+    }
+
+    expect(send).toHaveBeenCalledWith(
+      '573001234567',
+      'Claro. Un asesor revisará tu caso.',
+      undefined,
+      undefined,
+      'session-audio',
+    );
+    expect(prisma.whatsAppSession.updateMany).toHaveBeenCalledWith({
+      where: { id: 'session-audio', assignedToId: null, waitingForAdvisor: false },
+      data: { waitingForAdvisor: true },
+    });
+    expect(socketGateway.emitWhatsApp).toHaveBeenCalledWith(
+      'whatsappAgentRequest',
+      expect.objectContaining({ sessionId: 'session-audio', waitingForAdvisor: true }),
+    );
+  });
 });
 
 describe('WhatsApp scheduled closing', () => {
@@ -186,6 +252,191 @@ describe('WhatsApp scheduled closing', () => {
     await (service as any).handleChatbot({ phone: '573001234567', assignedToId: null }, 'Hola');
 
     expect(send).toHaveBeenCalledWith('573001234567', 'Estamos cerrados. Volvemos desde las 12:00.');
+  });
+});
+
+describe('WhatsApp advisor handoff safety', () => {
+  const session = {
+    id: 'chat-1',
+    phone: '3001234567',
+    customerName: 'Cliente',
+    assignedToId: null,
+    assignedTo: null,
+    waitingForAdvisor: false,
+    lastMessageAt: new Date('2026-09-21T15:00:00.000Z'),
+  };
+
+  const createService = () => {
+    const prisma: any = {
+      whatsAppSession: {
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        findUnique: jest.fn().mockResolvedValue({ ...session, waitingForAdvisor: true }),
+        update: jest.fn().mockResolvedValue({ ...session, waitingForAdvisor: false }),
+      },
+    };
+    const socketGateway = { emitWhatsApp: jest.fn() };
+    const service = new WhatsappService(prisma, { get: jest.fn() } as any, socketGateway as any);
+    return { service, prisma, socketGateway };
+  };
+
+  it('recognizes an explicit request for a person without asking Gemini', async () => {
+    const { service, prisma, socketGateway } = createService();
+    jest.spyOn(service as any, 'getClosedBusinessReply').mockResolvedValue(null);
+    jest.spyOn(service as any, 'getSetting').mockResolvedValue('true');
+    const gemini = jest.spyOn(service as any, 'handleGeminiChatbot').mockResolvedValue(undefined);
+    const send = jest.spyOn(service, 'sendMessage').mockResolvedValue({ sent: true } as any);
+
+    await (service as any).handleChatbot(session, 'Quiero hablar con una asesora, por favor');
+
+    expect(gemini).not.toHaveBeenCalled();
+    expect(send).toHaveBeenCalledWith(
+      session.phone,
+      expect.stringContaining('uno de nuestros asesores'),
+      undefined,
+      undefined,
+      session.id,
+    );
+    expect(prisma.whatsAppSession.updateMany).toHaveBeenCalledWith({
+      where: { id: session.id, assignedToId: null, waitingForAdvisor: false },
+      data: { waitingForAdvisor: true },
+    });
+    expect(socketGateway.emitWhatsApp).toHaveBeenCalledWith(
+      'whatsappAgentRequest',
+      expect.objectContaining({ sessionId: session.id, waitingForAdvisor: true }),
+    );
+    expect(socketGateway.emitWhatsApp).toHaveBeenCalledWith(
+      'whatsappSessionUpdated',
+      expect.objectContaining({ sessionId: session.id, waitingForAdvisor: true }),
+    );
+  });
+
+  it('keeps a human request queued and reports the notice failure when Meta rejects the reply', async () => {
+    const { service, prisma, socketGateway } = createService();
+    jest.spyOn(service, 'sendMessage').mockResolvedValue({ sent: false, reason: 'api_error' } as any);
+
+    await expect((service as any).requestAdvisorHandoff(
+      session,
+      'Te atenderá un asesor. [TRANSFERIR_ASESOR]',
+      'prueba',
+    )).resolves.toBe(true);
+
+    expect(prisma.whatsAppSession.updateMany).toHaveBeenCalledWith({
+      where: { id: session.id, assignedToId: null, waitingForAdvisor: false },
+      data: { waitingForAdvisor: true },
+    });
+    expect(socketGateway.emitWhatsApp).toHaveBeenCalledWith(
+      'whatsappAgentRequest',
+      expect.objectContaining({
+        sessionId: session.id,
+        waitingForAdvisor: true,
+        noticePending: true,
+      }),
+    );
+    expect(socketGateway.emitWhatsApp).toHaveBeenCalledWith(
+      'whatsappSessionUpdated',
+      expect.objectContaining({
+        sessionId: session.id,
+        waitingForAdvisor: true,
+        noticePending: false,
+        noticeSent: false,
+        noticeFailureReason: 'api_error',
+      }),
+    );
+  });
+
+  it('publishes the waiting state before Meta finishes sending the customer notice', async () => {
+    const { service, socketGateway } = createService();
+    let finishSend!: (value: any) => void;
+    const pendingSend = new Promise(resolve => { finishSend = resolve; });
+    jest.spyOn(service, 'sendMessage').mockReturnValue(pendingSend as any);
+
+    const handoff = (service as any).requestAdvisorHandoff(
+      session,
+      'En un momento te atenderá un asesor.',
+      'meta_lenta',
+    );
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    expect(socketGateway.emitWhatsApp).toHaveBeenCalledWith(
+      'whatsappAgentRequest',
+      expect.objectContaining({
+        sessionId: session.id,
+        waitingForAdvisor: true,
+        noticePending: true,
+      }),
+    );
+
+    finishSend({ sent: true });
+    await expect(handoff).resolves.toBe(true);
+  });
+
+  it('does not send a duplicate handoff notice when the chat is already waiting', async () => {
+    const { service, prisma, socketGateway } = createService();
+    prisma.whatsAppSession.updateMany.mockResolvedValue({ count: 0 });
+    prisma.whatsAppSession.findUnique.mockResolvedValue({ ...session, waitingForAdvisor: true });
+    const send = jest.spyOn(service, 'sendMessage').mockResolvedValue({ sent: true } as any);
+
+    await expect((service as any).requestAdvisorHandoff(
+      session,
+      'En un momento te atenderá un asesor.',
+      'evento_duplicado',
+    )).resolves.toBe(true);
+
+    expect(send).not.toHaveBeenCalled();
+    expect(socketGateway.emitWhatsApp).not.toHaveBeenCalled();
+  });
+
+  it('keeps a waiting conversation silent even after many hours', async () => {
+    const { service, prisma } = createService();
+    jest.spyOn(service as any, 'getClosedBusinessReply').mockResolvedValue(null);
+    jest.spyOn(service as any, 'getSetting').mockResolvedValue('true');
+    const gemini = jest.spyOn(service as any, 'handleGeminiChatbot').mockResolvedValue(undefined);
+    const send = jest.spyOn(service, 'sendMessage').mockResolvedValue({ sent: true } as any);
+
+    await (service as any).handleChatbot(
+      { ...session, waitingForAdvisor: true },
+      'Sigo esperando respuesta',
+      new Date('2026-09-20T00:00:00.000Z'),
+    );
+
+    expect(prisma.whatsAppSession.update).not.toHaveBeenCalled();
+    expect(prisma.whatsAppSession.updateMany).not.toHaveBeenCalled();
+    expect(gemini).not.toHaveBeenCalled();
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it('removes every internal transfer marker before sending it to the customer', () => {
+    const { service } = createService();
+
+    expect((service as any).parseAdvisorTransferReply(
+      'Ya te ayudamos. [TRANSFERIR_ASESOR]\nTRANSFERIR ASESOR',
+    )).toEqual({ cleanText: 'Ya te ayudamos.', shouldTransfer: true });
+  });
+
+  it.each([
+    'Quiero un asesor',
+    'Pásame un asesor',
+    'Necesito una persona',
+    'Quiero que me atienda alguien',
+  ])('detects the common human request: %s', (message) => {
+    const { service } = createService();
+    expect((service as any).isExplicitAdvisorRequest(message)).toBe(true);
+  });
+
+  it('recognizes a handoff promise even if Gemini omitted the internal marker', () => {
+    const { service } = createService();
+    expect((service as any).replyPromisesAdvisorHandoff(
+      'De acuerdo. Un asesor continuará la atención contigo por este chat.',
+    )).toBe(true);
+  });
+
+  it.each([
+    'Voy a comunicarte con un asesor.',
+    'Te comunicaré con uno de nuestros asesores.',
+    'Voy a ponerte en contacto con nuestro equipo.',
+  ])('recognizes another common handoff promise: %s', (reply) => {
+    const { service } = createService();
+    expect((service as any).replyPromisesAdvisorHandoff(reply)).toBe(true);
   });
 });
 
@@ -681,7 +932,17 @@ describe('WhatsApp Gemini settings', () => {
         upsert: jest.fn().mockResolvedValue(null),
         delete: jest.fn().mockResolvedValue(null),
       },
-      whatsAppSession: { update: jest.fn().mockResolvedValue(null) },
+      whatsAppSession: {
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        findUnique: jest.fn().mockResolvedValue({
+          id: 'chat-1',
+          phone: '3001234567',
+          customerName: 'José',
+          assignedToId: null,
+          assignedTo: null,
+          waitingForAdvisor: true,
+        }),
+      },
     };
     const socketGateway = { emitWhatsApp: jest.fn() };
     const service = new WhatsappService(prisma, { get: jest.fn() } as any, socketGateway as any);
@@ -703,9 +964,12 @@ describe('WhatsApp Gemini settings', () => {
     expect(send).toHaveBeenCalledWith(
       '3001234567',
       'Gracias. Un asesor verificará la tarifa, el tiempo y el total antes de confirmar tu pedido.',
+      undefined,
+      undefined,
+      'chat-1',
     );
-    expect(prisma.whatsAppSession.update).toHaveBeenCalledWith({
-      where: { id: 'chat-1' },
+    expect(prisma.whatsAppSession.updateMany).toHaveBeenCalledWith({
+      where: { id: 'chat-1', assignedToId: null, waitingForAdvisor: false },
       data: { waitingForAdvisor: true },
     });
     expect(socketGateway.emitWhatsApp).toHaveBeenCalledWith(

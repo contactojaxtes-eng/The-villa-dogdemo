@@ -133,6 +133,12 @@ export function useNotifications() {
     })
 
     const isMuted = () => localStorage.getItem('the_villa_dog_mute_notifications') === 'true'
+    const recentWhatsappMessages = new Map<string, number>()
+    const recentAdvisorRequests = new Map<string, number>()
+    const whatsappMessageToastId = (sessionId?: string) => `whatsapp-message:${user.id}:${sessionId || 'unknown'}`
+    const whatsappMessageBrowserTag = (sessionId?: string) => `whatsapp-message:${user.id}:${sessionId || 'unknown'}`
+    const advisorRequestToastId = (sessionId: string) => `whatsapp-advisor:${user.id}:${sessionId}`
+    const advisorRequestBrowserTag = (sessionId: string) => `whatsapp-advisor:${user.id}:${sessionId}`
 
     // Alertas exclusivas de comandas de salón demoradas. Se conservan en el
     // shell global para que la mesera y el administrador las vean a tiempo.
@@ -662,8 +668,9 @@ export function useNotifications() {
       assignedToId?: string | null
       assignedTo?: { id: string; name: string } | null
     }) => {
-      // Cocineros, meseros y gestores de domicilios/despachadores NO reciben alertas emergentes ni sonoras de mensajes de WhatsApp
-      if (['KITCHEN', 'WAITER', 'DELIVERY_MANAGER', 'DISPATCHER'].includes(user.role || '')) return
+      // Solo los roles operativos con permiso de WhatsApp reciben estos avisos.
+      // La gestora de domicilios sí atiende chats y debe ver los escalados.
+      if (['KITCHEN', 'WAITER', 'DISPATCHER'].includes(user.role || '')) return
       if (!hasUserPermission(user, 'whatsapp.view')) return
 
       // Mantiene la bandeja y los mensajes calientes incluso mientras el usuario
@@ -676,12 +683,25 @@ export function useNotifications() {
       // Si el usuario silenció los mensajes emergentes, no mostrar popup ni sonido
       if (isMuted() || localStorage.getItem('niche_mute_wa_toasts') === 'true') return
 
+      const sessionKey = payload.sessionId || payload.phone || 'unknown'
+      const advisorRequestedAt = recentAdvisorRequests.get(sessionKey) || 0
+      // Si el escalado llegó primero, no lo tapes inmediatamente con el aviso
+      // genérico del mismo mensaje.
+      if (Date.now() - advisorRequestedAt < 10_000) return
+      recentWhatsappMessages.set(sessionKey, Date.now())
+      setTimeout(() => {
+        if (Date.now() - (recentWhatsappMessages.get(sessionKey) || 0) >= 10_000) {
+          recentWhatsappMessages.delete(sessionKey)
+        }
+      }, 10_500)
+
       const msgPreview = payload.messageType === 'image' ? '📷 Foto'
         : payload.messageType === 'audio' ? '🎙️ Audio'
         : payload.messageType === 'document' ? '📄 Documento'
         : (payload.content || '').substring(0, 50)
 
       toast('💬 Nuevo mensaje de WhatsApp', {
+        id: whatsappMessageToastId(sessionKey),
         description: `${payload.customerName}: ${msgPreview}`,
         icon: <MessageCircle className="h-4 w-4 text-[#25D366]" />,
         duration: 4000,
@@ -695,7 +715,8 @@ export function useNotifications() {
       showBrowserNotification(
         `💬 ${payload.customerName}`,
         msgPreview,
-        '/chat'
+        '/chat',
+        { tag: whatsappMessageBrowserTag(sessionKey) },
       )
     })
 
@@ -705,26 +726,49 @@ export function useNotifications() {
       customerName: string
       sessionId: string
     }) => {
-      // Cocineros, meseros y gestores de domicilios NO gestionan solicitudes de asesor
-      if (['KITCHEN', 'WAITER', 'DELIVERY_MANAGER', 'DISPATCHER'].includes(user.role || '')) return
+      if (['KITCHEN', 'WAITER', 'DISPATCHER'].includes(user.role || '')) return
       if (!hasUserPermission(user, 'whatsapp.view')) return
 
+
+      const sessionKey = data.sessionId || data.phone
+      const targetUrl = `/chat?session=${encodeURIComponent(data.sessionId)}`
+      const now = Date.now()
+      const duplicateAdvisorRequest = now - (recentAdvisorRequests.get(sessionKey) || 0) < 10_000
+      const replacesRecentMessageAlert = now - (recentWhatsappMessages.get(sessionKey) || 0) < 10_000
+      recentAdvisorRequests.set(sessionKey, now)
+      setTimeout(() => {
+        if (Date.now() - (recentAdvisorRequests.get(sessionKey) || 0) >= 10_000) {
+          recentAdvisorRequests.delete(sessionKey)
+        }
+      }, 10_500)
+
+      // El escalado reemplaza el aviso genérico del mensaje entrante para no
+      // sonar dos veces ni dejar dos tarjetas por la misma conversación.
+      toast.dismiss(whatsappMessageToastId(sessionKey))
+      closeBrowserNotification(whatsappMessageBrowserTag(sessionKey))
+
+      if (isMuted() || localStorage.getItem('niche_mute_wa_toasts') === 'true') return
+
       toast.warning('🙋 Cliente solicita asesor', {
+        id: advisorRequestToastId(data.sessionId),
         description: `${data.customerName} (${data.phone}) necesita hablar con un asesor. ¡Reclama el chat!`,
         icon: <UserPlus className="h-4 w-4 text-[#F59E0B]" />,
-        duration: 3500,
+        duration: 8000,
         action: {
           label: 'Ir al Chat',
           onClick: () => {
-            window.location.href = '/chat'
+            window.location.href = targetUrl
           }
         }
       })
-      playNotificationSound('urgent')
+      if (!duplicateAdvisorRequest && !replacesRecentMessageAlert && localStorage.getItem('niche_mute_sounds') !== 'true') {
+        playNotificationSound('urgent')
+      }
       showBrowserNotification(
         '🙋 ¡Cliente necesita asesor!',
         `${data.customerName} (${data.phone}) quiere hablar con un asesor`,
-        '/chat'
+        targetUrl,
+        { tag: advisorRequestBrowserTag(data.sessionId) },
       )
     })
 

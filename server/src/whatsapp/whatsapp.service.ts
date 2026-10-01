@@ -3237,6 +3237,7 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify(metaPayload),
+        signal: AbortSignal.timeout(12_000),
       });
       let ok = res.ok;
       let data = await res.json();
@@ -3441,6 +3442,7 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
             ...(components.length > 0 ? { components } : {}),
           },
         }),
+        signal: AbortSignal.timeout(12_000),
       });
       const ok = res.ok;
       const data = await res.json();
@@ -3717,6 +3719,153 @@ The Villa Dog • Montería`;
     return null;
   }
 
+  private parseAdvisorTransferReply(rawText: string): { cleanText: string; shouldTransfer: boolean } {
+    const markerPattern = /\[?\s*TRANSFERIR(?:[_\s-]+)ASESOR\s*\]?/gi;
+    const text = String(rawText || '');
+    const shouldTransfer = markerPattern.test(text);
+    markerPattern.lastIndex = 0;
+    const cleanText = text
+      .replace(markerPattern, '')
+      .replace(/[ \t]+\n/g, '\n')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+    return { cleanText, shouldTransfer };
+  }
+
+  private isExplicitAdvisorRequest(userText: string): boolean {
+    const normalized = this.normalizeSpanishLookup(userText)
+      .replace(/[^a-z0-9\s]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (!normalized) return false;
+
+    const directCommands = [
+      /^(?:asesor|asesora|agente|humano|persona real)(?: por favor| ya| ahora)?$/,
+      /^(?:atencion humana|atencion con una persona|servicio al cliente)(?: por favor)?$/,
+      /^(?:pasame|comunicame|transfiereme|derivame|remitame) (?:(?:con|a) )?(?:un |una |el |la )?(?:asesor|asesora|agente|humano|persona real|persona)$/,
+    ];
+    if (directCommands.some(pattern => pattern.test(normalized))) return true;
+
+    return /\b(?:quiero|necesito|deseo|solicito|busco)\s+(?:(?:a|con)\s+)?(?:un\s+|una\s+|el\s+|la\s+)?(?:asesor|asesora|agente|humano|persona real|persona)\b/.test(normalized)
+      || /\b(?:quiero|necesito|deseo|quisiera|prefiero|puedo|podria)\s+(?:hablar|chatear|comunicarme|contactar|que me atienda)\s+(?:con\s+)?(?:un\s+|una\s+|el\s+|la\s+)?(?:asesor|asesora|agente|humano|persona real)\b/.test(normalized)
+      || /\b(?:que me atienda|hablar con)\s+(?:alguien|una persona|un humano|un asesor|una asesora|un agente)\b/.test(normalized);
+  }
+
+  private replyPromisesAdvisorHandoff(replyText: string): boolean {
+    const normalized = this.normalizeSpanishLookup(replyText);
+    return /\b(?:un asesor|una asesora|un agente|nuestro equipo)\b.{0,80}\b(?:atendera|respondera|continuara|revisara|confirmara|contactara|ayudara|tomara tu chat)\b/.test(normalized)
+      || /\b(?:te paso|te pasare|voy a pasarte|te transfiero|te transferire|voy a transferirte|te derivo|voy a derivarte|te comunico|te comunicare|voy a comunicarte|te conecto|te conectare|voy a conectarte|te pongo en contacto|voy a ponerte en contacto)\b.{0,80}\b(?:asesor|asesora|asesores|agente|persona|equipo)\b/.test(normalized);
+  }
+
+  private isExplicitBotResumeRequest(userText: string): boolean {
+    const normalized = this.normalizeSpanishLookup(userText)
+      .replace(/[^a-z0-9\s]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    return ['bot', 'salir', 'reiniciar', 'menu'].includes(normalized)
+      || /^(?:volver|regresar|continuar) (?:con )?(?:el )?bot$/.test(normalized)
+      || /^(?:activar|reactivar) (?:el )?bot$/.test(normalized);
+  }
+
+  private async requestAdvisorHandoff(session: any, customerReply: string, reason: string): Promise<boolean> {
+    const { cleanText } = this.parseAdvisorTransferReply(customerReply);
+    const reply = cleanText || 'Gracias. Un asesor continuará la atención contigo en este chat.';
+    // Persistir la espera antes de llamar a Meta cierra la carrera entre dos
+    // mensajes simultáneos: solo el primero reserva el chat y envía el aviso.
+    // Además, una falla externa nunca puede borrar la solicitud humana.
+    const marked = await this.prisma.whatsAppSession.updateMany({
+      where: { id: session.id, assignedToId: null, waitingForAdvisor: false },
+      data: { waitingForAdvisor: true },
+    });
+    if (marked.count === 0) {
+      const current = await this.prisma.whatsAppSession.findUnique({
+        where: { id: session.id },
+        include: { assignedTo: { select: { id: true, name: true } } },
+      });
+      if (current?.assignedToId || current?.waitingForAdvisor) return true;
+      this.logger.error(`No fue posible persistir la derivación de ${session.phone}; no se enviará una confirmación engañosa al cliente.`);
+      return false;
+    }
+
+    const queuedPayload = {
+      id: session.id,
+      sessionId: session.id,
+      phone: session.phone,
+      customerName: session.customerName,
+      waitingForAdvisor: true,
+      assignedToId: null,
+      assignedTo: null,
+      lastMessageAt: session.lastMessageAt,
+      reason,
+      noticePending: true,
+    };
+    // La alerta operativa depende solo de la base de datos. Se emite antes de
+    // esperar a Meta para que una caída externa nunca oculte el chat pendiente.
+    this.socketGateway.emitWhatsApp('whatsappAgentRequest', queuedPayload);
+    this.socketGateway.emitWhatsApp('whatsappSessionUpdated', queuedPayload);
+
+    let sent: any;
+    try {
+      sent = await this.sendMessage(
+        session.phone,
+        reply,
+        undefined,
+        undefined,
+        session.id,
+      );
+    } catch (error) {
+      this.logger.warn(`Falló el intento de avisar la derivación a ${session.phone}; la solicitud humana permanece en la cola.`);
+      sent = { sent: false, reason: 'api_error' };
+    }
+    const noticeSent = Boolean(sent?.sent);
+    if (!noticeSent) {
+      this.logger.warn(`Meta no confirmó el aviso de derivación para ${session.phone} (${sent?.reason || 'sin detalle'}); la solicitud humana sí se conservará en la cola.`);
+    }
+
+    // Publicar el resultado del aviso con el estado más reciente. Si alguien
+    // reclamó mientras Meta respondía, este delta conserva esa asignación.
+    const updated = await this.prisma.whatsAppSession.findUnique({
+      where: { id: session.id },
+      include: { assignedTo: { select: { id: true, name: true } } },
+    }).catch(() => null);
+
+    const payload = {
+      ...queuedPayload,
+      phone: updated?.phone || session.phone,
+      customerName: updated?.customerName || session.customerName,
+      waitingForAdvisor: updated?.waitingForAdvisor ?? true,
+      assignedToId: updated?.assignedToId ?? session.assignedToId ?? null,
+      assignedTo: updated?.assignedTo ?? session.assignedTo ?? null,
+      lastMessageAt: updated?.lastMessageAt || session.lastMessageAt,
+      noticePending: false,
+      noticeSent,
+      noticeFailureReason: noticeSent ? null : (sent?.reason || 'unknown'),
+    };
+    this.socketGateway.emitWhatsApp('whatsappSessionUpdated', payload);
+    this.logger.log(`Conversación ${session.phone} derivada a un asesor (${reason}).`);
+    return true;
+  }
+
+  private async resumeChatbotForSession(session: any): Promise<any> {
+    const updated = await this.prisma.whatsAppSession.update({
+      where: { id: session.id },
+      data: { waitingForAdvisor: false },
+      include: { assignedTo: { select: { id: true, name: true } } },
+    });
+    const payload = {
+      id: session.id,
+      sessionId: session.id,
+      phone: updated?.phone || session.phone,
+      assignedToId: updated?.assignedToId ?? session.assignedToId ?? null,
+      assignedTo: updated?.assignedTo ?? session.assignedTo ?? null,
+      waitingForAdvisor: false,
+      lastMessageAt: updated?.lastMessageAt || session.lastMessageAt,
+    };
+    this.socketGateway.emitWhatsApp('chatSessionAssigned', payload);
+    this.socketGateway.emitWhatsApp('whatsappSessionUpdated', payload);
+    return updated || { ...session, waitingForAdvisor: false };
+  }
+
   private async handleChatbot(session: any, userText: string, previousLastMessageAt?: Date | null) {
     try {
       // El cierre programado es una respuesta operativa, independiente de la
@@ -3740,46 +3889,22 @@ The Villa Dog • Montería`;
         return;
       }
 
-      // Si la sesión estuvo inactiva por más de 15 minutos en estado de espera del chatbot (sin asesor), reiniciamos
-      const fifteenMinutesAgo = new Date(Date.now() - 15 * 60 * 1000);
-      const lastActivity = previousLastMessageAt ? new Date(previousLastMessageAt) : new Date(0);
-      if (session.waitingForAdvisor && (!previousLastMessageAt || lastActivity < fifteenMinutesAgo)) {
-        this.logger.log(`Sesión ${session.phone} inactiva por más de 15 minutos. Reiniciando estado de espera.`);
-        session = await this.prisma.whatsAppSession.update({
-          where: { id: session.id },
-          data: {
-            waitingForAdvisor: false,
-          },
-          include: { assignedTo: { select: { id: true, name: true } } },
-        });
-        
-        // Notificar al frontend vía socket
-        this.socketGateway.emitWhatsApp('chatSessionAssigned', {
-          sessionId: session.id,
-          assignedToId: session.assignedToId,
-          assignedTo: session.assignedTo,
-          waitingForAdvisor: false,
-        });
-      }
-
-      const normalized = userText.trim().toLowerCase();
-
-      // Si el usuario escribe explícitamente "bot", "salir" o "reiniciar" para reactivar el chatbot
-      if (session.waitingForAdvisor && (normalized === 'bot' || normalized === 'salir' || normalized === 'reiniciar' || normalized === 'menu' || normalized === 'menú')) {
+      // Una solicitud de asesor no expira por tiempo. Solo una persona o el
+      // propio cliente con un comando explícito devuelve el chat al bot.
+      if (session.waitingForAdvisor && this.isExplicitBotResumeRequest(userText)) {
         this.logger.log(`Usuario solicitó reactivar el chatbot. Liberando estado de espera.`);
-        session = await this.prisma.whatsAppSession.update({
-          where: { id: session.id },
-          data: { waitingForAdvisor: false },
-        });
-
-        // Notificar al frontend vía socket
-        this.socketGateway.emitWhatsApp('chatSessionAssigned', {
-          sessionId: session.id,
-          assignedToId: session.assignedToId,
-          waitingForAdvisor: false,
-        });
+        session = await this.resumeChatbotForSession(session);
       } else if (session.waitingForAdvisor) {
         this.logger.log(`Sesión ${session.phone} está en espera de un asesor. Chatbot permanece en silencio.`);
+        return;
+      }
+
+      if (this.isExplicitAdvisorRequest(userText)) {
+        await this.requestAdvisorHandoff(
+          session,
+          'Claro. En un momento uno de nuestros asesores continuará la atención contigo por este chat.',
+          'solicitud_expresa_cliente',
+        );
         return;
       }
 
@@ -3901,6 +4026,9 @@ ${dynamicCategoriesString}
 
     7. FINALIZACIÓN Y TRANSFERENCIA:
        Si el cliente ya entregó los productos y todos los datos necesarios (o si recoge y ya dio el método de pago), responde que un asesor revisará y confirmará el resumen e incluye [TRANSFERIR_ASESOR]. Nunca afirmes que el pedido ya fue creado porque se crea desde el panel.
+       Si el cliente pide hablar con una persona, un asesor o atención humana, incluye [TRANSFERIR_ASESOR].
+       Si una INSTRUCCIÓN ADICIONAL CONFIGURADA POR ADMINISTRACIÓN ordena derivar al asesor para el caso actual, debes incluir [TRANSFERIR_ASESOR].
+       [TRANSFERIR_ASESOR] es una señal interna obligatoria: colócala al final de tu respuesta cuando corresponda, no la expliques ni la presentes como texto para el cliente. El sistema la retirará antes de enviar el mensaje.
 
 ${trainingExamplesBlock || ''}
 Historial de la conversación reciente:
@@ -4125,8 +4253,9 @@ Restaurante (Tú):
 
       replyText = replyText.trim();
 
-      let shouldTransfer = replyText.includes('[TRANSFERIR_ASESOR]');
-      let cleanReply = replyText.replace('[TRANSFERIR_ASESOR]', '').trim();
+      const parsedTransfer = this.parseAdvisorTransferReply(replyText);
+      let shouldTransfer = parsedTransfer.shouldTransfer || this.replyPromisesAdvisorHandoff(parsedTransfer.cleanText);
+      let cleanReply = parsedTransfer.cleanText;
 
       const explicitNeighborhood = this.extractExplicitNeighborhood([userText]);
       if (explicitNeighborhood) {
@@ -4171,23 +4300,10 @@ Restaurante (Tú):
         shouldTransfer = true;
       }
 
-      if (cleanReply) {
-        await this.sendMessage(session.phone, cleanReply);
-      }
-
       if (shouldTransfer) {
-        this.logger.log(`Gemini solicitó transferir cliente ${session.phone} a un asesor.`);
-        await this.prisma.whatsAppSession.update({
-          where: { id: session.id },
-          data: { waitingForAdvisor: true },
-        });
-
-        this.socketGateway.emitWhatsApp('whatsappAgentRequest', {
-          sessionId: session.id,
-          phone: session.phone,
-          customerName: session.customerName,
-          waitingForAdvisor: true,
-        });
+        await this.requestAdvisorHandoff(session, cleanReply, 'respuesta_gemini');
+      } else if (cleanReply) {
+        await this.sendMessage(session.phone, cleanReply, undefined, undefined, session.id);
       }
 
     } catch (err) {
@@ -4211,46 +4327,22 @@ Restaurante (Tú):
         return;
       }
 
-      // Si la sesión estuvo inactiva por más de 15 minutos en estado de espera del chatbot (sin asesor), reiniciamos
-      const inactivityThreshold = new Date(Date.now() - 15 * 60 * 1000);
-      const lastActivity = previousLastMessageAt ? new Date(previousLastMessageAt) : new Date(0);
-      if (session.waitingForAdvisor && (!previousLastMessageAt || lastActivity < inactivityThreshold)) {
-        this.logger.log(`Sesión ${session.phone} inactiva por más de 15 minutos. Reiniciando estado de espera.`);
-        session = await this.prisma.whatsAppSession.update({
-          where: { id: session.id },
-          data: {
-            waitingForAdvisor: false,
-          },
-          include: { assignedTo: { select: { id: true, name: true } } },
-        });
-        
-        // Notificar al frontend vía socket
-        this.socketGateway.emitWhatsApp('chatSessionAssigned', {
-          sessionId: session.id,
-          assignedToId: session.assignedToId,
-          assignedTo: session.assignedTo,
-          waitingForAdvisor: false,
-        });
-      }
-
       const normalized = userText.trim().toLowerCase();
 
-      // Si el usuario escribe explícitamente "bot", "salir" o "reiniciar" para reactivar el chatbot
-      if (session.waitingForAdvisor && (normalized === 'bot' || normalized === 'salir' || normalized === 'reiniciar' || normalized === 'menu' || normalized === 'menú')) {
+      if (session.waitingForAdvisor && this.isExplicitBotResumeRequest(userText)) {
         this.logger.log(`Usuario solicitó reactivar el chatbot. Liberando estado de espera.`);
-        session = await this.prisma.whatsAppSession.update({
-          where: { id: session.id },
-          data: { waitingForAdvisor: false },
-        });
-
-        // Notificar al frontend vía socket
-        this.socketGateway.emitWhatsApp('chatSessionAssigned', {
-          sessionId: session.id,
-          assignedToId: session.assignedToId,
-          waitingForAdvisor: false,
-        });
+        session = await this.resumeChatbotForSession(session);
       } else if (session.waitingForAdvisor) {
         this.logger.log(`Sesión ${session.phone} está en espera de un asesor. Chatbot permanece en silencio.`);
+        return;
+      }
+
+      if (this.isExplicitAdvisorRequest(userText)) {
+        await this.requestAdvisorHandoff(
+          session,
+          'Claro. En un momento uno de nuestros asesores continuará la atención contigo por este chat.',
+          'solicitud_expresa_cliente_contingencia',
+        );
         return;
       }
 
@@ -4278,38 +4370,14 @@ Restaurante (Tú):
           const modifyText = 
             `Entendido. Por favor escribe a continuación detalladamente los cambios que deseas realizar en tu pedido *#${activeOrder.orderNumber}* (por ejemplo: "quiero agregar una porción de papas" o "cambiar gaseosa por jugo").\n\n` +
             `Uno de nuestros asesores tomará tu solicitud de inmediato y actualizará tu pedido. ¡Gracias! �`;
-          await this.sendMessage(session.phone, modifyText);
-
-          await this.prisma.whatsAppSession.update({
-            where: { id: session.id },
-            data: { waitingForAdvisor: true },
-          });
-
-          this.socketGateway.emitWhatsApp('whatsappAgentRequest', {
-            sessionId: session.id,
-            phone: session.phone,
-            customerName: session.customerName,
-            waitingForAdvisor: true,
-          });
+          await this.requestAdvisorHandoff(session, modifyText, 'modificar_pedido_activo');
           return;
         }
 
         if (normalized === '6') {
           const advisorText = 
             `De acuerdo. En un momento uno de nuestros asesores tomará tu chat personalmente para ayudarte con tu pedido *#${activeOrder.orderNumber}*. ¡Gracias por tu paciencia! �`;
-          await this.sendMessage(session.phone, advisorText);
-
-          await this.prisma.whatsAppSession.update({
-            where: { id: session.id },
-            data: { waitingForAdvisor: true },
-          });
-
-          this.socketGateway.emitWhatsApp('whatsappAgentRequest', {
-            sessionId: session.id,
-            phone: session.phone,
-            customerName: session.customerName,
-            waitingForAdvisor: true,
-          });
+          await this.requestAdvisorHandoff(session, advisorText, 'asesor_pedido_activo');
           return;
         }
 
@@ -4317,19 +4385,7 @@ Restaurante (Tú):
           const cancelRequestText = 
             `Entendido. Para solicitar la cancelación de tu pedido *#${activeOrder.orderNumber}*, por favor indícanos brevemente el motivo de la cancelación.\n\n` +
             `Un asesor revisará tu solicitud de inmediato y te confirmará la cancelación. ⚠`;
-          await this.sendMessage(session.phone, cancelRequestText);
-
-          await this.prisma.whatsAppSession.update({
-            where: { id: session.id },
-            data: { waitingForAdvisor: true },
-          });
-
-          this.socketGateway.emitWhatsApp('whatsappAgentRequest', {
-            sessionId: session.id,
-            phone: session.phone,
-            customerName: session.customerName,
-            waitingForAdvisor: true,
-          });
+          await this.requestAdvisorHandoff(session, cancelRequestText, 'cancelar_pedido_activo');
           return;
         }
 
@@ -4351,17 +4407,7 @@ Restaurante (Tú):
             `• *Pedido:* #${activeOrder.orderNumber}\n` +
             `• *Estado:* ${statusText}\n\n` +
             `En un momento uno de nuestros asesores tomará tu chat personalmente. Si deseas consultar o cambiar algo de tu pedido, déjanos tu mensaje aquí y lo atenderemos de inmediato. ¡Muchas gracias! 😊`;
-          await this.sendMessage(session.phone, orderMenuText);
-          await this.prisma.whatsAppSession.update({
-            where: { id: session.id },
-            data: { waitingForAdvisor: true },
-          });
-          this.socketGateway.emitWhatsApp('whatsappAgentRequest', {
-            sessionId: session.id,
-            phone: session.phone,
-            customerName: session.customerName,
-            waitingForAdvisor: true,
-          });
+          await this.requestAdvisorHandoff(session, orderMenuText, 'consulta_pedido_activo');
           return;
         }
         
@@ -4370,19 +4416,7 @@ Restaurante (Tú):
           `He recibido tu mensaje respecto a tu pedido *#${activeOrder.orderNumber}*:\n\n` +
           `_"${userText}"_\n\n` +
           `He notificado a los asesores de inmediato para ayudarte personalmente. ¡Muchas gracias! �`;
-        await this.sendMessage(session.phone, directChangesText);
-
-        await this.prisma.whatsAppSession.update({
-          where: { id: session.id },
-          data: { waitingForAdvisor: true },
-        });
-
-        this.socketGateway.emitWhatsApp('whatsappAgentRequest', {
-          sessionId: session.id,
-          phone: session.phone,
-          customerName: session.customerName,
-          waitingForAdvisor: true,
-        });
+        await this.requestAdvisorHandoff(session, directChangesText, 'mensaje_sobre_pedido_activo');
         return;
       }
       
@@ -4516,17 +4550,7 @@ Restaurante (Tú):
           `• *Dirección exacta* de entrega (el barrio es opcional)\n` +
           `• *Método de pago* (Efectivo / Transferencia)\n\n` +
           `Uno de nuestros asesores tomará tu pedido de inmediato. ¡Muchas gracias! 😊`;
-        await this.sendMessage(session.phone, orderTemplateText);
-        await this.prisma.whatsAppSession.update({
-          where: { id: session.id },
-          data: { waitingForAdvisor: true },
-        });
-        this.socketGateway.emitWhatsApp('whatsappAgentRequest', {
-          sessionId: session.id,
-          phone: session.phone,
-          customerName: session.customerName,
-          waitingForAdvisor: true,
-        });
+        await this.requestAdvisorHandoff(session, orderTemplateText, 'inicio_pedido_contingencia');
         return;
       }
 
@@ -4559,20 +4583,7 @@ Restaurante (Tú):
       if (normalized === '5') {
         const agentText = 
           `Entendido. En un momento uno de nuestros asesores tomará tu chat y te atenderá personalmente. ¡Gracias por escribirnos! �`;
-        await this.sendMessage(session.phone, agentText);
-        
-        await this.prisma.whatsAppSession.update({
-          where: { id: session.id },
-          data: { waitingForAdvisor: true },
-        });
-
-        // Notificar a todos los asesores conectados
-        this.socketGateway.emitWhatsApp('whatsappAgentRequest', {
-          sessionId: session.id,
-          phone: session.phone,
-          customerName: session.customerName,
-          waitingForAdvisor: true,
-        });
+        await this.requestAdvisorHandoff(session, agentText, 'opcion_asesor_contingencia');
         return;
       }
 
@@ -4612,13 +4623,14 @@ Restaurante (Tú):
         // Detectar si ya trae los campos de la plantilla (Nombre:, Dirección:, Barrio:, Pedido:)
         const hasTemplateFields = /nombre:/i.test(userText) && (/direcci[oó]n:/i.test(userText) || /barrio:/i.test(userText));
         
+        let handoffReply = '';
         if (hasTemplateFields) {
           // El cliente ya llenó la plantilla completa, enviar directo al asesor
           const confirmText = 
             `¡Perfecto!  Hemos recibido tu pedido:\n\n` +
             `${userText}\n\n` +
             `Uno de nuestros asesores tomará tu chat de inmediato para confirmar el valor total y enviártelo. ¡Gracias! `;
-          await this.sendMessage(session.phone, confirmText);
+          handoffReply = confirmText;
         } else {
           // El cliente escribió lo que quiere pero sin plantilla, enviarle la plantilla pre-llenada
           const hasPhoneAsName = session.customerName && /^\d+$/.test(session.customerName.replace(/\D/g, ''));
@@ -4634,20 +4646,9 @@ Restaurante (Tú):
             `*Método de Pago:* (Efectivo / Nequi / Tarjeta)\n` +
             `*Pedido:* ${userText}\n\n` +
             `¡Uno de nuestros asesores tomará tu chat de inmediato para confirmar el valor total y enviártelo! `;
-          await this.sendMessage(session.phone, templateText);
+          handoffReply = templateText;
         }
-        
-        await this.prisma.whatsAppSession.update({
-          where: { id: session.id },
-          data: { waitingForAdvisor: true },
-        });
-
-        this.socketGateway.emitWhatsApp('whatsappAgentRequest', {
-          sessionId: session.id,
-          phone: session.phone,
-          customerName: session.customerName,
-          waitingForAdvisor: true,
-        });
+        await this.requestAdvisorHandoff(session, handoffReply, 'pedido_detectado_contingencia');
         return;
       }
 
@@ -4655,17 +4656,7 @@ Restaurante (Tú):
       const fallbackText = 
         `¡Hola! 👋 Recibimos tu mensaje en *The Villa Dog* 🌭🔥\n\n` +
         `En un momento uno de nuestros asesores te responderá personalmente para tomar tu pedido o resolver tus dudas. ¡Muchas gracias por escribirnos! 😊`;
-      await this.sendMessage(session.phone, fallbackText);
-      await this.prisma.whatsAppSession.update({
-        where: { id: session.id },
-        data: { waitingForAdvisor: true },
-      });
-      this.socketGateway.emitWhatsApp('whatsappAgentRequest', {
-        sessionId: session.id,
-        phone: session.phone,
-        customerName: session.customerName,
-        waitingForAdvisor: true,
-      });
+      await this.requestAdvisorHandoff(session, fallbackText, 'fallback_contingencia');
       return;
     } catch (error) {
       this.logger.error(`Error en chatbot para ${session.phone}:`, error);
@@ -7178,6 +7169,9 @@ INSTRUCCIONES CRÍTICAS:
 - ${audioMenuLinkRule}
 - SI EL CLIENTE PREGUNTA QUÉ LE RECOMIENDAS O PIDE SUGERENCIA EN EL AUDIO: No mandes la lista de categorías. Recomienda con entusiasmo 2 o 3 platos estrellas usando únicamente el menú oficial.
 - SI EL CLIENTE MENCIONA UNA CATEGORÍA ESPECÍFICA (ej: "pizzas", "perros", "hamburguesas", "salchipapas"): Muestra los platos y precios de esa categoría en el chat.
+- Si el cliente pide hablar con una persona, un asesor o atención humana, incluye [TRANSFERIR_ASESOR].
+- Si una INSTRUCCIÓN ADICIONAL CONFIGURADA POR ADMINISTRACIÓN ordena derivar al asesor para el caso actual, incluye [TRANSFERIR_ASESOR].
+- [TRANSFERIR_ASESOR] es una señal interna. Escríbela al final cuando corresponda, no la expliques; el sistema la retirará antes de enviar la respuesta.
 
 HORARIO CONFIGURADO:
 ${restaurantHours || 'Horario por confirmar con un asesor.'}
@@ -7260,6 +7254,8 @@ ${menuSummary}
 
       if (replyText) {
         replyText = replyText.replace(/[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{1F1E0}-\u{1F1FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]/gu, '').trim();
+        const parsedTransfer = this.parseAdvisorTransferReply(replyText);
+        replyText = parsedTransfer.cleanText;
         
         if (digitalMenuUrl && !replyText.includes(digitalMenuUrl)) {
           const lowerText = replyText.toLowerCase();
@@ -7268,8 +7264,11 @@ ${menuSummary}
           }
         }
 
-        await this.sendMessage(session.phone, replyText);
-        return true;
+        if (parsedTransfer.shouldTransfer || this.replyPromisesAdvisorHandoff(replyText)) {
+          return this.requestAdvisorHandoff(session, replyText, 'respuesta_audio_gemini');
+        }
+        const sent = await this.sendMessage(session.phone, replyText, undefined, undefined, session.id);
+        return Boolean(sent?.sent);
       }
       return false;
     } catch (err) {
@@ -7300,28 +7299,16 @@ ${menuSummary}
         }
 
         const text = `He recibido tu mensaje de voz. En un momento uno de nuestros asesores lo escuchara y te respondera personalmente. Gracias por tu paciencia.`;
-        await this.sendMessage(session.phone, text);
+        await this.requestAdvisorHandoff(session, text, 'audio_sin_respuesta_ia');
       } else if (type === 'image') {
         const text = `He recibido tu imagen. La he compartido con nuestros asesores para que la revisen de inmediato. Gracias.`;
-        await this.sendMessage(session.phone, text);
+        await this.requestAdvisorHandoff(session, text, 'imagen_recibida');
       } else if (type === 'document') {
         const text = `He recibido tu documento. Lo he compartido con nuestros asesores para que lo revisen. Gracias.`;
-        await this.sendMessage(session.phone, text);
+        await this.requestAdvisorHandoff(session, text, 'documento_recibido');
       } else {
         return;
       }
-
-      await this.prisma.whatsAppSession.update({
-        where: { id: session.id },
-        data: { waitingForAdvisor: true },
-      });
-
-      this.socketGateway.emitWhatsApp('whatsappAgentRequest', {
-        sessionId: session.id,
-        phone: session.phone,
-        customerName: session.customerName,
-        waitingForAdvisor: true,
-      });
     } catch (err) {
       this.logger.error('Error en chatbot multimedia:', err);
     }

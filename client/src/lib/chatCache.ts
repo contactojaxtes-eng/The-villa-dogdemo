@@ -9,6 +9,7 @@ export interface CachedSession {
   assignedToId?: string | null
   assignedTo?: { id: string; name: string } | null
   unreadCount?: number
+  waitingForAdvisor?: boolean
   activeOrder?: { id: string; orderNumber: number; status: string; total?: number } | null
   messages?: any[]
 }
