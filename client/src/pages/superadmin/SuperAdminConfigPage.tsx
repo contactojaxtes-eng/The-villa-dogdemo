@@ -100,6 +100,24 @@ interface GeminiModel {
   supportedGenerationMethods: string[]
 }
 
+interface AutoTrainingExample {
+  context: string
+  clientPrompt: string
+  advisorResponse: string
+}
+
+interface AutoTrainingConfig {
+  enabled: boolean
+  lastRun: string | null
+  examples: AutoTrainingExample[]
+  stats?: {
+    ordersAnalyzed: number
+    sessionsAnalyzed: number
+    examplesCount: number
+    updatedAt: string
+  }
+}
+
 interface GeminiModelInfo {
   provider: string
   keySuffix: string | null
@@ -259,6 +277,10 @@ export default function SuperAdminConfigPage() {
   const [testResult, setTestResult] = useState<GeminiTestResult | null>(null)
   const [sandboxDraft, setSandboxDraft] = useState('')
   const [sandboxRule, setSandboxRule] = useState('')
+  const [polishingRule, setPolishingRule] = useState(false)
+  const [autoTraining, setAutoTraining] = useState<AutoTrainingConfig | null>(null)
+  const [runningAutoTraining, setRunningAutoTraining] = useState(false)
+  const [togglingAutoTraining, setTogglingAutoTraining] = useState(false)
   const [sandboxMessages, setSandboxMessages] = useState<SandboxMessage[]>([])
   const [sandboxError, setSandboxError] = useState('')
   const [sendingSandbox, setSendingSandbox] = useState(false)
@@ -286,11 +308,13 @@ export default function SuperAdminConfigPage() {
     Promise.all([
       api.get<SmtpConfig>('/superadmin/config/smtp'),
       api.get<WhatsappCoreConfig>('/whatsapp/settings'),
+      api.get<AutoTrainingConfig>('/whatsapp/auto-training').catch(() => null),
     ])
-      .then(([smtpData, whatsappData]) => {
+      .then(([smtpData, whatsappData, trainingData]) => {
         if (!active) return
         setSmtp(smtpData)
         setWhatsappResponse(whatsappData)
+        if (trainingData) setAutoTraining(trainingData)
       })
       .catch(error => alerts.error('No se pudo cargar la configuración', getErrorMessage(error, 'Inténtalo nuevamente.')))
       .finally(() => active && setLoading(false))
@@ -494,6 +518,73 @@ export default function SuperAdminConfigPage() {
       setSandboxError(getErrorMessage(error, 'No se pudo completar la prueba.'))
     } finally {
       setSendingSandbox(false)
+    }
+  }
+
+  const polishRule = async () => {
+    const text = sandboxRule.trim()
+    if (!text || polishingRule) return
+    setPolishingRule(true)
+    try {
+      const result = await api.post<{ success: boolean; polishedRule: string }>('/whatsapp/polish-rule', {
+        text,
+        model: wa.geminiModel,
+      })
+      if (result.success && result.polishedRule) {
+        setSandboxRule(result.polishedRule.replace(/^-\s*/, ''))
+        alerts.toast('✨ Regla pulida y optimizada con IA')
+      }
+    } catch (error) {
+      alerts.error('No se pudo pulir la regla', getErrorMessage(error, 'Inténtalo nuevamente.'))
+    } finally {
+      setPolishingRule(false)
+    }
+  }
+
+  const toggleAutoTraining = async () => {
+    if (togglingAutoTraining) return
+    const nextState = !autoTraining?.enabled
+    setTogglingAutoTraining(true)
+    try {
+      await api.post('/whatsapp/auto-training/toggle', { enabled: nextState })
+      setAutoTraining(current => current ? { ...current, enabled: nextState } : { enabled: nextState, lastRun: null, examples: [] })
+      alerts.success(nextState ? 'Auto-entrenamiento nocturno activado' : 'Auto-entrenamiento nocturno pausado')
+    } catch (error) {
+      alerts.error('Error al cambiar auto-entrenamiento', getErrorMessage(error, 'Inténtalo de nuevo.'))
+    } finally {
+      setTogglingAutoTraining(false)
+    }
+  }
+
+  const runAutoTrainingNow = async () => {
+    if (runningAutoTraining) return
+    setRunningAutoTraining(true)
+    try {
+      const res = await api.post<{
+        success: boolean
+        examples: AutoTrainingExample[]
+        ordersAnalyzed: number
+        sessionsAnalyzed: number
+        updatedAt: string
+      }>('/whatsapp/auto-training/run')
+      if (res.success) {
+        setAutoTraining({
+          enabled: autoTraining?.enabled ?? true,
+          lastRun: res.updatedAt,
+          examples: res.examples,
+          stats: {
+            ordersAnalyzed: res.ordersAnalyzed,
+            sessionsAnalyzed: res.sessionsAnalyzed,
+            examplesCount: res.examples.length,
+            updatedAt: res.updatedAt,
+          }
+        })
+        alerts.success('¡Entrenamiento completado!', `Se actualizaron ${res.examples.length} ejemplos maestros a partir de ${res.ordersAnalyzed} pedidos y chats reales.`)
+      }
+    } catch (error) {
+      alerts.error('No se pudo completar el entrenamiento', getErrorMessage(error, 'Verifica las llaves de Gemini e inténtalo nuevamente.'))
+    } finally {
+      setRunningAutoTraining(false)
     }
   }
 
@@ -803,11 +894,46 @@ export default function SuperAdminConfigPage() {
             <Button type="button" onClick={() => void sendSandboxMessage()} disabled={sendingSandbox || !sandboxDraft.trim()} className="mt-3 h-11 w-full rounded-xl bg-[var(--accent)] font-black text-[var(--accent-fg)]">
               {sendingSandbox ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Send className="mr-2 h-4 w-4" />} {sendingSandbox ? 'Respondiendo…' : 'Enviar mensaje de prueba'}
             </Button>
-            {sandboxMessages.some(message => message.role === 'model') && <div className="mt-4 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-3">
-              <label className="block"><span className="mb-1.5 block text-xs font-black text-[var(--text-primary)]">¿Qué debería hacer mejor la IA?</span><textarea value={sandboxRule} maxLength={700} onChange={event => setSandboxRule(event.target.value)} className={cn(textAreaClass, 'min-h-20')} placeholder="Ejemplo: si el cliente pide Manzana sin tamaño, pregunta si la quiere de vidrio 250 ml o de 400 ml." /></label>
-              <Button type="button" variant="outline" onClick={() => void addSandboxRule()} disabled={savingAi || !sandboxRule.trim()} className="mt-2 h-9 rounded-xl text-xs font-bold">{savingAi ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Plus className="mr-1.5 h-4 w-4" />} Agregar y guardar regla</Button>
-              <p className="mt-2 text-[11px] text-[var(--text-muted)]">La regla se guarda automáticamente en el servidor y se aplica de inmediato tanto al bot de WhatsApp como a las pruebas de chat.</p>
-            </div>}
+            <div className="mt-4 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-3.5">
+              <label className="block">
+                <span className="mb-1.5 flex items-center justify-between text-xs font-black text-[var(--text-primary)]">
+                  <span>¿Qué debería hacer mejor la IA? (Escribe o pega chat)</span>
+                  <span className="text-[10px] font-normal text-[var(--text-muted)]">{sandboxRule.length}/700</span>
+                </span>
+                <textarea
+                  value={sandboxRule}
+                  maxLength={700}
+                  onChange={event => setSandboxRule(event.target.value)}
+                  className={cn(textAreaClass, 'min-h-20')}
+                  placeholder="Escribe una regla informal, queja o pega un fragmento de chat. Ejemplo: el cliente pidió hamburguesa sin tártara y le puso tártara."
+                />
+              </label>
+              <div className="mt-2.5 flex flex-wrap items-center gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => void polishRule()}
+                  disabled={polishingRule || !sandboxRule.trim()}
+                  className="h-9 rounded-xl border-amber-500/30 text-xs font-bold text-amber-600 hover:bg-amber-500/10 dark:text-amber-400"
+                >
+                  {polishingRule ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Sparkles className="mr-1.5 h-4 w-4 text-amber-500" />}
+                  Pulir con IA
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => void addSandboxRule()}
+                  disabled={savingAi || !sandboxRule.trim()}
+                  className="h-9 rounded-xl text-xs font-bold"
+                >
+                  {savingAi ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Plus className="mr-1.5 h-4 w-4" />}
+                  Agregar y guardar regla
+                </Button>
+              </div>
+              <p className="mt-2 text-[11px] leading-relaxed text-[var(--text-muted)]">
+                Escribe en tus propias palabras o pega un chat. Pulsa <strong>Pulir con IA</strong> para formular una regla concisa y luego <strong>Agregar y guardar regla</strong> para protegerla permanentemente en el servidor.
+              </p>
+            </div>
             <div className="mt-5 border-t border-[var(--border-subtle)] pt-4">
               <div className="flex flex-wrap items-center justify-between gap-2"><div><p className="text-xs font-black text-[var(--text-primary)]">Comprobar llaves</p><p className="text-[11px] text-[var(--text-muted)]">Verifica cada llave por separado con una respuesta corta.</p></div><Button type="button" variant="outline" onClick={() => void testGemini()} disabled={testingGemini} className="h-9 rounded-xl text-xs font-bold">{testingGemini ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Server className="mr-2 h-4 w-4" />} Probar conexión</Button></div>
               {testResult && (
@@ -850,6 +976,97 @@ export default function SuperAdminConfigPage() {
               )}
             </div>
           </Card>
+          <Card className="min-w-0 rounded-2xl border-[var(--border-subtle)] bg-[var(--bg-panel)] p-4 shadow-sm sm:p-5 xl:col-span-2">
+            <div className="flex flex-col gap-3 border-b border-[var(--border-subtle)] pb-4 sm:flex-row sm:items-center sm:justify-between">
+              <SectionTitle
+                icon={Sparkles}
+                title="Auto-entrenamiento diario inteligente (3:00 AM)"
+                description="Revisa los pedidos entregados del día y refresca los 5 mejores ejemplos de atención real para que la IA amanezca más inteligente."
+              />
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={autoTraining?.enabled ?? true}
+                  onClick={() => void toggleAutoTraining()}
+                  disabled={togglingAutoTraining}
+                  className={cn(
+                    'inline-flex h-9 shrink-0 items-center gap-2 rounded-xl border px-3 text-xs font-bold transition disabled:opacity-50',
+                    autoTraining?.enabled
+                      ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-600'
+                      : 'border-[var(--border-subtle)] bg-[var(--bg-elevated)] text-[var(--text-secondary)]'
+                  )}
+                >
+                  {togglingAutoTraining ? <Loader2 className="h-4 w-4 animate-spin" /> : <span className={cn('h-2.5 w-2.5 rounded-full', autoTraining?.enabled ? 'bg-emerald-500' : 'bg-slate-400')} />}
+                  {autoTraining?.enabled ? 'Entrenamiento activo (3:00 AM)' : 'Entrenamiento pausado'}
+                </button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => void runAutoTrainingNow()}
+                  disabled={runningAutoTraining}
+                  className="h-9 rounded-xl border-[var(--accent)]/30 text-xs font-bold text-[var(--accent)] hover:bg-[var(--accent)]/10"
+                >
+                  {runningAutoTraining ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-1.5 h-4 w-4" />}
+                  {runningAutoTraining ? 'Analizando chats…' : 'Entrenar con chats ahora'}
+                </Button>
+              </div>
+            </div>
+
+            <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-[11px] text-[var(--text-muted)]">
+              <p>
+                {autoTraining?.lastRun
+                  ? `Última actualización: ${new Date(autoTraining.lastRun).toLocaleString('es-CO')} · ${autoTraining.stats?.ordersAnalyzed || 0} pedidos entregados analizados`
+                  : 'Aún no se ha ejecutado el primer ciclo nocturno. Pulsa "Entrenar con chats ahora" para generar los primeros 5 ejemplos a partir de la base de datos.'}
+              </p>
+              <span className="rounded-md bg-emerald-500/10 px-2 py-0.5 text-[10px] font-black text-emerald-600">
+                Few-Shot Learning activo
+              </span>
+            </div>
+
+            <div className="mt-4">
+              <p className="text-xs font-black text-[var(--text-primary)]">
+                Ejemplos maestros aprendidos ({autoTraining?.examples?.length || 0}/5)
+              </p>
+              {(!autoTraining?.examples || autoTraining.examples.length === 0) ? (
+                <div className="mt-2 rounded-xl border border-dashed border-[var(--border-subtle)] bg-[var(--bg-elevated)]/50 p-6 text-center">
+                  <Sparkles className="mx-auto mb-2 h-6 w-6 text-amber-500" />
+                  <p className="text-xs font-bold text-[var(--text-primary)]">Sin ejemplos entrenados aún</p>
+                  <p className="mt-1 text-[11px] text-[var(--text-muted)]">
+                    Pulsa "Entrenar con chats ahora" para que Gemini extraiga los mejores casos de la base de datos.
+                  </p>
+                </div>
+              ) : (
+                <div className="mt-2 grid gap-2.5 sm:grid-cols-2 lg:grid-cols-3">
+                  {autoTraining.examples.map((item, index) => (
+                    <div key={index} className="flex flex-col justify-between rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-3">
+                      <div>
+                        <div className="flex items-center justify-between gap-2 mb-1.5">
+                          <span className="rounded-md bg-[var(--accent)]/10 px-1.5 py-0.5 text-[9px] font-black text-[var(--accent)]">
+                            Ejemplo #{index + 1}
+                          </span>
+                          <span className="truncate text-[10px] font-bold text-[var(--text-muted)]">
+                            {item.context || 'Atención'}
+                          </span>
+                        </div>
+                        <div className="space-y-1.5 text-[11px]">
+                          <div className="rounded-lg bg-[var(--bg-panel)] p-2">
+                            <span className="block text-[9px] font-black uppercase text-[var(--text-muted)]">Cliente:</span>
+                            <p className="text-[var(--text-primary)] italic">"{item.clientPrompt}"</p>
+                          </div>
+                          <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-2">
+                            <span className="block text-[9px] font-black uppercase text-emerald-600">Restaurante (The Villa Dog):</span>
+                            <p className="text-[var(--text-primary)]">{item.advisorResponse}</p>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </Card>
+
           <Card className="min-w-0 rounded-2xl border-[var(--border-subtle)] bg-[var(--bg-panel)] p-4 shadow-sm sm:p-5 xl:col-span-2">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <SectionTitle icon={Activity} title="Historial de solicitudes a Gemini" description="Compara el consumo diario de todas las llaves configuradas sin activar el bot." />

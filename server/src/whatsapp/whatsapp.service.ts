@@ -57,6 +57,7 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
   private readonly geminiMetricsDirty = new Set<string>();
   private readonly geminiMetricsInstanceId = randomUUID();
   private geminiMetricsFlushTimer?: ReturnType<typeof setInterval>;
+  private autoTrainingTimer?: ReturnType<typeof setInterval>;
 
   constructor(
     private prisma: PrismaService,
@@ -74,10 +75,15 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
     }
     this.geminiMetricsFlushTimer = setInterval(() => void this.flushGeminiMetrics().catch(() => {}), 5 * 60 * 1000);
     this.geminiMetricsFlushTimer.unref?.();
+    this.autoTrainingTimer = setInterval(() => void this.checkNightlyAutoTraining().catch(err => {
+      this.logger.warn('[AutoTraining] Error al verificar entrenamiento nocturno:', err);
+    }), 30 * 60 * 1000);
+    this.autoTrainingTimer.unref?.();
   }
 
   async onModuleDestroy() {
     if (this.geminiMetricsFlushTimer) clearInterval(this.geminiMetricsFlushTimer);
+    if (this.autoTrainingTimer) clearInterval(this.autoTrainingTimer);
     await this.flushGeminiMetrics().catch(() => {});
   }
 
@@ -3796,11 +3802,12 @@ The Villa Dog • Montería`;
     session: { customerName?: string | null };
     paymentInstruction: string;
     conversationPrompt: string;
+    trainingExamplesBlock?: string;
   }): string {
     const {
       customInstructionsBlock, recentOrdersSummary, menuSummary, restaurantHours,
       zonesSummary, menuGeneralRule, dynamicCategoriesString, menuCategoryRule,
-      menuFollowupRule, session, paymentInstruction, conversationPrompt,
+      menuFollowupRule, session, paymentInstruction, conversationPrompt, trainingExamplesBlock,
     } = context;
     return `
 Eres la persona encargada de atender de forma directa el WhatsApp del restaurante "The Villa Dog" en Montería, Colombia. Habla con un tono humano, cercano, natural y muy sencillo. Evita a toda costa sonar como un robot, una máquina de soporte técnico o un asistente de inteligencia artificial genérico. Habla como un asesor amable del restaurante.
@@ -3880,6 +3887,7 @@ ${dynamicCategoriesString}
     7. FINALIZACIÓN Y TRANSFERENCIA:
        Si el cliente ya entregó los productos y todos los datos necesarios (o si recoge y ya dio el método de pago), responde que un asesor revisará y confirmará el resumen e incluye [TRANSFERIR_ASESOR]. Nunca afirmes que el pedido ya fue creado porque se crea desde el panel.
 
+${trainingExamplesBlock || ''}
 Historial de la conversación reciente:
 ${conversationPrompt}
 
@@ -3902,6 +3910,7 @@ Restaurante (Tú):
         aiInstructions,
         paymentQrMode,
         paymentAccountText,
+        autoTrainingExamplesSetting,
       ] = await Promise.all([
         this.prisma.whatsAppMessage.findMany({
           where: { sessionId: session.id },
@@ -3928,6 +3937,7 @@ Restaurante (Tú):
         this.getSetting('chatbot_ai_instructions'),
         this.getSetting('chatbot_payment_qr_mode'),
         this.getSetting('chatbot_payment_account_text'),
+        this.getSetting('chatbot_auto_training_examples'),
       ]);
       const messagesChronological = history.reverse();
       
@@ -3997,7 +4007,9 @@ Restaurante (Tú):
           return `${m.direction === 'IN' ? 'Cliente' : 'Restaurante (Tú)'}: ${content}`;
         }).join('\n');
 
+        const trainingExamplesBlock = this.formatTrainingExamplesBlock(autoTrainingExamplesSetting);
         const systemPrompt = this.buildGeminiAssistantPrompt({
+          trainingExamplesBlock,
           customInstructionsBlock, recentOrdersSummary, menuSummary, restaurantHours,
           zonesSummary, menuGeneralRule, dynamicCategoriesString, menuCategoryRule,
           menuFollowupRule, session, paymentInstruction, conversationPrompt,
@@ -5310,7 +5322,10 @@ Restaurante (Tú):
     const conversationPrompt = messages.map((entry: { role: 'user' | 'model'; text: string }) =>
       `${entry.role === 'user' ? 'Cliente' : 'Restaurante (Tú)'}: ${entry.text.length > 1200 ? `${entry.text.slice(0, 500)}\n[Mensaje extenso ya enviado]` : entry.text}`,
     ).join('\n');
+    const autoTrainingExamples = await this.getSetting('chatbot_auto_training_examples');
+    const trainingExamplesBlock = this.formatTrainingExamplesBlock(autoTrainingExamples);
     const sandboxPrompt = this.buildGeminiAssistantPrompt({
+      trainingExamplesBlock,
       customInstructionsBlock,
       recentOrdersSummary: 'No hay pedidos previos registrados para este cliente.',
       menuSummary, restaurantHours, zonesSummary, menuGeneralRule,
@@ -5424,6 +5439,355 @@ Restaurante (Tú):
         'customerAddressReference', 'customerNeighborhood', 'zoneId',
       ],
     };
+  }
+
+
+  private formatTrainingExamplesBlock(examplesJson?: string | null): string {
+    if (!examplesJson) return '';
+    try {
+      const list = JSON.parse(examplesJson);
+      if (!Array.isArray(list) || list.length === 0) return '';
+      const items = list.slice(0, 5).map((ex: any, idx: number) =>
+        `[Caso de referencia ${idx + 1} - ${ex.context || 'Atención'}]:\nCliente: "${ex.clientPrompt}"\nRestaurante (Tú): "${ex.advisorResponse}"`
+      ).join('\n\n');
+      return `\nEJEMPLOS REALES DE ATENCIÓN DE REFERENCIA (CÓMO RESPONDE THE VILLA DOG):\n${items}\n`;
+    } catch {
+      return '';
+    }
+  }
+
+  async polishAiInstruction(rawText: string, modelOverride?: string): Promise<{ success: boolean; polishedRule: string }> {
+    const text = String(rawText || '').trim();
+    if (!text) {
+      throw new BadRequestException('Texto de la regla no provisto');
+    }
+    const rawApiKeys = await this.getSetting('gemini_api_key');
+    const apiKeys = (rawApiKeys || '').split(',').map((k: string) => k.trim()).filter(Boolean);
+    if (apiKeys.length === 0) {
+      throw new BadRequestException('Configura al menos una llave de Gemini para pulir instrucciones');
+    }
+
+    const polishPrompt = `Eres un redactor experto en reglas de atención al cliente para el restaurante "The Villa Dog" en Montería, Colombia.
+El administrador de The Villa Dog escribió esta corrección, queja o fragmento de chat:
+"${text}"
+
+Tu tarea es redactar UNA SOLA regla de negocio clara, concisa, profesional y directa para las instrucciones del bot de WhatsApp.
+REGLAS ESTRICTAS:
+1. Devuelve ÚNICAMENTE el texto de la regla final (máximo 1 o 2 líneas).
+2. Debe comenzar con un guión (-).
+3. Debe ser específica para comidas rápidas (perros, hamburguesas, salchipapas, bebidas, entregas, salsas, etc.).
+4. Si menciona una corrección sobre qué responder o preguntar, exprésala de forma imperativa y clara (ej: "- Si el cliente pide X, hacer Y").
+5. NO incluyas introducciones como "Aquí está la regla:", ni explicaciones ni comillas. Solo la regla.`;
+
+    const modelsToTry = await this.getGeminiModels(modelOverride);
+    const keyCandidates = this.getGeminiKeyCandidates(apiKeys);
+    let lastError = 'No se pudo conectar con Gemini';
+
+    for (const apiKey of keyCandidates) {
+      if (this.isGeminiKeyOnCooldown(apiKey)) continue;
+      for (const candidateModel of modelsToTry) {
+        if (this.isGeminiKeyOnCooldown(apiKey)) break;
+        try {
+          const url = `https://generativelanguage.googleapis.com/v1beta/models/${candidateModel}:generateContent?key=${apiKey}`;
+          const response = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              contents: [{ parts: [{ text: polishPrompt }] }],
+              generationConfig: this.buildGeminiGenerationConfig(candidateModel, {
+                temperature: 0.2,
+                maxOutputTokens: 250,
+              }),
+            }),
+            signal: AbortSignal.timeout(10000),
+          });
+
+          if (!response.ok) {
+            const errorBody: any = response.status === 403 || response.status === 429
+              ? await this.putGeminiKeyOnCooldown(apiKey, response)
+              : await response.json().catch(() => null);
+            lastError = this.sanitizeGeminiError(
+              errorBody?.error?.message || `Gemini respondió HTTP ${response.status}`,
+              apiKeys,
+            );
+            if (response.status === 403 || response.status === 429) break;
+            continue;
+          }
+
+          const data: any = await response.json();
+          const candidate = data?.candidates?.[0];
+          let reply = candidate?.content?.parts?.map((p: any) => p?.text || '').join('').trim() || '';
+          if (reply) {
+            reply = reply.replace(/^["'`]+|["'`]+$/g, '').trim();
+            if (!reply.startsWith('-')) {
+              reply = `- ${reply}`;
+            }
+            return { success: true, polishedRule: reply };
+          }
+        } catch (err) {
+          lastError = this.sanitizeGeminiError(err, apiKeys);
+        }
+      }
+    }
+
+    throw new BadRequestException(lastError || 'No se pudo pulir la regla con Gemini.');
+  }
+
+  async getAutoTrainingConfig() {
+    const [enabledSetting, examplesSetting, lastRunSetting, statsSetting] = await Promise.all([
+      this.getSetting('chatbot_auto_training_enabled'),
+      this.getSetting('chatbot_auto_training_examples'),
+      this.getSetting('chatbot_auto_training_last_run'),
+      this.getSetting('chatbot_auto_training_stats'),
+    ]);
+
+    let examples: Array<{ context: string; clientPrompt: string; advisorResponse: string }> = [];
+    try {
+      if (examplesSetting) examples = JSON.parse(examplesSetting);
+    } catch {}
+
+    let stats: any = null;
+    try {
+      if (statsSetting) stats = JSON.parse(statsSetting);
+    } catch {}
+
+    return {
+      enabled: enabledSetting !== 'false',
+      lastRun: lastRunSetting || null,
+      examples: Array.isArray(examples) ? examples : [],
+      stats,
+    };
+  }
+
+  async toggleAutoTraining(enabled: boolean) {
+    const val = enabled ? 'true' : 'false';
+    await this.prisma.appSetting.upsert({
+      where: { key: 'chatbot_auto_training_enabled' },
+      create: { key: 'chatbot_auto_training_enabled', value: val },
+      update: { value: val },
+    });
+    return { enabled };
+  }
+
+  async runAutoTrainingNow(): Promise<{
+    success: boolean;
+    examples: Array<{ context: string; clientPrompt: string; advisorResponse: string }>;
+    ordersAnalyzed: number;
+    sessionsAnalyzed: number;
+    updatedAt: string;
+  }> {
+    const rawApiKeys = await this.getSetting('gemini_api_key');
+    const apiKeys = (rawApiKeys || '').split(',').map((k: string) => k.trim()).filter(Boolean);
+    if (apiKeys.length === 0) {
+      throw new BadRequestException('Configura al menos una llave de Gemini para ejecutar el auto-entrenamiento.');
+    }
+
+    const deliveredOrders = await this.prisma.order.findMany({
+      where: { status: 'DELIVERED' },
+      take: 25,
+      orderBy: { createdAt: 'desc' },
+      select: {
+        id: true,
+        orderNumber: true,
+        customerName: true,
+        customerAddress: true,
+        orderType: true,
+        items: {
+          select: {
+            quantity: true,
+            notes: true,
+            menuItem: { select: { name: true } },
+          },
+        },
+      },
+    });
+
+    const activeSessions = await this.prisma.whatsAppSession.findMany({
+      take: 20,
+      orderBy: { lastMessageAt: 'desc' },
+      include: {
+        messages: {
+          take: 20,
+          orderBy: { createdAt: 'asc' },
+          select: {
+            direction: true,
+            content: true,
+          },
+        },
+      },
+    });
+
+    const transcripts: string[] = [];
+    for (const session of activeSessions) {
+      const msgs = session.messages.filter(m => m.content && m.content.trim().length > 1);
+      if (msgs.length < 2) continue;
+      const lines = msgs.slice(-10).map(m => {
+        const role = m.direction === 'inbound' || m.direction === 'IN' ? 'Cliente' : 'Restaurante';
+        const sanitized = m.content
+          .replace(/\b\d{10,12}\b/g, '[TELÉFONO]')
+          .replace(/\b\d{4}[ -]?\d{4}[ -]?\d{4}\b/g, '[CUENTA]');
+        return `${role}: ${sanitized}`;
+      });
+      transcripts.push(`--- Chat (${session.customerName || 'Cliente'}): ---\n${lines.join('\n')}`);
+      if (transcripts.length >= 8) break;
+    }
+
+    const deliveredSummaries = deliveredOrders.slice(0, 10).map(o => {
+      const itemsList = o.items.map(i => `${i.quantity}x ${i.menuItem?.name || 'Item'} ${i.notes ? `(${i.notes})` : ''}`).join(', ');
+      return `Pedido #${o.orderNumber}: ${itemsList} | Entrega: ${o.orderType === 'DELIVERY' ? 'Domicilio' : 'Recoger'}`;
+    }).join('\n');
+
+    const metaPrompt = `Eres el supervisor experto de atención y entrenamiento para el restaurante "The Villa Dog" en Montería, Colombia.
+A continuación tienes datos y conversaciones reales de pedidos y atención al cliente en el restaurante:
+
+PEDIDOS ENTREGADOS RECIENTES:
+${deliveredSummaries || 'Perros calientes sencillos, especiales, salchipapas, suizos, gaseosas vidrio 250ml y pet 400ml.'}
+
+CHATS REALES RECIENTES:
+${transcripts.join('\n\n') || 'Chats de clientes pidiendo combos, aclarando bebidas y direcciones.'}
+
+Tu tarea es sintetizar exactamente 5 EJEMPLOS MAESTROS en formato Few-Shot Learning (Pregunta/Pedido de Cliente y Respuesta Ideal del Restaurante) para que el bot de WhatsApp amanezca perfectamente afinado.
+
+REGLAS DE LOS 5 EJEMPLOS:
+1. Ejemplo 1: Toma de pedido con notas de preparación (ej. sin cebolla, salsa tártara aparte).
+2. Ejemplo 2: Elección o aclaración de bebida (preguntar presentación de forma precisa si no la especifican).
+3. Ejemplo 3: Pedido a domicilio (solicitar dirección y método de pago en un solo mensaje cordial sin pedir el nombre si ya lo dio).
+4. Ejemplo 4: Recomendación cordial de platos estrellas (en viñetas/bullet points, sin emojis).
+5. Ejemplo 5: Pedido para pasar a recoger o pregunta sobre cobertura/horario.
+- ABSOLUTAMENTE CERO EMOJIS en las respuestas del restaurante.
+- Tono humano, amable, monteriano/colombiano educado y directo.
+- Máximo 2 párrafos cortos por respuesta.
+
+Devuelve ÚNICAMENTE un JSON válido (un arreglo de 5 objetos) con esta estructura exacta, sin texto antes ni después, sin etiquetas markdown:
+[
+  {
+    "context": "Toma de pedido con notas de preparación",
+    "clientPrompt": "Buenas noches, me da dos perros especiales sin cebolla y uno con tártara aparte",
+    "advisorResponse": "¡Buenas noches! Claro que sí, con mucho gusto. Dos perros especiales: ambos sin cebolla y uno con salsa tártara aparte. ¿Deseas agregar alguna bebida a tu pedido?"
+  }
+]`;
+
+    const modelsToTry = await this.getGeminiModels();
+    const keyCandidates = this.getGeminiKeyCandidates(apiKeys);
+    let lastError = 'No se pudo conectar con Gemini';
+    let generatedExamples: Array<{ context: string; clientPrompt: string; advisorResponse: string }> = [];
+
+    for (const apiKey of keyCandidates) {
+      if (this.isGeminiKeyOnCooldown(apiKey)) continue;
+      for (const candidateModel of modelsToTry) {
+        if (this.isGeminiKeyOnCooldown(apiKey)) break;
+        try {
+          const url = `https://generativelanguage.googleapis.com/v1beta/models/${candidateModel}:generateContent?key=${apiKey}`;
+          const response = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              contents: [{ parts: [{ text: metaPrompt }] }],
+              generationConfig: this.buildGeminiGenerationConfig(candidateModel, {
+                temperature: 0.2,
+                maxOutputTokens: 1500,
+              }),
+            }),
+            signal: AbortSignal.timeout(20000),
+          });
+
+          if (!response.ok) {
+            const errorBody: any = response.status === 403 || response.status === 429
+              ? await this.putGeminiKeyOnCooldown(apiKey, response)
+              : await response.json().catch(() => null);
+            lastError = this.sanitizeGeminiError(
+              errorBody?.error?.message || `Gemini respondió HTTP ${response.status}`,
+              apiKeys,
+            );
+            if (response.status === 403 || response.status === 429) break;
+            continue;
+          }
+
+          const data: any = await response.json();
+          const candidate = data?.candidates?.[0];
+          const rawReply = candidate?.content?.parts?.map((p: any) => p?.text || '').join('').trim() || '';
+
+          const jsonText = rawReply.replace(/^\`\`\`(?:json)?\s*/i, '').replace(/\s*\`\`\`$/i, '').trim();
+          const parsed = JSON.parse(jsonText);
+          if (Array.isArray(parsed) && parsed.length >= 3) {
+            generatedExamples = parsed.map((item: any) => ({
+              context: String(item.context || 'Atención general').trim(),
+              clientPrompt: String(item.clientPrompt || '').trim(),
+              advisorResponse: String(item.advisorResponse || '').trim().replace(/[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{1F1E0}-\u{1F1FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]/gu, ''),
+            })).filter(ex => ex.clientPrompt && ex.advisorResponse);
+            break;
+          }
+        } catch (err) {
+          lastError = this.sanitizeGeminiError(err, apiKeys);
+        }
+      }
+      if (generatedExamples.length >= 3) break;
+    }
+
+    if (generatedExamples.length === 0) {
+      throw new BadRequestException(lastError || 'No se pudieron extraer ejemplos válidos.');
+    }
+
+    const nowIso = new Date().toISOString();
+    const stats = {
+      ordersAnalyzed: deliveredOrders.length,
+      sessionsAnalyzed: activeSessions.length,
+      examplesCount: generatedExamples.length,
+      updatedAt: nowIso,
+    };
+
+    await Promise.all([
+      this.prisma.appSetting.upsert({
+        where: { key: 'chatbot_auto_training_examples' },
+        create: { key: 'chatbot_auto_training_examples', value: JSON.stringify(generatedExamples) },
+        update: { value: JSON.stringify(generatedExamples) },
+      }),
+      this.prisma.appSetting.upsert({
+        where: { key: 'chatbot_auto_training_last_run' },
+        create: { key: 'chatbot_auto_training_last_run', value: nowIso },
+        update: { value: nowIso },
+      }),
+      this.prisma.appSetting.upsert({
+        where: { key: 'chatbot_auto_training_stats' },
+        create: { key: 'chatbot_auto_training_stats', value: JSON.stringify(stats) },
+        update: { value: JSON.stringify(stats) },
+      }),
+    ]);
+
+    this.logger.log(`[AutoTraining] Auto-entrenamiento completado con éxito: ${generatedExamples.length} ejemplos actualizados.`);
+
+    return {
+      success: true,
+      examples: generatedExamples,
+      ordersAnalyzed: deliveredOrders.length,
+      sessionsAnalyzed: activeSessions.length,
+      updatedAt: nowIso,
+    };
+  }
+
+  private async checkNightlyAutoTraining() {
+    const enabled = (await this.getSetting('chatbot_auto_training_enabled')) !== 'false';
+    if (!enabled) return;
+
+    const bogotaDateStr = new Date().toLocaleString('en-US', { timeZone: 'America/Bogota' });
+    const bogotaDate = new Date(bogotaDateStr);
+    const hour = bogotaDate.getHours();
+
+    if (hour === 3) {
+      const lastRun = await this.getSetting('chatbot_auto_training_last_run');
+      if (lastRun) {
+        const lastRunBogota = new Date(new Date(lastRun).toLocaleString('en-US', { timeZone: 'America/Bogota' }));
+        if (
+          lastRunBogota.getFullYear() === bogotaDate.getFullYear() &&
+          lastRunBogota.getMonth() === bogotaDate.getMonth() &&
+          lastRunBogota.getDate() === bogotaDate.getDate()
+        ) {
+          return;
+        }
+      }
+      this.logger.log('[AutoTraining] Ejecutando proceso nocturno de las 3:00 AM...');
+      await this.runAutoTrainingNow();
+    }
   }
 
   async getOrderReaderStatus() {

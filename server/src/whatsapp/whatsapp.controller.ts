@@ -475,6 +475,38 @@ export class WhatsappController {
   }
   
 
+  @Post('polish-rule')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('SUPERADMIN')
+  @ApiOperation({ summary: 'Pulir y resumir una regla de instrucción usando Gemini' })
+  async polishRule(@Body() body: { text?: string; model?: string }) {
+    return this.whatsappService.polishAiInstruction(body?.text || '', body?.model);
+  }
+
+  @Get('auto-training')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('SUPERADMIN')
+  @ApiOperation({ summary: 'Obtener estado y ejemplos del auto-entrenamiento nocturno' })
+  async getAutoTraining() {
+    return this.whatsappService.getAutoTrainingConfig();
+  }
+
+  @Post('auto-training/toggle')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('SUPERADMIN')
+  @ApiOperation({ summary: 'Activar o pausar el auto-entrenamiento nocturno' })
+  async toggleAutoTraining(@Body() body: { enabled?: boolean }) {
+    return this.whatsappService.toggleAutoTraining(Boolean(body?.enabled));
+  }
+
+  @Post('auto-training/run')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('SUPERADMIN')
+  @ApiOperation({ summary: 'Ejecutar auto-entrenamiento manualmente con chats recientes' })
+  async runAutoTraining() {
+    return this.whatsappService.runAutoTrainingNow();
+  }
+
   @Get('gemini-metrics')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('SUPERADMIN', 'ADMIN')
