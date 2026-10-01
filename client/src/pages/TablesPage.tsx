@@ -151,7 +151,7 @@ export default function TablesPage() {
     reconcileTimerRef.current = setTimeout(() => {
       reconcileTimerRef.current = null
       load(true)
-    }, 300)
+    }, 600)
   }, [load])
 
   const applyTableEvent = useCallback((payload: any) => {
@@ -188,7 +188,8 @@ export default function TablesPage() {
     // La consulta de historial usa currentShift=true. Una mesa abierta siempre
     // pertenece al turno actual; para una cerrada el corte depende de caja, así
     // que actualizamos una fila ya conocida y reconciliamos la membresía.
-    const requiresShiftMembershipCheck = table.status !== 'OPEN'
+    const inLocalHistory = myHistoryTables.some(item => item.id === table.id)
+    const requiresShiftMembershipCheck = table.status !== 'OPEN' && !inLocalHistory
     if (requiresShiftMembershipCheck) scheduleReconcile()
     setMyHistoryTables(previous => {
       const belongsToUser = table.openedBy?.id === user?.id || (table.orders || []).some((order: any) => order.waiter?.id === user?.id)

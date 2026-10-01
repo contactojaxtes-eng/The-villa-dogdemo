@@ -33,7 +33,7 @@ describe('HTTP traffic measurements', () => {
     response.emit('finish');
     const initial = await traffic.getLastSevenDays();
     expect(initial.days).toHaveLength(1);
-    expect(initial.days[0].routes).toEqual([{ route: '/api/orders/:id', method: 'GET', requests: 1, bytes: 128, unknownBytesRequests: 0, errors: 0 }]);
+    expect(initial.days[0].routes).toEqual([{ route: '/api/orders/:id', method: 'GET', requests: 1, bytes: 128, unknownBytesRequests: 0, errors: 0, status2xx: 1, status3xx: 0, status4xx: 0, status5xx: 0 }]);
 
     const date = initial.days[0].date;
     prisma.appSetting.findMany.mockResolvedValue([{
@@ -66,4 +66,21 @@ describe('HTTP traffic measurements', () => {
     expect(totals.days[0].bytes).toBe(4096);
     expect(totals.days[0].unknownBytesRequests).toBe(0);
   });
+  it('distinguishes 2xx, 3xx, 4xx, and 5xx responses for route visibility', async () => {
+    const prisma = { appSetting: { findMany: jest.fn().mockResolvedValue([]) } } as any;
+    const traffic = new TrafficService(prisma);
+    const mediaReq = { path: '/api/whatsapp/media/missing-media-id', route: { path: '/api/whatsapp/media/:mediaId' }, method: 'GET' } as any;
+    const res404 = new EventEmitter() as any;
+    res404.statusCode = 404;
+    res404.getHeader = () => null;
+    traffic.observe(mediaReq, res404);
+    res404.emit('finish');
+
+    const totals = await traffic.getLastSevenDays();
+    const mediaRoute = totals.days[0].routes.find(r => r.route === '/api/whatsapp/media/*');
+    expect(mediaRoute).toBeDefined();
+    expect(mediaRoute?.status4xx).toBe(1);
+    expect(totals.days[0].status4xx).toBe(1);
+  });
+
 });

@@ -2249,7 +2249,6 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
     }, operationTransaction);
     this.socketGateway.emitTableClosed(table);
     this.socketGateway.server.emit('cashRegistersChanged');
-    this.emitAccount(table);
     return table;
   }
 

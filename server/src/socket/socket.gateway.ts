@@ -257,7 +257,6 @@ export class SocketGateway implements OnGatewayConnection, OnGatewayDisconnect, 
 
   emitTableCreated(table: any) {
     this.server.emit('tableCreated', table);
-    this.server.emit('tableUpdated', table);
     this.server.emit('cashRegistersChanged');
   }
 
@@ -268,7 +267,6 @@ export class SocketGateway implements OnGatewayConnection, OnGatewayDisconnect, 
 
   emitTableClosed(table: any) {
     this.server.emit('tableClosed', table);
-    this.server.emit('tableUpdated', table);
     this.server.emit('cashRegistersChanged');
   }
 

@@ -1145,7 +1145,6 @@ function ChatPage() {
     sessionCursorRef.current = null
     hasMoreRef.current = true
     setHasMore(true)
-    loadStats()
     try {
       sessionQueryRef.current = { search: activeSearch, filter: activeFilter }
       const queryParams = new URLSearchParams()
@@ -1410,6 +1409,7 @@ function ChatPage() {
   // Socket connection and listener
   useEffect(() => {
     loadSessions(requestedSessionId || undefined)
+    loadStats()
 
     const socketUrl = import.meta.env.VITE_API_URL || window.location.origin
     const socket = io(`${socketUrl}/the-villa-dog`, {
@@ -1428,6 +1428,7 @@ function ChatPage() {
       }
       if (connectedOnce) {
         loadSessions()
+        loadStats()
         const currentSession = activeSessionRef.current
         if (currentSession?.id) loadMessages(currentSession.id, currentSession, true)
       }
@@ -1767,12 +1768,7 @@ function ChatPage() {
           return { ...s, messages: updatedMsgs }
         })
 
-        if (!exists && payload.sessionId && (payload.status === 'delivered' || payload.status === 'read')) {
-          if (statusReloadTimer.current) clearTimeout(statusReloadTimer.current)
-          statusReloadTimer.current = setTimeout(() => {
-            loadSessions()
-          }, 1500)
-        }
+        // Los estados delivered/read no descargan la lista completa de sesiones; se reflejan mediante Socket.IO sin polling.
 
         return next
       })

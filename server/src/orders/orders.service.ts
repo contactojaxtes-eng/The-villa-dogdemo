@@ -1975,12 +1975,13 @@ export class OrdersService implements OnModuleInit {
       });
 
       if (order.tableId) {
-        const table = await this.prisma.diningTable.findUnique({
-          where: { id: order.tableId },
-          include: { openedBy: true, orders: { include: { items: true, kitchenTickets: true } } },
-        });
-        if (table) {
-          this.socketGateway.emitTableUpdated(table);
+        try {
+          const table = await this.tablesService?.findTable(order.tableId);
+          if (table) {
+            this.socketGateway.emitTableUpdated(table);
+          }
+        } catch (err) {
+          this.logger.warn(`No se pudo sincronizar mesa ${order.tableId}:`, err);
         }
       }
 
@@ -2033,14 +2034,15 @@ export class OrdersService implements OnModuleInit {
       this.socketGateway.emitKitchenTicketUpdated(ticket);
     }
     if (order.tableId) {
-      const table = await this.prisma.diningTable.findUnique({
-        where: { id: order.tableId },
-        include: { openedBy: true, orders: { include: { items: true, kitchenTickets: true } } },
-      });
-      if (table) {
-        this.socketGateway.emitTableUpdated(table);
+        try {
+          const table = await this.tablesService?.findTable(order.tableId);
+          if (table) {
+            this.socketGateway.emitTableUpdated(table);
+          }
+        } catch (err) {
+          this.logger.warn(`No se pudo sincronizar mesa ${order.tableId}:`, err);
+        }
       }
-    }
 
     this.socketGateway.emitOrderStatusChange(id, 'CANCELLED', updated);
     await this.deliveryDriverGateway?.emitForDriver(order.deliveryDriverId, {
@@ -2115,14 +2117,15 @@ export class OrdersService implements OnModuleInit {
       this.socketGateway.emitKitchenTicketUpdated(ticket);
     }
     if (order.tableId) {
-      const table = await this.prisma.diningTable.findUnique({
-        where: { id: order.tableId },
-        include: { openedBy: true, orders: { include: { items: true, kitchenTickets: true } } },
-      });
-      if (table) {
-        this.socketGateway.emitTableUpdated(table);
+        try {
+          const table = await this.tablesService?.findTable(order.tableId);
+          if (table) {
+            this.socketGateway.emitTableUpdated(table);
+          }
+        } catch (err) {
+          this.logger.warn(`No se pudo sincronizar mesa ${order.tableId}:`, err);
+        }
       }
-    }
 
     this.socketGateway.emitOrderStatusChange(id, 'CANCELLED', updated);
     await this.deliveryDriverGateway?.emitForDriver(order.deliveryDriverId, {
@@ -2170,14 +2173,15 @@ export class OrdersService implements OnModuleInit {
     });
 
     if (order.tableId) {
-      const table = await this.prisma.diningTable.findUnique({
-        where: { id: order.tableId },
-        include: { openedBy: true, orders: { include: { items: true, kitchenTickets: true } } },
-      });
-      if (table) {
-        this.socketGateway.emitTableUpdated(table);
+        try {
+          const table = await this.tablesService?.findTable(order.tableId);
+          if (table) {
+            this.socketGateway.emitTableUpdated(table);
+          }
+        } catch (err) {
+          this.logger.warn(`No se pudo sincronizar mesa ${order.tableId}:`, err);
+        }
       }
-    }
 
     this.socketGateway.emitOrderStatusChange(id, revertStatus, updated);
     await this.deliveryDriverGateway?.emitForDriver(order.deliveryDriverId, {

@@ -14,6 +14,10 @@ type RouteTotals = {
   bytes: number;
   unknownBytesRequests: number;
   errors: number;
+  status2xx?: number;
+  status3xx?: number;
+  status4xx?: number;
+  status5xx?: number;
 };
 
 type DayTotals = {
@@ -24,6 +28,10 @@ type DayTotals = {
   bytes: number;
   unknownBytesRequests: number;
   errors: number;
+  status2xx?: number;
+  status3xx?: number;
+  status4xx?: number;
+  status5xx?: number;
   routes: RouteTotals[];
 };
 
@@ -68,7 +76,7 @@ export function responseBodyLength(method: string, statusCode: number, contentLe
 }
 
 function emptyDay(date: string, now: string): DayTotals {
-  return { date, firstSeenAt: now, lastSeenAt: now, requests: 0, bytes: 0, unknownBytesRequests: 0, errors: 0, routes: [] };
+  return { date, firstSeenAt: now, lastSeenAt: now, requests: 0, bytes: 0, unknownBytesRequests: 0, errors: 0, status2xx: 0, status3xx: 0, status4xx: 0, status5xx: 0, routes: [] };
 }
 
 function isDayTotals(value: unknown): value is DayTotals {
@@ -131,6 +139,10 @@ export class TrafficService implements OnModuleInit, OnModuleDestroy {
       const method = /^[A-Z]{1,10}$/.test(req.method) ? req.method : 'OTHER';
       const length = responseBodyLength(method, res.statusCode, res.getHeader('content-length') ?? logicalContentLength);
       const isError = res.statusCode >= 500;
+      const statusKey = res.statusCode >= 500 ? 'status5xx'
+        : res.statusCode >= 400 ? 'status4xx'
+        : res.statusCode >= 300 ? 'status3xx'
+        : 'status2xx';
       let day = this.days.get(date);
       if (!day) {
         day = emptyDay(date, now);
@@ -141,9 +153,10 @@ export class TrafficService implements OnModuleInit, OnModuleDestroy {
       day.bytes += length ?? 0;
       day.unknownBytesRequests += Number(length === null);
       day.errors += Number(isError);
+      day[statusKey] = (day[statusKey] || 0) + 1;
       let totals = day.routes.find(item => item.route === route && item.method === method);
       if (!totals) {
-        totals = { route: day.routes.length < MAX_ROUTES_PER_DAY ? route : '/other', method: day.routes.length < MAX_ROUTES_PER_DAY ? method : 'OTHER', requests: 0, bytes: 0, unknownBytesRequests: 0, errors: 0 };
+        totals = { route: day.routes.length < MAX_ROUTES_PER_DAY ? route : '/other', method: day.routes.length < MAX_ROUTES_PER_DAY ? method : 'OTHER', requests: 0, bytes: 0, unknownBytesRequests: 0, errors: 0, status2xx: 0, status3xx: 0, status4xx: 0, status5xx: 0 };
         const existingOverflow = day.routes.find(item => item.route === totals!.route && item.method === totals!.method);
         if (existingOverflow) totals = existingOverflow;
         else day.routes.push(totals);
@@ -152,6 +165,7 @@ export class TrafficService implements OnModuleInit, OnModuleDestroy {
       totals.bytes += length ?? 0;
       totals.unknownBytesRequests += Number(length === null);
       totals.errors += Number(isError);
+      totals[statusKey] = (totals[statusKey] || 0) + 1;
       this.dirty.add(date);
     });
   }
@@ -250,6 +264,10 @@ export class TrafficService implements OnModuleInit, OnModuleDestroy {
     day.bytes += source.bytes;
     day.unknownBytesRequests += source.unknownBytesRequests;
     day.errors += source.errors;
+    day.status2xx = (day.status2xx || 0) + (source.status2xx || 0);
+    day.status3xx = (day.status3xx || 0) + (source.status3xx || 0);
+    day.status4xx = (day.status4xx || 0) + (source.status4xx || 0);
+    day.status5xx = (day.status5xx || 0) + (source.status5xx || 0);
     for (const route of source.routes) {
       let aggregate = day.routes.find(item => item.route === route.route && item.method === route.method);
       if (!aggregate) {
@@ -260,6 +278,10 @@ export class TrafficService implements OnModuleInit, OnModuleDestroy {
         aggregate.bytes += route.bytes;
         aggregate.unknownBytesRequests += route.unknownBytesRequests;
         aggregate.errors += route.errors;
+        aggregate.status2xx = (aggregate.status2xx || 0) + (route.status2xx || 0);
+        aggregate.status3xx = (aggregate.status3xx || 0) + (route.status3xx || 0);
+        aggregate.status4xx = (aggregate.status4xx || 0) + (route.status4xx || 0);
+        aggregate.status5xx = (aggregate.status5xx || 0) + (route.status5xx || 0);
       }
     }
   }
