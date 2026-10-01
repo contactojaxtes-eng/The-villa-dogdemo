@@ -1,6 +1,6 @@
 ---
 name: villa-dog-safe-change
-description: Implement or review nontrivial The Villa Dog changes that affect live WhatsApp, orders, kitchen, dispatch, printing, Socket.IO, caching, performance, or production rollout. Use when live operation or multiple modules could be affected; skip for explanations and trivial edits.
+description: Implement or review nontrivial The Villa Dog changes that affect live WhatsApp, orders, kitchen, dispatch, printing, Socket.IO, caching, performance, Gemini usage, learning from chats, or production rollout. Use when live operation, cost, customer data, or multiple modules could be affected; skip for explanations and trivial edits.
 ---
 
 # Cambio seguro en The Villa Dog
@@ -9,6 +9,7 @@ description: Implement or review nontrivial The Villa Dog changes that affect li
 2. Delimita el flujo afectado y abre solo la referencia necesaria:
    - WhatsApp: `references/whatsapp.md`
    - Socket.IO, caché o rendimiento: `references/realtime-performance.md`
+   - Gemini, consumo de IA o aprendizaje con chats: `references/ai-data-learning.md`
    - Pedidos, pagos o impresión: `references/orders-printing.md`
    - Git, migraciones o producción: `references/release.md`
 3. Traza el flujo real de extremo a extremo antes de editar: entrada, persistencia, evento, estado del cliente y efecto operativo.
