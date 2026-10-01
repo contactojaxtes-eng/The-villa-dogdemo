@@ -4896,7 +4896,7 @@ Restaurante (Tú):
     let payload: any = null;
     let lastError: unknown = null;
     let workingKey = '';
-    for (const apiKey of keys.slice(0, 10)) {
+    for (const apiKey of keys.slice(0, 30)) {
       try {
         const models: any[] = [];
         let pageToken = '';
@@ -5062,8 +5062,8 @@ Restaurante (Tú):
       };
     }
 
-    if (keysToTest.length > 10) {
-      throw new BadRequestException('Puedes probar máximo 10 llaves a la vez');
+    if (keysToTest.length > 30) {
+      throw new BadRequestException('Puedes probar máximo 30 llaves a la vez');
     }
 
     const testPrompt = String(prompt || 'Responde únicamente: Conexión correcta').trim();
@@ -5150,12 +5150,16 @@ Restaurante (Tú):
     const successful = results.filter(result => result.ok);
     const firstSuccessful = successful[0];
     const requestsToday = await this.getGeminiUsageToday();
+    const allPassed = successful.length === keysToTest.length && keysToTest.length > 0;
 
     return {
-      success: successful.length > 0,
-      message: successful.length > 0
-        ? `${successful.length} de ${keysToTest.length} llave(s) respondieron correctamente.`
-        : 'Ninguna llave respondió correctamente. Revisa el detalle de la prueba.',
+      success: allPassed,
+      partialSuccess: successful.length > 0 && !allPassed,
+      message: allPassed
+        ? `Todas las ${keysToTest.length} llave(s) respondieron correctamente.`
+        : successful.length > 0
+          ? `${successful.length} de ${keysToTest.length} llave(s) respondieron correctamente. ${keysToTest.length - successful.length} llave(s) tienen error o están deshabilitadas en Google.`
+          : 'Ninguna llave respondió correctamente. Revisa el detalle de la prueba.',
       testedKeys: keysToTest.length,
       validKeys: successful.length,
       model: firstSuccessful?.model || modelsToTry[0],
@@ -5239,8 +5243,8 @@ Restaurante (Tú):
         message: 'No hay ninguna llave API de Gemini disponible para la prueba.',
       };
     }
-    if (apiKeys.length > 10) {
-      throw new BadRequestException('Puedes usar máximo 10 llaves en la prueba');
+    if (apiKeys.length > 30) {
+      throw new BadRequestException('Puedes usar máximo 30 llaves en la prueba');
     }
 
     const [dbItems, dbZones, configuredMenuUrl, restaurantHours, configuredInstructions, paymentQrMode, paymentAccountText] = await Promise.all([

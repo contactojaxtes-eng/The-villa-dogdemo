@@ -336,12 +336,22 @@ export default function SuperAdminConfigPage() {
     setTestResult(null)
   }
 
-  const removeKey = (index: number) => {
+  const removeKey = async (index: number) => {
+    const keyItem = geminiKeys[index] || ''
+    const masked = keyItem.includes('•')
+    const label = masked ? `que termina en ${keyItem.slice(-4)}` : `#${index + 1}`
+    const confirmed = await alerts.confirm(
+      `¿Eliminar Llave ${index + 1}?`,
+      `Se quitará la llave ${label} de la lista. Para que se elimine definitivamente del servidor, recuerda pulsar "Guardar configuración de IA".`
+    )
+    if (!confirmed) return
+
     setGeminiKeys(current => {
       const next = current.filter((_, keyIndex) => keyIndex !== index)
       return next.length ? next : ['']
     })
     setTestResult(null)
+    alerts.toast(`Llave ${index + 1} retirada. Pulsa "Guardar configuración de IA" para confirmar.`)
   }
 
   const toggleChatbot = async () => {
@@ -404,7 +414,16 @@ export default function SuperAdminConfigPage() {
       if (typeof result.requestsToday === 'number') {
         updateUsageToday(result.requestsToday)
       }
-      if (result.success) alerts.success('La IA respondió correctamente')
+      if (result.success) {
+        alerts.success(`Todas las ${result.testedKeys} llaves respondieron correctamente`)
+      } else if ((result as any).partialSuccess || (result.validKeys > 0 && result.validKeys < result.testedKeys)) {
+        alerts.warning(
+          `${result.validKeys} de ${result.testedKeys} llaves funcionan`,
+          `${result.testedKeys - result.validKeys} llave(s) tienen error (cuenta o llave deshabilitada en Google). Revisa la lista abajo.`
+        )
+      } else {
+        alerts.error('Ninguna llave respondió', result.message || 'Revisa que las llaves sean válidas.')
+      }
     } catch (error) {
       const message = getErrorMessage(error, 'No se pudo completar la prueba.')
       setTestResult({ success: false, message, testedKeys: 0, validKeys: 0, results: [] })
@@ -467,7 +486,7 @@ export default function SuperAdminConfigPage() {
     }
     setWa(current => ({ ...current, aiInstructions: nextInstructions }))
     setSandboxRule('')
-    alerts.success('Regla agregada al formulario', 'Pruébala de nuevo y guarda la configuración de IA cuando estés conforme.')
+    alerts.success('Regla agregada al formulario', 'La regla se añadió al campo "Instrucciones del negocio" en la izquierda. Para que aplique permanentemente, pulsa "Guardar configuración de IA".')
   }
 
   const loadGeminiModelInfo = async (keysOverride?: string, modelOverride?: string) => {
@@ -746,7 +765,44 @@ export default function SuperAdminConfigPage() {
             </div>}
             <div className="mt-5 border-t border-[var(--border-subtle)] pt-4">
               <div className="flex flex-wrap items-center justify-between gap-2"><div><p className="text-xs font-black text-[var(--text-primary)]">Comprobar llaves</p><p className="text-[11px] text-[var(--text-muted)]">Verifica cada llave por separado con una respuesta corta.</p></div><Button type="button" variant="outline" onClick={() => void testGemini()} disabled={testingGemini} className="h-9 rounded-xl text-xs font-bold">{testingGemini ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Server className="mr-2 h-4 w-4" />} Probar conexión</Button></div>
-              {testResult && <div className={cn('mt-3 rounded-xl border p-3 text-xs', testResult.success ? 'border-emerald-500/25 bg-emerald-500/5' : 'border-red-500/25 bg-red-500/5')}><p className="font-bold text-[var(--text-primary)]">{testResult.message}</p>{testResult.results.map(result => <p key={result.key} className="mt-1 text-[var(--text-secondary)]">{result.key}: {result.ok ? `${result.model} · ${result.latencyMs} ms` : result.error}</p>)}</div>}
+              {testResult && (
+                <div className={cn('mt-3 rounded-xl border p-3.5 text-xs', testResult.success ? 'border-emerald-500/25 bg-emerald-500/5' : testResult.validKeys > 0 ? 'border-amber-500/25 bg-amber-500/5' : 'border-red-500/25 bg-red-500/5')}>
+                  <div className="flex items-center justify-between gap-2">
+                    <p className={cn('font-black text-sm', testResult.success ? 'text-emerald-700 dark:text-emerald-300' : testResult.validKeys > 0 ? 'text-amber-700 dark:text-amber-300' : 'text-red-700 dark:text-red-300')}>
+                      {testResult.success ? '✓ Todas las llaves listas' : testResult.validKeys > 0 ? '⚠️ Llaves parcialmente funcionales' : '✗ Fallaron todas las llaves'}
+                    </p>
+                    <span className="rounded-md bg-[var(--bg-panel)] px-2 py-0.5 text-[10px] font-bold text-[var(--text-secondary)]">
+                      {testResult.validKeys}/{testResult.testedKeys} válidas
+                    </span>
+                  </div>
+                  <p className="mt-1 text-[11px] text-[var(--text-secondary)]">{testResult.message}</p>
+                  <div className="mt-2.5 divide-y divide-[var(--border-subtle)]/50 rounded-lg bg-[var(--bg-panel)] p-2">
+                    {testResult.results.map(result => {
+                      const isDeletedAccount = String(result.error || '').includes('bound service account is deleted or disabled');
+                      const humanError = isDeletedAccount
+                        ? 'Cuenta de servicio eliminada o deshabilitada en Google Cloud'
+                        : result.error;
+                      return (
+                        <div key={result.key} className="flex items-start justify-between gap-2 py-1.5 first:pt-0 last:pb-0">
+                          <div className="min-w-0">
+                            <span className="font-mono font-bold text-[var(--text-primary)]">{result.key}</span>
+                            {!result.ok && <p className="text-[11px] font-medium text-red-500 leading-tight mt-0.5">{humanError}</p>}
+                          </div>
+                          {result.ok ? (
+                            <span className="shrink-0 rounded bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-bold text-emerald-600">
+                              {result.model} · {result.latencyMs} ms
+                            </span>
+                          ) : (
+                            <span className="shrink-0 rounded bg-red-500/10 px-1.5 py-0.5 text-[10px] font-bold text-red-600">
+                              Error
+                            </span>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
             </div>
           </Card>
           <Card className="min-w-0 rounded-2xl border-[var(--border-subtle)] bg-[var(--bg-panel)] p-4 shadow-sm sm:p-5 xl:col-span-2">
