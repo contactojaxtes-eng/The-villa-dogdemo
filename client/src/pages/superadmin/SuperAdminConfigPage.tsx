@@ -497,7 +497,7 @@ export default function SuperAdminConfigPage() {
     }
   }
 
-  const addSandboxRule = () => {
+  const addSandboxRule = async () => {
     const rule = sandboxRule.trim()
     if (!rule) return
     const nextInstructions = [wa.aiInstructions.trim(), `- ${rule}`].filter(Boolean).join('\n')
@@ -505,9 +505,25 @@ export default function SuperAdminConfigPage() {
       alerts.warning('Las instrucciones permiten máximo 4.000 caracteres. Resume o edita las reglas anteriores.')
       return
     }
-    setWa(current => ({ ...current, aiInstructions: nextInstructions }))
-    setSandboxRule('')
-    alerts.success('Regla agregada al formulario', 'La regla se añadió al campo "Instrucciones del negocio" en la izquierda. Para que aplique permanentemente, pulsa "Guardar configuración de IA".')
+
+    const combinedKeys = geminiKeys.map(key => key.trim()).filter(Boolean).join(', ')
+    setSavingAi(true)
+    try {
+      const updated = await api.put<WhatsappCoreConfig>('/whatsapp/settings', {
+        chatbotEnabled: wa.chatbotEnabled,
+        geminiApiKey: combinedKeys,
+        geminiModel: wa.geminiModel,
+        aiInstructions: nextInstructions,
+      })
+      setWhatsappResponse(updated)
+      setSandboxRule('')
+      alerts.success('Regla agregada y guardada', 'La regla se guardó permanentemente en el servidor y ya está activa.')
+    } catch (error) {
+      setWa(current => ({ ...current, aiInstructions: nextInstructions }))
+      alerts.error('No se pudo guardar automáticamente', getErrorMessage(error, 'La regla quedó en el formulario pero debes pulsar "Guardar configuración de IA".'))
+    } finally {
+      setSavingAi(false)
+    }
   }
 
   const loadGeminiModelInfo = async (keysOverride?: string, modelOverride?: string) => {
@@ -789,8 +805,8 @@ export default function SuperAdminConfigPage() {
             </Button>
             {sandboxMessages.some(message => message.role === 'model') && <div className="mt-4 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-3">
               <label className="block"><span className="mb-1.5 block text-xs font-black text-[var(--text-primary)]">¿Qué debería hacer mejor la IA?</span><textarea value={sandboxRule} maxLength={700} onChange={event => setSandboxRule(event.target.value)} className={cn(textAreaClass, 'min-h-20')} placeholder="Ejemplo: si el cliente pide Manzana sin tamaño, pregunta si la quiere de vidrio 250 ml o de 400 ml." /></label>
-              <Button type="button" variant="outline" onClick={addSandboxRule} disabled={!sandboxRule.trim()} className="mt-2 h-9 rounded-xl text-xs font-bold"><Plus className="mr-1.5 h-4 w-4" /> Agregar a instrucciones</Button>
-              <p className="mt-2 text-[11px] text-[var(--text-muted)]">La regla se aplica en las siguientes pruebas. Para conservarla, pulsa “Guardar configuración de IA” en el panel izquierdo. Esto no activa el bot.</p>
+              <Button type="button" variant="outline" onClick={() => void addSandboxRule()} disabled={savingAi || !sandboxRule.trim()} className="mt-2 h-9 rounded-xl text-xs font-bold">{savingAi ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Plus className="mr-1.5 h-4 w-4" />} Agregar y guardar regla</Button>
+              <p className="mt-2 text-[11px] text-[var(--text-muted)]">La regla se guarda automáticamente en el servidor y se aplica de inmediato tanto al bot de WhatsApp como a las pruebas de chat.</p>
             </div>}
             <div className="mt-5 border-t border-[var(--border-subtle)] pt-4">
               <div className="flex flex-wrap items-center justify-between gap-2"><div><p className="text-xs font-black text-[var(--text-primary)]">Comprobar llaves</p><p className="text-[11px] text-[var(--text-muted)]">Verifica cada llave por separado con una respuesta corta.</p></div><Button type="button" variant="outline" onClick={() => void testGemini()} disabled={testingGemini} className="h-9 rounded-xl text-xs font-bold">{testingGemini ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Server className="mr-2 h-4 w-4" />} Probar conexión</Button></div>
