@@ -1,4 +1,4 @@
-import { Injectable, Logger, BadRequestException, ConflictException, ForbiddenException, NotFoundException, OnModuleInit, Optional } from '@nestjs/common';
+import { Injectable, Logger, BadRequestException, ConflictException, ForbiddenException, NotFoundException, OnModuleInit, OnModuleDestroy, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { randomUUID } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service';
@@ -7,6 +7,28 @@ import { DeliveryDriverGateway } from '../socket/delivery-driver.gateway';
 import { buildMessagingMenuText } from '../menu/menu-text';
 import { receiptSummary } from '../tables/receipt';
 import { toDriverOrderChatMessage } from './order-chat-message';
+
+export type GeminiOperation = 'ORDER_READER' | 'AUDIO_TRANSCRIPTION' | 'CHATBOT' | 'CONNECTION_TEST';
+
+export type GeminiMetricEntry = {
+  operation: GeminiOperation;
+  keyLabel: string;
+  model: string;
+  attempts: number;
+  successes: number;
+  http401: number;
+  http403: number;
+  http429: number;
+  otherErrors: number;
+};
+
+export type GeminiDayTotals = {
+  date: string;
+  attempts: number;
+  successes: number;
+  failures: number;
+  entries: GeminiMetricEntry[];
+};
 
 type CachedMedia = {
   buffer: Buffer;
@@ -17,7 +39,7 @@ type CachedMedia = {
 };
 
 @Injectable()
-export class WhatsappService implements OnModuleInit {
+export class WhatsappService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(WhatsappService.name);
   private readonly settingCache = new Map<string, { value: string | null; expiresAt: number }>();
   private readonly mediaCache = new Map<string, CachedMedia>();
@@ -28,6 +50,13 @@ export class WhatsappService implements OnModuleInit {
   private readonly mediaCacheTtlMs = 6 * 60 * 60 * 1000;
   private readonly geminiKeyCursors = new Map<string, number>();
   private readonly geminiKeyCooldownUntil = new Map<string, number>();
+  private readonly mediaNegativeCache = new Map<string, number>();
+  private readonly maxMediaNegativeItems = 150;
+  private readonly mediaNegativeTtlMs = 20 * 60 * 1000;
+  private readonly geminiDailyMetrics = new Map<string, GeminiDayTotals>();
+  private readonly geminiMetricsDirty = new Set<string>();
+  private readonly geminiMetricsInstanceId = randomUUID();
+  private geminiMetricsFlushTimer?: ReturnType<typeof setInterval>;
 
   constructor(
     private prisma: PrismaService,
@@ -43,6 +72,13 @@ export class WhatsappService implements OnModuleInit {
     } catch (error) {
       this.logger.warn('No se pudo limpiar la carta estática anterior al iniciar', error);
     }
+    this.geminiMetricsFlushTimer = setInterval(() => void this.flushGeminiMetrics().catch(() => {}), 5 * 60 * 1000);
+    this.geminiMetricsFlushTimer.unref?.();
+  }
+
+  async onModuleDestroy() {
+    if (this.geminiMetricsFlushTimer) clearInterval(this.geminiMetricsFlushTimer);
+    await this.flushGeminiMetrics().catch(() => {});
   }
 
   private async resolveMessageOrderId(
@@ -1184,6 +1220,8 @@ export class WhatsappService implements OnModuleInit {
           throw new BadRequestException('No se pudo reconocer ninguna llave válida de Gemini');
         }
         updates.push({ key: 'gemini_api_key', value: mergedKeys.join(', ') });
+        this.geminiKeyCursors.clear();
+        this.geminiKeyCooldownUntil.clear();
       }
     }
 
@@ -2766,15 +2804,38 @@ export class WhatsappService implements OnModuleInit {
     })();
   }
 
+  private pruneMediaNegativeCache() {
+    const now = Date.now();
+    for (const [key, expiresAt] of this.mediaNegativeCache.entries()) {
+      if (expiresAt <= now) this.mediaNegativeCache.delete(key);
+    }
+    if (this.mediaNegativeCache.size > this.maxMediaNegativeItems) {
+      const oldestKeys = [...this.mediaNegativeCache.keys()].slice(0, 50);
+      for (const k of oldestKeys) this.mediaNegativeCache.delete(k);
+    }
+  }
+
   async getMediaUrl(mediaId: string): Promise<string | null> {
+    const now = Date.now();
+    const negExpiry = this.mediaNegativeCache.get(mediaId);
+    if (negExpiry && negExpiry > now) {
+      return null;
+    }
     const token = await this.getSetting('whatsapp_token');
     if (!token) return null;
     try {
       const res = await fetch(`https://graph.facebook.com/v26.0/${mediaId}`, {
         headers: { Authorization: `Bearer ${token}` }
       });
-      if (!res.ok) return null;
+      if (!res.ok) {
+        if (res.status === 404 || res.status === 410 || res.status === 400) {
+          this.mediaNegativeCache.set(mediaId, Date.now() + this.mediaNegativeTtlMs);
+          this.pruneMediaNegativeCache();
+        }
+        return null;
+      }
       const data = await res.json();
+      this.mediaNegativeCache.delete(mediaId);
       return data.url || null;
     } catch (err) {
       this.logger.error('Error obteniendo URL de media', err);
@@ -3973,7 +4034,15 @@ Restaurante (Tú):
             });
 
             if (!response.ok) {
-              if (response.status === 429 || response.status === 403) {
+              this.recordGeminiAttempt({
+                operation: 'CHATBOT',
+                apiKey: key,
+                allKeys: apiKeys,
+                model,
+                statusCode: response.status,
+                success: false,
+              });
+              if (response.status === 401 || response.status === 429 || response.status === 403) {
                 await this.putGeminiKeyOnCooldown(key, response);
                 lastError = new Error(`Gemini no puede usar temporalmente la llave ...${key.slice(-4)}`);
                 break;
@@ -3987,9 +4056,25 @@ Restaurante (Tú):
               continue;
             }
             data = candidateData;
+            this.recordGeminiAttempt({
+              operation: 'CHATBOT',
+              apiKey: key,
+              allKeys: apiKeys,
+              model,
+              statusCode: 200,
+              success: true,
+            });
             await this.incrementGeminiUsage();
             break;
           } catch (e: any) {
+            this.recordGeminiAttempt({
+              operation: 'CHATBOT',
+              apiKey: key,
+              allKeys: apiKeys,
+              model,
+              statusCode: (e as any)?.status || undefined,
+              success: false,
+            });
             const safeError = this.sanitizeGeminiError(e, apiKeys);
             this.logger.warn(`Error con modelo ${model} y API key (...${key.slice(-4)}): ${safeError}. Probando siguiente opción...`);
             lastError = e;
@@ -4669,7 +4754,10 @@ Restaurante (Tú):
   }
 
   private geminiRetryDelayMs(status: number, response?: any, errorBody?: unknown): number {
-    const defaultDelay = status === 403 ? 5 * 60_000 : 60_000;
+    const defaultDelay = status === 401 ? 24 * 60 * 60_000 : status === 403 ? 5 * 60_000 : 60_000;
+    if (status === 401) {
+      return defaultDelay;
+    }
     const retryAfter = response?.headers?.get?.('retry-after');
     let requestedDelay = 0;
 
@@ -5030,14 +5118,22 @@ Restaurante (Tú):
             break;
           }
 
-          const errJson: any = res.status === 403 || res.status === 429
+          this.recordGeminiAttempt({
+            operation: 'CONNECTION_TEST',
+            apiKey,
+            allKeys: keysToTest,
+            model: candidateModel,
+            statusCode: res.status,
+            success: false,
+          });
+          const errJson: any = res.status === 401 || res.status === 403 || res.status === 429
             ? await this.putGeminiKeyOnCooldown(apiKey, res)
             : await res.json().catch(() => null);
           lastError = this.sanitizeGeminiError(
             errJson?.error?.message || `Gemini respondió HTTP ${res.status}`,
             keysToTest,
           );
-          if (res.status === 403 || res.status === 429) break;
+          if (res.status === 401 || res.status === 403 || res.status === 429) break;
         } catch (error) {
           lastError = this.sanitizeGeminiError(error, keysToTest);
         }
@@ -5521,7 +5617,15 @@ Responde solo con JSON válido.`;
             });
 
             if (!response.ok) {
-              if (response.status === 429 || response.status === 403) {
+              this.recordGeminiAttempt({
+                operation: 'ORDER_READER',
+                apiKey: key,
+                allKeys: apiKeys,
+                model,
+                statusCode: response.status,
+                success: false,
+              });
+              if (response.status === 401 || response.status === 429 || response.status === 403) {
                 await this.putGeminiKeyOnCooldown(key, response);
                 lastError = new Error(`Gemini no puede usar temporalmente la llave ...${key.slice(-4)}`);
                 break;
@@ -5534,11 +5638,27 @@ Responde solo con JSON válido.`;
             if (candidateData?.candidates?.[0]?.content?.parts?.[0]?.text) {
               data = candidateData;
               modelUsed = model;
+              this.recordGeminiAttempt({
+                operation: 'ORDER_READER',
+                apiKey: key,
+                allKeys: apiKeys,
+                model,
+                statusCode: 200,
+                success: true,
+              });
               await this.incrementGeminiUsage();
               break;
             }
             lastError = new Error('Gemini no devolvió contenido para interpretar el pedido');
           } catch (e: any) {
+            this.recordGeminiAttempt({
+              operation: 'ORDER_READER',
+              apiKey: key,
+              allKeys: apiKeys,
+              model,
+              statusCode: (e as any)?.status || undefined,
+              success: false,
+            });
             const safeError = this.sanitizeGeminiError(e, apiKeys);
             this.logger.warn(`Error con modelo ${model} y Gemini key (...${key.slice(-4)}): ${safeError}. Probando siguiente opción...`);
             lastError = e;
@@ -5999,7 +6119,15 @@ Devuelve únicamente la transcripción, sin saludo, sin resumen, sin markdown y 
           );
 
           if (!response.ok) {
-            if (response.status === 429 || response.status === 403) {
+            this.recordGeminiAttempt({
+              operation: 'AUDIO_TRANSCRIPTION',
+              apiKey: key,
+              allKeys: apiKeys,
+              model,
+              statusCode: response.status,
+              success: false,
+            });
+            if (response.status === 401 || response.status === 429 || response.status === 403) {
               await this.putGeminiKeyOnCooldown(key, response);
               break;
             }
@@ -6169,7 +6297,15 @@ ${menuSummary}
               break;
             }
           } else {
-            if (res.status === 429 || res.status === 403) {
+            this.recordGeminiAttempt({
+              operation: 'AUDIO_TRANSCRIPTION',
+              apiKey: key,
+              allKeys: apiKeys,
+              model,
+              statusCode: res.status,
+              success: false,
+            });
+            if (res.status === 401 || res.status === 429 || res.status === 403) {
               await this.putGeminiKeyOnCooldown(key, res);
               break;
             }
@@ -6251,6 +6387,170 @@ ${menuSummary}
       });
     } catch (err) {
       this.logger.error('Error en chatbot multimedia:', err);
+    }
+  }
+
+
+  recordGeminiAttempt(params: {
+    operation: GeminiOperation;
+    apiKey: string;
+    allKeys: string[];
+    model: string;
+    statusCode?: number;
+    success: boolean;
+  }) {
+    const today = new Date().toISOString().slice(0, 10);
+    let day = this.geminiDailyMetrics.get(today);
+    if (!day) {
+      day = { date: today, attempts: 0, successes: 0, failures: 0, entries: [] };
+      this.geminiDailyMetrics.set(today, day);
+    }
+    day.attempts++;
+    if (params.success) day.successes++;
+    else day.failures++;
+
+    const idx = (params.allKeys || []).map(k => String(k || '').trim()).indexOf(String(params.apiKey || '').trim());
+    const short = String(params.apiKey || '').trim().slice(-4);
+    const keyLabel = idx >= 0 ? `Llave ${idx + 1} (…${short})` : `Llave (…${short})`;
+    const model = params.model || 'desconocido';
+
+    let entry = day.entries.find(e => e.operation === params.operation && e.keyLabel === keyLabel && e.model === model);
+    if (!entry) {
+      entry = {
+        operation: params.operation,
+        keyLabel,
+        model,
+        attempts: 0,
+        successes: 0,
+        http401: 0,
+        http403: 0,
+        http429: 0,
+        otherErrors: 0,
+      };
+      day.entries.push(entry);
+    }
+    entry.attempts++;
+    if (params.success) {
+      entry.successes++;
+    } else {
+      if (params.statusCode === 401) entry.http401++;
+      else if (params.statusCode === 403) entry.http403++;
+      else if (params.statusCode === 429) entry.http429++;
+      else entry.otherErrors++;
+    }
+    this.geminiMetricsDirty.add(today);
+  }
+
+  private async flushGeminiMetrics() {
+    for (const date of Array.from(this.geminiMetricsDirty)) {
+      const day = this.geminiDailyMetrics.get(date);
+      if (!day) {
+        this.geminiMetricsDirty.delete(date);
+        continue;
+      }
+      const snapshot = JSON.stringify(day);
+      const key = `gemini_metrics_v1:${this.geminiMetricsInstanceId}:${date}`;
+      try {
+        await this.prisma.appSetting.upsert({
+          where: { key },
+          create: { key, value: snapshot },
+          update: { value: snapshot },
+        });
+        if (JSON.stringify(day) === snapshot) {
+          this.geminiMetricsDirty.delete(date);
+        }
+      } catch (err) {
+        this.logger.warn(`No se pudo guardar la medición de Gemini para ${date}`, err);
+      }
+    }
+    await this.pruneOldGeminiMetrics();
+  }
+
+  private async pruneOldGeminiMetrics() {
+    const today = new Date().toISOString().slice(0, 10);
+    const cutoff = new Date(`${today}T00:00:00.000Z`);
+    cutoff.setUTCDate(cutoff.getUTCDate() - 13);
+    const oldest = cutoff.toISOString().slice(0, 10);
+
+    for (const date of this.geminiDailyMetrics.keys()) {
+      if (date < oldest) {
+        this.geminiDailyMetrics.delete(date);
+        this.geminiMetricsDirty.delete(date);
+      }
+    }
+    try {
+      const rows = await this.prisma.appSetting.findMany({
+        where: { key: { startsWith: 'gemini_metrics_v1:' } },
+        select: { key: true },
+      });
+      const expired = rows
+        .map(r => r.key)
+        .filter(k => {
+          const parts = k.split(':');
+          const d = parts[parts.length - 1];
+          return /^\d{4}-\d{2}-\d{2}$/.test(d) && d < oldest;
+        });
+      if (expired.length > 0) {
+        await this.prisma.appSetting.deleteMany({ where: { key: { in: expired } } });
+      }
+    } catch {}
+  }
+
+  async getGeminiMetrics(daysCount = 14): Promise<GeminiDayTotals[]> {
+    const today = new Date().toISOString().slice(0, 10);
+    const cutoff = new Date(`${today}T00:00:00.000Z`);
+    cutoff.setUTCDate(cutoff.getUTCDate() - (daysCount - 1));
+    const oldest = cutoff.toISOString().slice(0, 10);
+
+    const rows = await this.prisma.appSetting.findMany({
+      where: { key: { startsWith: 'gemini_metrics_v1:' } },
+      select: { key: true, value: true },
+    });
+
+    const byDay = new Map<string, GeminiDayTotals>();
+
+    for (const row of rows) {
+      const parts = row.key.split(':');
+      const date = parts[parts.length - 1];
+      const instance = parts[1];
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || date < oldest || date > today) continue;
+      if (instance === this.geminiMetricsInstanceId && this.geminiDailyMetrics.has(date)) continue;
+      try {
+        const parsed = JSON.parse(row.value) as GeminiDayTotals;
+        this.mergeGeminiDay(byDay, parsed);
+      } catch {}
+    }
+
+    for (const [date, day] of this.geminiDailyMetrics) {
+      if (date >= oldest && date <= today) {
+        this.mergeGeminiDay(byDay, day);
+      }
+    }
+
+    return Array.from(byDay.values()).sort((a, b) => b.date.localeCompare(a.date));
+  }
+
+  private mergeGeminiDay(target: Map<string, GeminiDayTotals>, source: GeminiDayTotals) {
+    let day = target.get(source.date);
+    if (!day) {
+      day = { date: source.date, attempts: 0, successes: 0, failures: 0, entries: [] };
+      target.set(source.date, day);
+    }
+    day.attempts += source.attempts || 0;
+    day.successes += source.successes || 0;
+    day.failures += source.failures || 0;
+    for (const entry of source.entries || []) {
+      let existing = day.entries.find(e => e.operation === entry.operation && e.keyLabel === entry.keyLabel && e.model === entry.model);
+      if (!existing) {
+        day.entries.push({ ...entry });
+      } else {
+        existing.attempts += entry.attempts || 0;
+        existing.successes += entry.successes || 0;
+        existing.http401 += entry.http401 || 0;
+        existing.http403 += entry.http403 || 0;
+        existing.http429 += entry.http429 || 0;
+        existing.otherErrors += entry.otherErrors || 0;
+      }
     }
   }
 

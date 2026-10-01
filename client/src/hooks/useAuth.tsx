@@ -2,6 +2,8 @@ import { createContext, useContext, useState, useEffect, useCallback, type React
 import { useNavigate } from 'react-router-dom'
 import { api } from '../lib/api'
 import { hasUserPermission } from '../lib/permissions'
+import { clearProofCache } from '../lib/proofCache'
+import { clearMediaCache } from '../lib/mediaCache'
 
 interface User {
   id: string
@@ -97,6 +99,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const logout = () => {
     sessionStorage.removeItem(IMPERSONATION_KEY)
     setIsImpersonating(false)
+    clearProofCache()
+    clearMediaCache()
     api.clearToken()
     setUser(null)
     navigate('/login', { replace: true })

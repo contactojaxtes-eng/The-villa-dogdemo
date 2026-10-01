@@ -658,4 +658,55 @@ describe('DeliveryDriversService', () => {
       mimetype: 'image/svg+xml',
     })).rejects.toThrow('imagen válida');
   });
+
+  it('never returns fileBase64 in uploadMyProof response', async () => {
+    const tx: any = {
+      $queryRaw: jest.fn().mockResolvedValue([{ locked: 1 }]),
+      deliveryDriver: { findUnique: jest.fn().mockResolvedValue({ id: 'driver-1', active: true }) },
+      order: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: 'order-1',
+          total: 20_000,
+          status: 'DELIVERED',
+          orderType: 'DELIVERY',
+          paymentMethod: 'TRANSFER',
+          paymentStatus: 'PENDING_REVIEW',
+          cashClosingId: 'active-shift',
+        }),
+        update: jest.fn().mockResolvedValue({ id: 'order-1', total: 20_000 }),
+        findUnique: jest.fn().mockResolvedValue({ id: 'order-1', total: 20_000 }),
+      },
+      cashClosing: { findFirst: jest.fn().mockResolvedValue({ id: 'active-shift', cashRegisterId: 'delivery-register' }) },
+      payment: { upsert: jest.fn().mockResolvedValue({ id: 'pay-1', method: 'TRANSFER' }) },
+      transferProof: {
+        updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+        create: jest.fn().mockResolvedValue({
+          id: 'proof-1',
+          fileBase64: 'data:image/jpeg;base64,HUGE_BASE64_STRING_THAT_SHOULD_BE_OMITTED',
+          mimeType: 'image/jpeg',
+          originalName: 'comprobante.jpg',
+          sizeBytes: 1024,
+        }),
+      },
+      orderChangeLog: { create: jest.fn().mockResolvedValue({}) },
+    };
+    const prisma: any = { $transaction: jest.fn((callback: (transaction: any) => unknown) => callback(tx)) };
+    const socket: any = { server: { emit: jest.fn() } };
+    const service = new DeliveryDriversService(prisma, socket);
+
+    const result = await service.uploadMyProof('driver-user', 'order-1', { method: 'TRANSFER' }, [{
+      fieldname: 'proof',
+      buffer: Buffer.from([0xff, 0xd8, 0xff, 0xd9]),
+      mimetype: 'image/jpeg',
+      originalname: 'comprobante.jpg',
+    }]);
+
+    expect(result.order).toBeDefined();
+    expect(result.proof).toBeDefined();
+    expect((result.proof as any).fileBase64).toBeUndefined();
+    expect((result.proof as any).id).toBe('proof-1');
+    expect(JSON.stringify(result)).not.toContain('HUGE_BASE64_STRING');
+  });
 });
+
+

@@ -1,28 +1,34 @@
 import { useEffect, useState } from 'react'
-import { api } from '@/lib/api'
+import { acquireProofUrl, peekProofUrl, releaseProofUrl } from '@/lib/proofCache'
 import { FileQuestion, Image as ImageIcon } from 'lucide-react'
 
 export function ProtectedImage({ endpoint, alt, className }: { endpoint: string; alt: string; className?: string }) {
-  const [url, setUrl] = useState('')
-  const [failed, setFailed] = useState(false)
   const isLocalPreview = endpoint.startsWith('blob:') || endpoint.startsWith('data:')
+  const cachedUrl = isLocalPreview ? endpoint : peekProofUrl(endpoint)
+  const [url, setUrl] = useState(cachedUrl || '')
+  const [failed, setFailed] = useState(false)
 
   useEffect(() => {
     let active = true
-    let objectUrl = ''
-    setUrl('')
+    let retained = false
     setFailed(false)
     if (isLocalPreview) return
 
-    api.getBlob(endpoint)
-      .then(blob => {
-        if (!active) return
-        if (blob && blob.size > 0) {
-          objectUrl = URL.createObjectURL(blob)
-          setUrl(objectUrl)
-        } else {
-          setFailed(true)
+    const cached = peekProofUrl(endpoint)
+    if (cached) {
+      setUrl(cached)
+    } else {
+      setUrl('')
+    }
+
+    acquireProofUrl(endpoint)
+      .then(objUrl => {
+        if (!active) {
+          releaseProofUrl(endpoint)
+          return
         }
+        retained = true
+        setUrl(objUrl)
       })
       .catch(() => {
         if (active) setFailed(true)
@@ -30,7 +36,7 @@ export function ProtectedImage({ endpoint, alt, className }: { endpoint: string;
 
     return () => {
       active = false
-      if (objectUrl) URL.revokeObjectURL(objectUrl)
+      if (retained) releaseProofUrl(endpoint)
     }
   }, [endpoint, isLocalPreview])
 

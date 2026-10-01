@@ -9,8 +9,11 @@ type MediaEntry = {
 
 const mediaCache = new Map<string, MediaEntry>()
 const pendingMedia = new Map<string, Promise<MediaEntry>>()
+const negativeMediaCache = new Map<string, number>() // mediaId -> expiresAt
 const MAX_MEDIA_ITEMS = 80
 const MAX_MEDIA_BYTES = 48 * 1024 * 1024
+const NEGATIVE_MEDIA_TTL_MS = 20 * 60 * 1000
+const MAX_NEGATIVE_ITEMS = 120
 
 const totalBytes = () => [...mediaCache.values()].reduce((sum, entry) => sum + entry.bytes, 0)
 
@@ -27,6 +30,17 @@ function pruneMediaCache() {
   }
 }
 
+function pruneNegativeCache() {
+  const now = Date.now()
+  for (const [k, exp] of negativeMediaCache.entries()) {
+    if (exp <= now) negativeMediaCache.delete(k)
+  }
+  if (negativeMediaCache.size > MAX_NEGATIVE_ITEMS) {
+    const oldest = [...negativeMediaCache.keys()].slice(0, 40)
+    for (const k of oldest) negativeMediaCache.delete(k)
+  }
+}
+
 export function peekWhatsappMediaUrl(mediaId: string) {
   const entry = mediaCache.get(mediaId)
   if (!entry) return null
@@ -35,6 +49,12 @@ export function peekWhatsappMediaUrl(mediaId: string) {
 }
 
 export async function acquireWhatsappMediaUrl(mediaId: string) {
+  const now = Date.now()
+  const negExp = negativeMediaCache.get(mediaId)
+  if (negExp && negExp > now) {
+    throw new Error('Multimedia no disponible (404/expirado)')
+  }
+
   const cached = mediaCache.get(mediaId)
   if (cached) {
     cached.refs += 1
@@ -46,7 +66,12 @@ export async function acquireWhatsappMediaUrl(mediaId: string) {
   if (!pending) {
     pending = api.getBlob(`/whatsapp/media/${encodeURIComponent(mediaId)}`)
       .then(blob => {
-        if (!blob || blob.size === 0) throw new Error('Archivo multimedia vacío')
+        if (!blob || blob.size === 0) {
+          negativeMediaCache.set(mediaId, Date.now() + NEGATIVE_MEDIA_TTL_MS)
+          pruneNegativeCache()
+          throw new Error('Archivo multimedia vacío')
+        }
+        negativeMediaCache.delete(mediaId)
         const entry: MediaEntry = {
           url: URL.createObjectURL(blob),
           bytes: blob.size,
@@ -55,6 +80,11 @@ export async function acquireWhatsappMediaUrl(mediaId: string) {
         }
         mediaCache.set(mediaId, entry)
         return entry
+      })
+      .catch(err => {
+        negativeMediaCache.set(mediaId, Date.now() + NEGATIVE_MEDIA_TTL_MS)
+        pruneNegativeCache()
+        throw err
       })
       .finally(() => pendingMedia.delete(mediaId))
     pendingMedia.set(mediaId, pending)
@@ -74,3 +104,15 @@ export function releaseWhatsappMediaUrl(mediaId: string) {
   entry.lastUsed = Date.now()
   pruneMediaCache()
 }
+
+export function clearMediaCache(): void {
+  for (const entry of mediaCache.values()) {
+    try {
+      URL.revokeObjectURL(entry.url)
+    } catch {}
+  }
+  mediaCache.clear()
+  pendingMedia.clear()
+  negativeMediaCache.clear()
+}
+

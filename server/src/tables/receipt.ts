@@ -41,3 +41,10 @@ export const receiptSummary = {
   paymentId: true, orderId: true, tableId: true, cashClosingId: true, submittedById: true,
   reviewedById: true,
 } as const;
+
+export function sanitizeReceipt<T extends Record<string, any>>(proof: T | null | undefined): Omit<T, 'fileBase64' | 'filePath'> | null {
+  if (!proof) return null;
+  const { fileBase64, filePath, ...rest } = proof;
+  return rest as Omit<T, 'fileBase64' | 'filePath'>;
+}
+

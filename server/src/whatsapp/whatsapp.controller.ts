@@ -470,8 +470,15 @@ export class WhatsappController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('SUPERADMIN')
   @ApiOperation({ summary: 'Consultar modelos y límites publicados por Gemini' })
-  async getGeminiModels(@Body() body: { key?: string; model?: string }) {
-    return this.whatsappService.getGeminiModelInfo(body?.key, body?.model);
+  
+
+  @Get('gemini-metrics')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('SUPERADMIN', 'ADMIN')
+  @ApiOperation({ summary: 'Consultar métricas agregadas de uso y errores de Gemini' })
+  async getGeminiMetrics(@Query('days') days?: string) {
+    const daysNum = Math.min(30, Math.max(1, Number(days) || 14));
+    return this.whatsappService.getGeminiMetrics(daysNum);
   }
 
   @Post('parse-order')

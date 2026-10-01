@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import {
   Loader2,
   AlertCircle,
@@ -26,7 +26,9 @@ export function WhatsAppMedia({ mediaId, type }: WhatsAppMediaProps) {
   const rawMediaId = safeMediaId.split('|')[0] || ''
   const cleanMediaId = rawMediaId.includes('/') ? (rawMediaId.split('/').pop() || rawMediaId) : rawMediaId
   const captionText = safeMediaId.includes('|') ? safeMediaId.split('|').slice(1).join('|') : ''
+  const containerRef = useRef<HTMLDivElement | null>(null)
   const cachedSrc = peekWhatsappMediaUrl(cleanMediaId)
+  const [isVisible, setIsVisible] = useState(Boolean(cachedSrc))
   const [src, setSrc] = useState<string | null>(cachedSrc)
   const [loading, setLoading] = useState(!cachedSrc)
   const [error, setError] = useState(false)
@@ -35,6 +37,27 @@ export function WhatsAppMedia({ mediaId, type }: WhatsAppMediaProps) {
   const [scale, setScale] = useState(1)
 
   useEffect(() => {
+    if (isVisible) return
+    const el = containerRef.current
+    if (!el || typeof IntersectionObserver === 'undefined') {
+      setIsVisible(true)
+      return
+    }
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some(e => e.isIntersecting)) {
+          setIsVisible(true)
+          observer.disconnect()
+        }
+      },
+      { rootMargin: '250px' }
+    )
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [isVisible])
+
+  useEffect(() => {
+    if (!isVisible) return
     let active = true
     let retained = false
 
@@ -50,7 +73,6 @@ export function WhatsAppMedia({ mediaId, type }: WhatsAppMediaProps) {
         retained = true
         setSrc(url)
       } catch (err) {
-        console.error('Error fetching media:', err)
         if (active) setError(true)
       } finally {
         if (active) setLoading(false)
@@ -63,7 +85,7 @@ export function WhatsAppMedia({ mediaId, type }: WhatsAppMediaProps) {
       active = false
       if (retained) releaseWhatsappMediaUrl(cleanMediaId)
     }
-  }, [cleanMediaId])
+  }, [cleanMediaId, isVisible])
 
   const handleCloseZoom = () => {
     setIsZoomed(false)
@@ -80,8 +102,16 @@ export function WhatsAppMedia({ mediaId, type }: WhatsAppMediaProps) {
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [isZoomed])
 
+  if (!isVisible) {
+    return (
+      <div ref={containerRef} className="flex items-center justify-center p-3 bg-[var(--bg-elevated)]/20 rounded-xl min-h-[50px] animate-pulse">
+        <span className="text-[10px] font-medium text-[var(--text-secondary)]">Multimedia en espera...</span>
+      </div>
+    )
+  }
+
   return (
-    <div className="space-y-1.5 max-w-full">
+    <div ref={containerRef} className="space-y-1.5 max-w-full">
       {loading ? (
         <div className="flex items-center justify-center p-3 bg-[var(--bg-elevated)]/30 rounded-xl">
           <Loader2 className="h-4 w-4 animate-spin text-[var(--accent)]" />
@@ -257,12 +287,35 @@ export function WhatsAppDocument({ mediaId }: { mediaId: string }) {
   const rawMediaId = safeMediaId.split('|')[0] || ''
   const cleanMediaId = rawMediaId.includes('/') ? (rawMediaId.split('/').pop() || rawMediaId) : rawMediaId
   const captionText = safeMediaId.includes('|') ? safeMediaId.split('|').slice(1).join('|') : ''
+  const containerRef = useRef<HTMLDivElement | null>(null)
   const cachedSrc = peekWhatsappMediaUrl(cleanMediaId)
+  const [isVisible, setIsVisible] = useState(Boolean(cachedSrc))
   const [loading, setLoading] = useState(!cachedSrc)
   const [error, setError] = useState(false)
   const [src, setSrc] = useState<string | null>(cachedSrc)
 
   useEffect(() => {
+    if (isVisible) return
+    const el = containerRef.current
+    if (!el || typeof IntersectionObserver === 'undefined') {
+      setIsVisible(true)
+      return
+    }
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some(e => e.isIntersecting)) {
+          setIsVisible(true)
+          observer.disconnect()
+        }
+      },
+      { rootMargin: '250px' }
+    )
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [isVisible])
+
+  useEffect(() => {
+    if (!isVisible) return
     let active = true
     let retained = false
 
@@ -278,7 +331,6 @@ export function WhatsAppDocument({ mediaId }: { mediaId: string }) {
         retained = true
         setSrc(url)
       } catch (err) {
-        console.error('Error fetching document:', err)
         if (active) setError(true)
       } finally {
         if (active) setLoading(false)
@@ -291,10 +343,18 @@ export function WhatsAppDocument({ mediaId }: { mediaId: string }) {
       active = false
       if (retained) releaseWhatsappMediaUrl(cleanMediaId)
     }
-  }, [cleanMediaId])
+  }, [cleanMediaId, isVisible])
+
+  if (!isVisible) {
+    return (
+      <div ref={containerRef} className="flex items-center gap-2 p-2 bg-[var(--bg-elevated)]/20 rounded-xl min-w-[200px] animate-pulse">
+        <span className="text-[10px] font-medium text-[var(--text-secondary)]">Documento en espera...</span>
+      </div>
+    )
+  }
 
   return (
-    <div className="space-y-1.5 min-w-[200px]">
+    <div ref={containerRef} className="space-y-1.5 min-w-[200px]">
       {loading ? (
         <div className="flex items-center gap-2 p-2 bg-[var(--bg-elevated)]/30 rounded-xl">
           <Loader2 className="h-4 w-4 animate-spin text-[var(--accent)]" />

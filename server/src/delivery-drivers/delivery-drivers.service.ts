@@ -5,7 +5,7 @@ import { lockOperation, operationTransaction } from '../common/operation-lock';
 import { PrismaService } from '../prisma/prisma.service';
 import { SocketGateway } from '../socket/socket.gateway';
 import { DeliveryDriverGateway } from '../socket/delivery-driver.gateway';
-import { detectReceiptMime, receiptSummary, validateReceipt } from '../tables/receipt';
+import { detectReceiptMime, receiptSummary, sanitizeReceipt, validateReceipt } from '../tables/receipt';
 import { WhatsappService } from '../whatsapp/whatsapp.service';
 import { extractDriverChatMediaId, toDriverOrderChatMessage } from '../whatsapp/order-chat-message';
 import { CompleteDriverDeliveryDto, ConfigureDriverAccessDto, CreateDriverDto, UpdateDriverDto } from './dto';
@@ -1042,7 +1042,7 @@ export class DeliveryDriversService {
           deliveryDriver: { select: { id: true, name: true, phone: true } },
         },
       });
-      return { order: updatedOrder, payment, proof, isTransfer: hasTransferPart };
+      return { order: updatedOrder, payment, proof: sanitizeReceipt(proof), isTransfer: hasTransferPart };
     }, operationTransaction);
 
     this.socketGateway.emitOrderStatusChange(orderId, 'DELIVERED', result.order);
@@ -1325,7 +1325,7 @@ export class DeliveryDriversService {
           deliveryDriver: { select: { id: true, name: true, phone: true } },
         },
       });
-      return { order: updatedOrder, payment, proof, isTransfer: true };
+      return { order: updatedOrder, payment, proof: sanitizeReceipt(proof), isTransfer: true };
     }, operationTransaction);
 
     this.socketGateway.server.emit('paymentUpdated', result.payment);
