@@ -338,20 +338,41 @@ export default function SuperAdminConfigPage() {
 
   const removeKey = async (index: number) => {
     const keyItem = geminiKeys[index] || ''
+    if (!keyItem.trim()) {
+      setGeminiKeys(current => {
+        const next = current.filter((_, keyIndex) => keyIndex !== index)
+        return next.length ? next : ['']
+      })
+      return
+    }
+
     const masked = keyItem.includes('•')
     const label = masked ? `que termina en ${keyItem.slice(-4)}` : `#${index + 1}`
     const confirmed = await alerts.confirm(
       `¿Eliminar Llave ${index + 1}?`,
-      `Se quitará la llave ${label} de la lista. Para que se elimine definitivamente del servidor, recuerda pulsar "Guardar configuración de IA".`
+      `Se eliminará la llave ${label} permanentemente del servidor y se guardará la configuración de inmediato.`
     )
     if (!confirmed) return
 
-    setGeminiKeys(current => {
-      const next = current.filter((_, keyIndex) => keyIndex !== index)
-      return next.length ? next : ['']
-    })
-    setTestResult(null)
-    alerts.toast(`Llave ${index + 1} retirada. Pulsa "Guardar configuración de IA" para confirmar.`)
+    const nextKeys = geminiKeys.filter((_, keyIndex) => keyIndex !== index)
+    const combinedKeys = nextKeys.map(k => k.trim()).filter(Boolean).join(', ')
+
+    setSavingAi(true)
+    try {
+      const updated = await api.put<WhatsappCoreConfig>('/whatsapp/settings', {
+        chatbotEnabled: wa.chatbotEnabled,
+        geminiApiKey: combinedKeys,
+        geminiModel: wa.geminiModel,
+        aiInstructions: wa.aiInstructions,
+      })
+      setWhatsappResponse(updated)
+      setTestResult(null)
+      alerts.success('Llave eliminada', `La llave ${label} fue eliminada y la configuración se guardó en el servidor.`)
+    } catch (error) {
+      alerts.error('No se pudo eliminar la llave', getErrorMessage(error, 'Error al guardar los cambios en el servidor.'))
+    } finally {
+      setSavingAi(false)
+    }
   }
 
   const toggleChatbot = async () => {
@@ -492,19 +513,27 @@ export default function SuperAdminConfigPage() {
   const loadGeminiModelInfo = async (keysOverride?: string, modelOverride?: string) => {
     const combinedKeys = keysOverride ?? geminiKeys.map(key => key.trim()).filter(Boolean).join(', ')
     if (!combinedKeys) {
-      alerts.warning('Agrega al menos una llave de Gemini para consultar los modelos.')
+      if (!keysOverride) {
+        alerts.warning('Agrega al menos una llave de Gemini para consultar los modelos.')
+      }
       return
     }
     setLoadingModelInfo(true)
     setModelInfoError('')
     try {
       const result = await api.post<GeminiModelInfo>('/whatsapp/gemini-models', { key: combinedKeys, model: modelOverride ?? wa.geminiModel })
+      if (result && !Array.isArray(result.availableModels)) {
+        result.availableModels = []
+      }
       setModelInfo(result)
-      alerts.toast(`${result.availableModels.length} modelos compatibles encontrados`)
+      const count = result?.availableModels?.length || 0
+      alerts.toast(`${count} modelos compatibles encontrados`)
     } catch (error) {
       const message = getErrorMessage(error, 'No se pudieron consultar los modelos de Gemini.')
       setModelInfoError(message)
-      alerts.error('No se pudo consultar Gemini', message)
+      if (!keysOverride) {
+        alerts.error('No se pudo consultar Gemini', message)
+      }
     } finally {
       setLoadingModelInfo(false)
     }
@@ -693,7 +722,7 @@ export default function SuperAdminConfigPage() {
                         <div className="flex gap-2">
                           <span className="flex h-11 min-w-20 items-center justify-center rounded-xl bg-[var(--bg-elevated)] px-2 text-[11px] font-bold text-[var(--text-muted)]">Llave {index + 1}</span>
                           <input type="text" autoComplete="off" value={keyValue} onChange={event => updateKey(index, event.target.value)} className={cn(fieldClass, 'min-w-0 flex-1 font-mono text-xs', masked && 'border-emerald-500/30 text-emerald-600', invalid && 'border-red-500 text-red-600')} placeholder="Pega aquí la llave API" />
-                          <button type="button" onClick={() => removeKey(index)} className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-red-500/20 text-red-500 transition hover:bg-red-500/10" aria-label={`Eliminar llave ${index + 1}`}><Trash2 className="h-4 w-4" /></button>
+                          <button type="button" onClick={() => removeKey(index)} disabled={savingAi} className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-red-500/20 text-red-500 transition hover:bg-red-500/10 disabled:cursor-not-allowed disabled:opacity-50" aria-label={`Eliminar llave ${index + 1}`}><Trash2 className="h-4 w-4" /></button>
                         </div>
                         {masked && <p className="mt-1 pl-[5.5rem] text-[10px] font-bold text-emerald-600">Guardada · termina en {keyValue.slice(-4)}</p>}
                         {invalid && <p className="mt-1 pl-[5.5rem] text-[10px] font-bold text-red-500">La llave parece incompleta.</p>}
@@ -705,7 +734,7 @@ export default function SuperAdminConfigPage() {
 
               {modelInfoError && <div className="rounded-xl border border-red-500/20 bg-red-500/5 p-3 text-xs font-bold text-red-600">{modelInfoError}</div>}
               {modelInfo && <div className="space-y-4 rounded-2xl border border-blue-500/20 bg-blue-500/5 p-4">
-                <div className="flex items-start gap-2"><Gauge className="mt-0.5 h-5 w-5 shrink-0 text-blue-600" /><div><p className="text-sm font-black text-[var(--text-primary)]">Modelos reales de esta llave</p><p className="mt-0.5 text-[11px] text-[var(--text-muted)]">Google devolvió {modelInfo.availableModels.length} modelos que aceptan respuestas de texto. Consulta realizada con la llave {modelInfo.keySuffix || 'configurada'} · {new Date(modelInfo.checkedAt).toLocaleTimeString('es-CO')}</p></div></div>
+                <div className="flex items-start gap-2"><Gauge className="mt-0.5 h-5 w-5 shrink-0 text-blue-600" /><div><p className="text-sm font-black text-[var(--text-primary)]">Modelos reales de esta llave</p><p className="mt-0.5 text-[11px] text-[var(--text-muted)]">Google devolvió {modelInfo.availableModels?.length || 0} modelos que aceptan respuestas de texto. Consulta realizada con la llave {modelInfo.keySuffix || 'configurada'} · {new Date(modelInfo.checkedAt).toLocaleTimeString('es-CO')}</p></div></div>
 
                 <div className="grid gap-2 sm:grid-cols-3"><div className="rounded-xl bg-[var(--bg-panel)] p-3"><p className="text-[10px] font-bold uppercase tracking-wide text-[var(--text-muted)]">Modelo activo guardado</p><p className="mt-1 truncate text-xs font-black text-[var(--text-primary)]">{modelInfo.configuredModel || savedGeminiModel || 'No configurado'}</p>{!modelInfo.selectedModel && <p className="mt-1 text-[10px] font-bold text-amber-600">No aparece disponible para esta llave</p>}</div><div className="rounded-xl bg-[var(--bg-panel)] p-3"><p className="text-[10px] font-bold uppercase tracking-wide text-[var(--text-muted)]">Entrada máxima</p><p className="mt-1 text-sm font-black text-[var(--text-primary)]">{formatTokenLimit(modelInfo.selectedModel?.inputTokenLimit ?? null)}</p></div><div className="rounded-xl bg-[var(--bg-panel)] p-3"><p className="text-[10px] font-bold uppercase tracking-wide text-[var(--text-muted)]">Salida máxima</p><p className="mt-1 text-sm font-black text-[var(--text-primary)]">{formatTokenLimit(modelInfo.selectedModel?.outputTokenLimit ?? null)}</p></div></div>
 
@@ -713,7 +742,7 @@ export default function SuperAdminConfigPage() {
 
                 <div className="flex items-start gap-2 rounded-xl bg-[var(--bg-panel)] p-3"><Info className="mt-0.5 h-4 w-4 shrink-0 text-blue-600" /><p className="text-[11px] leading-5 text-[var(--text-secondary)]">Solicitudes registradas por esta aplicación hoy: <strong>{modelInfo.usage.requestsToday.toLocaleString('es-CO')}</strong>. La cuota restante exacta no la publica esta API; Google la administra por proyecto y plan en AI Studio o Cloud Console.</p></div>
 
-                <div><div className="mb-2 flex items-center justify-between gap-2"><p className="text-xs font-black text-[var(--text-primary)]">Todos los modelos disponibles</p><span className="rounded-lg bg-[var(--bg-panel)] px-2 py-1 text-[10px] font-bold text-[var(--text-muted)]">Haz clic para seleccionar</span></div><div className="max-h-[30rem] space-y-2 overflow-y-auto pr-1">{modelInfo.availableModels.map(model => { const use = getGeminiModelUse(model); const selected = wa.geminiModel === model.name; const active = savedGeminiModel === model.name; return <button key={model.name} type="button" onClick={() => { setWa(current => ({ ...current, geminiModel: model.name })); setTestResult(null) }} className={cn('w-full rounded-xl border p-3 text-left transition hover:border-[var(--accent)] hover:shadow-sm', modelToneClass[use.tone], selected && 'border-[var(--accent)] ring-2 ring-[var(--accent)]/15')}><div className="flex items-start justify-between gap-3"><div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><span className="truncate text-xs font-black text-[var(--text-primary)]">{model.displayName || model.name}</span><span className="rounded-md bg-[var(--bg-panel)] px-1.5 py-0.5 text-[9px] font-black text-[var(--text-secondary)]">{use.label}</span>{active && <span className="rounded-md bg-emerald-500 px-1.5 py-0.5 text-[9px] font-black text-white">Activo</span>}{selected && !active && <span className="rounded-md bg-amber-500 px-1.5 py-0.5 text-[9px] font-black text-white">Por guardar</span>}</div><p className="mt-1 truncate font-mono text-[10px] text-[var(--text-muted)]">{model.name}</p><p className="mt-1 text-[11px] leading-4 text-[var(--text-secondary)]">{model.description || use.description}</p></div><span className="shrink-0 text-[10px] font-bold text-[var(--text-muted)]">{formatTokenLimit(model.outputTokenLimit)} salida</span></div></button> })}</div></div>
+                <div><div className="mb-2 flex items-center justify-between gap-2"><p className="text-xs font-black text-[var(--text-primary)]">Todos los modelos disponibles</p><span className="rounded-lg bg-[var(--bg-panel)] px-2 py-1 text-[10px] font-bold text-[var(--text-muted)]">Haz clic para seleccionar</span></div><div className="max-h-[30rem] space-y-2 overflow-y-auto pr-1">{(modelInfo.availableModels || []).map(model => { const use = getGeminiModelUse(model); const selected = wa.geminiModel === model.name; const active = savedGeminiModel === model.name; return <button key={model.name} type="button" onClick={() => { setWa(current => ({ ...current, geminiModel: model.name })); setTestResult(null) }} className={cn('w-full rounded-xl border p-3 text-left transition hover:border-[var(--accent)] hover:shadow-sm', modelToneClass[use.tone], selected && 'border-[var(--accent)] ring-2 ring-[var(--accent)]/15')}><div className="flex items-start justify-between gap-3"><div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><span className="truncate text-xs font-black text-[var(--text-primary)]">{model.displayName || model.name}</span><span className="rounded-md bg-[var(--bg-panel)] px-1.5 py-0.5 text-[9px] font-black text-[var(--text-secondary)]">{use.label}</span>{active && <span className="rounded-md bg-emerald-500 px-1.5 py-0.5 text-[9px] font-black text-white">Activo</span>}{selected && !active && <span className="rounded-md bg-amber-500 px-1.5 py-0.5 text-[9px] font-black text-white">Por guardar</span>}</div><p className="mt-1 truncate font-mono text-[10px] text-[var(--text-muted)]">{model.name}</p><p className="mt-1 text-[11px] leading-4 text-[var(--text-secondary)]">{model.description || use.description}</p></div><span className="shrink-0 text-[10px] font-bold text-[var(--text-muted)]">{formatTokenLimit(model.outputTokenLimit)} salida</span></div></button> })}</div></div>
                 <p className="text-[10px] text-[var(--text-muted)]">El modelo elegido queda guardado al pulsar “Guardar configuración de IA”. “Nuevo pedido” usa automáticamente ese modelo para interpretar el chat; si falla, mantiene la contingencia local.</p>
               </div>}
 

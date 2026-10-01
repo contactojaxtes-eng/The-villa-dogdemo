@@ -470,6 +470,9 @@ export class WhatsappController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('SUPERADMIN')
   @ApiOperation({ summary: 'Consultar modelos y límites publicados por Gemini' })
+  async getGeminiModels(@Body() body: { key?: string; model?: string }) {
+    return this.whatsappService.getGeminiModelInfo(body?.key, body?.model);
+  }
   
 
   @Get('gemini-metrics')
