@@ -46,9 +46,12 @@ export class GeocodingController {
           const cleanDisplayName = cleanParts.join(', ');
           const cleanAddress = cleanParts.slice(0, 3).join(', ');
 
-          // Resolve suggested zone: try by extracted neighbourhood first, then by clean parts, then by overall query
-          let suggestedZone: any = null;
-          if (neighbourhood) {
+          // Una excepción exacta configurada con tarifa $0 sí prevalece sobre el
+          // barrio general. Las coincidencias normales se resuelven primero por
+          // el barrio de Nominatim para que palabras amplias como "Centro" no
+          // ganen solo por aparecer en el nombre de un establecimiento.
+          let suggestedZone: any = await this.zonesService.suggestExactFreePlace(query);
+          if (!suggestedZone && neighbourhood) {
             suggestedZone = await this.zonesService.suggestByName(neighbourhood);
           }
           if (!suggestedZone) {
@@ -60,7 +63,6 @@ export class GeocodingController {
           if (!suggestedZone) {
             suggestedZone = await this.zonesService.suggestByName(query);
           }
-
           // If a zone is matched, synchronize the neighbourhood name with the official zone name
           if (suggestedZone) {
             neighbourhood = suggestedZone.name;

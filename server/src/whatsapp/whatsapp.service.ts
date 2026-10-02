@@ -7,6 +7,7 @@ import { DeliveryDriverGateway } from '../socket/delivery-driver.gateway';
 import { buildMessagingMenuText } from '../menu/menu-text';
 import { receiptSummary } from '../tables/receipt';
 import { toDriverOrderChatMessage } from './order-chat-message';
+import { sanitizeOrderNote } from './order-notes';
 
 export type GeminiOperation = 'ORDER_READER' | 'AUDIO_TRANSCRIPTION' | 'CHATBOT' | 'CONNECTION_TEST' | 'LEARNING' | 'RULE_POLISH';
 
@@ -74,6 +75,14 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
   private autoTrainingTimer?: ReturnType<typeof setTimeout>;
   private autoTrainingStopped = false;
   private autoTrainingRunInProgress = false;
+  private readonly chatbotSessionQueues = new Map<string, Promise<void>>();
+  private readonly latestChatbotTriggerBySession = new Map<string, string>();
+  private readonly pendingChatbotPayloadBySession = new Map<string, {
+    session: any;
+    userText: string;
+    previousLastMessageAt?: Date | null;
+    triggerMessageId: string;
+  }>();
 
   constructor(
     private prisma: PrismaService,
@@ -412,6 +421,26 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
     return text.length >= 3 && /[a-záéíóúñ0-9]/i.test(text);
   }
 
+  private isIncompleteGeminiReply(value: string): boolean {
+    const text = String(value || '').trim();
+    if (!this.isMeaningfulGeminiReply(text)) return true;
+    if (/[:;,\-–—]\s*$/.test(text)) return true;
+    const terminalText = text.replace(/[.!?…]+\s*$/, '').trim();
+    return /\b(?:a|al|de|del|en|la|el|los|las|un|una|unos|unas|con|sin|por|para|hacia|y|e|o|u|que|pero|porque|nuestro|nuestra|nuestros|nuestras|su|sus)\s*$/i.test(terminalText);
+  }
+
+  private getCompleteGeminiReply(data: any): string | null {
+    const candidate = data?.candidates?.[0];
+    if (!candidate) return null;
+    const finishReason = String(candidate.finishReason || '').trim().toUpperCase();
+    if (finishReason && finishReason !== 'STOP') return null;
+    const reply = (Array.isArray(candidate?.content?.parts) ? candidate.content.parts : [])
+      .map((part: any) => typeof part?.text === 'string' ? part.text : '')
+      .join('')
+      .trim();
+    return this.isIncompleteGeminiReply(reply) ? null : reply;
+  }
+
   private parseColombianAmount(value: string): number | null {
     const normalized = String(value || '').replace(/\s/g, '').replace(/\./g, '').replace(',', '.');
     const parsed = Number(normalized);
@@ -744,27 +773,12 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
 
     // 3. Scan message text with regex for Colombian mobile phone numbers
     if (text) {
-      // 3.1 Check explicit label (e.g. "Cel: 3108776660", "Teléfono: 3001234567", "numero de llamadas: 315...")
-      const explicitMatch = text.match(/(?:tel[eé]fono|cel(?:ular)?|m[oó]vil|n[uú]mero|num|nro|wa|llamadas?)\s*[:=-]?\s*(?:57\s*)?(3\d{2}[\s.-]?\d{3}[\s.-]?\d{4})/i);
+      // Solo un rótulo inequívoco puede reemplazar el dato de contacto. Un
+      // número suelto puede ser Nequi, una cuenta, un comprobante o cambio.
+      const explicitMatch = text.match(/(?:tel[eé]fono|cel(?:ular)?|m[oó]vil|whatsapp|n[uú]mero\s+de\s+tel[eé]fono)\s*[:=-]?\s*(?:57\s*)?(3\d{2}[\s.-]?\d{3}[\s.-]?\d{4})/i);
       if (explicitMatch) {
         const digits = explicitMatch[1].replace(/\D/g, '');
         if (digits.length === 10 && digits.startsWith('3')) return digits;
-      }
-
-      // 3.2 Check standalone lines with a 10 or 12 digit number
-      const lines = text.split(/[\r\n]+/);
-      for (const line of lines) {
-        const trimmed = line.trim();
-        const lineDigits = trimmed.replace(/\D/g, '');
-        if (lineDigits.length === 10 && lineDigits.startsWith('3')) return lineDigits;
-        if (lineDigits.length === 12 && lineDigits.startsWith('573')) return lineDigits.slice(2);
-      }
-
-      // 3.3 Generic 10 digit Colombian mobile pattern
-      const genericMatch = text.match(/\b(?:57\s*)?(3[0-9]{2})[\s.-]?([0-9]{3})[\s.-]?([0-9]{4})\b/);
-      if (genericMatch) {
-        const digits = `${genericMatch[1]}${genericMatch[2]}${genericMatch[3]}`;
-        if (digits.length === 10) return digits;
       }
     }
 
@@ -1679,7 +1693,11 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
     }
 
     const previousLastMessageAt = session?.lastMessageAt || null;
-    const callablePhone = (phone10.length === 10 && phone10.startsWith('3')) ? phone10 : (cleanDigits || null);
+    // Meta puede entregar un identificador técnico largo como remitente. Nunca
+    // debe guardarse ese identificador como teléfono del cliente. Se prioriza el
+    // número llamable validado desde el remitente, el contacto o el propio texto.
+    const callablePhone = detectedCallablePhone
+      || ((phone10.length === 10 && phone10.startsWith('3')) ? phone10 : null);
 
     if (!session) {
       session = await this.prisma.whatsAppSession.create({
@@ -1816,9 +1834,7 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
     // La lectura de pedidos puede transcribir una nota de voz aunque el bot esté
     // pausado; esta operación nunca envía una respuesta al cliente.
     if (dbMessageType === 'text') {
-      this.handleChatbot(session, content, previousLastMessageAt).catch(err => {
-        this.logger.error(`Error en chatbot de texto para ${session.phone}:`, err);
-      });
+      this.enqueueChatbotResponse(session, content, previousLastMessageAt, newMsg.id);
     } else if (dbMessageType === 'audio') {
       const mediaId = this.getMediaIdFromContent(content);
       if (mediaId) {
@@ -1827,15 +1843,27 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
           messageId: newMsg.id,
           mediaId,
           content,
+        }).then(async transcript => {
+          if (transcript && await this.isLatestIncomingMessage(session.id, newMsg.id)) {
+            // El audio usa exactamente la misma cola, contexto y validaciones
+            // que el texto. Así solo se consume una transcripción y se evita
+            // que audio + texto produzcan respuestas cruzadas.
+            this.enqueueChatbotResponse(session, transcript, previousLastMessageAt, newMsg.id);
+            return;
+          }
+          if (!transcript && await this.isLatestIncomingMessage(session.id, newMsg.id)) {
+            await this.handleMultimediaChatbot(session, dbMessageType, mediaId, newMsg.id);
+          }
         }).catch(err => {
           this.logger.error(`Error transcribiendo nota de voz para ${session.phone}:`, err);
         });
+      } else {
+        this.handleMultimediaChatbot(session, dbMessageType, content, newMsg.id).catch(err => {
+          this.logger.error(`Error en chatbot multimedia para ${session.phone}:`, err);
+        });
       }
-      this.handleMultimediaChatbot(session, dbMessageType, mediaId || content).catch(err => {
-        this.logger.error(`Error en chatbot multimedia para ${session.phone}:`, err);
-      });
     } else {
-      this.handleMultimediaChatbot(session, dbMessageType, content).catch(err => {
+      this.handleMultimediaChatbot(session, dbMessageType, content, newMsg.id).catch(err => {
         this.logger.error(`Error en chatbot multimedia para ${session.phone}:`, err);
       });
     }
@@ -3719,6 +3747,47 @@ The Villa Dog • Montería`;
     return null;
   }
 
+  private extractDeliveryTariffClaim(value: string, mentionedZone?: any): { found: boolean; amount: number | null } {
+    const zoneName = this.normalizeSpanishLookup(String(mentionedZone?.name || ''));
+    // No se separa por punto: en Colombia forma parte de montos como $8.000.
+    const sentences = String(value || '').split(/[!?\n]+/).map(sentence => sentence.trim()).filter(Boolean);
+
+    for (const sentence of sentences) {
+      const normalized = this.normalizeSpanishLookup(sentence);
+      const mentionsDelivery = /\b(?:domicilio|envio|entrega)\b/.test(normalized);
+      const mentionsZone = Boolean(zoneName) && ` ${normalized} `.includes(` ${zoneName} `);
+      const hasTariffNoun = /\b(?:tarifa|costo|valor|precio)\b/.test(normalized);
+      const hasPricingVerb = /\b(?:cuesta|vale|sale|es|son|queda|seria|sera)\b/.test(normalized);
+      const hasMoneyMarker = sentence.includes('$');
+      const looksLikeAddress = /\b(?:direccion|calle|cll|carrera|cra|avenida|diagonal|transversal|manzana|mz|lote|apartamento|apto|casa)\b/.test(normalized);
+      const isTariffContext = (
+        mentionsDelivery && (hasTariffNoun || hasPricingVerb || hasMoneyMarker)
+      ) || (
+        mentionsZone && (hasTariffNoun || hasPricingVerb || hasMoneyMarker)
+      );
+      if (!isTariffContext) continue;
+
+      const thousands = sentence.match(/(?:\$\s*)?(\d{1,2})\s*mil\b/i);
+      if (thousands?.[1]) {
+        return { found: true, amount: Number(thousands[1]) * 1000 };
+      }
+      const numeric = sentence.match(/\$\s*(\d[\d.,]*)|\b(\d{3,6})\b/);
+      const rawAmount = numeric?.[1] || numeric?.[2];
+      if (!rawAmount) continue;
+      const parsedAmount = this.parseColombianAmount(rawAmount);
+      // Una dirección puede contener números de tres o cuatro cifras. Sin un
+      // sustantivo de tarifa ni símbolo monetario, no los interpretes como precio.
+      if (looksLikeAddress && !hasTariffNoun && !hasMoneyMarker) continue;
+      if (!hasMoneyMarker && !hasTariffNoun && parsedAmount !== null && parsedAmount < 500) continue;
+      return {
+        found: true,
+        amount: parsedAmount,
+      };
+    }
+
+    return { found: false, amount: null };
+  }
+
   private parseAdvisorTransferReply(rawText: string): { cleanText: string; shouldTransfer: boolean } {
     const markerPattern = /\[?\s*TRANSFERIR(?:[_\s-]+)ASESOR\s*\]?/gi;
     const text = String(rawText || '');
@@ -3866,24 +3935,105 @@ The Villa Dog • Montería`;
     return updated || { ...session, waitingForAdvisor: false };
   }
 
-  private async handleChatbot(session: any, userText: string, previousLastMessageAt?: Date | null) {
+  private enqueueChatbotResponse(
+    session: any,
+    userText: string,
+    previousLastMessageAt: Date | null | undefined,
+    triggerMessageId: string,
+  ): void {
+    const sessionId = String(session?.id || '').trim();
+    if (!sessionId || !triggerMessageId) return;
+
+    this.latestChatbotTriggerBySession.set(sessionId, triggerMessageId);
+    this.pendingChatbotPayloadBySession.set(sessionId, {
+      session,
+      userText,
+      previousLastMessageAt,
+      triggerMessageId,
+    });
+    if (this.chatbotSessionQueues.has(sessionId)) return;
+
+    const queue = (async () => {
+      while (true) {
+        // Agrupa los mensajes cortos que el cliente suele enviar en varias
+        // burbujas sin retrasar la aparición inmediata en el panel.
+        await new Promise(resolve => setTimeout(resolve, 400));
+        const payload = this.pendingChatbotPayloadBySession.get(sessionId);
+        if (!payload) return;
+
+        await this.handleChatbot(
+          payload.session,
+          payload.userText,
+          payload.previousLastMessageAt,
+          payload.triggerMessageId,
+        );
+
+        if (this.latestChatbotTriggerBySession.get(sessionId) === payload.triggerMessageId) return;
+      }
+    })().catch(error => {
+      this.logger.error(`Error en cola de chatbot para ${session?.phone || sessionId}:`, error);
+    }).finally(() => {
+      if (this.chatbotSessionQueues.get(sessionId) === queue) {
+        this.chatbotSessionQueues.delete(sessionId);
+        this.latestChatbotTriggerBySession.delete(sessionId);
+        this.pendingChatbotPayloadBySession.delete(sessionId);
+      }
+    });
+
+    this.chatbotSessionQueues.set(sessionId, queue);
+  }
+
+  private async isLatestChatbotTrigger(sessionId: string, triggerMessageId?: string): Promise<boolean> {
+    if (!triggerMessageId) return true;
+    if (this.latestChatbotTriggerBySession.get(sessionId) !== triggerMessageId) return false;
+    return this.isLatestIncomingMessage(sessionId, triggerMessageId);
+  }
+
+  private async isLatestIncomingMessage(sessionId: string, messageId?: string): Promise<boolean> {
+    if (!messageId) return true;
+    const latestIncoming = await this.prisma.whatsAppMessage.findFirst({
+      where: { sessionId, direction: 'IN' },
+      orderBy: { createdAt: 'desc' },
+      select: { id: true },
+    });
+    return latestIncoming?.id === messageId;
+  }
+
+  private async isSessionAvailableForChatbot(sessionId: string): Promise<boolean> {
+    const findUnique = (this.prisma.whatsAppSession as any)?.findUnique;
+    if (typeof findUnique !== 'function') return true;
+    const current = await findUnique.call(this.prisma.whatsAppSession, {
+      where: { id: sessionId },
+      select: { assignedToId: true, waitingForAdvisor: true },
+    });
+    return !current?.assignedToId && !current?.waitingForAdvisor;
+  }
+
+  private async handleChatbot(
+    session: any,
+    userText: string,
+    previousLastMessageAt?: Date | null,
+    triggerMessageId?: string,
+  ) {
     try {
-      // El cierre programado es una respuesta operativa, independiente de la
-      // IA. Por eso sigue funcionando aunque el bot conversacional esté pausado.
-      const closedReply = await this.getClosedBusinessReply();
-      if (closedReply) {
-        await this.sendMessage(session.phone, closedReply);
+      const sessionId = String(session?.id || '');
+      if (!(await this.isLatestChatbotTrigger(sessionId, triggerMessageId))) {
+        this.logger.log(`Respuesta automática omitida: llegó un mensaje más nuevo en ${session.phone}.`);
         return;
       }
 
-      // Verificar si el chatbot está habilitado en los ajustes
-      const chatbotEnabled = await this.getSetting('chatbot_enabled');
-      if (chatbotEnabled !== 'true') {
-        this.logger.log(`Chatbot desactivado/pausado (${chatbotEnabled}), ignorando mensaje de ${session.phone}`);
-        return;
+      // La propiedad del chat se vuelve a leer antes de cualquier respuesta,
+      // incluida la notificación de cierre. El objeto recibido por el webhook
+      // puede haber quedado obsoleto mientras una asesora reclamaba el chat.
+      const findCurrentSession = (this.prisma.whatsAppSession as any)?.findUnique;
+      if (sessionId && typeof findCurrentSession === 'function') {
+        const currentSession = await findCurrentSession.call(this.prisma.whatsAppSession, {
+          where: { id: sessionId },
+          select: { assignedToId: true, waitingForAdvisor: true },
+        });
+        if (currentSession) session = { ...session, ...currentSession };
       }
 
-      // Si la sesión ya está asignada a un usuario humano, no hacemos auto-respuesta ni la desasignamos
       if (session.assignedToId) {
         this.logger.log(`Sesión ${session.phone} asignada a ${session.assignedToId}, chatbot no responde`);
         return;
@@ -3894,12 +4044,35 @@ The Villa Dog • Montería`;
       if (session.waitingForAdvisor && this.isExplicitBotResumeRequest(userText)) {
         this.logger.log(`Usuario solicitó reactivar el chatbot. Liberando estado de espera.`);
         session = await this.resumeChatbotForSession(session);
+        if (session?.assignedToId) return;
       } else if (session.waitingForAdvisor) {
         this.logger.log(`Sesión ${session.phone} está en espera de un asesor. Chatbot permanece en silencio.`);
         return;
       }
 
+      // El cierre programado es una respuesta operativa, independiente de la
+      // IA. Por eso sigue funcionando aunque el bot conversacional esté pausado.
+      const closedReply = await this.getClosedBusinessReply();
+      if (closedReply) {
+        if (!(await this.isLatestChatbotTrigger(sessionId, triggerMessageId))) return;
+        if (!(await this.isSessionAvailableForChatbot(sessionId))) return;
+        if (sessionId) {
+          await this.sendMessage(session.phone, closedReply, undefined, undefined, sessionId);
+        } else {
+          await this.sendMessage(session.phone, closedReply);
+        }
+        return;
+      }
+
+      // Verificar si el chatbot está habilitado en los ajustes
+      const chatbotEnabled = await this.getSetting('chatbot_enabled');
+      if (chatbotEnabled !== 'true') {
+        this.logger.log(`Chatbot desactivado/pausado (${chatbotEnabled}), ignorando mensaje de ${session.phone}`);
+        return;
+      }
+
       if (this.isExplicitAdvisorRequest(userText)) {
+        if (!(await this.isLatestChatbotTrigger(sessionId, triggerMessageId))) return;
         await this.requestAdvisorHandoff(
           session,
           'Claro. En un momento uno de nuestros asesores continuará la atención contigo por este chat.',
@@ -3911,22 +4084,270 @@ The Villa Dog • Montería`;
       const rawApiKeys = await this.getSetting('gemini_api_key');
       if (!rawApiKeys) {
         this.logger.log(`API Key de Gemini no configurada. Usando chatbot de contingencia basado en reglas.`);
-        return this.handleRuleBasedChatbot(session, userText, previousLastMessageAt);
+        return this.handleRuleBasedChatbot(session, userText, previousLastMessageAt, triggerMessageId);
       }
       
       const apiKeys = rawApiKeys.split(',').map(k => k.trim()).filter(k => k.length > 0);
 
-      await this.handleGeminiChatbot(session, userText, apiKeys);
+      await this.handleGeminiChatbot(session, userText, apiKeys, triggerMessageId);
 
     } catch (error) {
       this.logger.error(`Error en ruteador de chatbot para ${session.phone}:`, error);
-      // Fallback en caso de cualquier error en el ruteo o Gemini
       try {
-        await this.handleRuleBasedChatbot(session, userText, previousLastMessageAt);
+        if (!(await this.isLatestChatbotTrigger(String(session.id || ''), triggerMessageId))) return;
+        const errorMessage = String((error as any)?.message || error || '');
+        if (/respuesta incompleta|empty response/i.test(errorMessage)) {
+          await this.requestAdvisorHandoff(
+            session,
+            'No quiero enviarte una respuesta incompleta. Un asesor continuará la atención contigo por este chat.',
+            'respuesta_ia_incompleta',
+          );
+          return;
+        }
+        // Ante una falla real del proveedor conserva la atención básica sin
+        // reenviar una salida incompleta del modelo.
+        await this.handleRuleBasedChatbot(session, userText, previousLastMessageAt, triggerMessageId);
       } catch (fbErr) {
         this.logger.error(`Error en chatbot de contingencia para ${session.phone}:`, fbErr);
       }
     }
+  }
+
+  private isPersistedOrderChatMessage(message: any): boolean {
+    if (message?.direction !== 'OUT') return false;
+    const content = this.normalizeSpanishLookup(String(message?.content || ''));
+    // normalizeSpanishLookup elimina el símbolo #; compara la forma ya
+    // normalizada para que un pedido confirmado sí cierre el ciclo anterior.
+    return /pedido\s+\d+/.test(content) && (
+      content.includes('ha sido recibido')
+      || content.includes('esta siendo preparado')
+      || content.includes('ha sido actualizado')
+      || content.includes('ha sido cancelado')
+      || content.includes('ya va en camino')
+      || content.includes('ha sido entregado')
+    );
+  }
+
+  private selectCurrentConversationMessages(history: any[], lastOrderCreatedAt?: Date | string | null): any[] {
+    const chronological = [...(Array.isArray(history) ? history : [])].sort((left, right) => {
+      const leftTime = new Date(left?.createdAt || 0).getTime();
+      const rightTime = new Date(right?.createdAt || 0).getTime();
+      return leftTime - rightTime;
+    });
+    let start = 0;
+
+    const orderBoundary = lastOrderCreatedAt ? new Date(lastOrderCreatedAt).getTime() : 0;
+    if (orderBoundary > 0) {
+      const firstMessageAfterOrder = chronological.findIndex(message => (
+        new Date(message?.createdAt || 0).getTime() > orderBoundary
+      ));
+      // Si todavía no existe ningún mensaje posterior al último pedido, no
+      // reutilices el ciclo anterior como contexto del bot.
+      start = firstMessageAfterOrder >= 0 ? firstMessageAfterOrder : chronological.length;
+    }
+
+    for (let index = 0; index < chronological.length - 1; index += 1) {
+      if (this.isPersistedOrderChatMessage(chronological[index])) {
+        start = Math.max(start, index + 1);
+      }
+    }
+    for (let index = Math.max(1, start + 1); index < chronological.length; index += 1) {
+      const previousAt = new Date(chronological[index - 1]?.createdAt || 0).getTime();
+      const currentAt = new Date(chronological[index]?.createdAt || 0).getTime();
+      if (previousAt > 0 && currentAt > 0 && currentAt - previousAt >= 30 * 60 * 1000) {
+        start = index;
+      }
+    }
+
+    return chronological.slice(start).slice(-16);
+  }
+
+  private conversationMessageForGemini(message: any): string {
+    const rawContent = String(message?.content || '').trim();
+    const messageType = String(message?.messageType || 'text').toLowerCase();
+    if (messageType === 'audio' || messageType === 'voice') {
+      const transcript = rawContent.match(/(?:^|\|)\s*📝\s*Transcripci[oó]n:\s*([\s\S]+)/i)?.[1]?.trim();
+      return transcript ? `Nota de voz transcrita: ${transcript}` : '[Nota de voz recibida; contenido no transcrito]';
+    }
+    if (messageType === 'image' || messageType === 'sticker') return '[Imagen recibida en esta conversación]';
+    if (messageType === 'video') return '[Video recibido en esta conversación]';
+    if (messageType === 'document') return '[Documento recibido en esta conversación]';
+    if (rawContent.length > 1200) return `${rawContent.slice(0, 500)}\n[Mensaje extenso ya enviado]`;
+    return rawContent;
+  }
+
+  private isCallableCustomerPhone(value: unknown): boolean {
+    const digits = String(value || '').replace(/\D/g, '');
+    return (digits.length === 10 && digits.startsWith('3'))
+      || (digits.length === 12 && digits.startsWith('573'))
+      || (digits.length === 11 && digits.startsWith('1'));
+  }
+
+  private getConversationFacts(session: any, messages: any[]): {
+    hasKnownPhone: boolean;
+    paymentMethod: 'efectivo' | 'transferencia' | 'mixto' | null;
+    orderType: 'domicilio' | 'recoger' | null;
+    hasAddress: boolean;
+  } {
+    let paymentMethod: 'efectivo' | 'transferencia' | 'mixto' | null = null;
+    let orderType: 'domicilio' | 'recoger' | null = null;
+    let hasAddress = false;
+
+    for (const message of messages) {
+      if (message?.direction !== 'IN') continue;
+      const rawText = this.conversationMessageForGemini(message);
+      // Analiza cada afirmación por separado. Una burbuja como
+      // "Pago en efectivo, ¿cuánto demora?" conserva el pago confirmado sin
+      // confundir la pregunta posterior con una duda sobre el método de pago.
+      const segments = rawText.match(/[^,;.!?¿\n]+[?]?/g) || [rawText];
+      for (const rawSegment of segments) {
+        const text = this.normalizeSpanishLookup(rawSegment);
+        if (!text) continue;
+        const isQuestionSegment = rawSegment.includes('?')
+          || /^(?:reciben|aceptan|puedo|podria|se puede|cuanto|como|cual|donde|tienen)\b/.test(text);
+        const asksAboutPayment = isQuestionSegment && (
+          /^(?:reciben|aceptan|puedo|podria|se puede|tienen|manejan)\b.*\b(?:efectivo|transferencia|nequi|daviplata|bancolombia|pago|pagar)\b/.test(text)
+          || /\b(?:cual|como|que)\b.*\b(?:metodo\s+de\s+pago|forma\s+de\s+pago|pagar)\b/.test(text)
+          || /^(?:el\s+)?(?:pago|metodo\s+de\s+pago)\s+(?:es|seria)\b/.test(text)
+        );
+        const asksAboutOrderType = isQuestionSegment && (
+          /^(?:hacen|tienen|manejan|puedo|podria|se puede|envian|mandan|entregan)\b.*\b(?:domicilio|recoger|retiro|entrega)\b/.test(text)
+          || /\b(?:domicilio|recoger|retirar)\b.*\bo\b.*\b(?:domicilio|recoger|retirar)\b/.test(text)
+          || /^(?:es|seria)\s+(?:(?:a|para)\s+)?(?:domicilio|recoger)$/.test(text)
+        );
+        const asksAboutAddress = isQuestionSegment && (
+          /^(?:cual|que|donde|necesitan|requieren|tienen)\b.*\b(?:direccion|barrio|ubicacion)\b/.test(text)
+          || /^(?:direccion|barrio|ubicacion)$/.test(text)
+        );
+
+        const rejectsCash = /\bno\s+(?:tengo|quiero|puedo|voy\s+a\s+pagar(?:\s+en)?)\b[^.!?]{0,30}\befectivo\b/.test(text);
+        const rejectsTransfer = /\bno\s+(?:tengo|quiero|puedo|voy\s+a\s+pagar(?:\s+por)?)\b[^.!?]{0,30}\b(?:transferencia|nequi|daviplata|bancolombia)\b/.test(text);
+        const hasCash = !asksAboutPayment && !rejectsCash && /\b(?:efectivo|contra entrega)\b/.test(text);
+        const hasTransfer = !asksAboutPayment && !rejectsTransfer && /\b(?:transferencia|nequi|daviplata|bancolombia)\b/.test(text);
+        const replacesPreviousPayment = /\b(?:mejor|cambio|prefiero|finalmente)\b/.test(text);
+        if (/\bmixto\b/.test(text) || (hasCash && hasTransfer)) paymentMethod = 'mixto';
+        else if (hasCash) paymentMethod = !replacesPreviousPayment && paymentMethod === 'transferencia' && /\b(?:tambien|y)\b/.test(text) ? 'mixto' : 'efectivo';
+        else if (hasTransfer) paymentMethod = !replacesPreviousPayment && paymentMethod === 'efectivo' && /\b(?:tambien|y)\b/.test(text) ? 'mixto' : 'transferencia';
+
+        const rejectsPickup = /\bno\b[^.!?]{0,25}\brecoger\b/.test(text);
+        const rejectsDelivery = /\bno\b[^.!?]{0,25}\b(?:domicilio|entrega|enviar|mandar)\b/.test(text);
+        if (!asksAboutOrderType && !rejectsDelivery && (/^(?:domicilio|envio|entrega)$/.test(text)
+          || /\b(?:a|para)\s+domicilio\b|\b(?:es|seria)\s+(?:(?:a|para)\s+)?domicilio\b|\b(?:enviar|mandar|entregar)\b/.test(text))) {
+          orderType = 'domicilio';
+        } else if (!asksAboutOrderType && !rejectsPickup && (/^(?:recoger|pasar a recoger|pickup)$/.test(text)
+          || /\b(?:paso|pasar|pasa|voy|va)\s+a\s+recoger\b|\b(?:es|seria)\s+(?:para\s+)?recoger\b|\bpara\s+recoger\b|\bpickup\b/.test(text))) {
+          orderType = 'recoger';
+        }
+
+        if (!asksAboutAddress && (/\b(?:calle|cll|carrera|cra|avenida|diagonal|transversal|manzana|mz|lote)\b[^\n]{0,100}\d/i.test(text)
+          || /\bdireccion\s*:/i.test(text))) {
+          hasAddress = true;
+        }
+      }
+
+      if (String(message?.messageType || '').toLowerCase() === 'location') {
+        hasAddress = true;
+      }
+    }
+
+    return {
+      hasKnownPhone: this.isCallableCustomerPhone(session?.customerPhone) || this.isCallableCustomerPhone(session?.phone),
+      paymentMethod,
+      orderType,
+      hasAddress,
+    };
+  }
+
+  private removeRepeatedKnownDataQuestions(
+    value: string,
+    facts: {
+      hasKnownPhone: boolean;
+      paymentMethod: 'efectivo' | 'transferencia' | 'mixto' | null;
+      orderType: 'domicilio' | 'recoger' | null;
+      hasAddress: boolean;
+    },
+    willTransfer = false,
+  ): string {
+    const original = String(value || '').trim();
+    const normalized = this.normalizeSpanishLookup(original);
+    const asks = original.includes('?')
+      || /\b(?:cual|cuales|indica|indicame|confirma|confirmame|comparte|dime|envia|enviame|regala|regalame|proporciona|escribe|necesito|falta)\b/.test(normalized);
+    const requestsPhone = asks
+      && /\b(?:telefono|celular|numero(?:\s+de\s+whatsapp)?|whatsapp)\b/.test(normalized);
+    const requestsPayment = (
+      (asks && /\b(?:metodo\s+de\s+pago|forma\s+de\s+pago|pago|pagar)\b/.test(normalized))
+      || /\bcomo\s+(?:vas|deseas|quieres)\s+a\s+pagar\b/.test(normalized)
+    );
+    const requestsAddress = asks
+      && /\b(?:direccion|barrio|ubicacion|donde\s+entregar)\b/.test(normalized);
+    const requestsOrderType = (
+      (asks && /\b(?:domicilio|recoger|retirar|tipo\s+de\s+entrega)\b/.test(normalized))
+      || /\b(?:es|seria)\s+para\s+(?:domicilio|recoger)\s+o\s+(?:domicilio|recoger)\b/.test(normalized)
+    );
+
+    const asksPhone = facts.hasKnownPhone && requestsPhone;
+    const asksPayment = Boolean(facts.paymentMethod) && requestsPayment;
+    const asksAddress = facts.hasAddress && requestsAddress;
+    const asksOrderType = Boolean(facts.orderType) && requestsOrderType;
+
+    if (!asksPhone && !asksPayment && !asksAddress && !asksOrderType) return original;
+
+    const known: string[] = [];
+    if (facts.hasKnownPhone) known.push('tu número de WhatsApp');
+    if (facts.paymentMethod) known.push(facts.paymentMethod === 'mixto' ? 'el pago mixto' : `el pago en ${facts.paymentMethod}`);
+    if (facts.orderType) known.push(`la entrega para ${facts.orderType}`);
+    if (facts.hasAddress) known.push('tu dirección');
+
+    const missingRequested: string[] = [];
+    if (requestsPhone && !facts.hasKnownPhone) missingRequested.push('tu número de teléfono');
+    if (requestsPayment && !facts.paymentMethod) missingRequested.push('el método de pago');
+    if (requestsOrderType && !facts.orderType) missingRequested.push('si es para domicilio o para recoger');
+    if (requestsAddress && !facts.hasAddress) missingRequested.push('la dirección exacta');
+    if (missingRequested.length > 0) {
+      return `Perfecto, ya tengo registrados ${known.join(', ')}. Solo falta confirmar ${missingRequested.join(', ')}.`;
+    }
+    return willTransfer
+      ? `Perfecto, ya tengo registrados ${known.join(', ')}. Un asesor revisará el pedido y continuará contigo por este chat.`
+      : `Perfecto, ya tengo registrados ${known.join(', ')}. Continuemos con tu pedido; dime qué deseas agregar o corregir.`;
+  }
+
+  private customerRequestsPreviousOrder(value: string): boolean {
+    const text = this.normalizeSpanishLookup(value);
+    return /\b(?:pedido anterior|ultimo pedido|lo mismo|repetir|repiteme|como la vez pasada|que pedi)\b/.test(text);
+  }
+
+  private replyClaimsReceivedPaymentProof(value: string): boolean {
+    const text = this.normalizeSpanishLookup(value);
+    return /\b(?:recibi|recibimos|llego|vemos|veo|validamos|confirmamos)\b[^.!?\n]{0,80}\b(?:comprobante|soporte|captura|foto|imagen|transferencia)\b/.test(text);
+  }
+
+  private isSimpleGreeting(value: string): boolean {
+    const text = this.normalizeSpanishLookup(value).replace(/\s+/g, ' ').trim();
+    return /^(?:hola|buenas|buenos dias|buenas tardes|buenas noches|hey|ey)(?: como estas?)?$/.test(text);
+  }
+
+  private sanitizeAutomaticGeneralOrderNotes(values: unknown): string[] {
+    if (!Array.isArray(values)) return [];
+    const result: string[] = [];
+    for (const value of values) {
+      const raw = String(value || '').replace(/\s+/g, ' ').trim();
+      if (!raw) continue;
+      if (/^mesa$/i.test(raw)) {
+        result.push('Mesa');
+        continue;
+      }
+      const time = raw.match(/\b(?:para|a)\s+las?\s+(\d{1,2}(?:\s*(?::|y)\s*\d{1,2})?\s*(?:a\.?\s*m\.?|p\.?\s*m\.?)?)/i)?.[1]?.trim();
+      const arrival = raw.match(/\b(?:llamar|avisar|tocar(?:\s+el)?\s+timbre)\s+(?:al|cuando)\s+llegar\b/i)?.[0];
+      const parts: string[] = [];
+      if (time) parts.push(`Para las ${time}`);
+      if (/\b(?:no|nunca)\s+antes\b/i.test(raw)) parts.push('No antes');
+      if (arrival) parts.push(arrival.charAt(0).toUpperCase() + arrival.slice(1).toLowerCase());
+      const clean = parts.join('; ');
+      if (clean && !result.some(note => this.normalizeSpanishLookup(note) === this.normalizeSpanishLookup(clean))) {
+        result.push(clean);
+      }
+    }
+    return result;
   }
 
   private buildGeminiAssistantPrompt(context: {
@@ -3940,6 +4361,7 @@ The Villa Dog • Montería`;
     menuCategoryRule: string;
     menuFollowupRule: string;
     session: { customerName?: string | null };
+    knownFactsBlock?: string;
     paymentInstruction: string;
     conversationPrompt: string;
     trainingExamplesBlock?: string;
@@ -3948,6 +4370,7 @@ The Villa Dog • Montería`;
       customInstructionsBlock, recentOrdersSummary, menuSummary, restaurantHours,
       zonesSummary, menuGeneralRule, dynamicCategoriesString, menuCategoryRule,
       menuFollowupRule, session, paymentInstruction, conversationPrompt, trainingExamplesBlock,
+      knownFactsBlock = '         * Teléfono de WhatsApp: FALTA.\n         * Método de pago: FALTA.\n         * Tipo de entrega: FALTA.\n         * Dirección exacta: FALTA.',
     } = context;
     return `
 Eres la persona encargada de atender de forma directa el WhatsApp del restaurante "The Villa Dog" en Montería, Colombia. Habla con un tono humano, cercano, natural y muy sencillo. Evita a toda costa sonar como un robot, una máquina de soporte técnico o un asistente de inteligencia artificial genérico. Habla como un asesor amable del restaurante.
@@ -4017,12 +4440,15 @@ ${dynamicCategoriesString}
 
     6. MANEJO DE DATOS Y TOMAR PEDIDOS (REGLAS DE ORO):
        - NOMBRE DEL CLIENTE: El nombre registrado de la persona es "${session.customerName || 'No especificado aún'}". Si ya conoces su nombre (por ejemplo, "${session.customerName || ''}" o si viene en el texto como "Nombre: Juan Martinez"), ESTÁ ABSOLUTAMENTE PROHIBIDO VOLVER A PREGUNTAR SU NOMBRE. Llámalo por su nombre directamente (ej: "¡Hola Juan!").
+       - DATOS YA CONOCIDOS POR EL SISTEMA (fuente autoritativa):
+${knownFactsBlock}
+       - Nunca solicites otra vez un dato marcado como DISPONIBLE o CONFIRMADO. El teléfono de WhatsApp no forma parte de los datos que debes pedir cuando ya está disponible.
        - CUENTAS DE TRANSFERENCIA: ${paymentInstruction}
        - PREGUNTA ÚNICA: No pidas los datos uno por uno. Después de conocer productos y tipo de entrega, solicita EN UN SOLO MENSAJE todos los datos que falten.
        - PEDIDO PARA PASAR A RECOGER (PICKUP): Nunca preguntes barrio ni dirección. Pide únicamente el método de pago si todavía falta.
        - PEDIDO A DOMICILIO: La dirección exacta y el método de pago son necesarios. El barrio es opcional: úsalo si el cliente lo informa, pero NUNCA bloquees ni retrases el pedido por no tenerlo. Ejemplo: "Listo. Envíame en un solo mensaje tu dirección exacta y si pagas en efectivo o transferencia; si conoces el barrio también puedes indicarlo."
        - Si el cliente ya entregó uno o dos datos, pregunta solamente por todos los que falten, juntos y en una respuesta corta.
-       - TARIFA DE DOMICILIO - REGLA CRÍTICA ABSOLUTA: La lista de barrios y tarifas que tienes disponible arriba es la lista OFICIAL. Si el barrio del cliente NO APARECE en esa lista oficial, o si no tiene precio asignado, ESTÁ ABSOLUTAMENTE PROHIBIDO DECIR QUE EL DOMICILIO ES "GRATIS", "$0" O INVENTAR UN VALOR. Jamás digas que un domicilio es gratis. En esos casos, DEBES responder exactamente: "Perfecto. El valor del domicilio a tu barrio será verificado y confirmado directamente por nuestro asesor al procesar tu pedido." e incluir [TRANSFERIR_ASESOR].
+       - TARIFA DE DOMICILIO - REGLA CRÍTICA ABSOLUTA: La lista de barrios, lugares especiales y tarifas disponible arriba es la lista OFICIAL. Una entrada oficial con tarifa $0 es una excepción autorizada sin costo, pero solo cuando el cliente menciona ese lugar exacto. Si la dirección o barrio NO APARECE en la lista, ESTÁ ABSOLUTAMENTE PROHIBIDO decir "gratis", "$0" o inventar un valor. En esos casos, responde exactamente: "Perfecto. El valor del domicilio a tu barrio será verificado y confirmado directamente por nuestro asesor al procesar tu pedido." e incluye [TRANSFERIR_ASESOR].
 
     7. FINALIZACIÓN Y TRANSFERENCIA:
        Si el cliente ya entregó los productos y todos los datos necesarios (o si recoge y ya dio el método de pago), responde que un asesor revisará y confirmará el resumen e incluye [TRANSFERIR_ASESOR]. Nunca afirmes que el pedido ya fue creado porque se crea desde el panel.
@@ -4038,11 +4464,20 @@ Restaurante (Tú):
 `;
   }
 
-  private async handleGeminiChatbot(session: any, userText: string, apiKeys: string[]) {
+  private async handleGeminiChatbot(
+    session: any,
+    userText: string,
+    apiKeys: string[],
+    triggerMessageId?: string,
+  ) {
     try {
-      const cleanPhone = (session.phone.startsWith('57') && session.phone.length === 12)
-        ? session.phone.substring(2)
-        : session.phone;
+      const preferredPhone = this.isCallableCustomerPhone(session?.customerPhone)
+        ? String(session.customerPhone)
+        : (this.isCallableCustomerPhone(session?.phone) ? String(session.phone) : '');
+      const phoneDigits = preferredPhone.replace(/\D/g, '');
+      const cleanPhone = phoneDigits.startsWith('57') && phoneDigits.length === 12
+        ? phoneDigits.substring(2)
+        : phoneDigits;
       const [
         history,
         dbItems,
@@ -4055,11 +4490,12 @@ Restaurante (Tú):
         paymentAccountText,
         activeTrainingExamplesSetting,
         trainingExamplesEnabledSetting,
+        latestSessionOrder,
       ] = await Promise.all([
         this.prisma.whatsAppMessage.findMany({
           where: { sessionId: session.id },
           orderBy: { createdAt: 'desc' },
-          take: 16,
+          take: 40,
         }),
         this.prisma.menuItem.findMany({
           where: { active: true, availableForDelivery: { not: false }, code: { not: null } },
@@ -4070,12 +4506,14 @@ Restaurante (Tú):
           where: { active: true },
           orderBy: { name: 'asc' },
         }),
-        this.prisma.order.findMany({
-          where: { customerPhone: { contains: cleanPhone } },
-          include: { items: { include: { menuItem: true } } },
-          orderBy: { createdAt: 'desc' },
-          take: 5,
-        }),
+        this.customerRequestsPreviousOrder(userText) && cleanPhone
+          ? this.prisma.order.findMany({
+              where: { customerPhone: { in: Array.from(new Set([cleanPhone, `57${cleanPhone}`, `+57${cleanPhone}`])) } },
+              include: { items: { include: { menuItem: true } } },
+              orderBy: { createdAt: 'desc' },
+              take: 5,
+            })
+          : Promise.resolve([]),
         this.getSetting('digital_menu_url'),
         this.getSetting('restaurant_hours'),
         this.getSetting('chatbot_ai_instructions'),
@@ -4083,8 +4521,16 @@ Restaurante (Tú):
         this.getSetting('chatbot_payment_account_text'),
         this.getSetting('chatbot_learning_active_examples_v1'),
         this.getSetting('chatbot_learning_examples_enabled_v1'),
+        typeof (this.prisma.order as any)?.findFirst === 'function'
+          ? this.prisma.order.findFirst({
+              where: { chatSessionId: session.id },
+              orderBy: { createdAt: 'desc' },
+              select: { createdAt: true },
+            })
+          : Promise.resolve(null),
       ]);
-      const messagesChronological = history.reverse();
+      const messagesChronological = this.selectCurrentConversationMessages(history, (latestSessionOrder as any)?.createdAt);
+      const knownFacts = this.getConversationFacts(session, messagesChronological);
       
       const itemsByCategory: Record<string, string[]> = {};
       dbItems.forEach(i => {
@@ -4114,7 +4560,10 @@ Restaurante (Tú):
         .map(c => `- *${c}*`)
         .join('\n');
 
-      const zonesSummary = dbZones.map(z => `- ${z.name}: $${z.rate.toLocaleString('de-DE')}`).join('\n');
+      const zonesSummary = dbZones.map(z => Number(z.rate) === 0
+        ? `- ${z.name}: $0 (excepción exacta sin costo autorizada)`
+        : `- ${z.name}: $${z.rate.toLocaleString('de-DE')}`
+      ).join('\n');
 
       let recentOrdersSummary = 'No hay pedidos previos registrados para este cliente.';
       if (recentCustomerOrders.length > 0) {
@@ -4145,27 +4594,34 @@ Restaurante (Tú):
           : '';
 
         const conversationPrompt = messagesChronological.map(m => {
-          const rawContent = String(m.content || '').trim();
-          const content = rawContent.length > 1200
-            ? `${rawContent.slice(0, 500)}\n[Mensaje extenso ya enviado]`
-            : rawContent;
+          const content = this.conversationMessageForGemini(m);
           return `${m.direction === 'IN' ? 'Cliente' : 'Restaurante (Tú)'}: ${content}`;
         }).join('\n');
 
+        const knownFactsBlock = [
+          `         * Teléfono de WhatsApp: ${knownFacts.hasKnownPhone ? 'DISPONIBLE; no volver a pedirlo' : 'FALTA'}.`,
+          `         * Método de pago: ${knownFacts.paymentMethod ? `${knownFacts.paymentMethod.toUpperCase()} CONFIRMADO` : 'FALTA'}.`,
+          `         * Tipo de entrega: ${knownFacts.orderType ? `${knownFacts.orderType.toUpperCase()} CONFIRMADO` : 'FALTA'}.`,
+          `         * Dirección exacta: ${knownFacts.hasAddress ? 'DISPONIBLE; no volver a pedirla' : 'FALTA'}.`,
+        ].join('\n');
+
         const trainingExamplesBlock = trainingExamplesEnabledSetting === 'true'
-          ? this.formatTrainingExamplesBlock(activeTrainingExamplesSetting)
+          ? this.formatTrainingExamplesBlock(activeTrainingExamplesSetting, 'approved', userText)
           : '';
         const systemPrompt = this.buildGeminiAssistantPrompt({
           trainingExamplesBlock,
           customInstructionsBlock, recentOrdersSummary, menuSummary, restaurantHours,
           zonesSummary, menuGeneralRule, dynamicCategoriesString, menuCategoryRule,
-          menuFollowupRule, session, paymentInstruction, conversationPrompt,
+          menuFollowupRule, session, paymentInstruction, conversationPrompt, knownFactsBlock,
         });
 
       let lastError: any = null;
       let data: any = null;
+      let replyText = '';
+      let completedContentAttempts = 0;
       const modelsToTry = await this.getGeminiModels();
 
+      candidateSearch:
       for (const key of this.getGeminiKeyCandidates(apiKeys)) {
         if (this.isGeminiKeyOnCooldown(key)) continue;
         for (const model of modelsToTry) {
@@ -4179,7 +4635,7 @@ Restaurante (Tú):
             // the live chat fast while preserving the model's validation.
             generationConfig: this.buildGeminiGenerationConfig(model, {
               temperature: 0.3,
-              maxOutputTokens: 600,
+              maxOutputTokens: 1200,
             }),
           };
           try {
@@ -4209,12 +4665,24 @@ Restaurante (Tú):
               throw new Error(`Gemini API returned status ${response.status}`);
             }
             const candidateData: any = await response.json();
-            const candidateReply = String(candidateData?.candidates?.[0]?.content?.parts?.[0]?.text || '').trim();
-            if (!this.isMeaningfulGeminiReply(candidateReply)) {
-              lastError = new Error('Gemini no devolvió texto para este mensaje');
+            completedContentAttempts += 1;
+            await this.incrementGeminiUsage();
+            const candidateReply = this.getCompleteGeminiReply(candidateData);
+            if (!candidateReply) {
+              this.recordGeminiAttempt({
+                operation: 'CHATBOT',
+                apiKey: key,
+                allKeys: apiKeys,
+                model,
+                statusCode: 200,
+                success: false,
+              });
+              lastError = new Error('Gemini devolvió una respuesta incompleta; no se enviará al cliente');
+              if (completedContentAttempts >= 2) break candidateSearch;
               continue;
             }
             data = candidateData;
+            replyText = candidateReply;
             this.recordGeminiAttempt({
               operation: 'CHATBOT',
               apiKey: key,
@@ -4223,7 +4691,6 @@ Restaurante (Tú):
               statusCode: 200,
               success: true,
             });
-            await this.incrementGeminiUsage();
             break;
           } catch (e: any) {
             this.recordGeminiAttempt({
@@ -4246,7 +4713,6 @@ Restaurante (Tú):
         throw lastError || new Error('Todas las API keys de Gemini fallaron (429 u otro error)');
       }
 
-      let replyText = (data as any).candidates?.[0]?.content?.parts?.[0]?.text;
       if (!replyText) {
         throw new Error('Empty response from Gemini');
       }
@@ -4267,30 +4733,40 @@ Restaurante (Tú):
         }
       }
 
-      const normalizedIncoming = this.normalizeSpanishLookup(
-        messagesChronological
-          .filter(message => message.direction === 'IN')
-          .map(message => message.content)
-          .join(' '),
-      );
-      const mentionedZone = [...dbZones]
-        .sort((left, right) => right.name.length - left.name.length)
-        .find(zone => {
+      let mentionedZone: any = undefined;
+      const zonesBySpecificity = [...dbZones].sort((left, right) => right.name.length - left.name.length);
+      for (const message of [...messagesChronological].reverse()) {
+        if (message.direction !== 'IN') continue;
+        const normalizedMessage = ` ${this.normalizeSpanishLookup(this.conversationMessageForGemini(message))} `;
+        const matched = zonesBySpecificity.find(zone => {
           const normalizedZone = this.normalizeSpanishLookup(zone.name);
-          return normalizedZone.length >= 3 && ` ${normalizedIncoming} `.includes(` ${normalizedZone} `);
+          return normalizedZone.length >= 3 && normalizedMessage.includes(` ${normalizedZone} `);
         });
-      const tariffClaim = cleanReply.match(
-        /(?:\b(?:valor|tarifa|costo)\s+(?:del\s+)?domicilio\b|\bdomicilio\s+(?:cuesta|vale|tiene un valor de)\b)[^0-9$]{0,80}\$?\s*([\d][\d.,]*)/i,
-      );
-      const claimedTariff = tariffClaim?.[1] ? this.parseColombianAmount(tariffClaim[1]) : null;
-      const invalidTariff = Boolean(tariffClaim) && (
-        !mentionedZone || claimedTariff === null || claimedTariff !== Number(mentionedZone.rate)
+        if (matched) {
+          mentionedZone = matched;
+          break;
+        }
+        // Una ubicación posterior y desconocida invalida cualquier barrio
+        // citado antes; nunca reutiliza silenciosamente una tarifa vieja.
+        if (/\b(?:barrio|urbanizacion|sector|vereda|universidad|conjunto|calle|cll|carrera|cra|avenida|diagonal|transversal|manzana|mz|lote|direccion)\b/.test(normalizedMessage)) {
+          break;
+        }
+      }
+      const tariffClaim = this.extractDeliveryTariffClaim(cleanReply, mentionedZone);
+      const invalidTariff = tariffClaim.found && (
+        !mentionedZone || tariffClaim.amount === null || tariffClaim.amount !== Number(mentionedZone.rate)
       );
       const claimsUnverifiedTotal = /\btotal(?:\s+(?:final|a pagar|del pedido))?\b[^0-9$]{0,50}\$?\s*[\d]/i.test(cleanReply);
       const claimsUnverifiedTime = /\b(?:tarda|demora|tiempo estimado|llega(?:r[ií]a)?)\b[^0-9]{0,40}\d+\s*(?:minutos?|mins?|horas?)/i.test(cleanReply);
-      const claimsFreeDelivery = /\bdomicilio\b[^.!?\n]{0,50}\bgratis\b|\bgratis\b[^.!?\n]{0,50}\bdomicilio\b/i.test(cleanReply);
+      const freeDeliveryPhrase = '(?:gratis|gratuito|sin\\s+(?:costo|valor)|no\\s+(?:se\\s+)?cobra|no\\s+cobramos|no\\s+(?:tiene|tendra|tendria)\\s+costo|(?:vale|cuesta|valor(?:\\s+es)?|tarifa(?:\\s+es)?)\\s*\\$?\\s*0)';
+      const deliveryTerm = '(?:domicilio|env[ií]o|entrega)';
+      const claimsFreeDelivery = new RegExp(
+        `${deliveryTerm}[^.!?\\n]{0,60}${freeDeliveryPhrase}|${freeDeliveryPhrase}[^.!?\\n]{0,60}${deliveryTerm}|\\bpara\\b[^.!?\\n]{1,80}${freeDeliveryPhrase}`,
+        'i',
+      ).test(cleanReply);
+      const invalidFreeDelivery = claimsFreeDelivery && (!mentionedZone || Number((mentionedZone as any).rate) !== 0);
 
-      if (invalidTariff || claimsUnverifiedTotal || claimsUnverifiedTime || claimsFreeDelivery) {
+      if (invalidTariff || claimsUnverifiedTotal || claimsUnverifiedTime || invalidFreeDelivery) {
         cleanReply = 'Gracias. Un asesor verificará la tarifa, el tiempo y el total antes de confirmar tu pedido.';
         shouldTransfer = true;
       }
@@ -4298,6 +4774,38 @@ Restaurante (Tú):
       if (!this.isMeaningfulGeminiReply(cleanReply)) {
         cleanReply = 'Gracias. Un asesor revisará los datos de tu pedido y te confirmará el resumen.';
         shouldTransfer = true;
+      }
+
+      cleanReply = this.removeRepeatedKnownDataQuestions(cleanReply, knownFacts, shouldTransfer);
+
+      const cycleHasIncomingImage = messagesChronological.some(message => (
+        message.direction === 'IN' && ['image', 'document'].includes(String(message.messageType || '').toLowerCase())
+      ));
+      const cycleMentionsSentPaymentProof = messagesChronological.some(message => {
+        if (message.direction !== 'IN') return false;
+        const content = this.normalizeSpanishLookup(String(message?.content || ''));
+        const mentionsFinancialProof = /\b(?:comprobante|soporte|pago|pague|pagado|transferencia|transferi|consigne|consignacion|nequi|daviplata|bancolombia)\b/.test(content);
+        const indicatesSubmission = /\b(?:comprobante|soporte|pague|pagado|transferi|consigne|consignacion|adjunte|envie|mande|foto|imagen|capture|captura)\b/.test(content);
+        return mentionsFinancialProof && indicatesSubmission;
+      });
+      const cycleHasPaymentProof = cycleHasIncomingImage && cycleMentionsSentPaymentProof;
+      if (this.replyClaimsReceivedPaymentProof(cleanReply) && !cycleHasPaymentProof) {
+        cleanReply = this.isSimpleGreeting(userText)
+          ? `Hola${session.customerName ? ` ${session.customerName}` : ''}, ¿cómo podemos ayudarte?`
+          : 'No puedo confirmar un comprobante que no aparece en esta conversación. Un asesor puede revisarlo contigo.';
+        shouldTransfer = !this.isSimpleGreeting(userText);
+      } else if (this.isSimpleGreeting(userText) && this.replyClaimsReceivedPaymentProof(cleanReply)) {
+        cleanReply = `Hola${session.customerName ? ` ${session.customerName}` : ''}, ¿cómo podemos ayudarte?`;
+        shouldTransfer = false;
+      }
+
+      if (!(await this.isLatestChatbotTrigger(String(session.id || ''), triggerMessageId))) {
+        this.logger.log(`Respuesta Gemini descartada: llegó un mensaje más nuevo en ${session.phone}.`);
+        return;
+      }
+      if (!(await this.isSessionAvailableForChatbot(String(session.id || '')))) {
+        this.logger.log(`Respuesta Gemini descartada: el chat ya fue tomado por un asesor.`);
+        return;
       }
 
       if (shouldTransfer) {
@@ -4312,8 +4820,19 @@ Restaurante (Tú):
     }
   }
 
-  private async handleRuleBasedChatbot(session: any, userText: string, previousLastMessageAt?: Date | null) {
+  private async handleRuleBasedChatbot(
+    session: any,
+    userText: string,
+    previousLastMessageAt?: Date | null,
+    triggerMessageId?: string,
+  ) {
     try {
+      const sessionId = String(session?.id || '');
+      const canReply = async () => (
+        await this.isLatestChatbotTrigger(sessionId, triggerMessageId)
+        && await this.isSessionAvailableForChatbot(sessionId)
+      );
+      if (!(await canReply())) return;
       // Verificar si el chatbot está habilitado en los ajustes
       const chatbotEnabled = await this.getSetting('chatbot_enabled');
       if (chatbotEnabled !== 'true') {
@@ -4337,7 +4856,25 @@ Restaurante (Tú):
         return;
       }
 
+      const preferredCustomerPhone = this.isCallableCustomerPhone(session?.customerPhone)
+        ? String(session.customerPhone)
+        : (this.isCallableCustomerPhone(session?.phone) ? String(session.phone) : '');
+      const preferredCustomerDigits = preferredCustomerPhone.replace(/\D/g, '');
+      const cleanCustomerPhone = preferredCustomerDigits.startsWith('57') && preferredCustomerDigits.length === 12
+        ? preferredCustomerDigits.slice(2)
+        : preferredCustomerDigits;
+      const buildCustomerMenuUrl = (baseUrl: string | null): string | null => {
+        if (!baseUrl) return null;
+        const params: string[] = [];
+        if (cleanCustomerPhone) params.push(`phone=${encodeURIComponent(cleanCustomerPhone)}`);
+        const hasPhoneAsName = session.customerName && /^\d+$/.test(session.customerName.replace(/\D/g, ''));
+        if (session.customerName && !hasPhoneAsName) params.push(`name=${encodeURIComponent(session.customerName)}`);
+        if (params.length === 0) return baseUrl;
+        return `${baseUrl}${baseUrl.includes('?') ? '&' : '?'}${params.join('&')}`;
+      };
+
       if (this.isExplicitAdvisorRequest(userText)) {
+        if (!(await canReply())) return;
         await this.requestAdvisorHandoff(
           session,
           'Claro. En un momento uno de nuestros asesores continuará la atención contigo por este chat.',
@@ -4349,14 +4886,33 @@ Restaurante (Tú):
       this.logger.log(`Chatbot procesando mensaje de ${session.phone}: "${normalized}"`);
 
       // 1. Verificar si el cliente tiene un pedido activo/en curso
-      const cleanPhone = (session.phone || '').replace(/\D/g, '').slice(-10);
-      const activeOrder = await this.prisma.order.findFirst({
-        where: {
-          customerPhone: { contains: cleanPhone },
-          status: { in: ['PENDING', 'READY', 'IN_ROUTE'] },
-        },
-        orderBy: { createdAt: 'desc' },
-      });
+      let activeOrder = sessionId
+        ? await this.prisma.order.findFirst({
+            where: {
+              chatSessionId: sessionId,
+              status: { in: ['PENDING', 'READY', 'IN_ROUTE'] },
+            },
+            orderBy: { createdAt: 'desc' },
+          })
+        : null;
+      // Compatibilidad para pedidos antiguos que todavía no tenían vínculo de
+      // chat. Solo aplica cuando `session.phone` es el teléfono real (no BSUID)
+      // y exige coincidencia exacta para no cruzar conversaciones.
+      if (!activeOrder && cleanCustomerPhone && this.isCallableCustomerPhone(session?.phone)) {
+        const phoneVariants = Array.from(new Set([
+          cleanCustomerPhone,
+          `57${cleanCustomerPhone}`,
+          `+57${cleanCustomerPhone}`,
+        ]));
+        activeOrder = await this.prisma.order.findFirst({
+          where: {
+            chatSessionId: null,
+            customerPhone: { in: phoneVariants },
+            status: { in: ['PENDING', 'READY', 'IN_ROUTE'] },
+          },
+          orderBy: { createdAt: 'desc' },
+        });
+      }
 
       if (activeOrder) {
         const orderStatusMap: Record<string, string> = {
@@ -4370,6 +4926,7 @@ Restaurante (Tú):
           const modifyText = 
             `Entendido. Por favor escribe a continuación detalladamente los cambios que deseas realizar en tu pedido *#${activeOrder.orderNumber}* (por ejemplo: "quiero agregar una porción de papas" o "cambiar gaseosa por jugo").\n\n` +
             `Uno de nuestros asesores tomará tu solicitud de inmediato y actualizará tu pedido. ¡Gracias! �`;
+          if (!(await canReply())) return;
           await this.requestAdvisorHandoff(session, modifyText, 'modificar_pedido_activo');
           return;
         }
@@ -4377,6 +4934,7 @@ Restaurante (Tú):
         if (normalized === '6') {
           const advisorText = 
             `De acuerdo. En un momento uno de nuestros asesores tomará tu chat personalmente para ayudarte con tu pedido *#${activeOrder.orderNumber}*. ¡Gracias por tu paciencia! �`;
+          if (!(await canReply())) return;
           await this.requestAdvisorHandoff(session, advisorText, 'asesor_pedido_activo');
           return;
         }
@@ -4385,6 +4943,7 @@ Restaurante (Tú):
           const cancelRequestText = 
             `Entendido. Para solicitar la cancelación de tu pedido *#${activeOrder.orderNumber}*, por favor indícanos brevemente el motivo de la cancelación.\n\n` +
             `Un asesor revisará tu solicitud de inmediato y te confirmará la cancelación. ⚠`;
+          if (!(await canReply())) return;
           await this.requestAdvisorHandoff(session, cancelRequestText, 'cancelar_pedido_activo');
           return;
         }
@@ -4407,6 +4966,7 @@ Restaurante (Tú):
             `• *Pedido:* #${activeOrder.orderNumber}\n` +
             `• *Estado:* ${statusText}\n\n` +
             `En un momento uno de nuestros asesores tomará tu chat personalmente. Si deseas consultar o cambiar algo de tu pedido, déjanos tu mensaje aquí y lo atenderemos de inmediato. ¡Muchas gracias! 😊`;
+          if (!(await canReply())) return;
           await this.requestAdvisorHandoff(session, orderMenuText, 'consulta_pedido_activo');
           return;
         }
@@ -4416,6 +4976,7 @@ Restaurante (Tú):
           `He recibido tu mensaje respecto a tu pedido *#${activeOrder.orderNumber}*:\n\n` +
           `_"${userText}"_\n\n` +
           `He notificado a los asesores de inmediato para ayudarte personalmente. ¡Muchas gracias! �`;
+        if (!(await canReply())) return;
         await this.requestAdvisorHandoff(session, directChangesText, 'mensaje_sobre_pedido_activo');
         return;
       }
@@ -4464,6 +5025,7 @@ Restaurante (Tú):
           `📍 *Ubicación y Domicilios - The Villa Dog:*\n\n` +
           `Despachamos pedidos directamente a tu dirección en toda la ciudad. 🛵🔥\n\n` +
           `Compártenos tu barrio y dirección para cotizar tu envío y tomar tu pedido. Con gusto te atendemos.`;
+        if (!(await canReply())) return;
         await this.sendMessage(session.phone, locationText);
         return;
       }
@@ -4482,17 +5044,14 @@ Restaurante (Tú):
         const digitalMenuUrl = this.getShareableDigitalMenuUrl(configuredMenuUrl);
         let menuLinkText = '';
         if (digitalMenuUrl) {
-          const cleanedPhone = (session.phone.startsWith('57') && session.phone.length === 12) ? session.phone.substring(2) : session.phone;
-          const hasPhoneAsName = session.customerName && /^\d+$/.test(session.customerName.replace(/\D/g, ''));
-          const nameParam = (session.customerName && !hasPhoneAsName) ? `&name=${encodeURIComponent(session.customerName)}` : '';
-          const separator = digitalMenuUrl.includes('?') ? '&' : '?';
-          const fullMenuUrl = `${digitalMenuUrl}${separator}phone=${cleanedPhone}${nameParam}`;
+          const fullMenuUrl = buildCustomerMenuUrl(digitalMenuUrl) || digitalMenuUrl;
           const displayUrl = fullMenuUrl.replace(/^https?:\/\//i, '');
           menuLinkText = `\n\nPuedes ver nuestra carta digital interactiva aquí:\n👉 ${displayUrl}`;
         }
         const welcomeText = 
           `¡Hola! Te damos la bienvenida a *The Villa Dog* 🌭🔥\n\n` +
           `Con gusto te atendemos. Cuéntanos qué te gustaría pedir o en qué podemos ayudarte.${menuLinkText}`;
+        if (!(await canReply())) return;
         await this.sendMessage(session.phone, welcomeText);
         return;
       }
@@ -4503,14 +5062,7 @@ Restaurante (Tú):
         
         const configuredMenuUrl = await this.getSetting('digital_menu_url');
         const digitalMenuUrl = this.getShareableDigitalMenuUrl(configuredMenuUrl);
-        let fullMenuUrl = digitalMenuUrl;
-        if (digitalMenuUrl) {
-          const cleanedPhone = (session.phone.startsWith('57') && session.phone.length === 12) ? session.phone.substring(2) : session.phone;
-          const hasPhoneAsName = session.customerName && /^\d+$/.test(session.customerName.replace(/\D/g, ''));
-          const nameParam = (session.customerName && !hasPhoneAsName) ? `&name=${encodeURIComponent(session.customerName)}` : '';
-          const separator = digitalMenuUrl.includes('?') ? '&' : '?';
-          fullMenuUrl = `${digitalMenuUrl}${separator}phone=${cleanedPhone}${nameParam}`;
-        }
+        const fullMenuUrl = buildCustomerMenuUrl(digitalMenuUrl);
         const displayUrl = fullMenuUrl ? fullMenuUrl.replace(/^https?:\/\//i, '') : '';
         const digitalMenuLine = displayUrl 
           ? `\n\nTambién puedes ver nuestra carta digital interactiva con fotos y armar tu pedido directamente aquí:\n👉 ${displayUrl}` 
@@ -4537,6 +5089,7 @@ Restaurante (Tú):
             `Escríbenos lo que deseas pedir y con gusto tomamos tu pedido. 😊`;
         }
           
+        if (!(await canReply())) return;
         await this.sendMessage(session.phone, menuText);
         return;
       }
@@ -4550,6 +5103,7 @@ Restaurante (Tú):
           `• *Dirección exacta* de entrega (el barrio es opcional)\n` +
           `• *Método de pago* (Efectivo / Transferencia)\n\n` +
           `Uno de nuestros asesores tomará tu pedido de inmediato. ¡Muchas gracias! 😊`;
+        if (!(await canReply())) return;
         await this.requestAdvisorHandoff(session, orderTemplateText, 'inicio_pedido_contingencia');
         return;
       }
@@ -4560,6 +5114,7 @@ Restaurante (Tú):
           `• Martes a Domingo: 5:30 PM - 11:30 PM\n` +
           `• Lunes: Cerrado por descanso de nuestro equipo.\n\n` +
           `Escríbenos lo que deseas pedir y con gusto tomamos tu pedido. 😊`;
+        if (!(await canReply())) return;
         await this.sendMessage(session.phone, scheduleText);
         return;
       }
@@ -4576,6 +5131,7 @@ Restaurante (Tú):
           `${zonesList}\n\n` +
           `*Nota:* Si tu barrio es nuevo o no aparece en la lista, no te preocupes, un asesor definirá el costo al momento de procesar tu pedido. \n\n` +
           `Escríbenos lo que deseas pedir y con gusto tomamos tu pedido. 😊`;
+        if (!(await canReply())) return;
         await this.sendMessage(session.phone, coverageText);
         return;
       }
@@ -4583,6 +5139,7 @@ Restaurante (Tú):
       if (normalized === '5') {
         const agentText = 
           `Entendido. En un momento uno de nuestros asesores tomará tu chat y te atenderá personalmente. ¡Gracias por escribirnos! �`;
+        if (!(await canReply())) return;
         await this.requestAdvisorHandoff(session, agentText, 'opcion_asesor_contingencia');
         return;
       }
@@ -4648,6 +5205,7 @@ Restaurante (Tú):
             `¡Uno de nuestros asesores tomará tu chat de inmediato para confirmar el valor total y enviártelo! `;
           handoffReply = templateText;
         }
+        if (!(await canReply())) return;
         await this.requestAdvisorHandoff(session, handoffReply, 'pedido_detectado_contingencia');
         return;
       }
@@ -4656,6 +5214,7 @@ Restaurante (Tú):
       const fallbackText = 
         `¡Hola! 👋 Recibimos tu mensaje en *The Villa Dog* 🌭🔥\n\n` +
         `En un momento uno de nuestros asesores te responderá personalmente para tomar tu pedido o resolver tus dudas. ¡Muchas gracias por escribirnos! 😊`;
+      if (!(await canReply())) return;
       await this.requestAdvisorHandoff(session, fallbackText, 'fallback_contingencia');
       return;
     } catch (error) {
@@ -5470,11 +6029,27 @@ Restaurante (Tú):
   }
 
 
-  private formatTrainingExamplesBlock(examplesJson?: string | null, source: 'approved' | 'candidates' = 'approved'): string {
+  private formatTrainingExamplesBlock(
+    examplesJson?: string | null,
+    source: 'approved' | 'candidates' = 'approved',
+    currentUserText?: string,
+  ): string {
     if (!examplesJson) return '';
     try {
-      const list = this.parseStoredTrainingExamples(examplesJson);
+      let list = this.parseStoredTrainingExamples(examplesJson);
       if (list.length === 0) return '';
+      if (currentUserText !== undefined) {
+        const stopWords = new Set(['hola', 'buenas', 'quiero', 'para', 'como', 'esta', 'este', 'esto', 'con', 'sin', 'por', 'favor', 'gracias', 'pedido', 'pedir']);
+        const queryTokens = this.normalizeSpanishLookup(currentUserText)
+          .split(/\s+/)
+          .filter(token => token.length >= 4 && !stopWords.has(token));
+        if (queryTokens.length === 0) return '';
+        list = list.filter(example => {
+          const reference = this.normalizeSpanishLookup(`${example.context} ${example.clientPrompt}`);
+          return queryTokens.some(token => reference.includes(token));
+        });
+        if (list.length === 0) return '';
+      }
       const items = list.slice(0, 5).map((ex: any, idx: number) =>
         `[Caso de referencia ${idx + 1} - ${ex.context || 'Atención'}]:\nCliente: "${ex.clientPrompt}"\nRestaurante (Tú): "${ex.advisorResponse}"`
       ).join('\n\n');
@@ -6467,6 +7042,7 @@ REGLAS DE RECONOCIMIENTO Y RELACIÓN DE PRODUCTOS (THE VILLA DOG):
   * PROHIBIDO REPETIR PRODUCTOS O CANTIDADES: JAMÁS pongas en "notes" el nombre del producto ni su cantidad o variante (ej: NUNCA "3 sencillo", "1 perro", "hamburguesa sencilla", "gratinado", "sencillo", "combo"). La cantidad va en "quantity" y el producto en "menuItemId".
   * PROHIBIDO CHARLA, SALUDOS O AFECTO: JAMÁS incluyas saludos ("hola", "buenas"), expresiones de cortesía ("por favor", "me regala", "me da"), ni frases afectivas ("te amo", "bebé", "mi amor", "linda", etc.) en las notas.
   * REGLA DEFAULT: Si el cliente NO dio una instrucción explícita de modificación/cocina para ese producto, el campo "notes" DEBE SER EXACTAMENTE UNA CADENA VACÍA ("").
+  * "preference" debe ser siempre "". No copies allí la frase del cliente, el producto, la cantidad ni el tipo de entrega.
   * SEPARACIÓN DE PRODUCTOS CON DIFERENTE PREPARACIÓN (MUY IMPORTANTE): Si el cliente pide por ejemplo "2 perros sencillos 1 sin cebolla", NO los agrupes en un solo ítem de 2. Debes separarlos en dos ítems independientes en el array "items":
     - Ítem 1: menuItemId del Perro Sencillo, quantity: 1, notes: "Sin cebolla"
     - Ítem 2: menuItemId del Perro Sencillo, quantity: 1, notes: ""
@@ -6476,6 +7052,7 @@ REGLAS DE RECONOCIMIENTO Y RELACIÓN DE PRODUCTOS (THE VILLA DOG):
 - TIPO DE ENTREGA Y PAGO:
   * detectedOrderType: "delivery" si es a domicilio; "pickup" si pasa a recoger o come en mesa; null si no lo especifica.
   * paymentMethod: "CASH" para efectivo; "TRANSFER" para Nequi, Daviplata, Bancolombia; null si no se confirma.
+  * independentNotes solo puede contener una hora solicitada (por ejemplo "Para las 6:15; no antes") o una instrucción operativa breve como "Llamar al llegar". No copies productos, cantidades, saludos, dirección, teléfono, barrio ni método de pago.
 - DATOS DEL CLIENTE:
   * Extrae nombre, teléfono, dirección, barrio y referencia si el cliente los escribió.
   * zoneId: solo el ID de una zona vigente si coincide claramente con el barrio escrito; de lo contrario null.
@@ -6508,6 +7085,7 @@ ${text}
 Responde solo con JSON válido.`;
 
       let data: any = null;
+      let resultText = '';
       let modelUsed = '';
       let lastError: any = null;
       // El modelo principal es el que el administrador guardó en Configuración
@@ -6563,8 +7141,21 @@ Responde solo con JSON válido.`;
             }
 
             const candidateData: any = await response.json();
-            if (candidateData?.candidates?.[0]?.content?.parts?.[0]?.text) {
+            await this.incrementGeminiUsage();
+            const candidateText = this.getCompleteGeminiReply(candidateData);
+            if (candidateText) {
+              let candidateJson = candidateText.trim();
+              if (candidateJson.startsWith('```json') && candidateJson.endsWith('```')) {
+                candidateJson = candidateJson.substring(7, candidateJson.length - 3).trim();
+              } else if (candidateJson.startsWith('```') && candidateJson.endsWith('```')) {
+                candidateJson = candidateJson.substring(3, candidateJson.length - 3).trim();
+              }
+              const parsedCandidate = JSON.parse(candidateJson);
+              if (!parsedCandidate || typeof parsedCandidate !== 'object' || Array.isArray(parsedCandidate)) {
+                throw new Error('Gemini devolvió un JSON de pedido inválido');
+              }
               data = candidateData;
+              resultText = candidateJson;
               modelUsed = model;
               this.recordGeminiAttempt({
                 operation: 'ORDER_READER',
@@ -6574,10 +7165,17 @@ Responde solo con JSON válido.`;
                 statusCode: 200,
                 success: true,
               });
-              await this.incrementGeminiUsage();
               break;
             }
-            lastError = new Error('Gemini no devolvió contenido para interpretar el pedido');
+            this.recordGeminiAttempt({
+              operation: 'ORDER_READER',
+              apiKey: key,
+              allKeys: apiKeys,
+              model,
+              statusCode: 200,
+              success: false,
+            });
+            lastError = new Error('Gemini devolvió una respuesta incompleta para interpretar el pedido');
           } catch (e: any) {
             this.recordGeminiAttempt({
               operation: 'ORDER_READER',
@@ -6592,24 +7190,15 @@ Responde solo con JSON válido.`;
             lastError = e;
           }
         }
-        if (data?.candidates?.[0]?.content?.parts?.[0]?.text) break;
+        if (resultText) break;
       }
 
       if (!data) {
         throw lastError || new Error('Todas las API keys y modelos fallaron en parseOrder');
       }
 
-      let resultText = (data as any).candidates?.[0]?.content?.parts?.[0]?.text;
       if (!resultText) {
         throw new Error('No se recibió contenido de Gemini');
-      }
-
-      // Limpiar markdown si el modelo no respetó la regla
-      resultText = resultText.trim();
-      if (resultText.startsWith('```json')) {
-        resultText = resultText.substring(7, resultText.length - 3).trim();
-      } else if (resultText.startsWith('```')) {
-        resultText = resultText.substring(3, resultText.length - 3).trim();
       }
 
       const parsedResponse = JSON.parse(resultText);
@@ -6828,75 +7417,27 @@ Responde solo con JSON válido.`;
           if (add) additions.push(add);
         }
 
-        let cleanItemNotes = typeof rawItem.notes === 'string' ? rawItem.notes.trim() : '';
         const parsedItemQty = Math.min(99, Math.max(1, Math.trunc(Number(rawItem.quantity) || 1)));
-
-        if (cleanItemNotes) {
-          // Quitar consultas directas de precios
-          cleanItemNotes = cleanItemNotes.replace(/\b(?:que\s+precio\s+tiene|cuanto\s+cuesta|cuanto\s+vale|que\s+cuesta|a\s+como|a\s+cómo|que\s+vale|que\s+precio)\b/gi, ' ');
-          cleanItemNotes = cleanItemNotes.replace(/[?¿]/g, ' ');
-
-          // Quitar repeticiones de cantidades y nombres de producto/variantes dentro de la nota
-          cleanItemNotes = cleanItemNotes.replace(/\b\d+\s*(?:x\s*)?(?:perros?|hamburguesas?|pizzas?|salchipapas?|desgranados?|suizos?|patacones?)?\s*(?:sencill[oa]s?|especial(?:es)?|gratina[do]s?|mixt[oa]s?|personal(?:es)?|familiar(?:es)?|chica|combo|tradicional|clasic[oa]s?|grande|pequeñ[oa]s?)\b/gi, ' ');
-          cleanItemNotes = cleanItemNotes.replace(/\b\d+\s+(sin|con)\b/gi, '$1');
-
-          cleanItemNotes = cleanItemNotes
-            .replace(/\(\s*\$\s*[\d.,]+\s*\)/gi, '')
-            .replace(/\[\s*\$\s*[\d.,]+\s*\]/gi, '')
-            .replace(/\$\s*[\d.,]+/g, '')
-            .replace(/\b\d{1,3}(?:\.\d{3})+(?:\s*(?:pesos|cop|mil|k))?\b/gi, '')
-            .replace(/\b\d{4,}(?:\s*(?:pesos|cop|mil|k))?\b/gi, '');
-
-          if (menuItem) {
-            const parenMatches = menuItem.name.match(/\(([^)]+)\)/g) || [];
-            for (const p of parenMatches) {
-              const inside = p.replace(/[()]/g, '').trim();
-              if (inside.length > 2) {
-                cleanItemNotes = cleanItemNotes.replace(new RegExp(`\\b${inside.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&')}\\b`, 'gi'), '');
-              }
-            }
-            const cleanProdName = menuItem.name.replace(/\([^)]+\)/g, '').trim();
-            if (cleanProdName.length > 2) {
-              cleanItemNotes = cleanItemNotes.replace(new RegExp(`\\b${cleanProdName.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&')}\\b`, 'gi'), '');
-            }
-          }
-
-          cleanItemNotes = cleanItemNotes.replace(/\s+/g, ' ').trim();
-
-          // Si después de limpiar solo quedó una repetición de cantidad/variante/producto (ej: "3 sencillo", "sencillo", "gratinada", "gra")
-          const isPureProductOrQty = /^(?:\d+\s*(?:x\s*)?)?(?:perros?|hamburguesas?|pizzas?|salchipapas?|desgranados?|suizos?|patacones?)?\s*(?:sencill[oa]s?|especial(?:es)?|gratina[do]s?|mixt[oa]s?|personal(?:es)?|familiar(?:es)?|chica|combo|tradicional|clasic[oa]s?|grande|pequeñ[oa]s?|super|gra\b)?\s*$/i.test(cleanItemNotes);
-          if (isPureProductOrQty) {
-            cleanItemNotes = '';
-          }
-
-          // Limpiar delimitadores iniciales y finales respetando la nota completa del cliente
-          if (cleanItemNotes) {
-            cleanItemNotes = cleanItemNotes.replace(/^[—–\-|,.\s]+|[—–\-|,.\s]+$/g, '').trim();
-          }
-        }
-
-        // Si la nota original especificaba una cantidad parcial (ej: "1 sin cebolla" cuando quantity es 2)
-        const rawNoteStr = String(rawItem.notes || '');
-        const wordToNum: Record<string, number> = { 'un': 1, 'una': 1, 'uno': 1, 'dos': 2, 'tres': 3, 'cuatro': 4, 'cinco': 5 };
-        const partialMatch = rawNoteStr.match(/(?:^|\s)(\d+|un|una|uno|dos|tres|cuatro|cinco)\s+(?:sin|con|solo\s+con)\s+([a-záéíóúüñA-ZÁÉÍÓÚÜÑ\s,/.\-–—]+)/i);
-        let partialQty = 0;
-        if (partialMatch) {
-          const rawPart = partialMatch[1].toLowerCase();
-          partialQty = parseInt(rawPart, 10) || wordToNum[rawPart] || 0;
-        }
+        const preparationCandidates = [rawItem.notes, rawItem.preference]
+          .filter((value: unknown) => typeof value === 'string' && value.trim())
+          .map((value: string) => sanitizeOrderNote(value, menuItem.name, parsedItemQty));
+        const preparation = preparationCandidates.find(candidate => candidate.note)
+          || { note: '', partialQty: 0 };
+        const cleanItemNotes = preparation.note;
+        const partialQty = preparation.partialQty;
 
         if (cleanItemNotes && partialQty > 0 && partialQty < parsedItemQty) {
           parsedCartItems.push({
             menuItem,
             quantity: partialQty,
-            preference: typeof rawItem.preference === 'string' ? rawItem.preference.trim().slice(0, 300) : '',
+            preference: '',
             notes: cleanItemNotes,
             additions
           });
           parsedCartItems.push({
             menuItem,
             quantity: parsedItemQty - partialQty,
-            preference: typeof rawItem.preference === 'string' ? rawItem.preference.trim().slice(0, 300) : '',
+            preference: '',
             notes: '',
             additions: []
           });
@@ -6904,7 +7445,7 @@ Responde solo con JSON válido.`;
           parsedCartItems.push({
             menuItem,
             quantity: parsedItemQty,
-            preference: typeof rawItem.preference === 'string' ? rawItem.preference.trim().slice(0, 300) : '',
+            preference: '',
             notes: cleanItemNotes,
             additions
           });
@@ -6963,9 +7504,7 @@ Responde solo con JSON válido.`;
         parsedCartItems,
         unresolvedBeverages: cleanedUnresolvedBeverages,
         detectedOrderType,
-        independentNotes: Array.isArray(rawJson.independentNotes)
-          ? rawJson.independentNotes.filter((note: unknown) => typeof note === 'string').map((note: string) => note.trim().slice(0, 300)).filter(Boolean)
-          : [],
+        independentNotes: this.sanitizeAutomaticGeneralOrderNotes(rawJson.independentNotes),
         customerName: typeof rawJson.customerName === 'string' ? rawJson.customerName.trim().slice(0, 100) || null : null,
         customerPhone: typeof rawJson.customerPhone === 'string' ? rawJson.customerPhone.trim().slice(0, 35) || null : null,
         customerAddress: typeof rawJson.customerAddress === 'string' ? rawJson.customerAddress.trim().slice(0, 250) || null : null,
@@ -6993,25 +7532,28 @@ Responde solo con JSON válido.`;
     messageId: string;
     mediaId: string;
     content: string;
-  }): Promise<void> {
-    const readerEnabled = await this.getSetting('order_reader_enabled');
-    if (readerEnabled !== 'true') return;
+  }): Promise<string | null> {
+    const [readerEnabled, chatbotEnabled] = await Promise.all([
+      this.getSetting('order_reader_enabled'),
+      this.getSetting('chatbot_enabled'),
+    ]);
+    if (readerEnabled !== 'true' && chatbotEnabled !== 'true') return null;
 
     const rawApiKeys = await this.getSetting('gemini_api_key');
     const apiKeys = String(rawApiKeys || '').split(',').map(key => key.trim()).filter(Boolean);
-    if (apiKeys.length === 0) return;
+    if (apiKeys.length === 0) return null;
 
     const media = await this.getMediaBuffer(params.mediaId);
     if (!media?.buffer?.length) {
       this.logger.warn(`No fue posible descargar la nota de voz ${params.mediaId} para transcribirla.`);
-      return;
+      return null;
     }
 
     // WhatsApp limita las notas de voz entrantes; este tope evita saturar la
     // memoria si un proveedor entrega un archivo anormalmente grande.
     if (media.buffer.length > 20 * 1024 * 1024) {
       this.logger.warn(`La nota de voz ${params.mediaId} excede 20 MB y no se transcribirá automáticamente.`);
-      return;
+      return null;
     }
 
     const audioData = media.buffer.toString('base64');
@@ -7021,8 +7563,10 @@ Responde solo con JSON válido.`;
 Devuelve únicamente la transcripción, sin saludo, sin resumen, sin markdown y sin inventar datos. Conserva cantidades, productos, direcciones, barrios, forma de pago y notas de cocina como “sin cebolla”, “sin salsa” o “con más queso”.`;
     let transcript = '';
     let modelUsed = '';
+    let completedContentAttempts = 0;
     const modelsToTry = await this.getGeminiModels();
 
+    transcriptionSearch:
     for (const key of this.getGeminiKeyCandidates(apiKeys)) {
       if (this.isGeminiKeyOnCooldown(key)) continue;
       for (const model of modelsToTry) {
@@ -7064,13 +7608,35 @@ Devuelve únicamente la transcripción, sin saludo, sin resumen, sin markdown y 
           }
 
           const data: any = await response.json();
-          transcript = String(data?.candidates?.[0]?.content?.parts?.[0]?.text || '')
-            .replace(/\s+/g, ' ')
-            .trim()
-            .slice(0, 3_000);
+          completedContentAttempts += 1;
+          await this.incrementGeminiUsage();
+          const completeTranscript = this.getCompleteGeminiReply(data);
+          if (!completeTranscript) {
+            this.recordGeminiAttempt({
+              operation: 'AUDIO_TRANSCRIPTION',
+              apiKey: key,
+              allKeys: apiKeys,
+              model,
+              statusCode: 200,
+              success: false,
+            });
+            if (completedContentAttempts >= 2) break transcriptionSearch;
+            continue;
+          }
+          const normalizedTranscript = completeTranscript.replace(/\s+/g, ' ').trim();
+          // `getCompleteGeminiReply` ya exige una salida completa. Guardar la
+          // transcripción íntegra evita cortar una dirección o una nota al final.
+          transcript = normalizedTranscript;
           if (transcript) {
             modelUsed = model;
-            await this.incrementGeminiUsage();
+            this.recordGeminiAttempt({
+              operation: 'AUDIO_TRANSCRIPTION',
+              apiKey: key,
+              allKeys: apiKeys,
+              model,
+              statusCode: 200,
+              success: true,
+            });
             break;
           }
         } catch (error: any) {
@@ -7081,7 +7647,7 @@ Devuelve únicamente la transcripción, sin saludo, sin resumen, sin markdown y 
       if (transcript) break;
     }
 
-    if (!transcript) return;
+    if (!transcript) return null;
 
     const transcriptLabel = `📝 Transcripción: ${transcript}`;
     const contentWithTranscript = params.content.includes('|')
@@ -7105,187 +7671,27 @@ ${transcriptLabel}`
       modelUsed,
       createdAt: updated.createdAt,
     });
+    return transcript;
   }
 
-  private async handleAudioWithGemini(session: any, mediaId: string): Promise<boolean> {
+
+  private async handleMultimediaChatbot(
+    session: any,
+    type: string,
+    mediaId: string,
+    triggerMessageId?: string,
+  ) {
     try {
-      const rawApiKeys = await this.getSetting('gemini_api_key');
-      if (!rawApiKeys) return false;
-      const apiKeys = rawApiKeys.split(',').map(k => k.trim()).filter(k => k.length > 0);
-      if (apiKeys.length === 0) return false;
+      const sessionId = String(session?.id || '');
+      if (!(await this.isLatestIncomingMessage(sessionId, triggerMessageId))) return;
+      if (session.assignedToId || session.waitingForAdvisor) return;
+      if (!(await this.isSessionAvailableForChatbot(sessionId))) return;
 
-      const media = await this.getMediaBuffer(mediaId);
-      if (!media || !media.buffer) return false;
-
-      const base64Audio = media.buffer.toString('base64');
-      const mimeType = media.contentType.split(';')[0].trim() || 'audio/ogg';
-
-      const [configuredMenuUrl, restaurantHours, aiInstructions, paymentQrMode, paymentAccountText] = await Promise.all([
-        this.getSetting('digital_menu_url'),
-        this.getSetting('restaurant_hours'),
-        this.getSetting('chatbot_ai_instructions'),
-        this.getSetting('chatbot_payment_qr_mode'),
-        this.getSetting('chatbot_payment_account_text'),
-      ]);
-      const digitalMenuUrl = this.getShareableDigitalMenuUrl(configuredMenuUrl);
-      const audioMenuLinkRule = digitalMenuUrl
-        ? `Si pide el menú o una categoría, muestra los productos y precios y puedes añadir este enlace al final: ${digitalMenuUrl}.`
-        : 'Si pide el menú o una categoría, muestra los productos y precios directamente en el chat. No incluyas enlaces porque todavía no hay un dominio público configurado.';
-      const paymentInstruction = paymentQrMode === 'IMAGE'
-        ? 'Para transferencias se utiliza el QR oficial. No inventes números de cuenta; indica que un asesor enviará el QR.'
-        : paymentAccountText
-          ? `Datos oficiales para transferencias:\n${paymentAccountText}`
-          : 'No hay datos de transferencia configurados. No inventes cuentas y pide apoyo a un asesor.';
-      const customInstructionsBlock = aiInstructions?.trim()
-        ? `\nINSTRUCCIONES ADICIONALES CONFIGURADAS POR ADMINISTRACIÓN:\n${aiInstructions.trim()}\n`
-        : '';
-
-      const dbItems = await this.prisma.menuItem.findMany({
-        where: { active: true, availableForDelivery: { not: false }, code: { not: null } },
-        include: { category: { select: { name: true } } },
-        orderBy: [{ category: { name: 'asc' } }, { price: 'asc' }]
-      });
-
-      const itemsByCategory: Record<string, string[]> = {};
-      dbItems.forEach(i => {
-        const catName = i.category?.name || 'General';
-        if (!itemsByCategory[catName]) itemsByCategory[catName] = [];
-        itemsByCategory[catName].push(`- ${i.name}: $${i.price.toLocaleString('de-DE')}`);
-      });
-      const menuSummary = Object.entries(itemsByCategory)
-        .map(([cat, items]) => `*${cat.toUpperCase()}*\n${items.join('\n')}`)
-        .join('\n\n');
-
-      const systemPrompt = `
-Eres la persona encargada de atender de forma directa el WhatsApp del restaurante "The Villa Dog" en Montería, Colombia.
-Estás escuchando una NOTA DE VOZ que envió un cliente por WhatsApp.
-${customInstructionsBlock}
-
-INSTRUCCIONES CRÍTICAS:
-1. Escucha atentamente la nota de voz adjunta.
-2. Responde a la inquietud o pedido del cliente de forma muy amable, humana y clara.
-3. PAUTAS DE ESTILO Y MENÚ DUAL:
-- ABSOLUTAMENTE PROHIBIDO USAR EMOJIS. No uses caritas ni símbolos. Solo texto normal con puntuación estándar.
-- ${audioMenuLinkRule}
-- SI EL CLIENTE PREGUNTA QUÉ LE RECOMIENDAS O PIDE SUGERENCIA EN EL AUDIO: No mandes la lista de categorías. Recomienda con entusiasmo 2 o 3 platos estrellas usando únicamente el menú oficial.
-- SI EL CLIENTE MENCIONA UNA CATEGORÍA ESPECÍFICA (ej: "pizzas", "perros", "hamburguesas", "salchipapas"): Muestra los platos y precios de esa categoría en el chat.
-- Si el cliente pide hablar con una persona, un asesor o atención humana, incluye [TRANSFERIR_ASESOR].
-- Si una INSTRUCCIÓN ADICIONAL CONFIGURADA POR ADMINISTRACIÓN ordena derivar al asesor para el caso actual, incluye [TRANSFERIR_ASESOR].
-- [TRANSFERIR_ASESOR] es una señal interna. Escríbela al final cuando corresponda, no la expliques; el sistema la retirará antes de enviar la respuesta.
-
-HORARIO CONFIGURADO:
-${restaurantHours || 'Horario por confirmar con un asesor.'}
-
-PAGOS:
-${paymentInstruction}
-
-Menú del restaurante:
-${menuSummary}
-`;
-
-      let replyText: string | null = null;
-      const modelsToTry = await this.getGeminiModels();
-
-      for (const key of this.getGeminiKeyCandidates(apiKeys)) {
-        if (this.isGeminiKeyOnCooldown(key)) continue;
-        for (const model of modelsToTry) {
-          if (this.isGeminiKeyOnCooldown(key)) break;
-          try {
-            const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`;
-            const payload = {
-              contents: [{
-                parts: [
-                  {
-                    inlineData: {
-                    mimeType: mimeType,
-                    data: base64Audio
-                  }
-                },
-                {
-                  text: systemPrompt
-                }
-              ]
-            }],
-            generationConfig: this.buildGeminiGenerationConfig(model, {
-              temperature: 0.3,
-              maxOutputTokens: 500,
-            })
-          };
-
-          const res = await fetch(url, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload),
-            signal: AbortSignal.timeout(12000)
-          });
-
-          if (res.ok) {
-            const data = await res.json();
-            const candidateReply = String(data?.candidates?.[0]?.content?.parts?.[0]?.text || '').trim();
-            if (this.isMeaningfulGeminiReply(candidateReply)) {
-              replyText = candidateReply;
-              await this.incrementGeminiUsage();
-              break;
-            }
-          } else {
-            this.recordGeminiAttempt({
-              operation: 'AUDIO_TRANSCRIPTION',
-              apiKey: key,
-              allKeys: apiKeys,
-              model,
-              statusCode: res.status,
-              success: false,
-            });
-            if (res.status === 401 || res.status === 429 || res.status === 403) {
-              await this.putGeminiKeyOnCooldown(key, res);
-              break;
-            }
-            const errBody = await res.text();
-            const safeError = this.sanitizeGeminiError(errBody, apiKeys);
-            this.logger.warn(`Modelo ${model} devolvió HTTP ${res.status}: ${safeError}`);
-          }
-        } catch (e: any) {
-          const safeError = this.sanitizeGeminiError(e, apiKeys);
-          this.logger.warn(`Error procesando audio con modelo ${model} y Gemini key (...${key.slice(-4)}): ${safeError}`);
-        }
-      }
-      if (replyText) break;
-    }
-
-      if (replyText) {
-        replyText = replyText.replace(/[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{1F1E0}-\u{1F1FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]/gu, '').trim();
-        const parsedTransfer = this.parseAdvisorTransferReply(replyText);
-        replyText = parsedTransfer.cleanText;
-        
-        if (digitalMenuUrl && !replyText.includes(digitalMenuUrl)) {
-          const lowerText = replyText.toLowerCase();
-          if (lowerText.includes('menú') || lowerText.includes('menu') || lowerText.includes('carta') || lowerText.includes('opciones')) {
-            replyText += `\n\nPuedes ver nuestra carta digital interactiva con fotos aquí: ${digitalMenuUrl}`;
-          }
-        }
-
-        if (parsedTransfer.shouldTransfer || this.replyPromisesAdvisorHandoff(replyText)) {
-          return this.requestAdvisorHandoff(session, replyText, 'respuesta_audio_gemini');
-        }
-        const sent = await this.sendMessage(session.phone, replyText, undefined, undefined, session.id);
-        return Boolean(sent?.sent);
-      }
-      return false;
-    } catch (err) {
-      this.logger.error('Error procesando nota de voz con Gemini:', err);
-      return false;
-    }
-  }
-
-  private async handleMultimediaChatbot(session: any, type: string, mediaId: string) {
-    try {
       const closedReply = await this.getClosedBusinessReply();
       if (closedReply) {
-        await this.sendMessage(session.phone, closedReply);
-        return;
-      }
-
-      if (session.assignedToId || session.waitingForAdvisor) {
+        if (!(await this.isLatestIncomingMessage(sessionId, triggerMessageId))) return;
+        if (!(await this.isSessionAvailableForChatbot(sessionId))) return;
+        await this.sendMessage(session.phone, closedReply, undefined, undefined, sessionId || undefined);
         return;
       }
 
@@ -7293,18 +7699,19 @@ ${menuSummary}
       if (chatbotEnabled !== 'true') return;
 
       if (type === 'audio') {
-        const handledByAi = await this.handleAudioWithGemini(session, mediaId);
-        if (handledByAi) {
-          return;
-        }
-
         const text = `He recibido tu mensaje de voz. En un momento uno de nuestros asesores lo escuchara y te respondera personalmente. Gracias por tu paciencia.`;
+        if (!(await this.isLatestIncomingMessage(sessionId, triggerMessageId))) return;
+        if (!(await this.isSessionAvailableForChatbot(sessionId))) return;
         await this.requestAdvisorHandoff(session, text, 'audio_sin_respuesta_ia');
       } else if (type === 'image') {
         const text = `He recibido tu imagen. La he compartido con nuestros asesores para que la revisen de inmediato. Gracias.`;
+        if (!(await this.isLatestIncomingMessage(sessionId, triggerMessageId))) return;
+        if (!(await this.isSessionAvailableForChatbot(sessionId))) return;
         await this.requestAdvisorHandoff(session, text, 'imagen_recibida');
       } else if (type === 'document') {
         const text = `He recibido tu documento. Lo he compartido con nuestros asesores para que lo revisen. Gracias.`;
+        if (!(await this.isLatestIncomingMessage(sessionId, triggerMessageId))) return;
+        if (!(await this.isSessionAvailableForChatbot(sessionId))) return;
         await this.requestAdvisorHandoff(session, text, 'documento_recibido');
       } else {
         return;

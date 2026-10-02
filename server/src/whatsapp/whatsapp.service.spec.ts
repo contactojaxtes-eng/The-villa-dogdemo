@@ -34,7 +34,7 @@ describe('WhatsApp webhook burst handling', () => {
 
   it('keeps ten simultaneous customer conversations independent and emits each one immediately', async () => {
     const { service, prisma, socketGateway } = createService();
-    jest.spyOn(service as any, 'handleChatbot').mockResolvedValue(undefined);
+    jest.spyOn(service as any, 'enqueueChatbotResponse').mockReturnValue(undefined);
 
     const messages = Array.from({ length: 10 }, (_, index) => ({
       id: `wamid.test-${index}`,
@@ -87,6 +87,35 @@ describe('WhatsApp webhook burst handling', () => {
       '/api/whatsapp/media/media-video|Video del pedido',
     ]);
     expect(socketGateway.emitWhatsApp.mock.calls.filter(([event]: [string]) => event === 'whatsappMessage')).toHaveLength(3);
+  });
+
+  it('keeps the Meta conversation id separate from the callable customer phone', async () => {
+    const { service, prisma } = createService();
+    jest.spyOn(service as any, 'enqueueChatbotResponse').mockReturnValue(undefined);
+
+    await (service as any)._processWebhookAsync({
+      object: 'whatsapp_business_account',
+      entry: [{ changes: [{ field: 'messages', value: {
+        messages: [{
+          id: 'wamid.business-scoped-id',
+          from: '123456789012345',
+          type: 'text',
+          text: { body: 'Hola' },
+        }],
+        contacts: [{
+          wa_id: '123456789012345',
+          profile: { name: 'Cliente real' },
+          phones: [{ phone: '+57 300 123 4567' }],
+        }],
+      } }] }],
+    });
+
+    expect(prisma.whatsAppSession.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        phone: '123456789012345',
+        customerPhone: '3001234567',
+      }),
+    }));
   });
 });
 
@@ -164,71 +193,92 @@ describe('WhatsApp voice-note transcription for order intake', () => {
     expect(prisma.whatsAppMessage.update).not.toHaveBeenCalled();
   });
 
-  it('strips the internal marker and requests an advisor for a Gemini audio reply', async () => {
+  it('does not persist a truncated audio transcript and retries a complete one', async () => {
     const prisma: any = {
-      menuItem: { findMany: jest.fn().mockResolvedValue([]) },
-      whatsAppSession: {
-        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
-        findUnique: jest.fn().mockResolvedValue({
-          id: 'session-audio',
-          phone: '573001234567',
-          customerName: 'Cliente audio',
-          assignedToId: null,
-          assignedTo: null,
-          waitingForAdvisor: true,
+      whatsAppMessage: {
+        update: jest.fn().mockResolvedValue({
+          id: 'message-audio',
+          waMessageId: 'wamid.audio',
+          createdAt: new Date(),
         }),
       },
     };
-    const socketGateway = { emitWhatsApp: jest.fn() };
-    const service = new WhatsappService(prisma, { get: jest.fn() } as any, socketGateway as any);
-    const settings: Record<string, string> = {
-      gemini_api_key: 'test-key',
-      gemini_model: 'gemini-3.5-flash-lite',
-      chatbot_ai_instructions: 'Si el cliente pide una excepción, deriva a un asesor.',
-    };
-    jest.spyOn(service as any, 'getSetting').mockImplementation(async (key: string) => settings[key] || null);
+    const service = new WhatsappService(prisma, { get: jest.fn() } as any, { emitWhatsApp: jest.fn() } as any);
+    jest.spyOn(service as any, 'getSetting').mockImplementation(async (key: string) => (
+      key === 'order_reader_enabled' ? 'true' : key === 'gemini_api_key' ? 'test-key' : null
+    ));
     jest.spyOn(service as any, 'getMediaBuffer').mockResolvedValue({
       buffer: Buffer.from('voice-note'),
-      contentType: 'audio/ogg; codecs=opus',
+      contentType: 'audio/ogg',
     });
-    jest.spyOn(service as any, 'getGeminiModels').mockResolvedValue(['gemini-3.5-flash-lite']);
+    jest.spyOn(service as any, 'getGeminiModels').mockResolvedValue(['gemini-a', 'gemini-b']);
     jest.spyOn(service as any, 'incrementGeminiUsage').mockResolvedValue(undefined);
-    const send = jest.spyOn(service, 'sendMessage').mockResolvedValue({ sent: true } as any);
-    const fetchSpy = jest.spyOn(global, 'fetch' as any).mockResolvedValue({
-      ok: true,
-      json: async () => ({
-        candidates: [{ content: { parts: [{ text: 'Claro. Un asesor revisará tu caso. [TRANSFERIR_ASESOR]' }] } }],
-      }),
-    } as any);
+    const fetchSpy = jest.spyOn(global, 'fetch')
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ candidates: [{ finishReason: 'MAX_TOKENS', content: { parts: [{ text: 'Dos perros con salsa de' }] } }] }),
+      } as any)
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ candidates: [{ finishReason: 'STOP', content: { parts: [{ text: 'Dos perros sin cebolla.' }] } }] }),
+      } as any);
 
     try {
-      await expect((service as any).handleAudioWithGemini({
-        id: 'session-audio',
-        phone: '573001234567',
-        customerName: 'Cliente audio',
-        assignedToId: null,
-        waitingForAdvisor: false,
-      }, 'media-audio')).resolves.toBe(true);
+      await expect((service as any).transcribeIncomingAudio({
+        session: { id: 'session-audio', phone: '573001234567' },
+        messageId: 'message-audio',
+        mediaId: 'media-audio',
+        content: '/api/whatsapp/media/media-audio',
+      })).resolves.toBe('Dos perros sin cebolla.');
     } finally {
       fetchSpy.mockRestore();
     }
 
-    expect(send).toHaveBeenCalledWith(
-      '573001234567',
-      'Claro. Un asesor revisará tu caso.',
-      undefined,
-      undefined,
-      'session-audio',
-    );
-    expect(prisma.whatsAppSession.updateMany).toHaveBeenCalledWith({
-      where: { id: 'session-audio', assignedToId: null, waitingForAdvisor: false },
-      data: { waitingForAdvisor: true },
-    });
-    expect(socketGateway.emitWhatsApp).toHaveBeenCalledWith(
-      'whatsappAgentRequest',
-      expect.objectContaining({ sessionId: 'session-audio', waitingForAdvisor: true }),
-    );
+    expect(prisma.whatsAppMessage.update).toHaveBeenCalledTimes(1);
+    expect(prisma.whatsAppMessage.update.mock.calls[0][0].data.content).toContain('Dos perros sin cebolla.');
+    expect(prisma.whatsAppMessage.update.mock.calls[0][0].data.content).not.toContain('salsa de');
   });
+
+  it('keeps a complete long transcript instead of silently cutting its ending', async () => {
+    const longTranscript = `${'Producto con detalle. '.repeat(170)}Dirección final calle 44 #2.`;
+    const prisma: any = {
+      whatsAppMessage: {
+        update: jest.fn().mockResolvedValue({
+          id: 'message-audio-long',
+          waMessageId: 'wamid.audio.long',
+          createdAt: new Date(),
+        }),
+      },
+    };
+    const service = new WhatsappService(prisma, { get: jest.fn() } as any, { emitWhatsApp: jest.fn() } as any);
+    jest.spyOn(service as any, 'getSetting').mockImplementation(async (key: string) => (
+      key === 'order_reader_enabled' ? 'true' : key === 'gemini_api_key' ? 'test-key' : null
+    ));
+    jest.spyOn(service as any, 'getMediaBuffer').mockResolvedValue({ buffer: Buffer.from('voice-note'), contentType: 'audio/ogg' });
+    jest.spyOn(service as any, 'getGeminiModels').mockResolvedValue(['gemini-a']);
+    jest.spyOn(service as any, 'incrementGeminiUsage').mockResolvedValue(undefined);
+    const fetchSpy = jest.spyOn(global, 'fetch').mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ candidates: [{ finishReason: 'STOP', content: { parts: [{ text: longTranscript }] } }] }),
+    } as any);
+
+    try {
+      await expect((service as any).transcribeIncomingAudio({
+        session: { id: 'session-audio', phone: '573001234567' },
+        messageId: 'message-audio-long',
+        mediaId: 'media-audio-long',
+        content: '/api/whatsapp/media/media-audio-long',
+      })).resolves.toBe(longTranscript);
+    } finally {
+      fetchSpy.mockRestore();
+    }
+
+    expect(prisma.whatsAppMessage.update.mock.calls[0][0].data.content).toContain('Dirección final calle 44 #2.');
+  });
+
 });
 
 describe('WhatsApp scheduled closing', () => {
@@ -253,6 +303,27 @@ describe('WhatsApp scheduled closing', () => {
 
     expect(send).toHaveBeenCalledWith('573001234567', 'Estamos cerrados. Volvemos desde las 12:00.');
   });
+
+  it.each([
+    { assignedToId: 'advisor-1', waitingForAdvisor: false },
+    { assignedToId: null, waitingForAdvisor: true },
+  ])('stays silent while a human owns or is expected in the chat: %j', async (ownership) => {
+    const prisma: any = {
+      whatsAppSession: { findUnique: jest.fn().mockResolvedValue(ownership) },
+    };
+    const service = new WhatsappService(prisma, { get: jest.fn() } as any, { emitWhatsApp: jest.fn() } as any);
+    jest.spyOn(service as any, 'getClosedBusinessReply').mockResolvedValue('Estamos cerrados.');
+    const send = jest.spyOn(service, 'sendMessage').mockResolvedValue({ sent: true } as any);
+
+    await (service as any).handleChatbot({
+      id: 'chat-owned',
+      phone: '573001234567',
+      assignedToId: null,
+      waitingForAdvisor: false,
+    }, 'Hola');
+
+    expect(send).not.toHaveBeenCalled();
+  });
 });
 
 describe('WhatsApp advisor handoff safety', () => {
@@ -267,11 +338,18 @@ describe('WhatsApp advisor handoff safety', () => {
   };
 
   const createService = () => {
+    let currentSession = { ...session };
     const prisma: any = {
       whatsAppSession: {
-        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
-        findUnique: jest.fn().mockResolvedValue({ ...session, waitingForAdvisor: true }),
-        update: jest.fn().mockResolvedValue({ ...session, waitingForAdvisor: false }),
+        updateMany: jest.fn().mockImplementation(async () => {
+          currentSession = { ...currentSession, waitingForAdvisor: true };
+          return { count: 1 };
+        }),
+        findUnique: jest.fn().mockImplementation(async () => currentSession),
+        update: jest.fn().mockImplementation(async () => {
+          currentSession = { ...currentSession, waitingForAdvisor: false };
+          return currentSession;
+        }),
       },
     };
     const socketGateway = { emitWhatsApp: jest.fn() };
@@ -388,6 +466,7 @@ describe('WhatsApp advisor handoff safety', () => {
 
   it('keeps a waiting conversation silent even after many hours', async () => {
     const { service, prisma } = createService();
+    prisma.whatsAppSession.findUnique.mockResolvedValue({ ...session, waitingForAdvisor: true });
     jest.spyOn(service as any, 'getClosedBusinessReply').mockResolvedValue(null);
     jest.spyOn(service as any, 'getSetting').mockResolvedValue('true');
     const gemini = jest.spyOn(service as any, 'handleGeminiChatbot').mockResolvedValue(undefined);
@@ -914,6 +993,12 @@ describe('WhatsApp Gemini settings', () => {
     ])).toBe('La Pradera');
     expect((service as any).isMeaningfulGeminiReply('.')).toBe(false);
     expect((service as any).isMeaningfulGeminiReply('Listo')).toBe(true);
+    expect((service as any).getCompleteGeminiReply({
+      candidates: [{ finishReason: 'STOP', content: { parts: [{ text: 'Únicamente con salsa de ....' }] } }],
+    })).toBeNull();
+    expect((service as any).getCompleteGeminiReply({
+      candidates: [{ finishReason: 'STOP', content: { parts: [{ text: 'Respuesta ' }, { text: 'completa.' }] } }],
+    })).toBe('Respuesta completa.');
   });
 
   it('hands the chat to an advisor when a model tries to invent a total', async () => {
@@ -934,14 +1019,23 @@ describe('WhatsApp Gemini settings', () => {
       },
       whatsAppSession: {
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
-        findUnique: jest.fn().mockResolvedValue({
-          id: 'chat-1',
-          phone: '3001234567',
-          customerName: 'José',
-          assignedToId: null,
-          assignedTo: null,
-          waitingForAdvisor: true,
-        }),
+        findUnique: jest.fn()
+          .mockResolvedValueOnce({
+            id: 'chat-1',
+            phone: '3001234567',
+            customerName: 'José',
+            assignedToId: null,
+            assignedTo: null,
+            waitingForAdvisor: false,
+          })
+          .mockResolvedValue({
+            id: 'chat-1',
+            phone: '3001234567',
+            customerName: 'José',
+            assignedToId: null,
+            assignedTo: null,
+            waitingForAdvisor: true,
+          }),
       },
     };
     const socketGateway = { emitWhatsApp: jest.fn() };
@@ -1115,6 +1209,470 @@ describe('WhatsApp Gemini settings', () => {
     } finally {
       fetchSpy.mockRestore();
     }
+  });
+
+  const createProtectedGeminiService = (params: {
+    history: any[];
+    zones?: any[];
+    customerPhone?: string | null;
+  }) => {
+    const prisma: any = {
+      whatsAppMessage: {
+        findMany: jest.fn().mockResolvedValue(params.history),
+        findFirst: jest.fn().mockResolvedValue(null),
+      },
+      menuItem: { findMany: jest.fn().mockResolvedValue([]) },
+      deliveryZone: { findMany: jest.fn().mockResolvedValue(params.zones || []) },
+      order: {
+        findMany: jest.fn().mockResolvedValue([]),
+        findFirst: jest.fn().mockResolvedValue(null),
+      },
+      whatsAppSession: {
+        findUnique: jest.fn().mockResolvedValue({ assignedToId: null, waitingForAdvisor: false }),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+      },
+    };
+    const service = new WhatsappService(
+      prisma,
+      { get: jest.fn() } as any,
+      { emitWhatsApp: jest.fn() } as any,
+    );
+    jest.spyOn(service as any, 'getSetting').mockResolvedValue(null);
+    jest.spyOn(service as any, 'getGeminiModels').mockResolvedValue(['gemini-a', 'gemini-b']);
+    jest.spyOn(service as any, 'incrementGeminiUsage').mockResolvedValue(undefined);
+    const send = jest.spyOn(service, 'sendMessage').mockResolvedValue({ sent: true } as any);
+    const session = {
+      id: 'chat-protected',
+      phone: '123456789012345',
+      customerPhone: params.customerPhone ?? '3001234567',
+      customerName: 'José',
+    };
+    return { service, prisma, send, session };
+  };
+
+  it('cuts stale proof context and fixes the answer before sending a greeting', async () => {
+    const { service, prisma, send, session } = createProtectedGeminiService({
+      history: [
+        { id: 'old-image', direction: 'IN', messageType: 'image', content: '/api/whatsapp/media/proof-old', createdAt: new Date('2026-10-01T17:00:00Z') },
+        { id: 'old-reply', direction: 'OUT', messageType: 'text', content: 'Ya recibimos tu comprobante.', createdAt: new Date('2026-10-01T17:01:00Z') },
+        { id: 'hello', direction: 'IN', messageType: 'text', content: 'hola', createdAt: new Date('2026-10-01T18:00:00Z') },
+      ],
+    });
+    const fetchSpy = jest.spyOn(global, 'fetch').mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ candidates: [{ finishReason: 'STOP', content: { parts: [{ text: 'Ya recibimos tu comprobante.' }] } }] }),
+    } as any);
+    let providerPrompt = '';
+
+    try {
+      await (service as any).handleGeminiChatbot(session, 'hola', ['test-key']);
+      const request = JSON.parse((fetchSpy.mock.calls[0][1] as RequestInit).body as string);
+      providerPrompt = request.contents[0].parts[0].text;
+    } finally {
+      fetchSpy.mockRestore();
+    }
+
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send).toHaveBeenCalledWith(
+      '123456789012345',
+      'Hola José, ¿cómo podemos ayudarte?',
+      undefined,
+      undefined,
+      'chat-protected',
+    );
+    expect(prisma.whatsAppSession.updateMany).not.toHaveBeenCalled();
+    expect(providerPrompt).toContain('Cliente: hola');
+    expect(providerPrompt).not.toContain('proof-old');
+    expect(providerPrompt).not.toContain('Ya recibimos tu comprobante');
+  });
+
+  it('never sends a MAX_TOKENS fragment and retries with a complete response', async () => {
+    const { service, send, session } = createProtectedGeminiService({
+      history: [{ id: 'current', direction: 'IN', messageType: 'text', content: 'Quiero dos perros', createdAt: new Date() }],
+    });
+    const fetchSpy = jest.spyOn(global, 'fetch')
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ candidates: [{ finishReason: 'MAX_TOKENS', content: { parts: [{ text: 'Claro, serían dos perros con salsa de' }] } }] }),
+      } as any)
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ candidates: [{ finishReason: 'STOP', content: { parts: [{ text: 'Perfecto. ¿Deseas alguna modificación de cocina?' }] } }] }),
+      } as any);
+    let providerCallCount = 0;
+
+    try {
+      await (service as any).handleGeminiChatbot(session, 'Quiero dos perros', ['test-key']);
+      providerCallCount = fetchSpy.mock.calls.length;
+    } finally {
+      fetchSpy.mockRestore();
+    }
+
+    expect(providerCallCount).toBe(2);
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send.mock.calls[0][1]).toBe('Perfecto. ¿Deseas alguna modificación de cocina?');
+    expect(send.mock.calls[0][1]).not.toContain('salsa de');
+  });
+
+  it.each([
+    'Perfecto, puedes pagar en',
+    'Te confirmo que',
+    'Domicilio a',
+    'Puedes pagar en efectivo y',
+  ])('rejects a STOP response that still ends mid-sentence: %s', (fragment) => {
+    const { service } = createProtectedGeminiService({ history: [] });
+    expect((service as any).getCompleteGeminiReply({
+      candidates: [{ finishReason: 'STOP', content: { parts: [{ text: fragment }] } }],
+    })).toBeNull();
+  });
+
+  it('accepts an exact configured delivery exception at zero pesos', async () => {
+    const { service, prisma, send, session } = createProtectedGeminiService({
+      history: [{ id: 'current', direction: 'IN', messageType: 'text', content: 'Entrega en Universidad de Córdoba', createdAt: new Date() }],
+      zones: [{ id: 'zone-free', name: 'Universidad de Córdoba', rate: 0 }],
+    });
+    const fetchSpy = jest.spyOn(global, 'fetch').mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ candidates: [{ finishReason: 'STOP', content: { parts: [{ text: 'El domicilio a Universidad de Córdoba es gratis.' }] } }] }),
+    } as any);
+
+    try {
+      await (service as any).handleGeminiChatbot(session, 'Entrega en Universidad de Córdoba', ['test-key']);
+    } finally {
+      fetchSpy.mockRestore();
+    }
+
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send.mock.calls[0][1]).toBe('El domicilio a Universidad de Córdoba es gratis.');
+    expect(prisma.whatsAppSession.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('does not ask again for the known phone or payment method', async () => {
+    const { service, send, session } = createProtectedGeminiService({
+      history: [
+        { id: 'payment', direction: 'IN', messageType: 'text', content: 'Pago en efectivo', createdAt: new Date(Date.now() - 1000) },
+        { id: 'items', direction: 'IN', messageType: 'text', content: 'Quiero dos perros', createdAt: new Date() },
+      ],
+    });
+    const fetchSpy = jest.spyOn(global, 'fetch').mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ candidates: [{ finishReason: 'STOP', content: { parts: [{ text: '¿Cuál es tu número de teléfono y cuál será el método de pago?' }] } }] }),
+    } as any);
+
+    try {
+      await (service as any).handleGeminiChatbot(session, 'Quiero dos perros', ['test-key']);
+    } finally {
+      fetchSpy.mockRestore();
+    }
+
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send.mock.calls[0][1]).toContain('ya tengo registrados tu número de WhatsApp, el pago en efectivo');
+    expect(send.mock.calls[0][1]).not.toMatch(/cu[aá]l.*tel[eé]fono/i);
+  });
+
+  it('keeps confirmed facts that share a bubble with a different question', () => {
+    const { service, session } = createProtectedGeminiService({ history: [] });
+    const facts = (service as any).getConversationFacts(session, [
+      { direction: 'IN', messageType: 'text', content: 'Pago en efectivo, ¿cuánto demora?', createdAt: new Date() },
+      { direction: 'IN', messageType: 'text', content: 'Es a domicilio, ¿sí?', createdAt: new Date() },
+    ]);
+
+    expect(facts).toEqual(expect.objectContaining({
+      hasKnownPhone: true,
+      paymentMethod: 'efectivo',
+      orderType: 'domicilio',
+    }));
+  });
+
+  it('keeps facts before a different question even without commas', () => {
+    const { service, session } = createProtectedGeminiService({ history: [] });
+    const facts = (service as any).getConversationFacts(session, [
+      { direction: 'IN', messageType: 'text', content: 'Pago en efectivo y cuánto demora?', createdAt: new Date() },
+      { direction: 'IN', messageType: 'text', content: 'Es a domicilio y cuánto cuesta?', createdAt: new Date() },
+      { direction: 'IN', messageType: 'text', content: 'Dirección calle 44 #2 y cuánto demora?', createdAt: new Date() },
+    ]);
+
+    expect(facts).toEqual(expect.objectContaining({
+      paymentMethod: 'efectivo',
+      orderType: 'domicilio',
+      hasAddress: true,
+    }));
+  });
+
+  it('does not turn questions about payment or delivery into confirmed facts', () => {
+    const { service, session } = createProtectedGeminiService({ history: [] });
+    const facts = (service as any).getConversationFacts(session, [
+      { direction: 'IN', messageType: 'text', content: '¿Reciben efectivo?', createdAt: new Date() },
+      { direction: 'IN', messageType: 'text', content: '¿Es a domicilio?', createdAt: new Date() },
+    ]);
+
+    expect(facts.paymentMethod).toBeNull();
+    expect(facts.orderType).toBeNull();
+  });
+
+  it('removes only repeated questions and still asks for data that is missing', () => {
+    const { service } = createProtectedGeminiService({ history: [] });
+    const reply = (service as any).removeRepeatedKnownDataQuestions(
+      '¿Cuál es tu número de teléfono y cuál será el método de pago?',
+      { hasKnownPhone: true, paymentMethod: null, orderType: null, hasAddress: false },
+      false,
+    );
+
+    expect(reply).toContain('ya tengo registrados tu número de WhatsApp');
+    expect(reply).toContain('Solo falta confirmar el método de pago');
+  });
+
+  it('validates a delivery tariff written with a colon before sending it', async () => {
+    const { service, prisma, send, session } = createProtectedGeminiService({
+      history: [{ id: 'current', direction: 'IN', messageType: 'text', content: 'Domicilio a La Granja', createdAt: new Date() }],
+      zones: [{ id: 'zone-1', name: 'La Granja', rate: 8000 }],
+    });
+    const fetchSpy = jest.spyOn(global, 'fetch').mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ candidates: [{ finishReason: 'STOP', content: { parts: [{ text: 'El domicilio: $9.000.' }] } }] }),
+    } as any);
+
+    try {
+      await (service as any).handleGeminiChatbot(session, 'Domicilio a La Granja', ['test-key']);
+    } finally {
+      fetchSpy.mockRestore();
+    }
+
+    expect(prisma.whatsAppSession.updateMany).toHaveBeenCalled();
+    expect(send).toHaveBeenCalledWith(
+      '123456789012345',
+      'Gracias. Un asesor verificará la tarifa, el tiempo y el total antes de confirmar tu pedido.',
+      undefined,
+      undefined,
+      'chat-protected',
+    );
+  });
+
+  it.each([
+    'La tarifa para La Granja es $9.000.',
+    'El costo para La Granja es $9.000.',
+    'Para La Granja son $9.000.',
+  ])('blocks an incorrect zone tariff even without the word domicilio: %s', async (providerReply) => {
+    const { service, prisma, send, session } = createProtectedGeminiService({
+      history: [{ id: 'current', direction: 'IN', messageType: 'text', content: 'Domicilio a La Granja', createdAt: new Date() }],
+      zones: [{ id: 'zone-1', name: 'La Granja', rate: 8000 }],
+    });
+    const fetchSpy = jest.spyOn(global, 'fetch').mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ candidates: [{ finishReason: 'STOP', content: { parts: [{ text: providerReply }] } }] }),
+    } as any);
+
+    try {
+      await (service as any).handleGeminiChatbot(session, 'Domicilio a La Granja', ['test-key']);
+    } finally {
+      fetchSpy.mockRestore();
+    }
+
+    expect(prisma.whatsAppSession.updateMany).toHaveBeenCalled();
+    expect(send.mock.calls[0][1]).toBe('Gracias. Un asesor verificará la tarifa, el tiempo y el total antes de confirmar tu pedido.');
+  });
+
+  it('keeps a correctly formatted Colombian delivery tariff', async () => {
+    const { service, prisma, send, session } = createProtectedGeminiService({
+      history: [{ id: 'current', direction: 'IN', messageType: 'text', content: 'Domicilio a La Granja', createdAt: new Date() }],
+      zones: [{ id: 'zone-1', name: 'La Granja', rate: 8000 }],
+    });
+    const fetchSpy = jest.spyOn(global, 'fetch').mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ candidates: [{ finishReason: 'STOP', content: { parts: [{ text: 'La tarifa para La Granja es $8.000.' }] } }] }),
+    } as any);
+
+    try {
+      await (service as any).handleGeminiChatbot(session, 'Domicilio a La Granja', ['test-key']);
+    } finally {
+      fetchSpy.mockRestore();
+    }
+
+    expect(send.mock.calls[0][1]).toBe('La tarifa para La Granja es $8.000.');
+    expect(prisma.whatsAppSession.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('does not mistake a house number for a delivery tariff', () => {
+    const { service } = createProtectedGeminiService({ history: [] });
+    expect((service as any).extractDeliveryTariffClaim(
+      'El domicilio es en la calle 44, casa 1204.',
+      { name: 'La Granja', rate: 8000 },
+    )).toEqual({ found: false, amount: null });
+  });
+
+  it('does not treat an unrelated image as a payment proof', async () => {
+    const { service, send, session } = createProtectedGeminiService({
+      history: [
+        { id: 'menu-photo', direction: 'IN', messageType: 'image', content: '/api/whatsapp/media/menu|Te mandé una foto del menú', createdAt: new Date(Date.now() - 1000) },
+        { id: 'hello', direction: 'IN', messageType: 'text', content: 'hola', createdAt: new Date() },
+      ],
+    });
+    const fetchSpy = jest.spyOn(global, 'fetch').mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ candidates: [{ finishReason: 'STOP', content: { parts: [{ text: 'Ya recibimos tu comprobante.' }] } }] }),
+    } as any);
+
+    try {
+      await (service as any).handleGeminiChatbot(session, 'hola', ['test-key']);
+    } finally {
+      fetchSpy.mockRestore();
+    }
+
+    expect(send.mock.calls[0][1]).toBe('Hola José, ¿cómo podemos ayudarte?');
+  });
+
+  it('uses the exact chat session for active orders and the callable phone only in menu links', async () => {
+    const prisma: any = {
+      order: { findFirst: jest.fn().mockResolvedValue(null) },
+      whatsAppSession: {
+        findUnique: jest.fn().mockResolvedValue({ assignedToId: null, waitingForAdvisor: false }),
+      },
+    };
+    const service = new WhatsappService(prisma, { get: jest.fn() } as any, { emitWhatsApp: jest.fn() } as any);
+    jest.spyOn(service as any, 'getSetting').mockImplementation(async (key: string) => {
+      if (key === 'chatbot_enabled') return 'true';
+      if (key === 'digital_menu_url') return 'https://pedidos.example/menu';
+      return null;
+    });
+    const send = jest.spyOn(service, 'sendMessage').mockResolvedValue({ sent: true } as any);
+    const session = {
+      id: 'chat-bsuid',
+      phone: '123456789012345',
+      customerPhone: '573001234567',
+      customerName: 'José',
+      assignedToId: null,
+      waitingForAdvisor: false,
+    };
+
+    await (service as any).handleRuleBasedChatbot(session, 'hola', new Date(), undefined);
+
+    expect(prisma.order.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ chatSessionId: 'chat-bsuid' }),
+    }));
+    expect(send.mock.calls[0][1]).toContain('phone=3001234567');
+    expect(send.mock.calls[0][1]).not.toContain('phone=123456789012345');
+  });
+
+  it('separates a new conversation after a saved order notice', () => {
+    const service = createService();
+    const selected = (service as any).selectCurrentConversationMessages([
+      { direction: 'IN', content: 'Dos perros', createdAt: new Date('2026-10-01T17:00:00Z') },
+      { direction: 'OUT', content: 'Tu pedido #163 ha sido recibido.', createdAt: new Date('2026-10-01T17:01:00Z') },
+      { direction: 'IN', content: 'hola', createdAt: new Date('2026-10-01T17:02:00Z') },
+    ]);
+    expect(selected.map((message: any) => message.content)).toEqual(['hola']);
+  });
+
+  it('never lets an older saved-order notice reopen context before the latest order', () => {
+    const service = createService();
+    const selected = (service as any).selectCurrentConversationMessages([
+      { direction: 'IN', content: 'Pedido viejo', createdAt: new Date('2026-10-01T16:00:00Z') },
+      { direction: 'OUT', content: 'Tu pedido #160 ha sido recibido.', createdAt: new Date('2026-10-01T16:01:00Z') },
+      { direction: 'IN', content: 'Conversación del pedido reciente', createdAt: new Date('2026-10-01T17:00:00Z') },
+      { direction: 'IN', content: 'hola de hoy', createdAt: new Date('2026-10-01T18:01:00Z') },
+    ], new Date('2026-10-01T18:00:00Z'));
+
+    expect(selected.map((message: any) => message.content)).toEqual(['hola de hoy']);
+  });
+
+  it('returns no stale messages when nothing happened after the latest order', () => {
+    const service = createService();
+    const selected = (service as any).selectCurrentConversationMessages([
+      { direction: 'IN', content: 'Dos perros', createdAt: new Date('2026-10-01T17:00:00Z') },
+      { direction: 'OUT', content: 'Tu pedido #163 ha sido recibido.', createdAt: new Date('2026-10-01T17:01:00Z') },
+    ], new Date('2026-10-01T17:02:00Z'));
+
+    expect(selected).toEqual([]);
+  });
+
+  it('groups a rapid message burst and answers only the newest bubble', async () => {
+    jest.useFakeTimers();
+    const prisma: any = {
+      whatsAppMessage: {
+        findFirst: jest.fn().mockResolvedValue({ id: 'message-2' }),
+      },
+    };
+    const service = new WhatsappService(prisma, { get: jest.fn() } as any, { emitWhatsApp: jest.fn() } as any);
+    const handle = jest.spyOn(service as any, 'handleChatbot').mockResolvedValue(undefined);
+    const session = { id: 'chat-burst', phone: '3001234567' };
+
+    try {
+      (service as any).enqueueChatbotResponse(session, 'Quiero dos perros', null, 'message-1');
+      (service as any).enqueueChatbotResponse(session, 'Y una gaseosa', null, 'message-2');
+      await jest.advanceTimersByTimeAsync(450);
+
+      expect(handle).toHaveBeenCalledTimes(1);
+      expect(handle).toHaveBeenCalledWith(session, 'Y una gaseosa', null, 'message-2');
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('cleans conversational text before returning order item notes', async () => {
+    const menuItem = {
+      id: 'dog-1',
+      name: 'Perro Sencillo',
+      price: 3500,
+      description: null,
+      active: true,
+      availableForDelivery: true,
+      category: { name: 'Perros' },
+    };
+    const prisma: any = {
+      menuItem: { findMany: jest.fn().mockResolvedValue([menuItem]) },
+      deliveryZone: { findMany: jest.fn().mockResolvedValue([]) },
+    };
+    const service = new WhatsappService(prisma, { get: jest.fn() } as any, { emitWhatsApp: jest.fn() } as any);
+    jest.spyOn(service as any, 'getSetting').mockImplementation(async (key: string) => (
+      key === 'order_reader_enabled' ? 'true' : key === 'gemini_api_key' ? 'test-key' : null
+    ));
+    jest.spyOn(service as any, 'getGeminiModels').mockResolvedValue(['gemini-a']);
+    jest.spyOn(service as any, 'incrementGeminiUsage').mockResolvedValue(undefined);
+    const providerOrder = JSON.stringify({
+      items: [{
+        menuItemId: 'dog-1',
+        quantity: 12,
+        preference: 'Pedir 12 perros que vengan bien calienticos',
+        notes: 'Pedir 12 perros que vengan bien calienticos',
+        additions: [],
+      }],
+      detectedOrderType: 'delivery',
+      paymentMethod: 'CASH',
+      independentNotes: ['Pedir 12 perros que vengan bien calienticos'],
+      unresolvedBeverages: [],
+      customerName: '',
+      customerPhone: '',
+      customerAddress: '',
+      customerAddressReference: '',
+      customerNeighborhood: '',
+      zoneId: '',
+    });
+    const fetchSpy = jest.spyOn(global, 'fetch').mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ candidates: [{ finishReason: 'STOP', content: { parts: [{ text: providerOrder }] } }] }),
+    } as any);
+
+    let result: any;
+    try {
+      result = await service.parseOrderWithGemini('Pedir 12 perros que vengan bien calienticos');
+    } finally {
+      fetchSpy.mockRestore();
+    }
+
+    expect(result.parsedCartItems).toEqual([
+      expect.objectContaining({ quantity: 12, preference: '', notes: 'Bien calienticos' }),
+    ]);
+    expect(result.independentNotes).toEqual([]);
   });
 });
 

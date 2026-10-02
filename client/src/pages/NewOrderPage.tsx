@@ -17,6 +17,7 @@ import { alerts } from '@/lib/alerts'
 import type { ComandaOrder } from '@/components/orders/ComandaPrint'
 import { AddressSearch, type AddressResult } from '@/components/orders/AddressSearch'
 import { globalSessionsCache } from '@/lib/chatCache'
+import { sanitizeOrderNote } from '@/lib/order-notes'
 import { ArrowLeft, ShoppingCart, Trash2, Search, Save, Sparkles, Clock, Bike, Store, Loader2, Plus, Minus, MapPin, DollarSign, AlertTriangle, Route, Pizza, CupSoda, ChefHat, Flame, UtensilsCrossed, X, Users, CheckCircle2, Mic, MicOff, ChevronDown, MessageCircle, Send, FileText, Phone, ExternalLink, Download, Eye, RotateCw, ZoomIn, ZoomOut, Edit } from 'lucide-react'
 
 function ChatDrawerMedia({ mediaId, type }: { mediaId: string; type: string }) {
@@ -298,6 +299,28 @@ function keepKitchenInstruction(rawNote: string | undefined, productName?: strin
   if (/^(?:para llevar|domicilio|recoger|pickup)$/.test(normalized)) return ''
   if (/^(?:\d+\s*(?:x\s*)?)?(?:perro|hamburguesa|pizza|gaseosa|jugo|combo|salchich\w*|doble\s+salchich\w*|triple\s+salchich\w*)(?:\s+\d+)?$/.test(normalized)) return ''
   return note
+}
+
+function sanitizeAutomaticGeneralNotes(values: unknown): string[] {
+  if (!Array.isArray(values)) return []
+  const result: string[] = []
+  for (const value of values) {
+    const raw = String(value || '').replace(/\s+/g, ' ').trim()
+    if (!raw) continue
+    if (/^mesa$/i.test(raw)) {
+      result.push('Mesa')
+      continue
+    }
+    const time = raw.match(/\b(?:para|a)\s+las?\s+(\d{1,2}(?:\s*(?::|y)\s*\d{1,2})?\s*(?:a\.?\s*m\.?|p\.?\s*m\.?)?)/i)?.[1]?.trim()
+    const arrival = raw.match(/\b(?:llamar|avisar|tocar(?:\s+el)?\s+timbre)\s+(?:al|cuando)\s+llegar\b/i)?.[0]
+    const parts: string[] = []
+    if (time) parts.push(`Para las ${time}`)
+    if (/\b(?:no|nunca)\s+antes\b/i.test(raw)) parts.push('No antes')
+    if (arrival) parts.push(arrival.charAt(0).toUpperCase() + arrival.slice(1).toLowerCase())
+    const clean = parts.join('; ')
+    if (clean && !result.some(note => normalizeText(note) === normalizeText(clean))) result.push(clean)
+  }
+  return result
 }
 
 function serializeItemNote(item: CartItem): string | undefined {
@@ -1582,31 +1605,9 @@ export default function NewOrderPage({
           }
 
           // Extraer notas de cocina reales (descartando nombres de productos y frases vacías)
-          let cleanClauseNotes = keepKitchenInstruction(clause, matchedItem.name)
-          if (cleanClauseNotes) {
-            cleanClauseNotes = cleanClauseNotes
-              .replace(/^\d+\s*/, '')
-              .replace(/^(un|una|uno|otro|otra|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez)\s+/i, '')
-              .replace(/^(y|e|con|para|quiero|me das|porfa|por favor)\s+/i, '')
-              .trim()
-            
-            // Si lo que quedó es solo el nombre del producto o palabras vacías, anular la nota
-            const normRemaining = normalizeText(cleanClauseNotes)
-            const isJustProductWord = normRemaining.split(/\s+/).every(w => stopWords.has(w) || normalizeText(matchedItem.name).includes(w))
-            const isProductFragment = /^(?:\d+\s*(?:x\s*)?)?(?:perro|hamburguesa|pizza|gaseosa|jugo|combo|salchich\w*|doble\s+salchich\w*|triple\s+salchich\w*)(?:\s+\d+)?$/.test(normRemaining)
-            if (isJustProductWord || isProductFragment) {
-              cleanClauseNotes = ''
-            }
-          }
-
-          // Verificar si la nota especifica una cantidad parcial (ej: "2 perros, 1 sin cebolla" -> 1 sin cebolla, 1 normal)
-          const wordToNum: Record<string, number> = { 'un': 1, 'una': 1, 'uno': 1, 'dos': 2, 'tres': 3, 'cuatro': 4, 'cinco': 5, 'seis': 6 }
-          const partialNoteQtyMatch = clause.match(/(?:^|\s)(\d+|un|una|uno|dos|tres|cuatro|cinco)\s+(?:sin|con|solo\s+con)\s+([a-záéíóúñ\s]+)/i)
-          let partialQty = 0
-          if (partialNoteQtyMatch) {
-            const rawPart = partialNoteQtyMatch[1].toLowerCase()
-            partialQty = parseInt(rawPart, 10) || wordToNum[rawPart] || 0
-          }
+          const sanitizedInstruction = sanitizeOrderNote(clause, matchedItem.name, parsedQuantity)
+          const cleanClauseNotes = sanitizedInstruction.note
+          const partialQty = sanitizedInstruction.partialQty
 
           if (cleanClauseNotes && partialQty > 0 && partialQty < parsedQuantity) {
             // Dividir en 2 líneas separadas para cocina: los que llevan la nota y los que van normales
@@ -1712,10 +1713,11 @@ export default function NewOrderPage({
     if (detectedOrderType) {
       setOrderType(detectedOrderType)
     }
-    if (independentNotes && independentNotes.length > 0) {
+    const safeIndependentNotes = sanitizeAutomaticGeneralNotes(independentNotes)
+    if (safeIndependentNotes.length > 0) {
       setNotes(prev => {
         const currentNotes = prev ? prev.split(' — ').map(n => n.trim()) : []
-        const uniqueNewNotes = independentNotes.filter(n => !currentNotes.includes(n))
+        const uniqueNewNotes = safeIndependentNotes.filter(n => !currentNotes.includes(n))
         if (uniqueNewNotes.length === 0) return prev
         return [...currentNotes, ...uniqueNewNotes].join(' — ')
       })
@@ -1730,11 +1732,8 @@ export default function NewOrderPage({
           const item = parsedItem.menuItem
           const lineId = `line-${Math.random().toString(36).substring(2, 9)}`
           const parentTag = `(#${lineId})`
-
-          const isAlreadyInCart = parsedItem.preference 
-            ? updatedCart.some(i => i.menuItemId === item.id && i.notes?.includes(parsedItem.preference))
-            : false
-          if (isAlreadyInCart) continue
+          const cleanPref = parsedItem.preference ? sanitizeOrderNote(parsedItem.preference, item.name, parsedItem.quantity).note : ''
+          const cleanNote = parsedItem.notes ? sanitizeOrderNote(parsedItem.notes, item.name, parsedItem.quantity).note : ''
 
           const additionsToInsert: MenuItem[] = []
           if (parsedItem.additions.length > 0) {
@@ -1757,9 +1756,6 @@ export default function NewOrderPage({
               additionsToInsert.push(...parsedItem.additions)
             }
           }
-
-          const cleanPref = parsedItem.preference ? keepKitchenInstruction(parsedItem.preference, item.name) : ''
-          const cleanNote = parsedItem.notes ? keepKitchenInstruction(parsedItem.notes, item.name) : ''
 
           let parentNotes = ''
           const hasAdditions = additionsToInsert.length > 0
@@ -2102,10 +2098,11 @@ export default function NewOrderPage({
             if (detectedOrderType) {
               setOrderType(detectedOrderType)
             }
-            if (independentNotes && independentNotes.length > 0) {
+            const safeIndependentNotes = sanitizeAutomaticGeneralNotes(independentNotes)
+            if (safeIndependentNotes.length > 0) {
               setNotes(prev => {
                 const currentNotes = prev ? prev.split(' — ').map(n => n.trim()) : []
-                const uniqueNewNotes = independentNotes.filter((n: string) => !currentNotes.includes(n))
+                const uniqueNewNotes = safeIndependentNotes.filter((n: string) => !currentNotes.includes(n))
                 if (uniqueNewNotes.length === 0) return prev
                 return [...currentNotes, ...uniqueNewNotes].join(' — ')
               })
@@ -2166,8 +2163,8 @@ export default function NewOrderPage({
                   }
                 }
 
-                const cleanPref = parsedItem.preference ? keepKitchenInstruction(parsedItem.preference, item.name) : ''
-                const cleanNote = parsedItem.notes ? keepKitchenInstruction(parsedItem.notes, item.name) : ''
+                const cleanPref = parsedItem.preference ? sanitizeOrderNote(parsedItem.preference, item.name, parsedItem.quantity).note : ''
+                const cleanNote = parsedItem.notes ? sanitizeOrderNote(parsedItem.notes, item.name, parsedItem.quantity).note : ''
 
                 let parentNotes = ''
                 const hasAdditions = additionsToInsert.length > 0
@@ -2222,7 +2219,6 @@ export default function NewOrderPage({
 
               if (newCart.length > 0) {
                 const normalizedCart = consolidateCart(newCart)
-                const cartUnits = (items: CartItem[]) => items.reduce((sum, item) => sum + Math.max(0, Number(item.quantity) || 0), 0)
                 const isEquivalentCart = (a: CartItem[], b: CartItem[]) => {
                   if (a.length !== b.length) return false
                   return a.every((itemA, idx) => {
@@ -2235,6 +2231,23 @@ export default function NewOrderPage({
                       noteA === noteB
                   })
                 }
+                const cartStructure = (items: CartItem[]) => {
+                  const totals = new Map<string, number>()
+                  for (const item of items) {
+                    const kind = item.notes?.startsWith('Adición para:') ? 'addition' : 'main'
+                    const key = `${kind}:${item.menuItemId}`
+                    const quantity = Math.max(0, Number(item.quantity) || 0)
+                    totals.set(key, (totals.get(key) || 0) + quantity)
+                  }
+                  return [...totals.entries()]
+                    .map(([key, quantity]) => `${key}:${quantity}`)
+                    .sort()
+                }
+                const isSameCartStructure = (a: CartItem[], b: CartItem[]) => {
+                  const left = cartStructure(a)
+                  const right = cartStructure(b)
+                  return left.length === right.length && left.every((entry, index) => entry === right[index])
+                }
 
                 if (source === 'local') {
                   autoParsedCartRef.current = normalizedCart
@@ -2243,16 +2256,16 @@ export default function NewOrderPage({
                 } else {
                   if (userInteractedWithCartRef.current || userClearedDraftRef.current) return
 
-                  const localUnits = autoParsedCartRef.current ? cartUnits(autoParsedCartRef.current) : 0
-                  const remoteUnits = cartUnits(normalizedCart)
-                  // Gemini puede responder con solo una línea mientras termina
-                  // de leer el historial. Nunca se permite que borre unidades ya
-                  // detectadas de forma local.
-                  if (localUnits > remoteUnits) return
+                  const localCart = autoParsedCartRef.current
+                  // Gemini solo puede enriquecer notas cuando conserva exactamente
+                  // los productos, cantidades y adiciones detectados localmente.
+                  // Si discrepa, se mantiene el borrador inmediato para no cambiar
+                  // silenciosamente un producto correcto por otro.
+                  if (localCart && localCart.length > 0 && !isSameCartStructure(localCart, normalizedCart)) return
 
                   // Si el lector local ya reconoció productos válidos y coincide en unidades,
                   // NO re-ejecutar setCart para evitar el refresco/reinicio visual de los productos.
-                  if (autoParsedCartRef.current && (isEquivalentCart(autoParsedCartRef.current, normalizedCart) || (localUnits > 0 && localUnits === remoteUnits))) {
+                  if (localCart && isEquivalentCart(localCart, normalizedCart)) {
                     return
                   }
 

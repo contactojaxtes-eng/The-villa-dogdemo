@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CacheService } from '../cache/cache.service';
 import { SocketGateway } from '../socket/socket.gateway';
@@ -141,11 +141,36 @@ export class ZonesService {
     this.socketGateway.server.emit('zonesChanged');
   }
 
+  private normalizeZoneName(value: unknown): string {
+    return String(value || '')
+      .toLocaleLowerCase('es-CO')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-z0-9]+/g, ' ')
+      .trim();
+  }
+
+  private async assertUniqueActiveName(name: string, excludedId?: string) {
+    const normalized = this.normalizeZoneName(name);
+    if (!normalized) throw new BadRequestException('El nombre del barrio o lugar es obligatorio');
+    const activeZones = await this.prisma.deliveryZone.findMany({
+      where: { active: true, ...(excludedId ? { id: { not: excludedId } } : {}) },
+      select: { id: true, name: true },
+    });
+    if (activeZones.some(zone => this.normalizeZoneName(zone.name) === normalized)) {
+      throw new BadRequestException('Ya existe un barrio o lugar activo con ese nombre. Edita su tarifa en vez de duplicarlo.');
+    }
+  }
+
   async create(data: { name: string; rate: number; zoneGroup?: string; km?: number; latitude?: number; longitude?: number }) {
+    const name = String(data.name || '').trim();
+    const rate = Number(data.rate);
+    if (!Number.isFinite(rate) || rate < 0) throw new BadRequestException('La tarifa debe ser un valor válido igual o mayor que $0');
+    await this.assertUniqueActiveName(name);
     const result = await this.prisma.deliveryZone.create({
       data: {
-        name: data.name,
-        rate: data.rate,
+        name,
+        rate,
         zoneGroup: data.zoneGroup || 'General',
         km: data.km,
         latitude: data.latitude,
@@ -157,8 +182,22 @@ export class ZonesService {
   }
 
   async update(id: string, data: { name?: string; rate?: number; active?: boolean; zoneGroup?: string; km?: number; latitude?: number; longitude?: number }) {
-    await this.findOne(id);
-    const result = await this.prisma.deliveryZone.update({ where: { id }, data });
+    const existing = await this.findOne(id);
+    const updateData = { ...data };
+    if (data.name !== undefined) {
+      const name = String(data.name || '').trim();
+      await this.assertUniqueActiveName(name, id);
+      updateData.name = name;
+    }
+    if (data.rate !== undefined) {
+      const rate = Number(data.rate);
+      if (!Number.isFinite(rate) || rate < 0) throw new BadRequestException('La tarifa debe ser un valor válido igual o mayor que $0');
+      updateData.rate = rate;
+    }
+    if (data.active === true && existing.active === false) {
+      await this.assertUniqueActiveName(String(updateData.name ?? existing.name), id);
+    }
+    const result = await this.prisma.deliveryZone.update({ where: { id }, data: updateData });
     this.invalidateCache();
     return result;
   }
@@ -194,12 +233,46 @@ export class ZonesService {
 
   async suggestByName(name: string) {
     if (!name) return null;
-    const normalized = name.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    const normalized = this.normalizeZoneName(name);
+    if (!normalized) return null;
     const zones = await this.findAll(); // uses cache!
-    const match = zones.find(z => {
-      const zn = z.name.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-      return zn.includes(normalized) || normalized.includes(zn);
-    });
+    const exact = zones.find(zone => this.normalizeZoneName(zone.name) === normalized);
+    const match = exact || zones
+      .filter(zone => {
+        const zoneName = this.normalizeZoneName(zone.name);
+        return zoneName.includes(normalized) || normalized.includes(zoneName);
+      })
+      .sort((left, right) => (
+        this.normalizeZoneName(right.name).length - this.normalizeZoneName(left.name).length
+      ))[0];
+    return match ? { id: match.id, name: match.name, rate: match.rate, zoneGroup: match.zoneGroup } : null;
+  }
+
+  /**
+   * Finds an explicitly configured free-delivery place mentioned in a search.
+   *
+   * This deliberately excludes paid zones. A broad paid zone such as "Centro"
+   * must not override the neighbourhood returned by Nominatim merely because an
+   * establishment name contains that word. Free places are explicit delivery
+   * exceptions, so their complete configured name can safely take precedence.
+   */
+  async suggestExactFreePlace(name: string) {
+    if (!name) return null;
+    const normalized = this.normalizeZoneName(name);
+    if (!normalized) return null;
+
+    const paddedQuery = ` ${normalized} `;
+    const zones = await this.findAll();
+    const match = zones
+      .filter(zone => Number(zone.rate) === 0)
+      .filter(zone => {
+        const zoneName = this.normalizeZoneName(zone.name);
+        return Boolean(zoneName) && paddedQuery.includes(` ${zoneName} `);
+      })
+      .sort((left, right) => (
+        this.normalizeZoneName(right.name).length - this.normalizeZoneName(left.name).length
+      ))[0];
+
     return match ? { id: match.id, name: match.name, rate: match.rate, zoneGroup: match.zoneGroup } : null;
   }
 

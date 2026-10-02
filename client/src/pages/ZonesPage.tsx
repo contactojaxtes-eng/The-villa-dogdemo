@@ -97,18 +97,27 @@ export default function ZonesPage() {
   }
 
   const saveZone = async () => {
-    if (!name || !rate) return
+    const cleanName = name.trim()
+    const parsedRate = Number(rate)
+    if (!cleanName || rate.trim() === '' || !Number.isFinite(parsedRate) || parsedRate < 0) {
+      alerts.error('Datos incompletos', 'Escribe el barrio o lugar y una tarifa válida. La tarifa puede ser $0 si es una excepción exacta.')
+      return
+    }
     const payload = {
-      name,
-      rate: parseFloat(rate),
+      name: cleanName,
+      rate: parsedRate,
       zoneGroup,
       km: km ? parseFloat(km) : null
     }
-    if (editId) await api.put(`/zones/${editId}`, payload)
-    else await api.post('/zones', payload)
-    setOpen(false); setEditId(null); setName(''); setRate(''); setKm('')
-    loadZones()
-    loadSectors()
+    try {
+      if (editId) await api.put(`/zones/${editId}`, payload)
+      else await api.post('/zones', payload)
+      setOpen(false); setEditId(null); setName(''); setRate(''); setKm('')
+      loadZones()
+      loadSectors()
+    } catch (error: any) {
+      alerts.error('No se pudo guardar', error?.message || 'Revisa que el nombre no esté repetido y que la tarifa sea válida.')
+    }
   }
 
   const addSector = async () => {
@@ -178,8 +187,8 @@ export default function ZonesPage() {
   return (
     <div className="space-y-6">
       <PageHeader
-        title="BARRIOS"
-        description="Zonas de domicilio en Montería, Córdoba. Cada barrio tiene su tarifa."
+        title="BARRIOS Y LUGARES"
+        description="Tarifas de domicilio. También puedes registrar un lugar exacto con tarifa $0 como excepción autorizada."
         actions={
           <div className="flex gap-2">
             <Button 
@@ -193,7 +202,7 @@ export default function ZonesPage() {
               className="bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-fg)] font-bold shadow-lg shadow-[var(--accent)]/15 rounded-xl h-11 px-5 text-xs uppercase tracking-wider" 
               onClick={() => { setEditId(null); setName(''); setRate(''); setKm(''); setZoneGroup(sectors[0] || 'General'); setOpen(true) }}
             >
-              <Plus className="mr-2 h-4 w-4" /> Nuevo barrio
+              <Plus className="mr-2 h-4 w-4" /> Nueva tarifa
             </Button>
           </div>
         }
@@ -205,7 +214,7 @@ export default function ZonesPage() {
           <Search className="absolute top-1/2 left-3.5 h-4 w-4 -translate-y-1/2 text-[var(--text-secondary)]" />
           <Input 
             className="pl-10 h-11 rounded-xl bg-[var(--bg-panel)] border-[var(--border-subtle)] focus:ring-2 focus:ring-[var(--accent)]/20 focus:border-[var(--accent)] text-[var(--text-primary)]" 
-            placeholder="Buscar barrio..." 
+            placeholder="Buscar barrio o lugar..."
             value={search} 
             onChange={e => setSearch(e.target.value)} 
           />
@@ -317,7 +326,7 @@ export default function ZonesPage() {
         <DialogContent className="border-[var(--border-subtle)] bg-[var(--bg-panel)] rounded-2xl max-w-md p-6 shadow-2xl">
           <DialogHeader>
             <DialogTitle className="text-xl font-bold text-[var(--text-primary)] tracking-tight">
-              {editId ? 'Editar Barrio' : 'Nuevo Barrio'}
+              {editId ? 'Editar barrio o lugar' : 'Nuevo barrio o lugar'}
             </DialogTitle>
           </DialogHeader>
           <div className="space-y-4 mt-3">
@@ -334,12 +343,12 @@ export default function ZonesPage() {
             </div>
             
             <div className="space-y-2">
-              <Label className="text-xs uppercase font-extrabold tracking-wider text-[var(--text-secondary)]">Nombre del barrio</Label>
+              <Label className="text-xs uppercase font-extrabold tracking-wider text-[var(--text-secondary)]">Barrio o lugar exacto</Label>
               <Input 
                 className="h-11 rounded-xl bg-[var(--bg-elevated)] border-[var(--border-subtle)] focus:ring-2 focus:ring-[var(--accent)]/20 focus:border-[var(--accent)] text-[var(--text-primary)]" 
                 value={name} 
                 onChange={e => setName(e.target.value)} 
-                placeholder="Ej: El Recreo" 
+                placeholder="Ej: El Recreo o Universidad de Córdoba"
               />
             </div>
             
@@ -352,6 +361,9 @@ export default function ZonesPage() {
                 onChange={e => setRate(e.target.value)} 
                 placeholder="4000" 
               />
+              <p className="text-[11px] leading-relaxed text-[var(--text-secondary)]">
+                Usa $0 solo para un lugar exacto autorizado. Escribe ese lugar con un nombre distinto al barrio general.
+              </p>
             </div>
             
             <div className="space-y-2">
