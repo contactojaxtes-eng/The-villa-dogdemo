@@ -1371,8 +1371,10 @@ describe('WhatsApp Gemini settings', () => {
     }
 
     expect(send).toHaveBeenCalledTimes(1);
-    expect(send.mock.calls[0][1]).toContain('ya tengo registrados tu número de WhatsApp, el pago en efectivo');
+    expect(send.mock.calls[0][1]).toContain('Continuemos con tu pedido');
     expect(send.mock.calls[0][1]).not.toMatch(/cu[aá]l.*tel[eé]fono/i);
+    expect(send.mock.calls[0][1]).not.toMatch(/cu[aá]l.*m[eé]todo.*pago/i);
+    expect(send.mock.calls[0][1]).not.toContain('ya tengo registrados tu número de WhatsApp');
   });
 
   it('keeps confirmed facts that share a bubble with a different question', () => {
@@ -1423,8 +1425,30 @@ describe('WhatsApp Gemini settings', () => {
       false,
     );
 
-    expect(reply).toContain('ya tengo registrados tu número de WhatsApp');
-    expect(reply).toContain('Solo falta confirmar el método de pago');
+    expect(reply).toBe('¡Listo! ¿Me confirmas si vas a pagar en efectivo o por transferencia?');
+    expect(reply).not.toContain('ya tengo registrados tu número de WhatsApp');
+  });
+
+  it('infers delivery orderType when address is given and asks directly for payment without reciting known facts', () => {
+    const { service, session } = createProtectedGeminiService({ history: [] });
+    const facts = (service as any).getConversationFacts(session, [
+      { direction: 'IN', messageType: 'text', content: 'Calle 78 # 6-225 prados de Picacho casa', createdAt: new Date() },
+    ]);
+
+    expect(facts.hasAddress).toBe(true);
+    expect(facts.orderType).toBe('domicilio');
+    expect(facts.hasKnownPhone).toBe(true);
+    expect(facts.paymentMethod).toBeNull();
+
+    const reply = (service as any).removeRepeatedKnownDataQuestions(
+      '¿Cuál es tu dirección y si es para domicilio o recoger, o método de pago?',
+      facts,
+      false,
+    );
+
+    expect(reply).toBe('¡Listo! ¿Me confirmas si vas a pagar en efectivo o por transferencia?');
+    expect(reply).not.toContain('ya tengo registrados');
+    expect(reply).not.toContain('si es para domicilio o para recoger');
   });
 
   it('validates a delivery tariff written with a colon before sending it', async () => {
@@ -1608,10 +1632,10 @@ describe('WhatsApp Gemini settings', () => {
     try {
       (service as any).enqueueChatbotResponse(session, 'Quiero dos perros', null, 'message-1');
       (service as any).enqueueChatbotResponse(session, 'Y una gaseosa', null, 'message-2');
-      await jest.advanceTimersByTimeAsync(450);
+      await jest.advanceTimersByTimeAsync(7100);
 
       expect(handle).toHaveBeenCalledTimes(1);
-      expect(handle).toHaveBeenCalledWith(session, 'Y una gaseosa', null, 'message-2');
+      expect(handle).toHaveBeenCalledWith(session, 'Quiero dos perros\nY una gaseosa', null, 'message-2');
     } finally {
       jest.useRealTimers();
     }

@@ -75,11 +75,12 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
   private autoTrainingTimer?: ReturnType<typeof setTimeout>;
   private autoTrainingStopped = false;
   private autoTrainingRunInProgress = false;
+  private readonly chatbotDebounceTimers = new Map<string, NodeJS.Timeout>();
   private readonly chatbotSessionQueues = new Map<string, Promise<void>>();
   private readonly latestChatbotTriggerBySession = new Map<string, string>();
   private readonly pendingChatbotPayloadBySession = new Map<string, {
     session: any;
-    userText: string;
+    messages: string[];
     previousLastMessageAt?: Date | null;
     triggerMessageId: string;
   }>();
@@ -108,6 +109,8 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
     this.autoTrainingStopped = true;
     if (this.geminiMetricsFlushTimer) clearInterval(this.geminiMetricsFlushTimer);
     if (this.autoTrainingTimer) clearTimeout(this.autoTrainingTimer);
+    this.chatbotDebounceTimers.forEach(timer => clearTimeout(timer));
+    this.chatbotDebounceTimers.clear();
     await this.flushGeminiMetrics().catch(() => {});
   }
 
@@ -3946,42 +3949,41 @@ The Villa Dog • Montería`;
     if (!sessionId || !triggerMessageId) return;
 
     this.latestChatbotTriggerBySession.set(sessionId, triggerMessageId);
+    const existing = this.pendingChatbotPayloadBySession.get(sessionId);
+    const messages = existing ? [...existing.messages, userText] : [userText];
     this.pendingChatbotPayloadBySession.set(sessionId, {
       session,
-      userText,
-      previousLastMessageAt,
+      messages,
+      previousLastMessageAt: existing?.previousLastMessageAt ?? previousLastMessageAt,
       triggerMessageId,
     });
-    if (this.chatbotSessionQueues.has(sessionId)) return;
 
-    const queue = (async () => {
-      while (true) {
-        // Agrupa los mensajes cortos que el cliente suele enviar en varias
-        // burbujas sin retrasar la aparición inmediata en el panel.
-        await new Promise(resolve => setTimeout(resolve, 400));
-        const payload = this.pendingChatbotPayloadBySession.get(sessionId);
-        if (!payload) return;
+    const activeTimer = this.chatbotDebounceTimers.get(sessionId);
+    if (activeTimer) {
+      clearTimeout(activeTimer);
+    }
 
+    // Ventana de silencio de 7 segundos para consolidar mensajes consecutivos en una sola respuesta
+    const timer = setTimeout(async () => {
+      this.chatbotDebounceTimers.delete(sessionId);
+      const payload = this.pendingChatbotPayloadBySession.get(sessionId);
+      if (!payload) return;
+      this.pendingChatbotPayloadBySession.delete(sessionId);
+
+      const combinedText = payload.messages.join('\n').trim();
+      try {
         await this.handleChatbot(
           payload.session,
-          payload.userText,
+          combinedText,
           payload.previousLastMessageAt,
           payload.triggerMessageId,
         );
-
-        if (this.latestChatbotTriggerBySession.get(sessionId) === payload.triggerMessageId) return;
+      } catch (error) {
+        this.logger.error(`Error en procesamiento de chatbot para ${session?.phone || sessionId}:`, error);
       }
-    })().catch(error => {
-      this.logger.error(`Error en cola de chatbot para ${session?.phone || sessionId}:`, error);
-    }).finally(() => {
-      if (this.chatbotSessionQueues.get(sessionId) === queue) {
-        this.chatbotSessionQueues.delete(sessionId);
-        this.latestChatbotTriggerBySession.delete(sessionId);
-        this.pendingChatbotPayloadBySession.delete(sessionId);
-      }
-    });
+    }, 7000);
 
-    this.chatbotSessionQueues.set(sessionId, queue);
+    this.chatbotDebounceTimers.set(sessionId, timer);
   }
 
   private async isLatestChatbotTrigger(sessionId: string, triggerMessageId?: string): Promise<boolean> {
@@ -4097,10 +4099,28 @@ The Villa Dog • Montería`;
       try {
         if (!(await this.isLatestChatbotTrigger(String(session.id || ''), triggerMessageId))) return;
         const errorMessage = String((error as any)?.message || error || '');
+        const normalizedUser = this.normalizeSpanishLookup(userText);
+        const isMenuQuery = ['carta', 'menu', 'catalogo', 'catálogo', 'precios', 'opciones'].some(kw => normalizedUser.includes(kw));
+
+        if (isMenuQuery) {
+          // Si el cliente pide la carta o el menú, la contingencia basada en reglas siempre
+          // entrega la carta oficial completa y el enlace digital sin depender de Gemini.
+          await this.handleRuleBasedChatbot(session, userText, previousLastMessageAt, triggerMessageId);
+          return;
+        }
+
         if (/respuesta incompleta|empty response/i.test(errorMessage)) {
+          // Ante una respuesta vacía o cortada de Gemini, primero intentamos resolver
+          // con la contingencia determinista antes de recurrir al asesor.
+          try {
+            await this.handleRuleBasedChatbot(session, userText, previousLastMessageAt, triggerMessageId);
+            return;
+          } catch {
+            // Si la contingencia por reglas tampoco puede procesarlo, transferir con mensaje cortés
+          }
           await this.requestAdvisorHandoff(
             session,
-            'No quiero enviarte una respuesta incompleta. Un asesor continuará la atención contigo por este chat.',
+            'Un asesor continuará la atención contigo por este chat en un momento. ¡Muchas gracias por tu paciencia!',
             'respuesta_ia_incompleta',
           );
           return;
@@ -4251,6 +4271,10 @@ The Villa Dog • Montería`;
       }
     }
 
+    if (hasAddress && orderType !== 'recoger') {
+      orderType = 'domicilio';
+    }
+
     return {
       hasKnownPhone: this.isCallableCustomerPhone(session?.customerPhone) || this.isCallableCustomerPhone(session?.phone),
       paymentMethod,
@@ -4286,6 +4310,10 @@ The Villa Dog • Montería`;
       || /\b(?:es|seria)\s+para\s+(?:domicilio|recoger)\s+o\s+(?:domicilio|recoger)\b/.test(normalized)
     );
 
+    if (facts.hasAddress && facts.orderType !== 'recoger') {
+      facts.orderType = 'domicilio';
+    }
+
     const asksPhone = facts.hasKnownPhone && requestsPhone;
     const asksPayment = Boolean(facts.paymentMethod) && requestsPayment;
     const asksAddress = facts.hasAddress && requestsAddress;
@@ -4293,23 +4321,42 @@ The Villa Dog • Montería`;
 
     if (!asksPhone && !asksPayment && !asksAddress && !asksOrderType) return original;
 
-    const known: string[] = [];
-    if (facts.hasKnownPhone) known.push('tu número de WhatsApp');
-    if (facts.paymentMethod) known.push(facts.paymentMethod === 'mixto' ? 'el pago mixto' : `el pago en ${facts.paymentMethod}`);
-    if (facts.orderType) known.push(`la entrega para ${facts.orderType}`);
-    if (facts.hasAddress) known.push('tu dirección');
+    const needsPhone = requestsPhone && !facts.hasKnownPhone;
+    const needsPayment = requestsPayment && !facts.paymentMethod;
+    const needsOrderType = requestsOrderType && !facts.orderType;
+    const needsAddress = requestsAddress && !facts.hasAddress;
+
+    if (needsPayment && !needsAddress && !needsOrderType && !needsPhone) {
+      return '¡Listo! ¿Me confirmas si vas a pagar en efectivo o por transferencia?';
+    }
+    if (needsAddress && !needsPayment && !needsOrderType && !needsPhone) {
+      return '¡Listo! Por favor compárteme tu dirección exacta y barrio para la entrega.';
+    }
+    if (needsPayment && needsAddress && !needsOrderType && !needsPhone) {
+      return '¡Listo! Por favor compárteme tu dirección exacta y si pagas en efectivo o por transferencia.';
+    }
+    if (needsOrderType && !needsAddress && !needsPayment && !needsPhone) {
+      return '¡Listo! ¿Tu pedido sería para entrega a domicilio o para recoger en el local?';
+    }
+    if (needsPayment && needsOrderType && !needsAddress && !needsPhone) {
+      return '¡Listo! ¿Sería para entrega a domicilio o para recoger, y cómo deseas pagar (efectivo o transferencia)?';
+    }
+    if (needsPhone && !needsPayment && !needsAddress && !needsOrderType) {
+      return '¡Listo! Por favor compárteme un número de celular de contacto para la entrega.';
+    }
 
     const missingRequested: string[] = [];
-    if (requestsPhone && !facts.hasKnownPhone) missingRequested.push('tu número de teléfono');
-    if (requestsPayment && !facts.paymentMethod) missingRequested.push('el método de pago');
-    if (requestsOrderType && !facts.orderType) missingRequested.push('si es para domicilio o para recoger');
-    if (requestsAddress && !facts.hasAddress) missingRequested.push('la dirección exacta');
+    if (needsAddress) missingRequested.push('la dirección exacta');
+    if (needsPayment) missingRequested.push('el método de pago (efectivo o transferencia)');
+    if (needsOrderType) missingRequested.push('si es para domicilio o para recoger');
+    if (needsPhone) missingRequested.push('tu número de teléfono');
+
     if (missingRequested.length > 0) {
-      return `Perfecto, ya tengo registrados ${known.join(', ')}. Solo falta confirmar ${missingRequested.join(', ')}.`;
+      return `¡Listo! Solo falta confirmar ${missingRequested.join(' y ')}.`;
     }
     return willTransfer
-      ? `Perfecto, ya tengo registrados ${known.join(', ')}. Un asesor revisará el pedido y continuará contigo por este chat.`
-      : `Perfecto, ya tengo registrados ${known.join(', ')}. Continuemos con tu pedido; dime qué deseas agregar o corregir.`;
+      ? '¡Listo! Ya tenemos todos tus datos. Un asesor revisará el pedido y continuará contigo por este chat.'
+      : '¡Listo! Continuemos con tu pedido; dime qué deseas agregar o corregir.';
   }
 
   private customerRequestsPreviousOrder(value: string): boolean {
@@ -4454,6 +4501,8 @@ ${knownFactsBlock}
        - TELÉFONO DE CONTACTO PARA DOMICILIOS: ${effectivePhoneInstruction}
        - CUENTAS DE TRANSFERENCIA: ${paymentInstruction}
        - PREGUNTA ÚNICA: No pidas los datos uno por uno. Después de conocer productos y tipo de entrega, solicita EN UN SOLO MENSAJE todos los datos que falten.
+       - PEDIDO A DOMICILIO Y DIRECCIÓN: Si el cliente ya dio su dirección (o el sistema la tiene como DISPONIBLE), ES OBLIGATORIAMENTE UN DOMICILIO. Está TOTALMENTE PROHIBIDO preguntar si es para domicilio o para recoger. Si ya se conoce la dirección y solo falta el método de pago, pregunta de inmediato y con total naturalidad únicamente por el método de pago: "¿Pagas en efectivo o transferencia?".
+       - CERO ENUMERACIÓN ROBÓTICA: NUNCA enumeres como un robot los datos ya registrados (ej: "ya tengo registrados tu número de WhatsApp y tu dirección"). Habla de forma natural, cercana y directa con lo que falta sin confundir al cliente.
        - PEDIDO PARA PASAR A RECOGER (PICKUP): Nunca preguntes barrio ni dirección ni teléfono. Pide únicamente el método de pago si todavía falta.
        - PEDIDO A DOMICILIO: La dirección exacta y el método de pago son necesarios. El barrio es opcional: úsalo si el cliente lo informa, pero NUNCA bloquees ni retrases el pedido por no tenerlo. Ejemplo: "Listo. Envíame en un solo mensaje tu dirección exacta y si pagas en efectivo o transferencia; si conoces el barrio también puedes indicarlo."
        - Si el cliente ya entregó uno o dos datos, pregunta solamente por todos los que falten, juntos y en una respuesta corta.
@@ -4785,7 +4834,7 @@ Restaurante (Tú):
       const claimsPaymentOrReceipt = /\b(?:comprobante|recibimos\s+(?:tu\s+)?pago|pago\s+recibido|alistando\s+tu\s+pedido|alistar\s+tu\s+pedido)\b/i.test(cleanReply);
       if (isSimpleGreeting && claimsPaymentOrReceipt) {
         const greetingName = session.customerName ? ` ${session.customerName}` : '';
-        cleanReply = `¡Hola${greetingName}! Claro que sí, con mucho gusto. ¿Qué se te antoja pedir hoy o te gustaría ver la carta?`;
+        cleanReply = `Hola${greetingName}, ¿cómo podemos ayudarte?`;
         shouldTransfer = false;
       }
 
