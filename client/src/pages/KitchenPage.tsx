@@ -1277,11 +1277,11 @@ export default function KitchenPage() {
 
                   {/* Nota general del pedido */}
                   {ticket.order?.notes && (
-                    <div className="mt-2 rounded-xl border border-amber-400/40 bg-amber-500/10 p-2 text-xs text-amber-950 dark:text-amber-200">
-                      <span className="block text-[10px] uppercase font-black tracking-wider text-amber-700 dark:text-amber-400">
+                    <div className="mt-2 rounded-xl border border-amber-400/40 bg-amber-500/10 p-2.5 text-sm text-amber-950 dark:text-amber-200">
+                      <span className="block text-xs uppercase font-black tracking-wider text-amber-700 dark:text-amber-400">
                         📝 Nota del pedido:
                       </span>
-                      <span className="font-bold">{ticket.order.notes}</span>
+                      <span className="font-bold text-sm">{ticket.order.notes}</span>
                     </div>
                   )}
 

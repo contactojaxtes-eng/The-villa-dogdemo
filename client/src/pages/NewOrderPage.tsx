@@ -3891,12 +3891,12 @@ export default function NewOrderPage({
                 </div>
               ) : (
                 <div className="space-y-1">
-                  <Label className="text-[10px] font-bold text-[var(--text-secondary)] uppercase">Notas del Pedido</Label>
+                  <Label className="text-xs font-bold text-[var(--text-secondary)] uppercase">Notas del Pedido</Label>
                   <Input 
                     value={notes} 
                     onChange={e => setNotes(e.target.value)} 
                     placeholder="Ej: Salsas por aparte" 
-                    className="bg-[var(--bg-input)] border-[var(--border-default)] rounded-xl h-8 text-xs focus:border-[var(--accent)]" 
+                    className="bg-[var(--bg-input)] border-[var(--border-default)] rounded-xl h-9 text-sm font-medium focus:border-[var(--accent)]" 
                   />
                 </div>
               )}
@@ -3904,12 +3904,12 @@ export default function NewOrderPage({
 
             {paymentMethod !== 'CASH' && paymentMethod !== 'CREDIT' && paymentMethod !== 'MIXED' && (
               <div className="space-y-1">
-                <Label className="text-[10px] font-bold text-[var(--text-secondary)] uppercase">Notas del Pedido</Label>
+                <Label className="text-xs font-bold text-[var(--text-secondary)] uppercase">Notas del Pedido</Label>
                 <Input 
                   value={notes} 
                   onChange={e => setNotes(e.target.value)} 
                   placeholder="Ej: Salsas por aparte" 
-                  className="bg-[var(--bg-input)] border-[var(--border-default)] rounded-xl h-8 text-xs focus:border-[var(--accent)]" 
+                  className="bg-[var(--bg-input)] border-[var(--border-default)] rounded-xl h-9 text-sm font-medium focus:border-[var(--accent)]" 
                 />
               </div>
             )}

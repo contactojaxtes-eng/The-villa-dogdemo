@@ -184,7 +184,7 @@ ${order.orderType === 'DELIVERY' ? `<div class="info">${fullAddress}</div>${orde
 <div class="lbl" style="font-size:16px; margin-bottom:4px;">${order.status === 'CANCELLED' ? '❌ NO PREPARAR / PEDIDO CANCELADO:' : (isEdited ? '⚠️ PRODUCTOS EDITADOS (REVISAR CAMBIOS):' : '🍽 PREPARAR:')}</div>
 ${items}
 <div class="line"></div>
-${cleanOrderNotes ? `<div style="font-weight:900; font-size:16px; border:2px solid #000; padding:6px; word-break: break-word; white-space: pre-wrap;">⚠ NOTA GENERAL:<br/>${cleanOrderNotes}</div><div class="line"></div>` : ''}
+${cleanOrderNotes ? `<div style="font-weight:900; font-size:19px; border:2px solid #000; padding:6px; word-break: break-word; white-space: pre-wrap;">⚠ NOTA GENERAL:<br/>${cleanOrderNotes}</div><div class="line"></div>` : ''}
 <div class="footer">${order.status === 'CANCELLED' ? `** TICKET DE CANCELACION (${stationName?.toUpperCase() || 'COCINA'}) **` : `** TICKET DE ${stationName?.toUpperCase() || 'COCINA'} ${isEdited ? '(EDITADO)' : ''} **`}</div>
 </body></html>`
   } else {
@@ -285,7 +285,7 @@ ${(!(order.tableId || order.orderType === 'LOCAL') && (order.orderType === 'DELI
 ${cleanOrderNotes ? `
 <div class="line"></div>
 <div class="lbl">Observaciones / Nota General</div>
-<div style="font-size: 11px; font-weight: bold; margin: 4px 0; word-break: break-word; white-space: pre-wrap;">${cleanOrderNotes}</div>
+<div style="font-size: 14px; font-weight: 800; margin: 4px 0; word-break: break-word; white-space: pre-wrap;">${cleanOrderNotes}</div>
 ` : ''}
 <div class="footer">¡Muchas gracias por su compra!<br/>Vuelve pronto</div>
 </body></html>`
@@ -480,7 +480,7 @@ export function buildComandaText(
       lines.push('[BIG][BOLD]NOTA GENERAL:[/BOLD][/BIG]')
       const gnLines = wrapText(cleanOrderNotes.toUpperCase(), is80 ? 44 : 28)
       for (const gnl of gnLines) {
-        lines.push(`[BOLD]${gnl}[/BOLD]`)
+        lines.push(`[BOLD][HEIGHT]${gnl}[/HEIGHT][/BOLD]`)
       }
       lines.push(divider)
     }
@@ -636,7 +636,7 @@ export function buildComandaText(
       lines.push('Observaciones:');
       const obsLines = wrapText(realObs.toUpperCase(), is80 ? 46 : 30);
       for (const ol of obsLines) {
-        lines.push(`  ${ol}`);
+        lines.push(`[BOLD]  ${ol}[/BOLD]`);
       }
     } else {
       lines.push('Observaciones:');

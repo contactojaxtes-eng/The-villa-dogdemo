@@ -695,7 +695,7 @@ export class PrintService {
       lines.push('Observaciones:');
       const obsLines = this.wrapText(realObs.toUpperCase(), is80 ? 46 : 30);
       for (const ol of obsLines) {
-        lines.push(`  ${ol}`);
+        lines.push(`[BOLD]  ${ol}[/BOLD]`);
       }
     } else {
       lines.push('Observaciones:');
@@ -866,7 +866,7 @@ export class PrintService {
       lines.push('[BIG][BOLD]NOTA GENERAL:[/BOLD][/BIG]');
       const gnLines = this.wrapText(cleanNoteText.toUpperCase(), is80 ? 44 : 28);
       for (const gnl of gnLines) {
-        lines.push(`[BOLD]${gnl}[/BOLD]`);
+        lines.push(`[BOLD][HEIGHT]${gnl}[/HEIGHT][/BOLD]`);
       }
     }
     if (isEdited) {

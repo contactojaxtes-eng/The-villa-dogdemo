@@ -2618,13 +2618,20 @@ function ChatPage() {
   // Save edited message from dialog
   const handleSaveEditedMessage = async () => {
     if (!editingMessage || !editText.trim()) return
+    const isUnder15Mins = Date.now() - new Date(editingMessage.createdAt).getTime() <= 15 * 60 * 1000
+    if (!isUnder15Mins) {
+      alerts.error('Tiempo límite expirado', 'Solo puedes editar mensajes dentro de los primeros 15 minutos de enviados, tal como en WhatsApp.')
+      setEditingMessage(null)
+      return
+    }
     try {
-      await api.put(`/whatsapp/messages/${editingMessage.id}`, { content: editText.trim() })
+      const res = await api.put(`/whatsapp/messages/${editingMessage.id}`, { content: editText.trim() })
       setMessagesCached(prev => prev.map(m => m.id === editingMessage.id ? { ...m, content: editText.trim(), isEdited: true } : m))
       setEditingMessage(null)
       setEditText('')
+      alerts.success('Mensaje corregido', 'Se actualizó el mensaje y se envió la corrección citada al cliente por WhatsApp.')
     } catch (err: any) {
-      alert('Error al editar el mensaje.')
+      alerts.error('Error al editar', err.response?.data?.message || err.message || 'Error al editar el mensaje.')
     }
   }
 
@@ -3772,7 +3779,7 @@ function ChatPage() {
                                         </button>
                                       )}
 
-                                      {!isIncoming && (!m.messageType || m.messageType === 'text') && (
+                                      {!isIncoming && (!m.messageType || m.messageType === 'text') && (Date.now() - new Date(m.createdAt).getTime() <= 15 * 60 * 1000) && (
                                         <button
                                           type="button"
                                           onClick={() => {
@@ -4171,7 +4178,7 @@ function ChatPage() {
           </DialogHeader>
           <div className="space-y-3 py-2">
             <p className="text-xs text-[var(--text-secondary)] font-medium">
-              Modifica el contenido del mensaje seleccionado en el historial:
+              Modifica el mensaje (se enviará la corrección citada al WhatsApp del cliente, máx. 15 min):
             </p>
             <Textarea
               value={editText}
@@ -4195,7 +4202,7 @@ function ChatPage() {
               onClick={handleSaveEditedMessage}
               className="h-9 text-xs font-bold rounded-xl bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-fg)]"
             >
-              Guardar Cambios
+              Guardar y Enviar Corrección
             </Button>
           </div>
         </DialogContent>

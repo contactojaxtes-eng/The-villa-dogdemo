@@ -176,7 +176,7 @@ export function printComanda(order: ComandaOrder) {
         `}).join('') || ''}
       `}).join('')}
     </div>
-    ${(() => { const cn = (order.notes || '').replace(/^\[MOSTRADOR\]\s*/i, '').replace(/^\[PICKUP\]\s*/i, '').trim(); return cn ? `<div class="section"><div class="label">Notas</div><div class="value" style="font-size: 13px; font-weight: 800; word-break: break-word; white-space: pre-wrap;">${cn}</div></div>` : '' })()}
+    ${(() => { const cn = (order.notes || '').replace(/^\[MOSTRADOR\]\s*/i, '').replace(/^\[PICKUP\]\s*/i, '').trim(); return cn ? `<div class="section"><div class="label" style="font-size: 13px;">Notas Generales</div><div class="value" style="font-size: 16px; font-weight: 900; word-break: break-word; white-space: pre-wrap;">${cn}</div></div>` : '' })()}
     <div class="section">
       <div class="item"><span>Subtotal</span><span>${formatCurrency(order.subtotal)}</span></div>
       ${order.deliveryFee > 0 ? `<div class="item"><span>Domicilio</span><span>${formatCurrency(order.deliveryFee)}</span></div>` : ''}

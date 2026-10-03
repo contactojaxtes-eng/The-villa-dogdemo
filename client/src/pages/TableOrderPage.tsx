@@ -1545,7 +1545,7 @@ export default function TableOrderPage() {
               onChange={e => setNotes(e.target.value)}
               placeholder="Nota general del pedido para cocina o caja..."
               rows={2}
-              className="text-xs resize-none rounded-xl"
+              className="text-sm font-medium resize-none rounded-xl"
             />
             <Button
               onClick={submit}
@@ -1819,7 +1819,7 @@ export default function TableOrderPage() {
               onChange={e => setNotes(e.target.value)}
               placeholder="Nota general del pedido..."
               rows={2}
-              className="text-xs resize-none rounded-xl"
+              className="text-sm font-medium resize-none rounded-xl"
             />
             <Button
               onClick={() => {

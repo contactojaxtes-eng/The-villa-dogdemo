@@ -233,7 +233,7 @@ export default function OrderDetailPage() {
               <span className="font-semibold">{order.customerAddress}</span>
             </div>
             {order.notes && (
-              <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-subtle)] p-3 text-xs text-[var(--text-secondary)] italic mt-2">
+              <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-subtle)] p-3 text-sm font-medium text-[var(--text-secondary)] italic mt-2">
                 Notas: "{order.notes}"
               </div>
             )}

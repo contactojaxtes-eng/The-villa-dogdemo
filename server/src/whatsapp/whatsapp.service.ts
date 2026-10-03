@@ -2710,40 +2710,20 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
     });
     if (!msg) throw new NotFoundException('Mensaje no encontrado');
 
-    if (msg.waMessageId && !msg.waMessageId.startsWith('out-') && msg.session?.phone) {
-      try {
-        const token = await this.getSetting('whatsapp_token');
-        const phoneId = await this.getSetting('whatsapp_phone_id');
-        if (token && phoneId) {
-          const rawPhone = (msg.session?.phone || '').replace(/\D/g, '');
-          const formattedPhone = rawPhone.length === 10 ? `57${rawPhone}` : rawPhone;
-          const metaRes = await fetch(`https://graph.facebook.com/v18.0/${phoneId}/messages`, {
-            method: 'POST',
-            headers: {
-              'Authorization': `Bearer ${token}`,
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-              messaging_product: 'whatsapp',
-              recipient_type: 'individual',
-              to: formattedPhone,
-              type: 'text',
-              text: { body: content },
-              message_id: msg.waMessageId,
-            }),
-          });
-          const metaData = await metaRes.json();
-          this.logger.log(`Meta edit response for ${msg.waMessageId}: ${JSON.stringify(metaData)}`);
-        }
-      } catch (err) {
-        this.logger.error(`Error editando mensaje ${msg.waMessageId} en Meta:`, err);
-      }
+    // Límite estricto de 15 minutos (exactamente como en WhatsApp)
+    const messageAgeMs = Date.now() - new Date(msg.createdAt).getTime();
+    const fifteenMinutesMs = 15 * 60 * 1000;
+    if (messageAgeMs > fifteenMinutesMs) {
+      throw new BadRequestException('El tiempo límite para editar este mensaje (15 minutos) ha expirado, tal como en WhatsApp');
     }
 
+    const trimmedContent = content.trim();
+
+    // 1. Actualizar el mensaje original en la base de datos marcándolo como editado
     const updated = await this.prisma.whatsAppMessage.update({
       where: { id },
       data: {
-        content,
+        content: trimmedContent,
         isEdited: true,
       },
     });
@@ -2752,11 +2732,32 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
       this.socketGateway.emitWhatsApp('chatMessageEdited', {
         messageId: id,
         sessionId: msg.sessionId,
-        content,
+        content: trimmedContent,
         isEdited: true,
       });
     }
-    return updated;
+
+    // 2. Si es un mensaje saliente y la sesión tiene teléfono,
+    // enviar un mensaje a WhatsApp citando el original con la corrección clara
+    let sentToCustomer = false;
+    if (msg.direction === 'OUT' && msg.session?.phone) {
+      try {
+        const correctionText = `✏️ *Corrección:* ${trimmedContent}`;
+        const sendResult = await this.sendMessage(
+          msg.session.phone,
+          correctionText,
+          msg.waMessageId || undefined,
+          msg.content,
+          msg.sessionId,
+          msg.orderId || undefined,
+        );
+        sentToCustomer = Boolean(sendResult && (sendResult as any).sent !== false);
+      } catch (err) {
+        this.logger.error(`Error enviando mensaje de corrección citado a ${msg.session?.phone}:`, err);
+      }
+    }
+
+    return { ...updated, sentToCustomer };
   }
 
   async markSessionMessagesAsRead(sessionId: string, force = false) {
@@ -4360,18 +4361,22 @@ The Villa Dog • Montería`;
     dynamicCategoriesString: string;
     menuCategoryRule: string;
     menuFollowupRule: string;
-    session: { customerName?: string | null };
+    session: { customerName?: string | null; phone?: string; customerPhone?: string | null };
     knownFactsBlock?: string;
     paymentInstruction: string;
+    phoneInstruction?: string;
     conversationPrompt: string;
     trainingExamplesBlock?: string;
   }): string {
     const {
       customInstructionsBlock, recentOrdersSummary, menuSummary, restaurantHours,
       zonesSummary, menuGeneralRule, dynamicCategoriesString, menuCategoryRule,
-      menuFollowupRule, session, paymentInstruction, conversationPrompt, trainingExamplesBlock,
+      menuFollowupRule, session, paymentInstruction, phoneInstruction, conversationPrompt, trainingExamplesBlock,
       knownFactsBlock = '         * Teléfono de WhatsApp: FALTA.\n         * Método de pago: FALTA.\n         * Tipo de entrega: FALTA.\n         * Dirección exacta: FALTA.',
     } = context;
+
+    const effectivePhoneInstruction = phoneInstruction ||
+      'Si el cliente ya escribe desde un celular colombiano (empieza por 3 o +57 3), ESTÁ PROHIBIDO pedirle teléfono (ya lo tenemos). Solo si escribe desde un ID de Meta o número extranjero, pide amablemente un celular colombiano de 10 dígitos que empiece por 3 para el domiciliario.';
     return `
 Eres la persona encargada de atender de forma directa el WhatsApp del restaurante "The Villa Dog" en Montería, Colombia. Habla con un tono humano, cercano, natural y muy sencillo. Evita a toda costa sonar como un robot, una máquina de soporte técnico o un asistente de inteligencia artificial genérico. Habla como un asesor amable del restaurante.
 ${customInstructionsBlock}
@@ -4439,13 +4444,17 @@ ${dynamicCategoriesString}
        - Si dos unidades llevan preparaciones distintas, distingue claramente cuál nota corresponde a cada una.
 
     6. MANEJO DE DATOS Y TOMAR PEDIDOS (REGLAS DE ORO):
+       - SALUDOS Y CERO SUPOSICIÓN DE COMPROBANTES: Si el cliente solo está saludando (ej: "hola", "buenas", "buenas noches", "holaaa", "¿cómo están?"), saluda cordialmente de vuelta y pregúntale amablemente qué se le antoja pedir hoy o en qué le puedes colaborar.
+         ¡ESTÁ ABSOLUTAMENTE PROHIBIDO decir que recibiste un comprobante de pago, que estás terminando de alistar su pedido o felicitarlo por un pago si el cliente no ha enviado explícitamente un comprobante o foto de pago en este momento! No asumas pagos de mensajes antiguos.
+       - HISTORIAL DE PEDIDOS PREVIOS: El historial de pedidos de este cliente es ÚNICAMENTE de consulta si el cliente te pregunta expresamente por su pedido anterior o quiere repetir uno. Si el cliente está saludando o haciendo un pedido nuevo, NO menciones pedidos anteriores ni supongas que hay un pedido pendiente o pago en curso.
        - NOMBRE DEL CLIENTE: El nombre registrado de la persona es "${session.customerName || 'No especificado aún'}". Si ya conoces su nombre (por ejemplo, "${session.customerName || ''}" o si viene en el texto como "Nombre: Juan Martinez"), ESTÁ ABSOLUTAMENTE PROHIBIDO VOLVER A PREGUNTAR SU NOMBRE. Llámalo por su nombre directamente (ej: "¡Hola Juan!").
        - DATOS YA CONOCIDOS POR EL SISTEMA (fuente autoritativa):
 ${knownFactsBlock}
        - Nunca solicites otra vez un dato marcado como DISPONIBLE o CONFIRMADO. El teléfono de WhatsApp no forma parte de los datos que debes pedir cuando ya está disponible.
+       - TELÉFONO DE CONTACTO PARA DOMICILIOS: ${effectivePhoneInstruction}
        - CUENTAS DE TRANSFERENCIA: ${paymentInstruction}
        - PREGUNTA ÚNICA: No pidas los datos uno por uno. Después de conocer productos y tipo de entrega, solicita EN UN SOLO MENSAJE todos los datos que falten.
-       - PEDIDO PARA PASAR A RECOGER (PICKUP): Nunca preguntes barrio ni dirección. Pide únicamente el método de pago si todavía falta.
+       - PEDIDO PARA PASAR A RECOGER (PICKUP): Nunca preguntes barrio ni dirección ni teléfono. Pide únicamente el método de pago si todavía falta.
        - PEDIDO A DOMICILIO: La dirección exacta y el método de pago son necesarios. El barrio es opcional: úsalo si el cliente lo informa, pero NUNCA bloquees ni retrases el pedido por no tenerlo. Ejemplo: "Listo. Envíame en un solo mensaje tu dirección exacta y si pagas en efectivo o transferencia; si conoces el barrio también puedes indicarlo."
        - Si el cliente ya entregó uno o dos datos, pregunta solamente por todos los que falten, juntos y en una respuesta corta.
        - TARIFA DE DOMICILIO - REGLA CRÍTICA ABSOLUTA: La lista de barrios, lugares especiales y tarifas disponible arriba es la lista OFICIAL. Una entrada oficial con tarifa $0 es una excepción autorizada sin costo, pero solo cuando el cliente menciona ese lugar exacto. Si la dirección o barrio NO APARECE en la lista, ESTÁ ABSOLUTAMENTE PROHIBIDO decir "gratis", "$0" o inventar un valor. En esos casos, responde exactamente: "Perfecto. El valor del domicilio a tu barrio será verificado y confirmado directamente por nuestro asesor al procesar tu pedido." e incluye [TRANSFERIR_ASESOR].
@@ -4769,6 +4778,15 @@ Restaurante (Tú):
       if (invalidTariff || claimsUnverifiedTotal || claimsUnverifiedTime || invalidFreeDelivery) {
         cleanReply = 'Gracias. Un asesor verificará la tarifa, el tiempo y el total antes de confirmar tu pedido.';
         shouldTransfer = true;
+      }
+
+      // Guardrail determinista: Evitar alucinación de confirmación de pago o comprobante cuando el cliente solo saluda
+      const isSimpleGreeting = /^(?:hola+|buenas(?:\s+(?:tardes|noches|d[ií]as))?|buenos\s+d[ií]as|saludos|hey|alo|al[oó]|que\s+tal|qu[eé]\s+mas)\s*[.!,?]*$/i.test(userText.trim());
+      const claimsPaymentOrReceipt = /\b(?:comprobante|recibimos\s+(?:tu\s+)?pago|pago\s+recibido|alistando\s+tu\s+pedido|alistar\s+tu\s+pedido)\b/i.test(cleanReply);
+      if (isSimpleGreeting && claimsPaymentOrReceipt) {
+        const greetingName = session.customerName ? ` ${session.customerName}` : '';
+        cleanReply = `¡Hola${greetingName}! Claro que sí, con mucho gusto. ¿Qué se te antoja pedir hoy o te gustaría ver la carta?`;
+        shouldTransfer = false;
       }
 
       if (!this.isMeaningfulGeminiReply(cleanReply)) {
