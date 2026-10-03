@@ -1639,6 +1639,11 @@ function ChatPage() {
       replyToContent?: string | null
       replyToDirection?: 'IN' | 'OUT' | null
     }) => {
+      // Ignorar mensajes internos de corrección citada de Meta en la vista del CRM
+      if (payload.direction === 'OUT' && (payload.content?.startsWith('✏️ *Corrección:*') || payload.content?.startsWith('✏ *Corrección:*'))) {
+        return
+      }
+
       // 1. Reload/update session list
       const isIncoming = payload.direction === 'IN'
       const isActiveIncoming = isIncoming && activeSessionRef.current?.id === payload.sessionId
@@ -3105,7 +3110,7 @@ function ChatPage() {
                   
                   let latestMsg = 'Sin mensajes'
                   if (s.messages && s.messages.length > 0) {
-                    const m = s.messages[0]
+                    const m = s.messages.find(item => !(item.direction === 'OUT' && (item.content?.startsWith('✏️ *Corrección:*') || item.content?.startsWith('✏ *Corrección:*')))) || s.messages[0]
                     if (m.messageType === 'image') latestMsg = '📷 Imagen'
                     else if (m.messageType === 'audio') latestMsg = '🎵 Mensaje de voz'
                     else if (m.messageType === 'document') latestMsg = '📄 Documento'
@@ -3667,6 +3672,9 @@ function ChatPage() {
                       let prevDateStr: string | null = null
                       return messages.map((m, index) => {
                         if (!m) return null
+                        if (m.direction === 'OUT' && (m.content?.startsWith('✏️ *Corrección:*') || m.content?.startsWith('✏ *Corrección:*'))) {
+                          return null
+                        }
                         const isIncoming = m.direction === 'IN'
                         const mDate = m.createdAt ? new Date(m.createdAt) : new Date()
                         const currentDateStr = isNaN(mDate.getTime()) ? 'Hoy' : mDate.toDateString()

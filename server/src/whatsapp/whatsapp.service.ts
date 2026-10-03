@@ -2610,6 +2610,10 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
         // sesiones que compartan teléfono o una variante antigua del número.
         sessionId,
         ...(orderId ? { orderId } : {}),
+        NOT: [
+          { content: { startsWith: '✏️ *Corrección:*' } },
+          { content: { startsWith: '✏ *Corrección:*' } },
+        ],
         ...messageCursor,
       },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
@@ -2741,22 +2745,47 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
     }
 
     // 2. Si es un mensaje saliente y la sesión tiene teléfono,
-    // enviar un mensaje a WhatsApp citando el original con la corrección clara
+    // enviar a Meta WhatsApp citando el original para que el cliente reciba la corrección en su celular,
+    // SIN crear un segundo mensaje duplicado en la base de datos ni en el CRM.
     let sentToCustomer = false;
     if (msg.direction === 'OUT' && msg.session?.phone) {
       try {
-        const correctionText = `✏️ *Corrección:* ${trimmedContent}`;
-        const sendResult = await this.sendMessage(
-          msg.session.phone,
-          correctionText,
-          msg.waMessageId || undefined,
-          msg.content,
-          msg.sessionId,
-          msg.orderId || undefined,
-        );
-        sentToCustomer = Boolean(sendResult && (sendResult as any).sent !== false);
+        const phoneId = await this.getSetting('whatsapp_phone_id');
+        const token = await this.getSetting('whatsapp_token');
+        if (phoneId && token) {
+          const targetSession = await this.resolveSessionForDispatch(msg.session.phone);
+          const { recipientPhone, lastInWaId, isId } = await this.resolveActiveRecipient(targetSession, msg.session.phone);
+          const formattedPhone = this.formatRecipient(recipientPhone);
+          const recipientObj = this.buildMetaRecipient(formattedPhone);
+          const correctionText = `✏️ *Corrección:* ${trimmedContent}`;
+          const metaPayload: any = {
+            messaging_product: 'whatsapp',
+            recipient_type: 'individual',
+            ...recipientObj,
+            type: 'text',
+            text: { body: correctionText },
+          };
+          if (msg.waMessageId) {
+            metaPayload.context = { message_id: msg.waMessageId };
+          } else if (isId || recipientObj.recipient || formattedPhone.length >= 13 || formattedPhone.startsWith('CO.')) {
+            if (lastInWaId) {
+              metaPayload.context = { message_id: lastInWaId };
+            }
+          }
+
+          const res = await fetch(`https://graph.facebook.com/v21.0/${phoneId}/messages`, {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${token}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(metaPayload),
+            signal: AbortSignal.timeout(12_000),
+          });
+          sentToCustomer = res.ok;
+        }
       } catch (err) {
-        this.logger.error(`Error enviando mensaje de corrección citado a ${msg.session?.phone}:`, err);
+        this.logger.error(`Error enviando mensaje de corrección a Meta para ${msg.session?.phone}:`, err);
       }
     }
 
