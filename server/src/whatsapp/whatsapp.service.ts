@@ -667,8 +667,10 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
   }
 
   getBestRecipientPhone(session?: any, fallbackPhone?: string): string {
-    if (session?.phone) return session.phone;
-    return fallbackPhone || '';
+    if (session?.phone && !this.isDummyPhoneNumber(session.phone)) return session.phone;
+    if (fallbackPhone && !this.isDummyPhoneNumber(fallbackPhone)) return fallbackPhone;
+    if (session?.customerPhone && !this.isDummyPhoneNumber(session.customerPhone)) return session.customerPhone;
+    return session?.phone || fallbackPhone || '';
   }
 
   async resolveActiveRecipient(session?: any, fallbackPhone?: string): Promise<{ recipientPhone: string; lastInWaId?: string; isId: boolean }> {
@@ -1825,6 +1827,7 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
 
     this.socketGateway.emitWhatsApp('whatsappSessionUpdated', {
       sessionId: session.id,
+      phone: session.phone,
       customerName: session.customerName,
       customerPhone: session.customerPhone,
       lastMessageAt: session.lastMessageAt,
@@ -2567,6 +2570,7 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
     if (this.socketGateway) {
       this.socketGateway.emitWhatsApp('whatsappSessionUpdated', {
         sessionId: updated.id,
+        phone: updated.phone,
         customerName: updated.customerName,
         customerPhone: updated.customerPhone,
         lastMessageAt: updated.lastMessageAt,
@@ -3260,16 +3264,16 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
       return { sent: false, reason: 'not_configured' };
     }
 
-    const cleanInput = (phone || '').replace(/\D/g, '');
-    if (cleanInput === '3000000000' || cleanInput === '0000000000' || /^0+$/.test(cleanInput) || (!phone.startsWith('@') && !phone.startsWith('CO.') && cleanInput.length < 7)) {
-      return { sent: false, reason: 'dummy_phone' };
-    }
-
     const targetSession = sessionId
       ? await this.prisma.whatsAppSession.findUnique({ where: { id: sessionId }, include: { assignedTo: { select: { id: true, name: true } } } })
       : await this.resolveSessionForDispatch(phone);
 
     const { recipientPhone, lastInWaId, isId } = await this.resolveActiveRecipient(targetSession, phone);
+
+    if (this.isDummyPhoneNumber(recipientPhone)) {
+      return { sent: false, reason: 'dummy_phone' };
+    }
+
     const formattedPhone = this.formatRecipient(recipientPhone);
 
     // Build Meta API payload with optional reply context
@@ -3643,6 +3647,11 @@ The Villa Dog • Montería`;
       ? await this.prisma.whatsAppSession.findUnique({ where: { id: sessionId }, include: { assignedTo: { select: { id: true, name: true } } } })
       : await this.resolveSessionForDispatch(phone);
     const { recipientPhone, lastInWaId, isId } = await this.resolveActiveRecipient(targetSession, phone);
+
+    if (this.isDummyPhoneNumber(recipientPhone)) {
+      return { sent: false, reason: 'dummy_phone' };
+    }
+
     const formattedPhone = this.formatRecipient(recipientPhone);
 
     let persistedMessage: any = null;

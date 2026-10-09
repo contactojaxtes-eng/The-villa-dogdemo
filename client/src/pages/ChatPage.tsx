@@ -629,6 +629,14 @@ const getSearchSuggestionReason = (session: Session, query: string) => {
   return 'coincidencia'
 }
 
+function getSessionDispatchPhone(session: Session | null | undefined): string {
+  if (!session) return ''
+  const trimmed = (session.phone || '').trim()
+  const clean = trimmed.replace(/\D/g, '')
+  const isDummy = !trimmed || clean === '3000000000' || clean === '0000000000' || /^0+$/.test(clean) || (!trimmed.startsWith('@') && !trimmed.startsWith('CO.') && clean.length < 7)
+  return (isDummy && session.customerPhone ? session.customerPhone : session.phone) || ''
+}
+
 function ChatPage() {
   const { user } = useAuth()
   const navigate = useNavigate()
@@ -1139,7 +1147,7 @@ function ChatPage() {
       
       const formData = new FormData()
       formData.append('file', file)
-      formData.append('phone', activeSession!.phone)
+      formData.append('phone', getSessionDispatchPhone(activeSession))
       formData.append('type', 'audio')
       if (activeSession?.id) formData.append('sessionId', activeSession.id)
       if (activeOrder?.id) formData.append('orderId', activeOrder.id)
@@ -1997,7 +2005,7 @@ function ChatPage() {
 
     const formData = new FormData()
     formData.append('file', uploadFile)
-    formData.append('phone', currentSession.phone)
+    formData.append('phone', getSessionDispatchPhone(currentSession))
     formData.append('type', type)
     if (captionText?.trim()) {
       formData.append('caption', captionText.trim())
@@ -2165,7 +2173,7 @@ function ChatPage() {
         sent: boolean
         message?: Message & { sessionId?: string }
       }>('/whatsapp/send', {
-        phone: activeSession.phone,
+        phone: getSessionDispatchPhone(activeSession),
         text: cleanText,
         sessionId: activeSession.id,
         orderId: activeOrder?.id || undefined,
@@ -2225,7 +2233,7 @@ function ChatPage() {
           sent: boolean
           message?: Message & { sessionId?: string }
         }>('/whatsapp/send', {
-          phone: activeSession.phone,
+          phone: getSessionDispatchPhone(activeSession),
           text: text,
           sessionId: activeSession.id,
           orderId: activeOrder?.id || undefined,
@@ -2273,7 +2281,7 @@ function ChatPage() {
 
     setSendingMenu(true)
     try {
-      await api.post('/whatsapp/send-menu', { phone: activeSession.phone })
+      await api.post('/whatsapp/send-menu', { phone: getSessionDispatchPhone(activeSession) })
       setActiveSession(prev => prev && prev.id === activeSession.id ? { ...prev, unreadCount: 0 } : prev)
       setSessions(prev => prev.map(s => s.id === activeSession.id ? { ...s, unreadCount: 0 } : s))
     } catch (err: any) {
@@ -2297,7 +2305,7 @@ function ChatPage() {
     setSendingPaymentQr(true)
     try {
       await api.post('/whatsapp/send-payment-qr', {
-        phone: activeSession.phone,
+        phone: getSessionDispatchPhone(activeSession),
         orderId: activeOrder?.id || undefined,
         sessionId: activeSession.id,
       })
@@ -2335,7 +2343,7 @@ function ChatPage() {
       const { latitude, longitude } = position.coords
 
       await api.post('/whatsapp/send-location', {
-        phone: activeSession.phone,
+        phone: getSessionDispatchPhone(activeSession),
         latitude,
         longitude,
         name: 'The Villa Dog',
@@ -3534,7 +3542,7 @@ function ChatPage() {
                   <div className="flex items-center gap-2 min-w-0 truncate">
                     <span className="text-[10px] text-[var(--text-muted)] font-mono font-medium flex items-center gap-1 truncate">
                       <Phone className="h-2.5 w-2.5 text-[var(--accent)] shrink-0" />
-                      <span className="truncate">{activeSession.phone}</span>
+                      <span className="truncate">{activeSession.phone || activeSession.customerPhone}</span>
                     </span>
                     {activeSession.customerPhone && activeSession.customerPhone !== activeSession.phone && (
                       <span className="text-emerald-600 dark:text-emerald-400 font-mono font-bold truncate bg-emerald-500/10 px-1.5 py-0.5 rounded border border-emerald-500/25 shrink-0">
