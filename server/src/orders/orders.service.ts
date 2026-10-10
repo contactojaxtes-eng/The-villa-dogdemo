@@ -2405,7 +2405,7 @@ export class OrdersService implements OnModuleInit {
     return updated;
   }
 
-  async getActiveOrders(search?: string, userRole?: string, requestedOrderType?: string) {
+  async getActiveOrders(search?: string, userRole?: string, requestedOrderType?: string, compact = false) {
     const cleanSearch = (search || '').trim();
     const isDeliveryStaff = Boolean(
       userRole &&
@@ -2448,29 +2448,83 @@ export class OrdersService implements OnModuleInit {
       }
       where.AND.push({ OR: searchConditions });
     }
-    return this.prisma.order.findMany({
-      where,
-      include: {
-        waiter: { select: { id: true, name: true } },
-        assignee: { select: { id: true, name: true } },
-        zone: { select: { id: true, name: true, zoneGroup: true, rate: true } },
-        items: {
+    // The dispatch board only needs the fields it renders and uses for payment
+    // collection. Keep the legacy include as the default for older consumers,
+    // while allowing the board to avoid shipping redundant relation columns on
+    // every Socket.IO reconciliation.
+    const activeOrderQuery: any = compact
+      ? {
+          where,
           select: {
             id: true,
-            quantity: true,
-            unitPrice: true,
-            totalPrice: true,
+            orderNumber: true,
+            invoiceNumber: true,
+            customerName: true,
+            customerPhone: true,
+            customerAddress: true,
+            addressReference: true,
             notes: true,
-            orderId: true,
-            menuItemId: true,
-            menuItem: { select: { id: true, name: true, price: true } },
+            subtotal: true,
+            tax: true,
+            deliveryFee: true,
+            total: true,
+            status: true,
+            orderType: true,
+            source: true,
+            paymentMethod: true,
+            originalPaymentMethod: true,
+            cashAmount: true,
+            transferAmount: true,
+            paymentStatus: true,
+            cancellationReason: true,
+            cancelledAt: true,
+            createdAt: true,
+            updatedAt: true,
+            waiter: { select: { id: true, name: true } },
+            assignee: { select: { id: true, name: true } },
+            cancelledBy: { select: { id: true, name: true } },
+            zone: { select: { id: true, name: true, zoneGroup: true } },
+            items: {
+              select: {
+                id: true,
+                quantity: true,
+                unitPrice: true,
+                notes: true,
+                menuItem: { select: { id: true, name: true, price: true } },
+              },
+            },
+            tableId: true,
+            diningTable: { select: { id: true, label: true } },
+            deliveryDriverId: true,
+            deliveryDriver: { select: { id: true, name: true, phone: true } },
           },
-        },
-        deliveryDriver: { select: { id: true, name: true, phone: true, active: true, userId: true } },
-        cashRegister: { select: { id: true, name: true } },
-      },
-      orderBy: { createdAt: 'asc' },
-    });
+          orderBy: { createdAt: 'asc' },
+        }
+      : {
+          where,
+          include: {
+            waiter: { select: { id: true, name: true } },
+            assignee: { select: { id: true, name: true } },
+            zone: { select: { id: true, name: true, zoneGroup: true, rate: true } },
+            items: {
+              select: {
+                id: true,
+                quantity: true,
+                unitPrice: true,
+                totalPrice: true,
+                notes: true,
+                orderId: true,
+                menuItemId: true,
+                menuItem: { select: { id: true, name: true, price: true } },
+              },
+            },
+            deliveryDriver: { select: { id: true, name: true, phone: true, active: true, userId: true } },
+            cashRegister: { select: { id: true, name: true } },
+          },
+          orderBy: { createdAt: 'asc' },
+        };
+
+    return this.prisma.order.findMany(activeOrderQuery);
   }
 
   async getTodayStats() {

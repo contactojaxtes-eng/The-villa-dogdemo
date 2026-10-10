@@ -55,9 +55,10 @@ export class OrdersController {
   getActiveOrders(
     @Query('search') search?: string,
     @Query('orderType') orderType?: string,
+    @Query('compact') compact?: string,
     @Request() req?: any,
   ) {
-    return this.ordersService.getActiveOrders(search, req?.user?.role, orderType);
+    return this.ordersService.getActiveOrders(search, req?.user?.role, orderType, compact === 'true');
   }
 
   @Get('stats/today')

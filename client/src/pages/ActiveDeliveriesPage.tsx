@@ -717,6 +717,10 @@ export default function ActiveDeliveriesPage() {
     const params = new URLSearchParams()
     if (submittedSearch) params.set('search', submittedSearch)
     params.set('orderType', isDeliveryStaff ? 'DELIVERY' : 'DELIVERY,PICKUP')
+    // The dispatch board does not need payment blobs or redundant relation
+    // columns. This projection keeps the same visible fields and actions while
+    // reducing the payload of each reconciliation.
+    params.set('compact', 'true')
     api.get<Order[]>(`/orders/active?${params.toString()}`, { force })
       .then(data => {
         if (requestId !== ordersRequestIdRef.current) return

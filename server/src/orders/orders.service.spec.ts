@@ -154,6 +154,25 @@ describe('Delivery order boundaries', () => {
     expect(query.include.items.select.menuItem.select).toEqual({ id: true, name: true, price: true });
   });
 
+  it('uses a bounded projection for the dispatch board when requested', async () => {
+    const prisma: any = {
+      order: { findMany: jest.fn().mockResolvedValue([]) },
+    };
+    const service = new OrdersService(prisma, {} as any, {} as any, {} as any, { notifyJobCreated: jest.fn() } as any);
+
+    await service.getActiveOrders(undefined, 'ADMIN', 'DELIVERY,PICKUP', true);
+
+    const query = prisma.order.findMany.mock.calls[0][0];
+    expect(query.include).toBeUndefined();
+    expect(query.select).toEqual(expect.objectContaining({
+      id: true,
+      total: true,
+      paymentStatus: true,
+      deliveryDriver: { select: { id: true, name: true, phone: true } },
+    }));
+    expect(query.select.items.select.totalPrice).toBeUndefined();
+  });
+
   it('refuses to liquidate a delivery that is still in the kitchen', async () => {
     const prisma: any = {
       cashClosing: { findFirst: jest.fn().mockResolvedValue({ id: 'closing-1' }) },
