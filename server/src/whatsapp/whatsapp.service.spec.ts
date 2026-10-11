@@ -1532,6 +1532,52 @@ describe('WhatsApp Gemini settings', () => {
     )).toEqual({ found: false, amount: null });
   });
 
+  it('intercepts and corrects an improper coverage rejection, transferring to advisor with positive confirmation', async () => {
+    const { service, prisma, send, session } = createProtectedGeminiService({
+      history: [{ id: 'current', direction: 'IN', messageType: 'text', content: '¿Tienen cobertura para el aeropuerto?', createdAt: new Date() }],
+      zones: [{ id: 'zone-1', name: 'La Granja', rate: 8000 }],
+    });
+    const fetchSpy = jest.spyOn(global, 'fetch').mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ candidates: [{ finishReason: 'STOP', content: { parts: [{ text: 'Lo siento, no tenemos cobertura hasta el aeropuerto.' }] } }] }),
+    } as any);
+
+    try {
+      await (service as any).handleGeminiChatbot(session, '¿Tienen cobertura para el aeropuerto?', ['test-key']);
+    } finally {
+      fetchSpy.mockRestore();
+    }
+
+    expect(prisma.whatsAppSession.updateMany).toHaveBeenCalled();
+    expect(send.mock.calls[0][1]).toBe(
+      '¡Claro que sí, con mucho gusto tomamos tu pedido! Cuéntanos qué deseas pedir. El valor del domicilio a tu zona será verificado y confirmado directamente por nuestro asesor.',
+    );
+  });
+
+  it('avoids resending the exact same reply if it duplicates the last outbound message', async () => {
+    const repeatedText = '¡Hola José! ¿Qué se te antoja pedir hoy?';
+    const { service, send, session } = createProtectedGeminiService({
+      history: [
+        { id: 'prev-out', direction: 'OUT', messageType: 'text', content: repeatedText, createdAt: new Date(Date.now() - 5000) },
+        { id: 'curr-in', direction: 'IN', messageType: 'text', content: 'hola de nuevo', createdAt: new Date() },
+      ],
+    });
+    const fetchSpy = jest.spyOn(global, 'fetch').mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ candidates: [{ finishReason: 'STOP', content: { parts: [{ text: repeatedText }] } }] }),
+    } as any);
+
+    try {
+      await (service as any).handleGeminiChatbot(session, 'hola de nuevo', ['test-key']);
+    } finally {
+      fetchSpy.mockRestore();
+    }
+
+    expect(send).not.toHaveBeenCalled();
+  });
+
   it('does not treat an unrelated image as a payment proof', async () => {
     const { service, send, session } = createProtectedGeminiService({
       history: [

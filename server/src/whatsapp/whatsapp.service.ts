@@ -76,6 +76,7 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
   private autoTrainingStopped = false;
   private autoTrainingRunInProgress = false;
   private readonly chatbotDebounceTimers = new Map<string, NodeJS.Timeout>();
+  private readonly processingChatbotSessions = new Set<string>();
   private readonly chatbotSessionQueues = new Map<string, Promise<void>>();
   private readonly latestChatbotTriggerBySession = new Map<string, string>();
   private readonly pendingChatbotPayloadBySession = new Map<string, {
@@ -4004,6 +4005,22 @@ The Villa Dog • Montería`;
     // Ventana de silencio de 7 segundos para consolidar mensajes consecutivos en una sola respuesta
     const timer = setTimeout(async () => {
       this.chatbotDebounceTimers.delete(sessionId);
+      if (this.processingChatbotSessions.has(sessionId)) {
+        this.logger.log(`Chatbot en proceso para ${sessionId}; reprogramando en 2s para evitar respuestas cruzadas.`);
+        const retryTimer = setTimeout(() => {
+          const pending = this.pendingChatbotPayloadBySession.get(sessionId);
+          if (pending) {
+            this.chatbotDebounceTimers.delete(sessionId);
+            this.pendingChatbotPayloadBySession.delete(sessionId);
+            const text = pending.messages.join('\n').trim();
+            if (text) {
+              void this.handleChatbot(pending.session, text, pending.previousLastMessageAt, pending.triggerMessageId);
+            }
+          }
+        }, 2000);
+        this.chatbotDebounceTimers.set(sessionId, retryTimer);
+        return;
+      }
       const payload = this.pendingChatbotPayloadBySession.get(sessionId);
       if (!payload) return;
       this.pendingChatbotPayloadBySession.delete(sessionId);
@@ -4056,8 +4073,17 @@ The Villa Dog • Montería`;
     previousLastMessageAt?: Date | null,
     triggerMessageId?: string,
   ) {
+    const sessionId = String(session?.id || '');
+    if (sessionId) {
+      if (this.processingChatbotSessions.has(sessionId)) {
+        this.logger.warn(`Ya hay un procesamiento de chatbot activo para la sesión ${sessionId} (${session.phone}). Omitiendo llamada concurrente.`);
+        return;
+      }
+      this.processingChatbotSessions.add(sessionId);
+    }
+
+    let replyDispatched = false;
     try {
-      const sessionId = String(session?.id || '');
       if (!(await this.isLatestChatbotTrigger(sessionId, triggerMessageId))) {
         this.logger.log(`Respuesta automática omitida: llegó un mensaje más nuevo en ${session.phone}.`);
         return;
@@ -4097,6 +4123,7 @@ The Villa Dog • Montería`;
       if (closedReply) {
         if (!(await this.isLatestChatbotTrigger(sessionId, triggerMessageId))) return;
         if (!(await this.isSessionAvailableForChatbot(sessionId))) return;
+        replyDispatched = true;
         if (sessionId) {
           await this.sendMessage(session.phone, closedReply, undefined, undefined, sessionId);
         } else {
@@ -4114,6 +4141,7 @@ The Villa Dog • Montería`;
 
       if (this.isExplicitAdvisorRequest(userText)) {
         if (!(await this.isLatestChatbotTrigger(sessionId, triggerMessageId))) return;
+        replyDispatched = true;
         await this.requestAdvisorHandoff(
           session,
           'Claro. En un momento uno de nuestros asesores continuará la atención contigo por este chat.',
@@ -4125,14 +4153,22 @@ The Villa Dog • Montería`;
       const rawApiKeys = await this.getSetting('gemini_api_key');
       if (!rawApiKeys) {
         this.logger.log(`API Key de Gemini no configurada. Usando chatbot de contingencia basado en reglas.`);
+        replyDispatched = true;
         return this.handleRuleBasedChatbot(session, userText, previousLastMessageAt, triggerMessageId);
       }
       
       const apiKeys = rawApiKeys.split(',').map(k => k.trim()).filter(k => k.length > 0);
 
-      await this.handleGeminiChatbot(session, userText, apiKeys, triggerMessageId);
+      const geminiResult = await this.handleGeminiChatbot(session, userText, apiKeys, triggerMessageId);
+      if (geminiResult && typeof geminiResult === 'object' && (geminiResult as any).dispatched) {
+        replyDispatched = true;
+      }
 
     } catch (error) {
+      if (replyDispatched) {
+        this.logger.warn(`Error en ruteador de chatbot para ${session.phone}, pero la respuesta ya fue despachada. Evitando contingencia repetida.`);
+        return;
+      }
       this.logger.error(`Error en ruteador de chatbot para ${session.phone}:`, error);
       try {
         if (!(await this.isLatestChatbotTrigger(String(session.id || ''), triggerMessageId))) return;
@@ -4168,6 +4204,10 @@ The Villa Dog • Montería`;
         await this.handleRuleBasedChatbot(session, userText, previousLastMessageAt, triggerMessageId);
       } catch (fbErr) {
         this.logger.error(`Error en chatbot de contingencia para ${session.phone}:`, fbErr);
+      }
+    } finally {
+      if (sessionId) {
+        this.processingChatbotSessions.delete(sessionId);
       }
     }
   }
@@ -4481,7 +4521,7 @@ ${menuSummary}
 Horario configurado por el restaurante:
 ${restaurantHours || 'Horario por confirmar con un asesor.'}
 
-Cobertura y tarifas de domicilios según el barrio en Montería:
+Tarifas de referencia de domicilios por barrio en Montería:
 ${zonesSummary}
 
     Reglas críticas de interacción:
@@ -4515,7 +4555,7 @@ ${dynamicCategoriesString}
        - NUNCA inventes ni calcules por tu cuenta un tiempo, una tarifa de domicilio o el total final del pedido.
        - No tienes una estimación validada de cocina ni transporte. Si el cliente pregunta por demora, indica que un asesor la confirmará.
        - Los precios solo pueden salir del menú vigente incluido arriba.
-       - La tarifa solo puede mencionarse cuando el barrio coincide claramente con una zona oficial. El total definitivo lo confirma el sistema o un asesor.
+       - La tarifa solo puede mencionarse cuando el barrio coincide claramente con una zona oficial. Si el barrio o lugar no está en la lista oficial, NUNCA digas que no hay cobertura; indica que el valor del domicilio a su zona será verificado por el asesor e incluye [TRANSFERIR_ASESOR]. El total definitivo lo confirma el sistema o un asesor.
 
     5A. BEBIDAS Y PRESENTACIONES:
        - Usa únicamente el nombre exacto de las bebidas del menú vigente. No cambies una marca, sabor, tamaño o empaque por otro parecido.
@@ -4544,6 +4584,11 @@ ${knownFactsBlock}
        - PEDIDO PARA PASAR A RECOGER (PICKUP): Nunca preguntes barrio ni dirección ni teléfono. Pide únicamente el método de pago si todavía falta.
        - PEDIDO A DOMICILIO: La dirección exacta y el método de pago son necesarios. El barrio es opcional: úsalo si el cliente lo informa, pero NUNCA bloquees ni retrases el pedido por no tenerlo. Ejemplo: "Listo. Envíame en un solo mensaje tu dirección exacta y si pagas en efectivo o transferencia; si conoces el barrio también puedes indicarlo."
        - Si el cliente ya entregó uno o dos datos, pregunta solamente por todos los que falten, juntos y en una respuesta corta.
+       - REGLA CRÍTICA DE COBERTURA (TOTALMENTE OBLIGATORIA):
+         ¡ESTÁ TERMINANTEMENTE PROHIBIDO DECIR QUE "NO TENEMOS COBERTURA", QUE "NO LLEGAMOS HASTA ALLÁ", QUE ESTÁ "FUERA DE COBERTURA" O RECHAZAR CUALQUIER ZONA, BARRIO O LUGAR (por ejemplo: Garzones, Aeropuerto, veredas, etc.)!
+         The Villa Dog SÍ despacha a toda la ciudad y zonas especiales.
+         Si el cliente pregunta si hay servicio o cobertura a cualquier lugar (ej: "¿Llegan a Garzones?", "¿Tienen domicilio para el Aeropuerto?", "¿Llegan hasta X?"), responde con total amabilidad y entusiasmo: "¡Claro que sí, con mucho gusto tomamos tu pedido!"
+         Si la dirección, barrio o lugar NO está en la lista de tarifas oficiales de referencia de arriba, NUNCA digas que no hay cobertura ni inventes tarifas. Indica que el valor del domicilio a su zona será verificado y confirmado directamente por nuestro asesor al procesar el pedido, continúa tomando su pedido cordialmente e incluye [TRANSFERIR_ASESOR].
        - TARIFA DE DOMICILIO - REGLA CRÍTICA ABSOLUTA: La lista de barrios, lugares especiales y tarifas disponible arriba es la lista OFICIAL. Una entrada oficial con tarifa $0 es una excepción autorizada sin costo, pero solo cuando el cliente menciona ese lugar exacto. Si la dirección o barrio NO APARECE en la lista, ESTÁ ABSOLUTAMENTE PROHIBIDO decir "gratis", "$0" o inventar un valor. En esos casos, responde exactamente: "Perfecto. El valor del domicilio a tu barrio será verificado y confirmado directamente por nuestro asesor al procesar tu pedido." e incluye [TRANSFERIR_ASESOR].
 
     7. FINALIZACIÓN Y TRANSFERENCIA:
@@ -4829,6 +4874,14 @@ Restaurante (Tú):
         }
       }
 
+      // Guardrail determinista: PROHIBIDO rechazar cobertura (Aeropuerto, Garzones, veredas, etc.)
+      const rejectsCoverageRegex = /\b(?:no\s+(?:tenemos|contamos\s+con|hay)\s+(?:cobertura|servicio\s+hasta|domicilios?\s+hasta|env[ií]os?\s+hasta)|fuera\s+de\s+cobertura|no\s+llegamos\s+(?:hasta|a)|no\s+(?:cubrimos|alcanzamos))\b/i;
+      if (rejectsCoverageRegex.test(cleanReply)) {
+        this.logger.warn(`Detectado rechazo indebido de cobertura en Gemini para ${session.phone}. Corrigiendo respuesta automáticamente.`);
+        cleanReply = '¡Claro que sí, con mucho gusto tomamos tu pedido! Cuéntanos qué deseas pedir. El valor del domicilio a tu zona será verificado y confirmado directamente por nuestro asesor.';
+        shouldTransfer = true;
+      }
+
       let mentionedZone: any = undefined;
       const zonesBySpecificity = [...dbZones].sort((left, right) => right.name.length - left.name.length);
       for (const message of [...messagesChronological].reverse()) {
@@ -4906,18 +4959,33 @@ Restaurante (Tú):
 
       if (!(await this.isLatestChatbotTrigger(String(session.id || ''), triggerMessageId))) {
         this.logger.log(`Respuesta Gemini descartada: llegó un mensaje más nuevo en ${session.phone}.`);
-        return;
+        return { dispatched: false };
       }
       if (!(await this.isSessionAvailableForChatbot(String(session.id || '')))) {
         this.logger.log(`Respuesta Gemini descartada: el chat ya fue tomado por un asesor.`);
-        return;
+        return { dispatched: false };
+      }
+
+      // Evitar repetir exactamente el mismo mensaje saliente enviado previamente
+      const lastOutbound = [...messagesChronological].reverse().find(m => m.direction === 'OUT');
+      if (lastOutbound?.content) {
+        const normLast = this.normalizeSpanishLookup(lastOutbound.content);
+        const normReply = this.normalizeSpanishLookup(cleanReply);
+        if (normLast && normReply && normLast === normReply) {
+          this.logger.warn(`Mensaje repetido evitado para ${session.phone}: el bot ya envió este texto exactamente.`);
+          return { dispatched: false };
+        }
       }
 
       if (shouldTransfer) {
         await this.requestAdvisorHandoff(session, cleanReply, 'respuesta_gemini');
+        return { dispatched: true };
       } else if (cleanReply) {
         await this.sendMessage(session.phone, cleanReply, undefined, undefined, session.id);
+        return { dispatched: true };
       }
+
+      return { dispatched: false };
 
     } catch (err) {
       this.logger.error(`Error en handleGeminiChatbot para ${session.phone}, reintentando contingencia:`, err);
