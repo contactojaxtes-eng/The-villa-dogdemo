@@ -9,8 +9,9 @@ import {
   allNavItems,
   getFirstAllowedPath,
   getHiddenModules,
+  getSidebarOrder,
   hasNavItemAccess,
-  SIDEBAR_ORDER_STORAGE_KEY,
+  saveSidebarOrder,
   type NavItem,
 } from '@/lib/navigation'
 import { BrandLogo } from '@/components/brand/BrandLogo'
@@ -18,6 +19,7 @@ import { Button } from '@/components/ui/button'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Bell, BellOff, ChevronLeft, ChevronRight, Crown, GripVertical, LogOut, Moon, Search, Sun, X } from 'lucide-react'
 import { isNotificationsMuted, toggleNotificationsMuted } from '@/lib/notificationSettings'
+import { SiteSwitcher } from './SiteSwitcher'
 
 const roleLabels: Record<string, string> = {
   SUPERADMIN: 'Super Administrador',
@@ -38,16 +40,28 @@ interface SidebarProps {
   onToggleCollapse?: () => void
 }
 
+const PREPARATION_ROUTES = new Set([
+  '/products',
+  '/superadmin/sites',
+  '/users',
+  '/zones',
+  '/cash-registers',
+  '/settings/kitchen-stations',
+  '/settings/modules',
+])
+
 export function Sidebar({ onClose, isCollapsed = false, onToggleCollapse }: SidebarProps) {
   const location = useLocation()
   const { user, logout } = useAuth()
+  const activeSiteId = user?.activeSite?.id
+  const preparationMode = user?.activeSite?.preparationMode === true
   const { theme, toggleTheme } = useTheme()
   const initials = user?.name?.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase() || '??'
-  const [hiddenModules, setHiddenModules] = useState<string[]>(() => getHiddenModules())
+  const [hiddenModules, setHiddenModules] = useState<string[]>(() => getHiddenModules(activeSiteId))
   const [isMuted, setIsMuted] = useState(() => isNotificationsMuted())
 
   useEffect(() => {
-    const syncModules = () => setHiddenModules(getHiddenModules())
+    const syncModules = () => setHiddenModules(getHiddenModules(activeSiteId))
     const syncMute = () => setIsMuted(isNotificationsMuted())
     window.addEventListener('storage', syncModules)
     window.addEventListener('storage', syncMute)
@@ -59,7 +73,7 @@ export function Sidebar({ onClose, isCollapsed = false, onToggleCollapse }: Side
       window.removeEventListener('the-villa-dog-modules-changed', syncModules)
       window.removeEventListener('the-villa-dog-mute-changed', syncMute)
     }
-  }, [])
+  }, [activeSiteId])
 
   const handleToggleMute = () => {
     const next = toggleNotificationsMuted()
@@ -68,25 +82,23 @@ export function Sidebar({ onClose, isCollapsed = false, onToggleCollapse }: Side
 
   const hasItemAccess = (item: NavItem) => {
     if (!hasNavItemAccess(user, item)) return false
+    if (preparationMode) return PREPARATION_ROUTES.has(item.href)
     // La entrada del portal del domiciliario es fija para ese rol. No debe
     // desaparecer por una preferencia de módulos guardada por administración.
     if (user?.role === 'DELIVERY_DRIVER' && item.href === '/my-deliveries') return true
     return !hiddenModules.includes(item.module)
   }
 
-  const [navOrder, setNavOrder] = useState<string[]>(() => {
-    try {
-      const saved = localStorage.getItem(SIDEBAR_ORDER_STORAGE_KEY)
-      if (saved) return JSON.parse(saved)
-    } catch {
-      return allNavItems.map(i => i.href)
-    }
-    return allNavItems.map(i => i.href)
-  })
+  const [navOrder, setNavOrder] = useState<string[]>(() => getSidebarOrder(activeSiteId))
 
   useEffect(() => {
-    localStorage.setItem(SIDEBAR_ORDER_STORAGE_KEY, JSON.stringify(navOrder))
-  }, [navOrder])
+    setHiddenModules(getHiddenModules(activeSiteId))
+    setNavOrder(getSidebarOrder(activeSiteId))
+  }, [activeSiteId])
+
+  useEffect(() => {
+    saveSidebarOrder(navOrder, activeSiteId)
+  }, [navOrder, activeSiteId])
 
   const [isEditing, setIsEditing] = useState(false)
   const [draggedIdx, setDraggedIdx] = useState<number | null>(null)
@@ -148,7 +160,7 @@ export function Sidebar({ onClose, isCollapsed = false, onToggleCollapse }: Side
     const [moved] = newOrder.splice(draggedIdx, 1)
     newOrder.splice(targetIndex, 0, moved)
     setNavOrder(newOrder)
-    localStorage.setItem(SIDEBAR_ORDER_STORAGE_KEY, JSON.stringify(newOrder))
+    saveSidebarOrder(newOrder, activeSiteId)
     setDraggedIdx(null)
     setDragOverIdx(null)
   }
@@ -179,9 +191,13 @@ export function Sidebar({ onClose, isCollapsed = false, onToggleCollapse }: Side
       )}
 
       <div className={cn("border-b border-[var(--border-subtle)] shrink-0 flex items-center justify-center", isCollapsed ? "px-3 py-3.5" : "px-3 py-3")}>
-        <Link to={getFirstAllowedPath(user) || '/profile'} className={cn("flex justify-center rounded-2xl bg-white border border-slate-200/80 transition-all duration-200 hover:scale-[1.02] active:scale-[0.98]", isCollapsed ? "h-11 w-11 items-center p-1 shadow-xs" : "py-2 px-3 w-full shadow-2xs")} onClick={onClose}>
+        <Link to={preparationMode ? '/superadmin/sites' : (getFirstAllowedPath(user, activeSiteId) || '/profile')} className={cn("flex justify-center rounded-2xl bg-white border border-slate-200/80 transition-all duration-200 hover:scale-[1.02] active:scale-[0.98]", isCollapsed ? "h-11 w-11 items-center p-1 shadow-xs" : "py-2 px-3 w-full shadow-2xs")} onClick={onClose}>
           {isCollapsed ? <span className="text-sm font-black text-[#E30613]">V</span> : <BrandLogo compact imageClassName="w-24" />}
         </Link>
+      </div>
+
+      <div className={cn('shrink-0 border-b border-[var(--border-subtle)]', isCollapsed ? 'px-4 py-2' : 'px-3 py-2.5')}>
+        <SiteSwitcher compact={isCollapsed} />
       </div>
 
       <nav className={cn("flex-1 min-h-0 overflow-y-auto overflow-x-hidden", isCollapsed ? "px-2 py-2" : "px-3 py-2")}>
@@ -247,7 +263,7 @@ export function Sidebar({ onClose, isCollapsed = false, onToggleCollapse }: Side
                             onClick={() => {
                               const defaultOrder = allNavItems.map(i => i.href)
                               setNavOrder(defaultOrder)
-                              localStorage.setItem(SIDEBAR_ORDER_STORAGE_KEY, JSON.stringify(defaultOrder))
+                              saveSidebarOrder(defaultOrder, activeSiteId)
                             }}
                             className="text-[9px] font-bold px-1.5 py-0.5 rounded-md border border-[var(--border-subtle)] text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)] cursor-pointer"
                             title="Restablecer orden predeterminado"

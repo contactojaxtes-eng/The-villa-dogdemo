@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Put, Query, Request, Res, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Headers, Param, Put, Query, Request, Res, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Response } from 'express';
 import { existsSync, readFileSync } from 'fs';
@@ -6,6 +6,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { Roles, RolesGuard } from '../auth/guards/roles.guard';
 import { TablesService } from './tables.service';
 import { detectReceiptMime } from './receipt';
+import { sendPrivateFileResponse } from '../common/private-file-response';
 
 @ApiTags('Payment Validation')
 @ApiBearerAuth()
@@ -17,20 +18,20 @@ export class PaymentValidationController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('ADMIN', 'SUPERADMIN', 'CASHIER')
   @ApiOperation({ summary: 'Cola de pagos de mesas y domicilios por validar' })
-  list(@Query('status') status?: string, @Query('method') method?: string, @Query('allHistory') allHistory?: string) {
-    return this.tablesService.listPaymentValidation(status || 'PENDING_REVIEW', method || 'ALL', allHistory === 'true');
+  list(@Query('status') status: string | undefined, @Query('method') method: string | undefined, @Query('allHistory') allHistory: string | undefined, @Request() req: any) {
+    return this.tablesService.listPaymentValidation(status || 'PENDING_REVIEW', method || 'ALL', allHistory === 'true', req.user.siteId);
   }
 
   @Get('proofs/:id/image')
   @UseGuards(JwtAuthGuard)
   @ApiOperation({ summary: 'Ver imagen temporal de comprobante' })
-  async image(@Param('id') id: string, @Request() req: any, @Res() res: Response) {
+  async image(
+    @Param('id') id: string,
+    @Request() req: any,
+    @Res() res: Response,
+    @Headers('if-none-match') ifNoneMatch?: string,
+  ) {
     const proof = await this.tablesService.proofImage(id, req.user);
-    const applyPrivateHeaders = () => {
-      res.setHeader('Cache-Control', 'private, no-store, max-age=0');
-      res.setHeader('Pragma', 'no-cache');
-      res.setHeader('X-Content-Type-Options', 'nosniff');
-    };
     if (proof.fileBase64) {
       let rawBase64 = proof.fileBase64.trim();
       if (rawBase64.startsWith('data:')) {
@@ -41,10 +42,12 @@ export class PaymentValidationController {
         const buffer = Buffer.from(rawBase64, 'base64');
         const mime = detectReceiptMime(buffer);
         if (buffer.length > 0 && mime) {
-          applyPrivateHeaders();
-          res.setHeader('Content-Type', mime);
-          res.setHeader('Content-Length', buffer.length);
-          return res.end(buffer);
+          return sendPrivateFileResponse(res, {
+            buffer,
+            contentType: mime,
+            resourceKey: `transfer-proof:${proof.id}`,
+            ifNoneMatch,
+          });
         }
       } catch (err) {
         console.warn('[payment-validation] Error decodificando imagen base64:', err);
@@ -54,10 +57,12 @@ export class PaymentValidationController {
       const buffer = readFileSync(proof.filePath);
       const mime = detectReceiptMime(buffer);
       if (mime) {
-        applyPrivateHeaders();
-        res.setHeader('Content-Type', mime);
-        res.setHeader('Content-Length', buffer.length);
-        return res.end(buffer);
+        return sendPrivateFileResponse(res, {
+          buffer,
+          contentType: mime,
+          resourceKey: `transfer-proof:${proof.id}`,
+          ifNoneMatch,
+        });
       }
     }
     const isCash = proof.method === 'CASH';
@@ -72,10 +77,12 @@ export class PaymentValidationController {
   <text x="300" y="270" fill="#94a3b8" font-family="system-ui, -apple-system, sans-serif" font-size="14" text-anchor="middle">${isCash ? 'Registrado por mesera · Validar dinero físico en caja' : 'Cobro registrado por mesera · Validado en caja'}</text>
 </svg>`
     );
-    res.setHeader('Content-Type', 'image/svg+xml; charset=utf-8');
-    res.setHeader('Content-Length', placeholderSvg.length);
-    applyPrivateHeaders();
-    return res.end(placeholderSvg);
+    return sendPrivateFileResponse(res, {
+      buffer: placeholderSvg,
+      contentType: 'image/svg+xml; charset=utf-8',
+      resourceKey: `transfer-proof-placeholder:${proof.id}`,
+      ifNoneMatch,
+    });
   }
 
   @Put(':id/validate')

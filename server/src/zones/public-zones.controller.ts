@@ -1,6 +1,8 @@
-import { Controller, Get } from '@nestjs/common';
+import { Controller, Get, Query, Req } from '@nestjs/common';
 import { ApiTags, ApiOperation } from '@nestjs/swagger';
 import { ZonesService } from './zones.service';
+import { PrismaService } from '../prisma/prisma.service';
+import { resolvePublicSite } from '../common/public-site';
 
 /**
  * Controlador PUBLICO de zonas (sin autenticacion).
@@ -9,11 +11,16 @@ import { ZonesService } from './zones.service';
 @ApiTags('Public Zones')
 @Controller('public/zones')
 export class PublicZonesController {
-  constructor(private zonesService: ZonesService) {}
+  constructor(
+    private zonesService: ZonesService,
+    private prisma: PrismaService,
+  ) {}
 
   @Get()
   @ApiOperation({ summary: 'Listar zonas publicas con precios de domicilio' })
-  findAll() {
-    return this.zonesService.findAll();
+  async findAll(@Query('site') siteCode?: string, @Req() req?: any) {
+    const site = await resolvePublicSite(this.prisma, siteCode);
+    if (req) req.trafficSiteId = site.id;
+    return this.zonesService.findAll(site.id);
   }
 }

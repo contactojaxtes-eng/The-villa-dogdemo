@@ -2,19 +2,22 @@ import { useEffect, useState } from 'react'
 import { Link, Outlet, useLocation } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Sidebar } from './Sidebar'
-import { Menu, Eye, LogOut, PlusCircle, ScrollText, UtensilsCrossed, ChefHat, Clock, Maximize, Minimize, Moon, Sun, Bell, BellOff } from 'lucide-react'
+import { Menu, Eye, LogOut, PlusCircle, ScrollText, UtensilsCrossed, ChefHat, Clock, Maximize, Minimize, Moon, Sun, Bell, BellOff, Building2 } from 'lucide-react'
 import { BrandLogo } from '@/components/brand/BrandLogo'
 import { useAuth } from '@/hooks/useAuth'
 import { useTheme } from '@/hooks/useTheme'
 import { cn } from '@/lib/utils'
 import { ErrorBoundary } from '../ErrorBoundary'
-import { autoReconnectUsbDevices } from '@/lib/useUsbPrinter'
+import { autoReconnectUsbDevices, disableUsbPrinterSiteScope, setUsbPrinterSiteScope } from '@/lib/useUsbPrinter'
+import { DEFAULT_SITE_ID } from '@/lib/multisite'
 import { ForceEmailVerificationModal } from '@/components/auth/ForceEmailVerificationModal'
 import { isNotificationsMuted, toggleNotificationsMuted } from '@/lib/notificationSettings'
+import { SiteSwitcher } from './SiteSwitcher'
 
 export function AppLayout() {
   const location = useLocation()
   const { user, isImpersonating, stopImpersonation, logout } = useAuth()
+  const preparationMode = user?.activeSite?.preparationMode === true
   const { theme, toggleTheme } = useTheme()
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false)
   const [isCollapsed, setIsCollapsed] = useState(() => localStorage.getItem('sidebar-collapsed') === 'true')
@@ -48,8 +51,14 @@ export function AppLayout() {
 
   // Auto-reconnect WebUSB printers silently on mount
   useEffect(() => {
+    const siteId = user?.activeSite?.id || DEFAULT_SITE_ID
+    setUsbPrinterSiteScope(siteId, !preparationMode)
+    if (preparationMode) {
+      return () => disableUsbPrinterSiteScope(siteId)
+    }
     autoReconnectUsbDevices(['caja', 'cocina', 'bar']).catch(() => {})
-  }, [])
+    return () => disableUsbPrinterSiteScope(siteId)
+  }, [preparationMode, user?.activeSite?.id])
 
   // Close mobile sidebar on navigation
   useEffect(() => {
@@ -134,6 +143,14 @@ export function AppLayout() {
           </div>
         )}
 
+        {preparationMode && (
+          <div className="flex shrink-0 flex-wrap items-center justify-center gap-x-2 gap-y-1 border-b border-amber-300 bg-amber-100 px-4 py-2 text-center text-xs font-bold text-amber-950">
+            <Building2 className="h-4 w-4" />
+            <span>Modo preparación: {user?.activeSite?.name}.</span>
+            <span className="font-semibold">Esta sede aún no recibe pedidos, chats, impresión ni actualizaciones en tiempo real.</span>
+          </div>
+        )}
+
         {/* Kitchen Top Bar (Barra superior dedicada para Tablets de Cocina) */}
         {isDedicatedKitchen ? (
           <header className="flex h-14 items-center justify-between border-b border-[var(--border-subtle)] bg-[var(--bg-panel)] px-3 sm:px-4 shrink-0 shadow-xs">
@@ -155,6 +172,7 @@ export function AppLayout() {
 
             {/* Acciones para Tablet */}
             <div className="flex items-center gap-1.5">
+              <SiteSwitcher compact />
               <div className="hidden md:flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-[var(--bg-elevated)] text-xs font-bold text-[var(--text-primary)] border border-[var(--border-subtle)]">
                 <span>👨‍🍳 {user?.name}</span>
               </div>
@@ -218,6 +236,7 @@ export function AppLayout() {
             </div>
             {/* Acciones directas en móvil: Notificaciones, Tema y Salir sin abrir el menú */}
             <div className="flex items-center gap-1">
+              <SiteSwitcher compact />
               <button
                 type="button"
                 onClick={handleToggleMute}

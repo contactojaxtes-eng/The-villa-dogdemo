@@ -8,6 +8,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { SocketGateway } from '../socket/socket.gateway';
 import { DeliveryDriverGateway } from '../socket/delivery-driver.gateway';
 import { OrdersService } from '../orders/orders.service';
+import { DEFAULT_SITE_ID } from '../common/multisite.constants';
 
 const ACTIVE_KITCHEN = ['NEW', 'PREPARING'];
 const ACTIVE_TABLE = ['OPEN'];
@@ -31,26 +32,61 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
     @Optional() private deliveryDriverGateway?: DeliveryDriverGateway,
   ) {}
 
+  private resolveSiteId(siteId?: string | null) {
+    return siteId || DEFAULT_SITE_ID;
+  }
+
+  private async readSiteSetting(key: string, db: any = this.prisma, siteId = DEFAULT_SITE_ID) {
+    const resolvedSiteId = this.resolveSiteId(siteId);
+    const setting = await db.siteSetting.findUnique({
+      where: { siteId_key: { siteId: resolvedSiteId, key } },
+    });
+    if (setting || resolvedSiteId !== DEFAULT_SITE_ID) return setting;
+    // La sede principal conserva los valores existentes hasta que se guarden
+    // por primera vez en SiteSetting. Ninguna sede nueva hereda AppSetting.
+    return db.appSetting.findUnique({ where: { key } });
+  }
+
+  private async writeSiteSetting(key: string, value: string, db: any = this.prisma, siteId = DEFAULT_SITE_ID) {
+    const resolvedSiteId = this.resolveSiteId(siteId);
+    return db.siteSetting.upsert({
+      where: { siteId_key: { siteId: resolvedSiteId, key } },
+      update: { value },
+      create: { siteId: resolvedSiteId, key, value },
+    });
+  }
+
+  private cookTimerKey(siteId: string, userId: string) {
+    return `${siteId}:${userId}`;
+  }
+
   async onModuleInit() {
-    // Purgar inmediatamente cualquier ticket de domicilio residual para que las tablets de cocina queden 100% limpias para mesas
-    await this.prisma.kitchenTicket.deleteMany({
+    const sites = await this.prisma.site.findMany({
+      where: { active: true },
+      select: { id: true },
+    }).catch(() => [{ id: DEFAULT_SITE_ID }]);
+    const siteIds = sites.length ? sites.map(site => site.id) : [DEFAULT_SITE_ID];
+
+    // Purgar tickets residuales por sede para no cruzar escrituras operativas.
+    await Promise.all(siteIds.map(siteId => this.prisma.kitchenTicket.deleteMany({
       where: {
+        siteId,
         OR: [
           { tableId: null },
           { order: { tableId: null } },
           { order: { orderType: { in: ['DELIVERY', 'PICKUP'] } } },
         ],
       },
-    }).catch(() => {});
+    }).catch(() => {})));
 
     // Una consulta compacta al arrancar restaura los temporizadores que hayan
     // quedado en PostgreSQL tras un despliegue. Después cada cambio programa su
     // propio vencimiento, sin sondear listas completas de forma periódica.
-    await Promise.all([
-      this.restoreCookBreakTimers('DINING').catch(() => {}),
-      this.restoreCookBreakTimers('DELIVERY').catch(() => {}),
-      this.restoreDiningDelayTimers().catch(() => {}),
-    ]);
+    await Promise.all(siteIds.flatMap(siteId => [
+      this.restoreCookBreakTimers('DINING', siteId).catch(() => {}),
+      this.restoreCookBreakTimers('DELIVERY', siteId).catch(() => {}),
+      this.restoreDiningDelayTimers(siteId).catch(() => {}),
+    ]));
   }
 
   onModuleDestroy() {
@@ -63,19 +99,20 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
     this.delayedDiningTicketIds.clear();
   }
 
-  private async restoreDiningDelayTimers() {
+  private async restoreDiningDelayTimers(siteId = DEFAULT_SITE_ID) {
     const tickets = await this.prisma.kitchenTicket.findMany({
       where: {
+        siteId: this.resolveSiteId(siteId),
         status: { in: ACTIVE_KITCHEN },
         tableId: { not: null },
         order: { orderType: 'LOCAL', tableId: { not: null } },
       },
-      select: { id: true, createdAt: true },
+      select: { id: true, siteId: true, createdAt: true },
     });
-    for (const ticket of tickets) this.scheduleDiningDelay(ticket.id, ticket.createdAt);
+    for (const ticket of tickets) this.scheduleDiningDelay(ticket.id, ticket.createdAt, ticket.siteId);
   }
 
-  private scheduleDiningDelay(ticketId: string, createdAt: Date | string | number) {
+  private scheduleDiningDelay(ticketId: string, createdAt: Date | string | number, siteId = DEFAULT_SITE_ID) {
     const previous = this.diningDelayTimers.get(ticketId);
     if (previous) clearTimeout(previous);
     this.diningDelayTimers.delete(ticketId);
@@ -84,7 +121,7 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
     const delay = Math.max(25, new Date(createdAt).getTime() + DINING_DELAY_MS - Date.now() + 25);
     const timer = setTimeout(() => {
       this.diningDelayTimers.delete(ticketId);
-      void this.emitDiningDelayIfActive(ticketId).catch(() => {});
+      void this.emitDiningDelayIfActive(ticketId, siteId).catch(() => {});
     }, delay);
     timer.unref?.();
     this.diningDelayTimers.set(ticketId, timer);
@@ -104,14 +141,16 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
       ACTIVE_KITCHEN.includes(ticket.status) &&
       (!ticket?.order?.orderType || ticket.order.orderType === 'LOCAL'),
     );
-    if (isDiningActive) this.scheduleDiningDelay(ticket.id, ticket.createdAt);
+    if (isDiningActive) this.scheduleDiningDelay(ticket.id, ticket.createdAt, this.resolveSiteId(ticket.siteId));
     else if (ticket?.id) this.clearDiningDelay(ticket.id);
   }
 
-  private async emitDiningDelayIfActive(ticketId: string) {
+  private async emitDiningDelayIfActive(ticketId: string, siteId = DEFAULT_SITE_ID) {
+    const resolvedSiteId = this.resolveSiteId(siteId);
     const ticket = await this.prisma.kitchenTicket.findFirst({
       where: {
         id: ticketId,
+        siteId: resolvedSiteId,
         status: { in: ACTIVE_KITCHEN },
         tableId: { not: null },
         order: { orderType: 'LOCAL', tableId: { not: null } },
@@ -130,17 +169,18 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
 
     const remaining = ticket.createdAt.getTime() + DINING_DELAY_MS - Date.now();
     if (remaining > 0) {
-      this.scheduleDiningDelay(ticket.id, ticket.createdAt);
+      this.scheduleDiningDelay(ticket.id, ticket.createdAt, resolvedSiteId);
       return;
     }
     if (this.delayedDiningTicketIds.has(ticket.id)) return;
     this.delayedDiningTicketIds.add(ticket.id);
-    this.socketGateway.emitDiningKitchenTicketDelayed(ticket);
+    this.socketGateway.emitDiningKitchenTicketDelayed(ticket, resolvedSiteId);
   }
 
-  private async restoreCookBreakTimers(channel: KitchenChannel) {
+  private async restoreCookBreakTimers(channel: KitchenChannel, siteId = DEFAULT_SITE_ID) {
     const settingKey = channel === 'DELIVERY' ? 'delivery_kitchen_cook_status' : 'kitchen_cook_status';
-    const setting = await this.prisma.appSetting.findUnique({ where: { key: settingKey } });
+    const resolvedSiteId = this.resolveSiteId(siteId);
+    const setting = await this.readSiteSetting(settingKey, this.prisma, resolvedSiteId);
     if (!setting) return;
 
     let statuses: Record<string, any> = {};
@@ -155,41 +195,46 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
     for (const [userId, status] of Object.entries(statuses)) {
       if (!status?.onBreak || !status?.breakUntil) continue;
       if (Number(status.breakUntil) <= now) hasExpired = true;
-      else this.scheduleCookBreakTimer(channel, userId, Number(status.breakUntil));
+      else this.scheduleCookBreakTimer(channel, userId, Number(status.breakUntil), resolvedSiteId);
     }
-    if (hasExpired) await this.enqueueCookBreakCheck(channel);
+    if (hasExpired) await this.enqueueCookBreakCheck(channel, resolvedSiteId);
   }
 
-  private scheduleCookBreakTimer(channel: KitchenChannel, userId: string, breakUntil?: number | null) {
+  private scheduleCookBreakTimer(channel: KitchenChannel, userId: string, breakUntil?: number | null, siteId = DEFAULT_SITE_ID) {
     const timers = channel === 'DELIVERY' ? this.deliveryCookBreakTimers : this.cookBreakTimers;
-    const previous = timers.get(userId);
+    const resolvedSiteId = this.resolveSiteId(siteId);
+    const timerKey = this.cookTimerKey(resolvedSiteId, userId);
+    const previous = timers.get(timerKey);
     if (previous) clearTimeout(previous);
-    timers.delete(userId);
+    timers.delete(timerKey);
     if (!breakUntil) return;
 
     const timer = setTimeout(() => {
-      timers.delete(userId);
-      void this.enqueueCookBreakCheck(channel).catch(() => {});
+      timers.delete(timerKey);
+      void this.enqueueCookBreakCheck(channel, resolvedSiteId).catch(() => {});
     }, Math.max(25, breakUntil - Date.now() + 25));
     timer.unref?.();
-    timers.set(userId, timer);
+    timers.set(timerKey, timer);
   }
 
-  private enqueueCookBreakCheck(channel: KitchenChannel) {
+  private enqueueCookBreakCheck(channel: KitchenChannel, siteId = DEFAULT_SITE_ID) {
+    const resolvedSiteId = this.resolveSiteId(siteId);
     if (channel === 'DELIVERY') {
-      const run = () => this.checkExpiredDeliveryCookBreaks();
+      const run = () => this.checkExpiredDeliveryCookBreaks(resolvedSiteId);
       this.deliveryCookBreakCheckQueue = this.deliveryCookBreakCheckQueue.then(run, run);
       return this.deliveryCookBreakCheckQueue;
     }
-    const run = () => this.checkExpiredCookBreaks();
+    const run = () => this.checkExpiredCookBreaks(resolvedSiteId);
     this.cookBreakCheckQueue = this.cookBreakCheckQueue.then(run, run);
     return this.cookBreakCheckQueue;
   }
 
-  private async getActiveClosing(userId: string, cashRegisterId?: string, db: Prisma.TransactionClient = this.prisma) {
+  private async getActiveClosing(userId: string, cashRegisterId?: string, db: Prisma.TransactionClient = this.prisma, siteId = DEFAULT_SITE_ID) {
+    const resolvedSiteId = this.resolveSiteId(siteId);
     if (cashRegisterId) {
       const specific = await db.cashClosing.findFirst({
         where: {
+          siteId: resolvedSiteId,
           cashRegisterId,
           isOpen: true,
           cashRegister: { purpose: { not: 'DELIVERY' } },
@@ -200,6 +245,7 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
     }
     const own = await db.cashClosing.findFirst({
       where: {
+        siteId: resolvedSiteId,
         userId,
         isOpen: true,
         cashRegister: { purpose: { not: 'DELIVERY' } },
@@ -211,6 +257,7 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
     // Priorizar un turno abierto de salón / caja principal (NUNCA caja de domicilios)
     const salonClosing = await db.cashClosing.findFirst({
       where: {
+        siteId: resolvedSiteId,
         isOpen: true,
         cashRegister: { purpose: { not: 'DELIVERY' } },
       },
@@ -412,16 +459,17 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
     return { ...table, total, paid, balance: Math.max(total - paid, 0), kitchenStatus, paymentStatus };
   }
 
-  async getShiftCutoff(db: Prisma.TransactionClient = this.prisma): Promise<Date> {
+  async getShiftCutoff(db: Prisma.TransactionClient = this.prisma, siteId = DEFAULT_SITE_ID): Promise<Date> {
+    const resolvedSiteId = this.resolveSiteId(siteId);
     const activeClosing = await db.cashClosing.findFirst({
-      where: { isOpen: true },
+      where: { siteId: resolvedSiteId, isOpen: true },
       orderBy: { shiftStart: 'desc' },
     });
     if (activeClosing?.shiftStart) {
       return activeClosing.shiftStart;
     }
     const lastClosed = await db.cashClosing.findFirst({
-      where: { isOpen: false },
+      where: { siteId: resolvedSiteId, isOpen: false },
       orderBy: { shiftEnd: 'desc' },
     });
     if (lastClosed?.shiftEnd) {
@@ -430,8 +478,9 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
     return new Date(Date.now() - 14 * 60 * 60 * 1000);
   }
 
-  async listTables(params: { status?: string; search?: string; waiterId?: string; currentShift?: string | boolean; summary?: string | boolean; view?: string }) {
-    const where: any = { orders: { some: {} } };
+  async listTables(params: { status?: string; search?: string; waiterId?: string; currentShift?: string | boolean; summary?: string | boolean; view?: string }, siteId = DEFAULT_SITE_ID) {
+    const resolvedSiteId = this.resolveSiteId(siteId);
+    const where: any = { siteId: resolvedSiteId, orders: { some: { siteId: resolvedSiteId } } };
     if (params.status === 'ALL') {
       // no status filter, return both active and closed
     } else if (params.status) {
@@ -449,7 +498,7 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
 
     // Filtrar únicamente mesas del turno actual (cuando se cierra caja, el historial de meseras inicia en 0)
     if (params.currentShift === 'true' || params.currentShift === true) {
-      const shiftCutoff = await this.getShiftCutoff();
+      const shiftCutoff = await this.getShiftCutoff(this.prisma, resolvedSiteId);
       where.AND = [
         ...(where.AND || []),
         {
@@ -492,19 +541,25 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
     return tables.map(t => this.summarizeTable(t));
   }
 
-  async findTable(id: string, db: Prisma.TransactionClient = this.prisma) {
-    const table = await db.diningTable.findUnique({ where: { id }, include: this.buildTableInclude() });
+  async findTable(id: string, db: Prisma.TransactionClient = this.prisma, siteId = DEFAULT_SITE_ID) {
+    const table = await db.diningTable.findFirst({ where: { id, siteId: this.resolveSiteId(siteId) }, include: this.buildTableInclude() });
     if (!table) throw new NotFoundException('Mesa no encontrada');
     return this.summarizeTable(table);
   }
 
   async createTable(data: { label: string; notes?: string; cashRegisterId?: string }, user: any) {
+    const siteId = this.resolveSiteId(user?.siteId);
     if (!data.label?.trim()) throw new BadRequestException('El nombre de la mesa es obligatorio');
-    const closing = await this.getActiveClosing(user.id, data.cashRegisterId);
-    const defaultRegister = await this.prisma.cashRegister.findFirst({ where: { active: true, purpose: { not: 'DELIVERY' } } });
+    if (data.cashRegisterId) {
+      const register = await this.prisma.cashRegister.findFirst({ where: { id: data.cashRegisterId, siteId, active: true } });
+      if (!register) throw new BadRequestException('La caja seleccionada no pertenece a esta sede.');
+    }
+    const closing = await this.getActiveClosing(user.id, data.cashRegisterId, this.prisma, siteId);
+    const defaultRegister = await this.prisma.cashRegister.findFirst({ where: { siteId, active: true, purpose: { not: 'DELIVERY' } } });
     const effectiveRegisterId = closing?.cashRegisterId || data.cashRegisterId || defaultRegister?.id || null;
     const table = await this.prisma.diningTable.create({
       data: {
+        siteId,
         label: data.label.trim(),
         notes: data.notes,
         openedById: user.id,
@@ -513,36 +568,37 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
       },
       include: this.buildTableInclude(),
     });
-    this.socketGateway.emitTableCreated(this.summarizeTable(table));
+    this.socketGateway.emitTableCreated(this.summarizeTable(table), siteId);
     return this.summarizeTable(table);
   }
 
   async createTableOrder(data: any, user: any) {
+    const siteId = this.resolveSiteId(user?.siteId);
     const clientMutationId = data.clientMutationId || randomUUID();
     const tickets: any[] = [];
     const result = await this.prisma.$transaction(async tx => {
       await lockOperation(tx);
-      const existing = await tx.order.findUnique({ where: { clientMutationId }, include: this.buildOrderInclude() });
+      const existing = await tx.order.findFirst({ where: { siteId, clientMutationId }, include: this.buildOrderInclude() });
       if (existing) {
         if (existing.waiterId !== user.id || !existing.tableId) throw new BadRequestException('El identificador del pedido ya está en uso');
-        return { table: await this.findTable(existing.tableId, tx), order: existing, replay: true };
+        return { table: await this.findTable(existing.tableId, tx, siteId), order: existing, replay: true };
       }
       let label = typeof data.tableLabel === 'string' ? data.tableLabel.trim() : '';
       if (!data.tableId && !label) {
-        const count = await tx.diningTable.count({ where: { status: 'OPEN' } });
+        const count = await tx.diningTable.count({ where: { siteId, status: 'OPEN' } });
         label = `Mesa ${count + 1}`;
       }
       if (label.length > 80) label = label.slice(0, 80);
-      let table = data.tableId ? await tx.diningTable.findUnique({ where: { id: data.tableId } }) : null;
+      let table = data.tableId ? await tx.diningTable.findFirst({ where: { id: data.tableId, siteId } }) : null;
       if (data.tableId && !table) throw new NotFoundException('Cuenta no encontrada');
       if (table && table.status !== 'OPEN') throw new BadRequestException('La cuenta ya está cerrada');
-      const closing = await this.getActiveClosing(user.id, table?.cashRegisterId || data.cashRegisterId, tx);
+      const closing = await this.getActiveClosing(user.id, table?.cashRegisterId || data.cashRegisterId, tx, siteId);
       if (!closing) throw new BadRequestException('Abre una caja antes de enviar pedidos');
-      const defaultRegister = await tx.cashRegister.findFirst({ where: { active: true, purpose: { not: 'DELIVERY' } } });
+      const defaultRegister = await tx.cashRegister.findFirst({ where: { siteId, active: true, purpose: { not: 'DELIVERY' } } });
       const effectiveRegisterId = table?.cashRegisterId || closing.cashRegisterId || data.cashRegisterId || defaultRegister?.id || null;
       if (!table) {
         table = await tx.diningTable.create({ data: {
-          label, openedById: user.id, cashRegisterId: effectiveRegisterId, cashClosingId: closing.id,
+          siteId, label, openedById: user.id, cashRegisterId: effectiveRegisterId, cashClosingId: closing.id,
         } });
       } else if (!table.cashRegisterId && effectiveRegisterId) {
         await tx.diningTable.update({
@@ -551,7 +607,7 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
         });
         table.cashRegisterId = effectiveRegisterId;
       }
-      if (await tx.payment.count({ where: { order: { tableId: table.id }, status: 'PENDING_REVIEW' } })) {
+      if (await tx.payment.count({ where: { order: { siteId, tableId: table.id }, status: 'PENDING_REVIEW' } })) {
         throw new BadRequestException('Espera a que caja revise el pago antes de agregar productos');
       }
       const order = await this.ordersService.createWithinTransaction({
@@ -560,25 +616,26 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
         waiterId: user.id, userId: user.id, userRole: user.role, orderType: 'LOCAL',
         source: data.offline ? 'OFFLINE_TABLE' : 'TABLE', paymentMethod: 'CASH',
         cashRegisterId: table.cashRegisterId || effectiveRegisterId, tableId: table.id, clientMutationId,
+        siteId,
       }, tx);
-      await this.createKitchenTickets(order.id, user.id, false, undefined, undefined, undefined, tx, tickets);
-      return { table: await this.findTable(table.id, tx), order, replay: false };
+      await this.createKitchenTickets(order.id, user.id, false, undefined, undefined, undefined, tx, tickets, siteId);
+      return { table: await this.findTable(table.id, tx, siteId), order, replay: false };
     }, operationTransaction);
     if (!result.replay) {
       tickets.forEach(event => {
         this.syncDiningDelayTimer(event.ticket);
-        event.created ? this.socketGateway.emitKitchenTicketCreated(event.ticket) : this.socketGateway.emitKitchenTicketUpdated(event.ticket);
+        event.created ? this.socketGateway.emitKitchenTicketCreated(event.ticket, siteId) : this.socketGateway.emitKitchenTicketUpdated(event.ticket, siteId);
       });
-      this.socketGateway.server.emit('tableOrderSubmitted', result);
-      this.socketGateway.emitTableUpdated(result.table);
-      this.socketGateway.server.emit('cashRegistersChanged');
+      this.socketGateway.emitToSite(siteId, 'tableOrderSubmitted', result);
+      this.socketGateway.emitTableUpdated(result.table, siteId);
+      this.socketGateway.emitToSite(siteId, 'cashRegistersChanged');
       await this.ordersService.notifyCreated(result.order);
     }
-    this.socketGateway.server.to(`user:${user.id}`).emit('offlineOrderSynced', result.order);
+    this.socketGateway.emitToSiteUser(siteId, user.id, 'offlineOrderSynced', result.order);
     return { table: result.table, order: result.order };
   }
 
-  private async buildChangeSummary(before: any[], after: any[], db: Prisma.TransactionClient = this.prisma) {
+  private async buildChangeSummary(before: any[], after: any[], db: Prisma.TransactionClient = this.prisma, siteId = DEFAULT_SITE_ID) {
     const key = (item: any) => `${item.menuItemId}_${(item.notes || '').trim().toLowerCase()}`;
     const beforeMap = new Map(before.map(item => [key(item), item]));
     const afterMap = new Map(after.map(item => [key(item), item]));
@@ -587,7 +644,7 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
 
     // Resolver nombres reales de productos para items nuevos
     const missingIds = after.filter(a => !before.some(b => b.menuItemId === a.menuItemId)).map(a => a.menuItemId);
-    const resolvedNewItems = missingIds.length > 0 ? await db.menuItem.findMany({ where: { id: { in: missingIds } } }) : [];
+    const resolvedNewItems = missingIds.length > 0 ? await db.menuItem.findMany({ where: { id: { in: missingIds }, siteId } }) : [];
     const newItemsNameMap = new Map(resolvedNewItems.map(m => [m.id, m.name]));
 
     const getName = (item: any) => {
@@ -646,44 +703,45 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
   }
 
   async updateTableOrder(orderId: string, data: any, user: any) {
+    const siteId = this.resolveSiteId(user?.siteId);
     const tickets: any[] = [];
     const result = await this.prisma.$transaction(async tx => {
       await lockOperation(tx);
-      const existing = await tx.order.findUnique({
-        where: { id: orderId },
+      const existing = await tx.order.findFirst({
+        where: { id: orderId, siteId },
         include: { items: { include: { menuItem: { include: { category: true } } } }, diningTable: true },
       });
       if (!existing?.tableId) throw new NotFoundException('Pedido de mesa no encontrado');
       if (existing.diningTable?.status !== 'OPEN') throw new BadRequestException('La cuenta está cerrada');
-      const { summary, changeMap } = await this.buildChangeSummary(existing.items, data.items || [], tx);
+      const { summary, changeMap } = await this.buildChangeSummary(existing.items, data.items || [], tx, siteId);
       const updateData = {
         customerName: existing.customerName, customerPhone: existing.customerPhone,
         customerAddress: existing.customerAddress, notes: data.notes ?? existing.notes,
         items: (data.items || []).map((item: any) => ({ menuItemId: item.menuItemId, quantity: item.quantity, notes: item.notes })),
         paymentMethod: existing.paymentMethod, orderType: 'LOCAL',
       };
-      const { updated } = await this.ordersService.updateWithinTransaction(orderId, updateData, tx);
-      await this.createKitchenTickets(orderId, user.id, true, summary, changeMap, existing.items, tx, tickets);
-      return { table: await this.findTable(existing.tableId, tx), order: updated, changeSummary: summary };
+      const { updated } = await this.ordersService.updateWithinTransaction(orderId, updateData, tx, user, siteId);
+      await this.createKitchenTickets(orderId, user.id, true, summary, changeMap, existing.items, tx, tickets, siteId);
+      return { table: await this.findTable(existing.tableId, tx, siteId), order: updated, changeSummary: summary };
     }, operationTransaction);
     tickets.forEach(event => {
       this.syncDiningDelayTimer(event.ticket);
       if (event.isEdited) {
-        this.socketGateway.emitKitchenTicketEdited(event.ticket);
+        this.socketGateway.emitKitchenTicketEdited(event.ticket, siteId);
       } else if (event.created) {
-        this.socketGateway.emitKitchenTicketCreated(event.ticket);
+        this.socketGateway.emitKitchenTicketCreated(event.ticket, siteId);
       } else {
-        this.socketGateway.emitKitchenTicketUpdated(event.ticket);
+        this.socketGateway.emitKitchenTicketUpdated(event.ticket, siteId);
       }
     });
-    this.socketGateway.server.emit('tableOrderEdited', { orderId, changeSummary: result.changeSummary });
-    this.socketGateway.emitTableUpdated(result.table);
-    this.socketGateway.server.emit('cashRegistersChanged');
-    this.socketGateway.server.emit('orderUpdated', result.order);
+    this.socketGateway.emitToSite(siteId, 'tableOrderEdited', { siteId, orderId, changeSummary: result.changeSummary });
+    this.socketGateway.emitTableUpdated(result.table, siteId);
+    this.socketGateway.emitToSite(siteId, 'cashRegistersChanged');
+    this.socketGateway.emitToSite(siteId, 'orderUpdated', result.order);
 
     // Auto-reimpresión en cocina y caja al editar pedido de mesa
     try {
-      await this.ordersService.printOrder(orderId);
+      await this.ordersService.printOrder(orderId, undefined, siteId);
     } catch (printErr) {
       // no-op
     }
@@ -691,16 +749,18 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
     return result;
   }
 
-  private async getStations(db: Prisma.TransactionClient = this.prisma) {
+  private async getStations(db: Prisma.TransactionClient = this.prisma, siteId = DEFAULT_SITE_ID) {
+    const resolvedSiteId = this.resolveSiteId(siteId);
     let stations = await db.kitchenStation.findMany({
-      where: { active: true },
+      where: { siteId: resolvedSiteId, active: true },
       include: { categories: true, users: { select: { id: true, name: true } } },
       orderBy: [{ priority: 'asc' }, { name: 'asc' }],
     });
     if (stations.length === 0) {
-      const cats = await db.menuCategory.findMany({ where: { active: true }, take: 2 });
+      const cats = await db.menuCategory.findMany({ where: { siteId: resolvedSiteId, active: true }, take: 2 });
       const created = await db.kitchenStation.create({
         data: {
+          siteId: resolvedSiteId,
           name: 'Cocina general',
           priority: 999,
           categories: cats.length ? { connect: cats.map(c => ({ id: c.id })) } : undefined,
@@ -712,9 +772,10 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
     return stations;
   }
 
-  private async pickCook(stationId: string, db: Prisma.TransactionClient = this.prisma) {
-    const station = await db.kitchenStation.findUnique({
-      where: { id: stationId },
+  private async pickCook(stationId: string, db: Prisma.TransactionClient = this.prisma, siteId = DEFAULT_SITE_ID) {
+    const resolvedSiteId = this.resolveSiteId(siteId);
+    const station = await db.kitchenStation.findFirst({
+      where: { id: stationId, siteId: resolvedSiteId },
       include: { users: true },
     });
     let stationUsers = (station?.users || []).filter(u => u.active);
@@ -722,18 +783,18 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
       // Fallback: Si la estación no tiene cocineros vinculados explícitamente,
       // buscar todos los usuarios activos con rol KITCHEN para garantizar la alternancia 1 a 1
       stationUsers = await db.user.findMany({
-        where: { role: 'KITCHEN', active: true },
+        where: { role: 'KITCHEN', active: true, siteMemberships: { some: { siteId: resolvedSiteId, active: true } } },
       });
     }
     if (stationUsers.length === 0) return null;
 
     // Domicilios y salón mantienen disponibilidades separadas. Así, una pausa
     // tomada desde el módulo de domicilios no altera la cocina de mesas.
-    const routingSettings = await this.getKitchenSettings(db);
+    const routingSettings = await this.getKitchenSettings(db, resolvedSiteId);
     const isDeliveryStation = routingSettings.stationChannels?.[stationId] === 'DELIVERY';
     const cookStatuses = isDeliveryStation
-      ? await this.getDeliveryCookStatuses(db)
-      : await this.getCookStatuses(db);
+      ? await this.getDeliveryCookStatuses(db, resolvedSiteId)
+      : await this.getCookStatuses(db, resolvedSiteId);
     const now = Date.now();
 
     // Filtrar cocineros que estén activos Y no estén en cena activa
@@ -755,7 +816,7 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
 
     // Ventana del turno actual para el reparto equitativo 50/50:
     // Inicia desde la apertura de caja actual o el último cierre de caja (para reiniciar el conteo a 0 tras cerrar caja)
-    const shiftWindow = await this.getShiftCutoff(db);
+    const shiftWindow = await this.getShiftCutoff(db, resolvedSiteId);
 
     const userIds = users.map(user => user.id);
     // Dos agregaciones cubren a todos los cocineros de la estación. Antes se
@@ -766,6 +827,7 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
         by: ['assignedToId'],
         where: {
           stationId,
+          siteId: resolvedSiteId,
           assignedToId: { in: userIds },
           createdAt: { gte: shiftWindow },
           status: { not: 'CANCELLED' },
@@ -777,6 +839,7 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
         by: ['assignedToId'],
         where: {
           stationId,
+          siteId: resolvedSiteId,
           assignedToId: { in: userIds },
           status: { in: ACTIVE_KITCHEN },
         },
@@ -835,7 +898,7 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
     );
   }
 
-  async getKitchenSettings(db: Prisma.TransactionClient = this.prisma) {
+  async getKitchenSettings(db: Prisma.TransactionClient = this.prisma, siteId = DEFAULT_SITE_ID) {
     const defaults = {
       smartDrinkRouting: false,
       multiStationDrinkTarget: 'none',
@@ -844,7 +907,7 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
       deliveryAutoPrint: true,
       stationChannels: {} as Record<string, 'DINING' | 'DELIVERY' | 'BOTH'>,
     };
-    const setting = await db.appSetting.findUnique({ where: { key: 'kitchen_routing_settings' } });
+    const setting = await this.readSiteSetting('kitchen_routing_settings', db, siteId);
     if (setting) {
       try {
         const parsed = JSON.parse(setting.value);
@@ -854,8 +917,9 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
     return defaults;
   }
 
-  async updateKitchenSettings(data: any) {
-    const current = await this.getKitchenSettings();
+  async updateKitchenSettings(data: any, siteId = DEFAULT_SITE_ID) {
+    const resolvedSiteId = this.resolveSiteId(siteId);
+    const current = await this.getKitchenSettings(this.prisma, resolvedSiteId);
     const allowedMode = ['PRINT', 'TABLET', 'BOTH'].includes(data?.deliveryKitchenMode)
       ? data.deliveryKitchenMode
       : current.deliveryKitchenMode;
@@ -866,7 +930,7 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
         )
       : current.stationChannels;
     if (data?.splitByChannel !== false && Object.keys(stationChannels || {}).length > 0) {
-      const activeStations = await this.prisma.kitchenStation.findMany({ where: { active: true }, select: { id: true } });
+      const activeStations = await this.prisma.kitchenStation.findMany({ where: { siteId: resolvedSiteId, active: true }, select: { id: true } });
       const hasDiningStation = activeStations.some(station => ['DINING', 'BOTH'].includes(stationChannels[station.id]));
       const hasDeliveryStation = activeStations.some(station => ['DELIVERY', 'BOTH'].includes(stationChannels[station.id]));
       if (!hasDiningStation) throw new BadRequestException('Debe quedar al menos una estación activa para el salón.');
@@ -883,18 +947,15 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
       ...(typeof data?.deliveryAutoPrint === 'boolean' ? { deliveryAutoPrint: data.deliveryAutoPrint } : {}),
       stationChannels,
     };
-    const updated = await this.prisma.appSetting.upsert({
-      where: { key: 'kitchen_routing_settings' },
-      update: { value: JSON.stringify(next) },
-      create: { key: 'kitchen_routing_settings', value: JSON.stringify(next) },
-    });
+    const updated = await this.writeSiteSetting('kitchen_routing_settings', JSON.stringify(next), this.prisma, resolvedSiteId);
     const result = JSON.parse(updated.value);
-    this.socketGateway.server.emit('kitchenSettingsUpdated', result);
+    this.socketGateway.emitToSite(resolvedSiteId, 'kitchenSettingsUpdated', result);
     return result;
   }
 
-  async checkExpiredCookBreaks() {
-    const setting = await this.prisma.appSetting.findUnique({ where: { key: 'kitchen_cook_status' } }).catch(() => null);
+  async checkExpiredCookBreaks(siteId = DEFAULT_SITE_ID) {
+    const resolvedSiteId = this.resolveSiteId(siteId);
+    const setting = await this.readSiteSetting('kitchen_cook_status', this.prisma, resolvedSiteId).catch(() => null);
     if (!setting) return;
     let statuses: Record<string, any> = {};
     try {
@@ -907,7 +968,7 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
     const now = Date.now();
     for (const [userId, status] of Object.entries(statuses)) {
       if (status && status.onBreak && status.breakUntil && now >= status.breakUntil) {
-        this.scheduleCookBreakTimer('DINING', userId, null);
+        this.scheduleCookBreakTimer('DINING', userId, null, resolvedSiteId);
         const u = await this.prisma.user.findUnique({ where: { id: userId }, select: { name: true } }).catch(() => null);
         const userName = u?.name || 'Cocinero';
         const breakReason = status.breakReason || 'Cena';
@@ -926,20 +987,22 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
         };
 
         // 1. Emitir Socket a TODOS los clientes conectados sin excepción
-        this.socketGateway.server.emit('cookBreakFinished', payload);
-
-        // 2. Emitir específicamente al canal de administradores
-        this.socketGateway.server.to('admins').emit('cookBreakFinished', payload);
+        this.socketGateway.emitToSite(resolvedSiteId, 'cookBreakFinished', { siteId: resolvedSiteId, ...payload });
 
         // 3. Crear notificación en base de datos para administradores y cajeros
         try {
           const admins = await this.prisma.user.findMany({
-            where: { role: { in: ['ADMIN', 'SUPERADMIN', 'CASHIER'] }, active: true },
+            where: {
+              role: { in: ['ADMIN', 'SUPERADMIN', 'CASHIER'] },
+              active: true,
+              siteMemberships: { some: { siteId: resolvedSiteId, active: true } },
+            },
             select: { id: true },
           });
           for (const admin of admins) {
             await this.prisma.notification.create({
               data: {
+                siteId: resolvedSiteId,
                 userId: admin.id,
                 title: `⏰ Tiempo de ${breakReason.toLowerCase()} terminado`,
                 type: 'KITCHEN_BREAK',
@@ -952,16 +1015,12 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
     }
 
     if (changed) {
-      await this.prisma.appSetting.upsert({
-        where: { key: 'kitchen_cook_status' },
-        update: { value: JSON.stringify(statuses) },
-        create: { key: 'kitchen_cook_status', value: JSON.stringify(statuses) },
-      }).catch(() => {});
-      this.socketGateway.server.emit('kitchenCookStatusChanged', statuses);
+      await this.writeSiteSetting('kitchen_cook_status', JSON.stringify(statuses), this.prisma, resolvedSiteId).catch(() => {});
+      this.socketGateway.emitToSite(resolvedSiteId, 'kitchenCookStatusChanged', statuses);
     }
   }
 
-  async getCookStatuses(db: Prisma.TransactionClient = this.prisma): Promise<Record<string, {
+  async getCookStatuses(db: Prisma.TransactionClient = this.prisma, siteId = DEFAULT_SITE_ID): Promise<Record<string, {
     active: boolean;
     onBreak: boolean;
     breakMinutes?: number;
@@ -970,7 +1029,8 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
     breakReason?: string;
     notifiedFinished?: boolean;
   }>> {
-    const setting = await db.appSetting.findUnique({ where: { key: 'kitchen_cook_status' } });
+    const resolvedSiteId = this.resolveSiteId(siteId);
+    const setting = await this.readSiteSetting('kitchen_cook_status', db, resolvedSiteId);
     let statuses: Record<string, any> = {};
     if (setting) {
       try {
@@ -982,7 +1042,7 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
     const now = Date.now();
     for (const [userId, status] of Object.entries(statuses)) {
       if (status && status.onBreak && status.breakUntil && now >= status.breakUntil) {
-        this.scheduleCookBreakTimer('DINING', userId, null);
+        this.scheduleCookBreakTimer('DINING', userId, null, resolvedSiteId);
         status.onBreak = false;
         status.notifiedFinished = true;
         changed = true;
@@ -990,19 +1050,16 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
     }
 
     if (changed) {
-      await this.prisma.appSetting.upsert({
-        where: { key: 'kitchen_cook_status' },
-        update: { value: JSON.stringify(statuses) },
-        create: { key: 'kitchen_cook_status', value: JSON.stringify(statuses) },
-      }).catch(() => {});
-      this.socketGateway.server.emit('kitchenCookStatusChanged', statuses);
+      await this.writeSiteSetting('kitchen_cook_status', JSON.stringify(statuses), db, resolvedSiteId).catch(() => {});
+      this.socketGateway.emitToSite(resolvedSiteId, 'kitchenCookStatusChanged', statuses);
     }
 
     return statuses;
   }
 
-  async checkExpiredDeliveryCookBreaks() {
-    const setting = await this.prisma.appSetting.findUnique({ where: { key: 'delivery_kitchen_cook_status' } }).catch(() => null);
+  async checkExpiredDeliveryCookBreaks(siteId = DEFAULT_SITE_ID) {
+    const resolvedSiteId = this.resolveSiteId(siteId);
+    const setting = await this.readSiteSetting('delivery_kitchen_cook_status', this.prisma, resolvedSiteId).catch(() => null);
     if (!setting) return;
     let statuses: Record<string, any> = {};
     try {
@@ -1015,7 +1072,7 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
     const now = Date.now();
     for (const [userId, status] of Object.entries(statuses)) {
       if (!status?.onBreak || !status?.breakUntil || now < status.breakUntil) continue;
-      this.scheduleCookBreakTimer('DELIVERY', userId, null);
+      this.scheduleCookBreakTimer('DELIVERY', userId, null, resolvedSiteId);
       status.onBreak = false;
       status.notifiedFinished = true;
       changed = true;
@@ -1028,21 +1085,17 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
         breakMinutes: status.breakMinutes || 15,
         channel: 'DELIVERY',
       };
-      this.socketGateway.server.emit('deliveryCookBreakFinished', payload);
-      this.socketGateway.server.emit('cookBreakFinished', payload);
+      this.socketGateway.emitToSite(resolvedSiteId, 'deliveryCookBreakFinished', { siteId: resolvedSiteId, ...payload });
+      this.socketGateway.emitToSite(resolvedSiteId, 'cookBreakFinished', { siteId: resolvedSiteId, ...payload });
     }
 
     if (changed) {
-      await this.prisma.appSetting.upsert({
-        where: { key: 'delivery_kitchen_cook_status' },
-        update: { value: JSON.stringify(statuses) },
-        create: { key: 'delivery_kitchen_cook_status', value: JSON.stringify(statuses) },
-      });
-      this.socketGateway.server.emit('deliveryKitchenCookStatusChanged', statuses);
+      await this.writeSiteSetting('delivery_kitchen_cook_status', JSON.stringify(statuses), this.prisma, resolvedSiteId);
+      this.socketGateway.emitToSite(resolvedSiteId, 'deliveryKitchenCookStatusChanged', statuses);
     }
   }
 
-  async getDeliveryCookStatuses(db: Prisma.TransactionClient = this.prisma): Promise<Record<string, {
+  async getDeliveryCookStatuses(db: Prisma.TransactionClient = this.prisma, siteId = DEFAULT_SITE_ID): Promise<Record<string, {
     active: boolean;
     onBreak: boolean;
     breakMinutes?: number;
@@ -1051,7 +1104,8 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
     breakReason?: string;
     notifiedFinished?: boolean;
   }>> {
-    const setting = await db.appSetting.findUnique({ where: { key: 'delivery_kitchen_cook_status' } });
+    const resolvedSiteId = this.resolveSiteId(siteId);
+    const setting = await this.readSiteSetting('delivery_kitchen_cook_status', db, resolvedSiteId);
     let statuses: Record<string, any> = {};
     if (setting) {
       try {
@@ -1063,25 +1117,24 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
     let changed = false;
     for (const [userId, status] of Object.entries(statuses)) {
       if (status?.onBreak && status?.breakUntil && now >= status.breakUntil) {
-        this.scheduleCookBreakTimer('DELIVERY', userId, null);
+        this.scheduleCookBreakTimer('DELIVERY', userId, null, resolvedSiteId);
         status.onBreak = false;
         status.notifiedFinished = true;
         changed = true;
       }
     }
     if (changed) {
-      await db.appSetting.upsert({
-        where: { key: 'delivery_kitchen_cook_status' },
-        update: { value: JSON.stringify(statuses) },
-        create: { key: 'delivery_kitchen_cook_status', value: JSON.stringify(statuses) },
-      });
-      this.socketGateway.server.emit('deliveryKitchenCookStatusChanged', statuses);
+      await this.writeSiteSetting('delivery_kitchen_cook_status', JSON.stringify(statuses), db, resolvedSiteId);
+      this.socketGateway.emitToSite(resolvedSiteId, 'deliveryKitchenCookStatusChanged', statuses);
     }
     return statuses;
   }
 
-  async updateDeliveryCookStatus(userId: string, data: { active?: boolean; onBreak?: boolean; breakMinutes?: number; breakReason?: string }) {
-    const statuses = await this.getDeliveryCookStatuses();
+  async updateDeliveryCookStatus(userId: string, data: { active?: boolean; onBreak?: boolean; breakMinutes?: number; breakReason?: string }, siteId = DEFAULT_SITE_ID) {
+    const resolvedSiteId = this.resolveSiteId(siteId);
+    const membership = await this.prisma.userSiteMembership.findFirst({ where: { userId, siteId: resolvedSiteId, active: true } });
+    if (!membership) throw new NotFoundException('Cocinero no encontrado en esta sede');
+    const statuses = await this.getDeliveryCookStatuses(this.prisma, resolvedSiteId);
     const existing = statuses[userId] || { active: true, onBreak: false };
 
     if (data.active !== undefined) existing.active = Boolean(data.active);
@@ -1100,14 +1153,10 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
     }
     statuses[userId] = existing;
 
-    const updated = await this.prisma.appSetting.upsert({
-      where: { key: 'delivery_kitchen_cook_status' },
-      update: { value: JSON.stringify(statuses) },
-      create: { key: 'delivery_kitchen_cook_status', value: JSON.stringify(statuses) },
-    });
+    const updated = await this.writeSiteSetting('delivery_kitchen_cook_status', JSON.stringify(statuses), this.prisma, resolvedSiteId);
     const result = JSON.parse(updated.value);
-    this.scheduleCookBreakTimer('DELIVERY', userId, existing.onBreak ? existing.breakUntil : null);
-    this.socketGateway.server.emit('deliveryKitchenCookStatusChanged', result);
+    this.scheduleCookBreakTimer('DELIVERY', userId, existing.onBreak ? existing.breakUntil : null, resolvedSiteId);
+    this.socketGateway.emitToSite(resolvedSiteId, 'deliveryKitchenCookStatusChanged', result);
 
     const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { name: true } });
     if (data.onBreak === true) {
@@ -1119,18 +1168,21 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
         breakReason: existing.breakReason,
         channel: 'DELIVERY',
       };
-      this.socketGateway.server.emit('deliveryCookBreakStarted', payload);
-      this.socketGateway.server.emit('cookBreakStarted', payload);
+      this.socketGateway.emitToSite(resolvedSiteId, 'deliveryCookBreakStarted', { siteId: resolvedSiteId, ...payload });
+      this.socketGateway.emitToSite(resolvedSiteId, 'cookBreakStarted', { siteId: resolvedSiteId, ...payload });
     } else if (data.onBreak === false) {
       const payload = { userId, userName: user?.name || 'Cocinero', channel: 'DELIVERY' };
-      this.socketGateway.server.emit('deliveryCookBreakReincorporated', payload);
-      this.socketGateway.server.emit('cookBreakReincorporated', payload);
+      this.socketGateway.emitToSite(resolvedSiteId, 'deliveryCookBreakReincorporated', { siteId: resolvedSiteId, ...payload });
+      this.socketGateway.emitToSite(resolvedSiteId, 'cookBreakReincorporated', { siteId: resolvedSiteId, ...payload });
     }
     return result;
   }
 
-  async updateCookStatus(userId: string, data: { active?: boolean; onBreak?: boolean; breakMinutes?: number; breakReason?: string }) {
-    const statuses = await this.getCookStatuses();
+  async updateCookStatus(userId: string, data: { active?: boolean; onBreak?: boolean; breakMinutes?: number; breakReason?: string }, siteId = DEFAULT_SITE_ID) {
+    const resolvedSiteId = this.resolveSiteId(siteId);
+    const membership = await this.prisma.userSiteMembership.findFirst({ where: { userId, siteId: resolvedSiteId, active: true } });
+    if (!membership) throw new NotFoundException('Cocinero no encontrado en esta sede');
+    const statuses = await this.getCookStatuses(this.prisma, resolvedSiteId);
     const existing = statuses[userId] || { active: true, onBreak: false };
 
     if (data.active !== undefined) {
@@ -1153,19 +1205,16 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
 
     statuses[userId] = existing;
 
-    const updated = await this.prisma.appSetting.upsert({
-      where: { key: 'kitchen_cook_status' },
-      update: { value: JSON.stringify(statuses) },
-      create: { key: 'kitchen_cook_status', value: JSON.stringify(statuses) },
-    });
+    const updated = await this.writeSiteSetting('kitchen_cook_status', JSON.stringify(statuses), this.prisma, resolvedSiteId);
 
     const result = JSON.parse(updated.value);
-    this.scheduleCookBreakTimer('DINING', userId, existing.onBreak ? existing.breakUntil : null);
-    this.socketGateway.server.emit('kitchenCookStatusChanged', result);
+    this.scheduleCookBreakTimer('DINING', userId, existing.onBreak ? existing.breakUntil : null, resolvedSiteId);
+    this.socketGateway.emitToSite(resolvedSiteId, 'kitchenCookStatusChanged', result);
 
     const u = await this.prisma.user.findUnique({ where: { id: userId }, select: { name: true } });
     if (data.onBreak === true) {
-      this.socketGateway.server.emit('cookBreakStarted', {
+      this.socketGateway.emitToSite(resolvedSiteId, 'cookBreakStarted', {
+        siteId: resolvedSiteId,
         userId,
         userName: u?.name || 'Cocinero',
         breakMinutes: existing.breakMinutes,
@@ -1173,7 +1222,8 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
         breakReason: existing.breakReason,
       });
     } else if (data.onBreak === false) {
-      this.socketGateway.server.emit('cookBreakReincorporated', {
+      this.socketGateway.emitToSite(resolvedSiteId, 'cookBreakReincorporated', {
+        siteId: resolvedSiteId,
         userId,
         userName: u?.name || 'Cocinero',
       });
@@ -1182,15 +1232,19 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
     return result;
   }
 
-  async deleteStation(id: string) {
+  async deleteStation(id: string, siteId = DEFAULT_SITE_ID) {
+    const resolvedSiteId = this.resolveSiteId(siteId);
+    const station = await this.prisma.kitchenStation.findFirst({ where: { id, siteId: resolvedSiteId } });
+    if (!station) throw new NotFoundException('Estación no encontrada');
     await this.prisma.kitchenStation.delete({ where: { id } });
-    this.socketGateway.server.emit('kitchenStationsChanged', { id, deleted: true });
+    this.socketGateway.emitToSite(resolvedSiteId, 'kitchenStationsChanged', { siteId: resolvedSiteId, id, deleted: true });
     return { success: true };
   }
 
-  async createKitchenTickets(orderId: string, actorId?: string, isEdited = false, changeSummary?: string, changeMap?: Map<string, any>, removedCandidateItems?: any[], db: Prisma.TransactionClient = this.prisma, events?: any[]) {
-    const order = await db.order.findUnique({
-      where: { id: orderId },
+  async createKitchenTickets(orderId: string, actorId?: string, isEdited = false, changeSummary?: string, changeMap?: Map<string, any>, removedCandidateItems?: any[], db: Prisma.TransactionClient = this.prisma, events?: any[], siteId = DEFAULT_SITE_ID) {
+    const resolvedSiteId = this.resolveSiteId(siteId);
+    const order = await db.order.findFirst({
+      where: { id: orderId, siteId: resolvedSiteId },
       include: { items: { include: { menuItem: { include: { category: true } } } }, diningTable: true, waiter: true },
     });
     if (!order) throw new NotFoundException('Pedido no encontrado');
@@ -1202,8 +1256,8 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
     }
 
     const isSalon = !!(order.tableId || order.orderType === 'DINE_IN');
-    const allActiveStations = await this.getStations(db);
-    const settings = await this.getKitchenSettings(db);
+    const allActiveStations = await this.getStations(db, resolvedSiteId);
+    const settings = await this.getKitchenSettings(db, resolvedSiteId);
 
     // 1. Filtrar estaciones según canal (Salón vs Domicilios) si existen diferenciadas
     let eligibleStations = allActiveStations;
@@ -1310,6 +1364,7 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
         existingTicket = await db.kitchenTicket.findFirst({
           where: {
             orderId,
+            siteId: resolvedSiteId,
             stationId,
             status: { in: ['NEW', 'PREPARING'] },
           },
@@ -1408,7 +1463,7 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
 
         if (deltaItemsData.length === 0) continue;
 
-        const assignedToId = existingTicket?.assignedToId || await this.pickCook(stationId, db);
+        const assignedToId = existingTicket?.assignedToId || await this.pickCook(stationId, db, resolvedSiteId);
         const deltaSummary = deltaItemsData.map(item => {
           if (item.changeType === 'ADDED') return `🟢 Agregado: +${item.quantity}x ${item.nameSnapshot}`;
           if (item.changeType === 'REMOVED') return `🔴 Retirado: -${item.quantity}x ${item.nameSnapshot}`;
@@ -1416,6 +1471,7 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
         }).join(' | ');
         const editedTicket = await db.kitchenTicket.create({
           data: {
+            siteId: resolvedSiteId,
             orderId,
             tableId: order.tableId,
             stationId,
@@ -1431,8 +1487,8 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
         if (events) {
           events.push({ created: true, ticket: editedTicket, isEdited: true });
         } else {
-          this.socketGateway.emitKitchenTicketCreated(editedTicket);
-          this.socketGateway.emitKitchenTicketEdited(editedTicket);
+          this.socketGateway.emitKitchenTicketCreated(editedTicket, resolvedSiteId);
+          this.socketGateway.emitKitchenTicketEdited(editedTicket, resolvedSiteId);
         }
         continue;
       }
@@ -1551,7 +1607,7 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
           newStatus = 'NEW';
         }
 
-        const assignedToId = existingTicket.assignedToId || await this.pickCook(stationId, db);
+        const assignedToId = existingTicket.assignedToId || await this.pickCook(stationId, db, resolvedSiteId);
 
         const updatedTicket = await db.kitchenTicket.update({
           where: { id: existingTicket.id },
@@ -1570,16 +1626,17 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
         if (events) {
           events.push({ created: false, ticket: updatedTicket, isEdited: stationIsEdited });
         } else if (stationIsEdited) {
-          this.socketGateway.emitKitchenTicketEdited(updatedTicket);
+          this.socketGateway.emitKitchenTicketEdited(updatedTicket, resolvedSiteId);
         } else {
-          this.socketGateway.emitKitchenTicketUpdated(updatedTicket);
+          this.socketGateway.emitKitchenTicketUpdated(updatedTicket, resolvedSiteId);
         }
       } else {
         // CREAR TICKET NUEVO (primera vez o adición cuando el ticket previo ya fue despachado)
-        const assignedToId = await this.pickCook(stationId, db);
+        const assignedToId = await this.pickCook(stationId, db, resolvedSiteId);
         const newStatus = hasActiveItems ? 'NEW' : 'CANCELLED';
         const newTicket = await db.kitchenTicket.create({
           data: {
+            siteId: resolvedSiteId,
             orderId,
             tableId: order.tableId,
             stationId,
@@ -1597,9 +1654,9 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
         if (events) {
           events.push({ created: true, ticket: newTicket, isEdited: stationIsEdited });
         } else if (stationIsEdited) {
-          this.socketGateway.emitKitchenTicketEdited(newTicket);
+          this.socketGateway.emitKitchenTicketEdited(newTicket, resolvedSiteId);
         } else {
-          this.socketGateway.emitKitchenTicketCreated(newTicket);
+          this.socketGateway.emitKitchenTicketCreated(newTicket, resolvedSiteId);
         }
       }
     }
@@ -1625,7 +1682,7 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
           }
         } catch {}
       }
-      if (!events) this.socketGateway.server.emit('tableOrderEdited', { orderId, changeSummary });
+      if (!events) this.socketGateway.emitToSite(resolvedSiteId, 'tableOrderEdited', { siteId: resolvedSiteId, orderId, changeSummary });
     }
     if (!events) {
       for (const ticket of tickets) this.syncDiningDelayTimer(ticket);
@@ -1639,10 +1696,11 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
   }
 
   async updateKitchenTicket(ticketId: string, status: string, user: any) {
+    const siteId = this.resolveSiteId(user?.siteId);
     if (!['NEW', 'PREPARING', 'READY', 'SERVED', 'CANCELLED'].includes(status)) throw new BadRequestException('Estado de cocina inválido');
     const result = await this.prisma.$transaction(async tx => {
       await lockOperation(tx);
-      const ticket = await tx.kitchenTicket.findUnique({ where: { id: ticketId }, include: { order: { include: { waiter: true, diningTable: true } } } });
+      const ticket = await tx.kitchenTicket.findFirst({ where: { id: ticketId, siteId }, include: { order: { include: { waiter: true, diningTable: true } } } });
       if (!ticket) throw new NotFoundException('Ticket no encontrado');
       if (ticket.status === status) {
         return { updated: ticket, table: null };
@@ -1661,28 +1719,30 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
         ...(status === 'READY' ? { readyAt: ticket.readyAt || new Date() } : {}),
         ...(status === 'SERVED' ? { servedAt: ticket.servedAt || new Date() } : {}),
       }, include: { station: { include: { users: { select: { id: true, name: true, role: true } } } }, assignedTo: { select: { id: true, name: true } }, items: true, order: { include: { waiter: true, diningTable: true } } } });
-      const active = await tx.kitchenTicket.count({ where: { orderId: ticket.orderId, status: { in: ACTIVE_KITCHEN } } });
+      const active = await tx.kitchenTicket.count({ where: { siteId, orderId: ticket.orderId, status: { in: ACTIVE_KITCHEN } } });
       await tx.order.update({ where: { id: ticket.orderId }, data: { kitchenStatus: active ? 'ACTIVE' : 'READY' } });
-      return { updated, table: ticket.tableId ? await this.finishPaidTable(ticket.tableId, tx) : null };
+      return { updated, table: ticket.tableId ? await this.finishPaidTable(ticket.tableId, tx, siteId) : null };
     }, operationTransaction);
     this.syncDiningDelayTimer(result.updated);
-    this.socketGateway.emitKitchenTicketUpdated(result.updated);
+    this.socketGateway.emitKitchenTicketUpdated(result.updated, siteId);
     if (status === 'READY') {
       const waiterId = (result.updated.order as any)?.waiterId || (result.updated.order as any)?.diningTable?.openedById || result.table?.openedById;
-      this.socketGateway.emitKitchenTicketReady(waiterId, result.updated);
-      this.socketGateway.emitOrderStatusChange(result.updated.orderId, 'READY', result.updated.order);
+      this.socketGateway.emitKitchenTicketReady(waiterId, result.updated, siteId);
+      this.socketGateway.emitOrderStatusChange(result.updated.orderId, 'READY', result.updated.order, siteId);
     }
-    if (result.table) this.emitAccount(result.table);
+    if (result.table) this.emitAccount(result.table, siteId);
     return result.updated;
   }
 
   async listKitchenTickets(user: any, params: { status?: string; stationId?: string; currentShift?: string | boolean }) {
-    const where: any = {};
+    const siteId = this.resolveSiteId(user?.siteId);
+    const where: any = { siteId };
 
     // Las tablets de cocina de salón/meseras muestran EXCLUSIVAMENTE pedidos de mesas.
     // Domicilios es 100% independiente y nunca debe salir en las tablets de cocina.
     where.tableId = { not: null };
     where.order = {
+      siteId,
       tableId: { not: null },
     };
 
@@ -1695,7 +1755,7 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
     }
     if (params.stationId) where.stationId = params.stationId;
     if (!['ADMIN', 'SUPERADMIN', 'CASHIER'].includes(user.role)) {
-      const settings = await this.getKitchenSettings();
+      const settings = await this.getKitchenSettings(this.prisma, siteId);
       const deliveryStationIds = Object.entries(settings.stationChannels || {})
         .filter(([, channel]) => channel === 'DELIVERY')
         .map(([stationId]) => stationId);
@@ -1720,7 +1780,7 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
     // garantizando que al cerrar la caja el contador e historial de cocineros arranque en 0.
     const isCurrentShift = params.currentShift !== 'false' && params.currentShift !== false;
     if (isCurrentShift) {
-      const shiftCutoff = await this.getShiftCutoff();
+      const shiftCutoff = await this.getShiftCutoff(this.prisma, siteId);
       where.AND = [
         ...(where.AND || []),
         {
@@ -1760,33 +1820,54 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
     return tickets;
   }
 
-  async listStations() {
+  async listStations(siteId = DEFAULT_SITE_ID) {
     return this.prisma.kitchenStation.findMany({
+      where: { siteId: this.resolveSiteId(siteId) },
       include: { categories: true, users: { select: { id: true, name: true, role: true } } },
       orderBy: [{ priority: 'asc' }, { name: 'asc' }],
     });
   }
 
-  async saveStation(data: any) {
+  async saveStation(data: any, siteId = DEFAULT_SITE_ID) {
+    const resolvedSiteId = this.resolveSiteId(siteId);
+    const userIds = [...new Set((data.userIds || []).filter(Boolean))] as string[];
+    const categoryIds = [...new Set((data.categoryIds || []).filter(Boolean))] as string[];
+    if (categoryIds.length > 0) {
+      const categoryCount = await this.prisma.menuCategory.count({
+        where: { id: { in: categoryIds }, siteId: resolvedSiteId },
+      });
+      if (categoryCount !== categoryIds.length) {
+        throw new BadRequestException('Una de las categorías no pertenece a esta sede.');
+      }
+    }
+    if (userIds.length > 0) {
+      const memberships = await this.prisma.userSiteMembership.count({ where: { siteId: resolvedSiteId, active: true, userId: { in: userIds } } });
+      if (memberships !== userIds.length) throw new BadRequestException('Uno de los cocineros no pertenece a esta sede.');
+    }
     const payload: any = {
       name: data.name?.trim(),
       active: data.active !== false,
       priority: Number(data.priority || 0),
       color: data.color || '#F97316',
-      categories: { set: (data.categoryIds || []).map((id: string) => ({ id })) },
-      users: { set: (data.userIds || []).map((id: string) => ({ id })) },
+      categories: { set: categoryIds.map((id) => ({ id })) },
+      users: { set: userIds.map((id: string) => ({ id })) },
     };
     if (!payload.name) throw new BadRequestException('El nombre de la estacion es obligatorio');
-    const station = data.id
-      ? await this.prisma.kitchenStation.update({ where: { id: data.id }, data: payload, include: { categories: true, users: true } })
-      : await this.prisma.kitchenStation.create({ data: payload, include: { categories: true, users: true } });
+    let station: any;
+    if (data.id) {
+      const existing = await this.prisma.kitchenStation.findFirst({ where: { id: data.id, siteId: resolvedSiteId } });
+      if (!existing) throw new NotFoundException('Estación no encontrada');
+      station = await this.prisma.kitchenStation.update({ where: { id: data.id }, data: payload, include: { categories: true, users: true } });
+    } else {
+      station = await this.prisma.kitchenStation.create({ data: { siteId: resolvedSiteId, ...payload }, include: { categories: true, users: true } });
+    }
 
     const requestedChannel = ['DINING', 'DELIVERY', 'BOTH'].includes(String(data.channel))
       ? String(data.channel) as 'DINING' | 'DELIVERY' | 'BOTH'
       : null;
-    const settings = await this.getKitchenSettings();
+    const settings = await this.getKitchenSettings(this.prisma, resolvedSiteId);
     if (requestedChannel || Object.keys(settings.stationChannels || {}).length > 0) {
-      const allStations = await this.prisma.kitchenStation.findMany({ select: { id: true, name: true } });
+      const allStations = await this.prisma.kitchenStation.findMany({ where: { siteId: resolvedSiteId }, select: { id: true, name: true } });
       const stationChannels: Record<string, 'DINING' | 'DELIVERY' | 'BOTH'> = { ...(settings.stationChannels || {}) };
       for (const currentStation of allStations) {
         if (!stationChannels[currentStation.id]) {
@@ -1795,34 +1876,32 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
       }
       stationChannels[station.id] = requestedChannel || stationChannels[station.id] || 'DINING';
       const nextSettings = { ...settings, splitByChannel: true, stationChannels };
-      await this.prisma.appSetting.upsert({
-        where: { key: 'kitchen_routing_settings' },
-        update: { value: JSON.stringify(nextSettings) },
-        create: { key: 'kitchen_routing_settings', value: JSON.stringify(nextSettings) },
-      });
-      this.socketGateway.server.emit('kitchenSettingsUpdated', nextSettings);
+      await this.writeSiteSetting('kitchen_routing_settings', JSON.stringify(nextSettings), this.prisma, resolvedSiteId);
+      this.socketGateway.emitToSite(resolvedSiteId, 'kitchenSettingsUpdated', nextSettings);
     }
-    this.socketGateway.server.emit('kitchenStationsChanged', station);
+    this.socketGateway.emitToSite(resolvedSiteId, 'kitchenStationsChanged', station);
     return station;
   }
 
-  private async finishPaidTable(tableId: string, tx: Prisma.TransactionClient) {
-    let table = await this.findTable(tableId, tx);
+  private async finishPaidTable(tableId: string, tx: Prisma.TransactionClient, siteId = DEFAULT_SITE_ID) {
+    const resolvedSiteId = this.resolveSiteId(siteId);
+    let table = await this.findTable(tableId, tx, resolvedSiteId);
     if (table.status === 'OPEN' && table.orders.length && table.balance === 0 && table.kitchenStatus !== 'ACTIVE') {
-      await tx.order.updateMany({ where: { tableId, status: { not: 'CANCELLED' }, paymentStatus: 'CONFIRMED' }, data: { status: 'DELIVERED' } });
-      await tx.kitchenTicket.updateMany({ where: { tableId, status: 'READY' }, data: { status: 'SERVED', servedAt: new Date() } });
+      await tx.order.updateMany({ where: { siteId: resolvedSiteId, tableId, status: { not: 'CANCELLED' }, paymentStatus: 'CONFIRMED' }, data: { status: 'DELIVERED' } });
+      await tx.kitchenTicket.updateMany({ where: { siteId: resolvedSiteId, tableId, status: 'READY' }, data: { status: 'SERVED', servedAt: new Date() } });
       await tx.diningTable.update({ where: { id: tableId }, data: { status: 'CLOSED', closedAt: new Date() } });
-      table = await this.findTable(tableId, tx);
+      table = await this.findTable(tableId, tx, resolvedSiteId);
     }
     return table;
   }
 
-  private emitAccount(table: any) {
-    if (table.status === 'CLOSED') this.socketGateway.emitTableClosed(table);
-    else this.socketGateway.emitTableUpdated(table);
+  private emitAccount(table: any, siteId?: string) {
+    if (table.status === 'CLOSED') this.socketGateway.emitTableClosed(table, siteId);
+    else this.socketGateway.emitTableUpdated(table, siteId);
   }
 
   async submitPayment(tableId: string, data: any, user: any, fileOrFiles?: any) {
+    const siteId = this.resolveSiteId(user?.siteId);
     if (!['CASH', 'TRANSFER', 'MIXED'].includes(data.method)) throw new BadRequestException('Método de pago inválido');
     const isCash = data.method === 'CASH';
     const isMixed = data.method === 'MIXED';
@@ -1914,8 +1993,8 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
     const settlementId = typeof data.clientMutationId === 'string' && data.clientMutationId.trim() && data.clientMutationId.length <= 100 ? data.clientMutationId : randomUUID();
     const result = await this.prisma.$transaction(async tx => {
       await lockOperation(tx);
-      const table = await this.findTable(tableId, tx);
-      const repeated = await tx.payment.findMany({ where: { settlementId }, include: { order: true } });
+      const table = await this.findTable(tableId, tx, siteId);
+      const repeated = await tx.payment.findMany({ where: { settlementId, order: { siteId } }, include: { order: true } });
       if (repeated.length) {
         if (repeated.some(p => p.order.tableId !== tableId || p.method !== data.method) || Math.abs(repeated.reduce((sum, p) => sum + p.amount, 0) - amount) > 0.01) {
           throw new BadRequestException('El identificador de cobro ya está en uso');
@@ -1923,7 +2002,7 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
         return { table, payment: repeated[0], replay: true };
       }
       if (table.status !== 'OPEN') throw new BadRequestException('La cuenta está cerrada');
-      if (!await this.getActiveClosing(user.id, table.cashRegisterId, tx)) throw new BadRequestException('Abre la caja antes de cobrar');
+      if (!await this.getActiveClosing(user.id, table.cashRegisterId, tx, siteId)) throw new BadRequestException('Abre la caja antes de cobrar');
       const orders = table.orders.filter((order: any) => order.status !== 'CANCELLED' && order.paymentStatus !== 'CONFIRMED');
       if (!orders.length) throw new BadRequestException('La cuenta ya está pagada');
       if (orders.some((order: any) => order.paymentStatus === 'PENDING_REVIEW')) throw new BadRequestException('Ya hay un comprobante pendiente de revisión');
@@ -1971,7 +2050,7 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
         } });
       }
       return {
-        table: await this.findTable(tableId, tx),
+        table: await this.findTable(tableId, tx, siteId),
         payment: payments[0],
         amount,
         method: data.method,
@@ -1983,16 +2062,17 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
       };
     }, operationTransaction);
     if (!result.replay) {
-      this.socketGateway.emitPaymentSubmitted(result);
-      this.socketGateway.server.emit('cashRegistersChanged');
-      this.emitAccount(result.table);
+      this.socketGateway.emitPaymentSubmitted(result, siteId);
+      this.socketGateway.emitToSite(siteId, 'cashRegistersChanged');
+      this.emitAccount(result.table, siteId);
     }
     return result;
   }
 
-  async listPaymentValidation(status = 'PENDING_REVIEW', method = 'ALL', allHistory = false) {
+  async listPaymentValidation(status = 'PENDING_REVIEW', method = 'ALL', allHistory = false, siteId = DEFAULT_SITE_ID) {
+    const resolvedSiteId = this.resolveSiteId(siteId);
     const activeClosings = await this.prisma.cashClosing.findMany({
-      where: { isOpen: true },
+      where: { siteId: resolvedSiteId, isOpen: true },
       select: {
         shiftStart: true,
         cashRegister: { select: { purpose: true } },
@@ -2013,13 +2093,14 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
 
     const whereClause: any = {
       order: {
+        siteId: resolvedSiteId,
         tableId: { not: null },
       },
       ...methodFilter,
     };
 
     const validatedDuringCurrentShift = {
-      order: { tableId: { not: null } },
+      order: { siteId: resolvedSiteId, tableId: { not: null } },
       OR: [
         { confirmedAt: { gte: salonShiftStart } },
         { createdAt: { gte: salonShiftStart } },
@@ -2127,8 +2208,9 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
   }
 
   async proofImage(proofId: string, user?: any) {
-    const proof = await this.prisma.transferProof.findUnique({
-      where: { id: proofId },
+    const siteId = this.resolveSiteId(user?.siteId);
+    const proof = await this.prisma.transferProof.findFirst({
+      where: { id: proofId, order: { siteId } },
       include: {
         order: {
           select: {
@@ -2152,30 +2234,31 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
   }
 
   async reviewPayment(paymentId: string, action: 'CONFIRMED' | 'REJECTED', user: any, reason?: string) {
+    const siteId = this.resolveSiteId(user?.siteId);
     if (!['CONFIRMED', 'REJECTED'].includes(action)) throw new BadRequestException('Acción inválida');
     const result: any = await this.prisma.$transaction(async tx => {
       await lockOperation(tx);
-      const payment = await tx.payment.findUnique({
-        where: { id: paymentId },
+      const payment = await tx.payment.findFirst({
+        where: { id: paymentId, order: { siteId } },
         include: {
           order: true,
         },
       });
       if (!payment || !payment.order.tableId) throw new NotFoundException('Cobro no encontrado');
 
-      if (payment.status === action) return { payment, table: await this.findTable(payment.order.tableId, tx), delivery: false, replay: true };
+      if (payment.status === action) return { payment, table: await this.findTable(payment.order.tableId, tx, siteId), delivery: false, replay: true };
 
       // Permitir confirmar pagos en PENDING_REVIEW o validar/aceptar pagos previamente REJECTED
       const allowedFrom = ['PENDING_REVIEW'];
       if (action === 'CONFIRMED') allowedFrom.push('REJECTED');
       if (!allowedFrom.includes(payment.status)) throw new BadRequestException('Este pago ya fue validado y confirmado');
 
-      const closing = await this.getActiveClosing(user.id, payment.order.cashRegisterId, tx);
+      const closing = await this.getActiveClosing(user.id, payment.order.cashRegisterId, tx, siteId);
       if (!closing) throw new BadRequestException('Abre la caja antes de validar');
-      const defaultRegister = await tx.cashRegister.findFirst({ where: { active: true } });
+      const defaultRegister = await tx.cashRegister.findFirst({ where: { siteId, active: true } });
       const targetRegisterId = payment.order.cashRegisterId || closing.cashRegisterId || defaultRegister?.id || null;
 
-      const group = await tx.payment.findMany({ where: payment.settlementId ? { settlementId: payment.settlementId } : { id: paymentId } });
+      const group = await tx.payment.findMany({ where: payment.settlementId ? { settlementId: payment.settlementId, order: { siteId } } : { id: paymentId, order: { siteId } } });
       if (group.some(p => !allowedFrom.includes(p.status))) throw new BadRequestException('Actualiza la cuenta: uno de los pagos ya cambió');
       const ids = group.map(p => p.id);
 
@@ -2183,7 +2266,7 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
         status: action, confirmedBy: user.id, confirmedAt: action === 'CONFIRMED' ? new Date() : null,
       } });
       await tx.order.updateMany({
-        where: { id: { in: group.map(p => p.orderId) } },
+        where: { siteId, id: { in: group.map(p => p.orderId) } },
         data: {
           paymentStatus: action,
           ...(targetRegisterId ? { cashRegisterId: targetRegisterId } : {}),
@@ -2198,19 +2281,20 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
         } });
       }
 
-      return { payment: { ...payment, status: action }, table: await this.finishPaidTable(payment.order.tableId, tx), delivery: false, replay: false };
+      return { payment: { ...payment, status: action }, table: await this.finishPaidTable(payment.order.tableId, tx, siteId), delivery: false, replay: false };
     }, operationTransaction);
     if (!result.replay) {
-      if (action === 'CONFIRMED') this.socketGateway.emitPaymentValidated(result);
-      else this.socketGateway.emitPaymentRejected(result.table.openedById, { ...result, reason });
-      this.socketGateway.server.emit('cashRegistersChanged');
-      this.emitAccount(result.table);
+      if (action === 'CONFIRMED') this.socketGateway.emitPaymentValidated(result, siteId);
+      else this.socketGateway.emitPaymentRejected(result.table.openedById, { ...result, reason }, siteId);
+      this.socketGateway.emitToSite(siteId, 'cashRegistersChanged');
+      this.emitAccount(result.table, siteId);
     }
     return result;
   }
 
   async updateTable(id: string, data: { label?: string; notes?: string }, user: any) {
-    const table = await this.prisma.diningTable.findUnique({ where: { id } });
+    const siteId = this.resolveSiteId(user?.siteId);
+    const table = await this.prisma.diningTable.findFirst({ where: { id, siteId } });
     if (!table) throw new NotFoundException('Mesa no encontrada');
     const updateData: any = {};
     const newLabel = typeof data.label === 'string' ? data.label.trim().slice(0, 80) : '';
@@ -2228,44 +2312,48 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
 
     if (newLabel) {
       await this.prisma.order.updateMany({
-        where: { tableId: id, status: { not: 'CANCELLED' } },
+        where: { siteId, tableId: id, status: { not: 'CANCELLED' } },
         data: { customerName: newLabel, customerAddress: newLabel },
       });
     }
 
     const summarized = this.summarizeTable(updated);
-    this.socketGateway.emitTableUpdated(summarized);
-    this.socketGateway.server.emit('cashRegistersChanged');
+    this.socketGateway.emitTableUpdated(summarized, siteId);
+    this.socketGateway.emitToSite(siteId, 'cashRegistersChanged');
     return summarized;
   }
 
-    async closeTable(tableId: string, user: any) {
+  async closeTable(tableId: string, user: any) {
+    const siteId = this.resolveSiteId(user?.siteId);
     const table = await this.prisma.$transaction(async tx => {
       await lockOperation(tx);
-      const table = await this.findTable(tableId, tx);
+      const table = await this.findTable(tableId, tx, siteId);
       if (table.kitchenStatus === 'ACTIVE') throw new BadRequestException('Hay productos pendientes en cocina');
       if (table.balance > 0 || !table.orders.length) throw new BadRequestException('La cuenta tiene pago pendiente');
-      return this.finishPaidTable(tableId, tx);
+      return this.finishPaidTable(tableId, tx, siteId);
     }, operationTransaction);
-    this.socketGateway.emitTableClosed(table);
-    this.socketGateway.server.emit('cashRegistersChanged');
+    this.socketGateway.emitTableClosed(table, siteId);
+    this.socketGateway.emitToSite(siteId, 'cashRegistersChanged');
     return table;
   }
 
-  async purgeProofsForClosing(cashClosingId?: string) {
+  async purgeProofsForClosing(cashClosingId?: string, siteId = DEFAULT_SITE_ID) {
     // Al cerrar la caja (cierre de turno), liberamos inmediatamente los bytes de imágenes (fileBase64)
     // para que la base de datos de PostgreSQL y los servidores nunca se llenen de almacenamiento.
     // Todos los datos contables (montos, referencias, mesera, cajero, hora, reporte Z) se conservan intactos.
     try {
       if (!cashClosingId) return;
 
-      const closing = await this.prisma.cashClosing.findUnique({
-        where: { id: cashClosingId },
+      const resolvedSiteId = this.resolveSiteId(siteId);
+      const closing = await this.prisma.cashClosing.findFirst({
+        where: { id: cashClosingId, siteId: resolvedSiteId },
       });
+      if (!closing) return;
 
       await this.prisma.transferProof.updateMany({
         where: {
           fileBase64: { not: null },
+          order: { siteId: resolvedSiteId },
           OR: [
             { cashClosingId },
             { table: { cashClosingId } },
@@ -2282,17 +2370,18 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  async assertNoOpenTableWork(cashRegisterId?: string) {
+  async assertNoOpenTableWork(cashRegisterId?: string, siteId = DEFAULT_SITE_ID) {
+    const resolvedSiteId = this.resolveSiteId(siteId);
     const openTables = await this.prisma.diningTable.count({
-      where: { status: 'OPEN', orders: { some: {} }, ...(cashRegisterId ? { cashRegisterId } : {}) },
+      where: { siteId: resolvedSiteId, status: 'OPEN', orders: { some: { siteId: resolvedSiteId } }, ...(cashRegisterId ? { cashRegisterId } : {}) },
     });
     if (openTables > 0) throw new BadRequestException(`No se puede cerrar la caja. Hay ${openTables} mesa(s) abierta(s).`);
     const pendingTickets = await this.prisma.kitchenTicket.count({
-      where: { status: { in: ACTIVE_KITCHEN }, ...(cashRegisterId ? { table: { cashRegisterId } } : {}) },
+      where: { siteId: resolvedSiteId, status: { in: ACTIVE_KITCHEN }, ...(cashRegisterId ? { table: { siteId: resolvedSiteId, cashRegisterId } } : {}) },
     });
     if (pendingTickets > 0) throw new BadRequestException(`No se puede cerrar la caja. Hay ${pendingTickets} ticket(s) de cocina pendientes.`);
     const pendingPayments = await this.prisma.payment.count({
-      where: { status: { in: PENDING_PAYMENT }, order: { orderType: 'LOCAL', ...(cashRegisterId ? { cashRegisterId } : {}) } },
+      where: { status: { in: PENDING_PAYMENT }, order: { siteId: resolvedSiteId, orderType: 'LOCAL', ...(cashRegisterId ? { cashRegisterId } : {}) } },
     });
     if (pendingPayments > 0) throw new BadRequestException(`No se puede cerrar la caja. Hay ${pendingPayments} pago(s) de mesa pendientes de validar.`);
   }

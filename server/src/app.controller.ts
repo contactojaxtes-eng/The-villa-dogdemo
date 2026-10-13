@@ -4,6 +4,8 @@ import type { Request } from 'express';
 import { PrintBridgeGuard } from './print/print-bridge.guard';
 import { PrismaService } from './prisma/prisma.service';
 import { PrintQueueSignalService } from './print/print-queue-signal.service';
+import { PrintService } from './print/print.service';
+import { DEFAULT_SITE_ID } from './common/multisite.constants';
 
 const MAX_PRINT_QUEUE_WAIT_MS = 25_000;
 const LEGACY_PRINT_QUEUE_WAIT_MS = 10_000;
@@ -14,6 +16,7 @@ export class AppController {
   constructor(
     private prisma: PrismaService,
     private printQueueSignal: PrintQueueSignalService,
+    private printService: PrintService,
   ) {}
 
   @Get('health')
@@ -44,15 +47,16 @@ export class AppController {
   @Get('api/cola-impresion')
   @ApiOperation({ summary: 'Consultar cola de impresión' })
   async getPrintQueue(@Query('waitMs') waitMs?: string, @Req() request?: Request) {
+    const siteId = String((request as any)?.printBridgeSiteId || DEFAULT_SITE_ID);
     // El valor por defecto también alivia los puentes ya instalados, cuyo timeout
     // HTTP es 15 s. Un cliente puede usar waitMs=0 si requiere una lectura directa.
     const requestedWaitMs = waitMs === undefined ? LEGACY_PRINT_QUEUE_WAIT_MS : Number(waitMs);
     const boundedWaitMs = Number.isFinite(requestedWaitMs)
       ? Math.min(Math.max(Math.trunc(requestedWaitMs), 0), MAX_PRINT_QUEUE_WAIT_MS)
       : 0;
-    const revision = this.printQueueSignal.currentRevision();
+    const revision = this.printQueueSignal.currentRevision(siteId);
     let jobs = await this.prisma.printJob.findMany({
-      where: { impreso: false },
+      where: { siteId, impreso: false },
       take: 100,
       orderBy: { id: 'asc' },
     });
@@ -67,13 +71,13 @@ export class AppController {
       else request?.once('aborted', abortWait);
       let changed = false;
       try {
-        changed = await this.printQueueSignal.waitForChange(revision, boundedWaitMs, abortController.signal);
+        changed = await this.printQueueSignal.waitForChange(revision, boundedWaitMs, abortController.signal, siteId);
       } finally {
         request?.off('aborted', abortWait);
       }
       if (!changed) return [];
       jobs = await this.prisma.printJob.findMany({
-        where: { impreso: false },
+        where: { siteId, impreso: false },
         take: 100,
         orderBy: { id: 'asc' },
       });
@@ -88,28 +92,12 @@ export class AppController {
     let cocinaPrinterIp = '';
     let cocinaPrinterPort = 9100;
     try {
-      const rows = await this.prisma.appSetting.findMany({
-        where: {
-          key: {
-            in: [
-              'custom_prep_printers',
-              'caja_printer_ip',
-              'caja_printer_port',
-              'cocina_printer_ip',
-              'cocina_printer_port',
-            ],
-          },
-        },
-      });
-      const values = Object.fromEntries(rows.map(row => [row.key, row.value]));
-      if (values.custom_prep_printers) {
-        const parsed = JSON.parse(values.custom_prep_printers);
-        customPrinters = Array.isArray(parsed) ? parsed : [];
-      }
-      cashPrinterIp = String(values.caja_printer_ip || '').trim();
-      cashPrinterPort = Number(values.caja_printer_port) || 9100;
-      cocinaPrinterIp = String(values.cocina_printer_ip || '').trim();
-      cocinaPrinterPort = Number(values.cocina_printer_port) || 9100;
+      const settings = await this.printService.getPrinterSettings(siteId);
+      customPrinters = Array.isArray(settings.printers) ? settings.printers : [];
+      cashPrinterIp = String(settings.caja?.ip || '').trim();
+      cashPrinterPort = Number(settings.caja?.port) || 9100;
+      cocinaPrinterIp = String(settings.cocina?.ip || '').trim();
+      cocinaPrinterPort = Number(settings.cocina?.port) || 9100;
     } catch {}
 
     const normalize = (value: unknown) => String(value || '').trim().toLowerCase();
@@ -144,7 +132,7 @@ export class AppController {
 
     if (duplicateIds.length > 0) {
       this.prisma.printJob.deleteMany({
-        where: { id: { in: duplicateIds } }
+        where: { siteId, id: { in: duplicateIds } }
       }).catch(() => {});
     }
 
@@ -218,10 +206,11 @@ export class AppController {
   @Post('api/imprimir/cola')
   @Post('api/cola-impresion')
   @ApiOperation({ summary: 'Confirmar impresión y limpiar cola' })
-  async confirmPrint(@Body() body: { ids: number[] }) {
+  async confirmPrint(@Body() body: { ids: number[] }, @Req() request?: Request) {
+    const siteId = String((request as any)?.printBridgeSiteId || DEFAULT_SITE_ID);
     if (body && Array.isArray(body.ids) && body.ids.length > 0) {
       await this.prisma.printJob.deleteMany({
-        where: { id: { in: body.ids } },
+        where: { siteId, id: { in: body.ids } },
       });
     }
     return { ok: true };

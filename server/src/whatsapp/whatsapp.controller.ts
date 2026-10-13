@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Put, Delete, Body, Param, Query, UseGuards, Req, Res, Request, BadRequestException, NotFoundException, UseInterceptors, UploadedFile } from '@nestjs/common';
+import { Controller, Get, Post, Put, Delete, Body, Headers, Param, Query, UseGuards, Req, Res, Request, BadRequestException, NotFoundException, UseInterceptors, UploadedFile } from '@nestjs/common';
 import { ApiTags, ApiOperation } from '@nestjs/swagger';
 import { WhatsappService } from './whatsapp.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -8,6 +8,8 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import * as express from 'express';
 import { existsSync, readFileSync } from 'fs';
 import { detectReceiptMime } from '../tables/receipt';
+import { AllowDraftSiteSetup } from '../auth/decorators/allow-draft-site-setup.decorator';
+import { sendPrivateFileResponse } from '../common/private-file-response';
 
 @ApiTags('WhatsApp')
 @Controller('whatsapp')
@@ -15,15 +17,11 @@ export class WhatsappController {
   constructor(private whatsappService: WhatsappService) {}
 
   private sendPrivateOrderChatProof(res: express.Response, proof: {
+    id: string;
     method: string;
     fileBase64: string | null;
     filePath: string | null;
-  }) {
-    const applyPrivateHeaders = () => {
-      res.setHeader('Cache-Control', 'private, no-store, max-age=0');
-      res.setHeader('Pragma', 'no-cache');
-      res.setHeader('X-Content-Type-Options', 'nosniff');
-    };
+  }, ifNoneMatch?: string) {
 
     if (proof.fileBase64) {
       let rawBase64 = proof.fileBase64.trim();
@@ -32,10 +30,12 @@ export class WhatsappController {
         const buffer = Buffer.from(rawBase64, 'base64');
         const mime = detectReceiptMime(buffer);
         if (buffer.length > 0 && mime) {
-          applyPrivateHeaders();
-          res.setHeader('Content-Type', mime);
-          res.setHeader('Content-Length', buffer.length);
-          return res.end(buffer);
+          return sendPrivateFileResponse(res, {
+            buffer,
+            contentType: mime,
+            resourceKey: `transfer-proof:${proof.id}`,
+            ifNoneMatch,
+          });
         }
       } catch {
         // Continúa con filePath para comprobantes antiguos que lo tengan.
@@ -46,10 +46,12 @@ export class WhatsappController {
       const buffer = readFileSync(proof.filePath);
       const mime = detectReceiptMime(buffer);
       if (mime) {
-        applyPrivateHeaders();
-        res.setHeader('Content-Type', mime);
-        res.setHeader('Content-Length', buffer.length);
-        return res.end(buffer);
+        return sendPrivateFileResponse(res, {
+          buffer,
+          contentType: mime,
+          resourceKey: `transfer-proof:${proof.id}`,
+          ifNoneMatch,
+        });
       }
     }
 
@@ -81,15 +83,21 @@ export class WhatsappController {
   @UseGuards(JwtAuthGuard, PermissionsGuard)
   @Permissions('whatsapp.view', 'dispatch.view', 'orders.view')
   @ApiOperation({ summary: 'Proxy de archivos multimedia de WhatsApp Meta' })
-  async streamMedia(@Param('mediaId') mediaId: string, @Res() res: express.Response) {
-    return this.whatsappService.streamMedia(mediaId, res);
+  async streamMedia(
+    @Param('mediaId') mediaId: string,
+    @Res() res: express.Response,
+    @Req() req: any,
+    @Headers('if-none-match') ifNoneMatch?: string,
+  ) {
+    return this.whatsappService.streamMedia(mediaId, res, req.user.siteId, ifNoneMatch);
   }
 
   @Get('settings')
+  @AllowDraftSiteSetup()
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('ADMIN', 'SUPERADMIN')
   async getSettings(@Request() req: any) {
-    const settings = await this.whatsappService.getSettings();
+    const settings = await this.whatsappService.getSettings(req.user.siteId);
     if (req.user.role !== 'SUPERADMIN' && settings.phoneId) {
       settings.phoneId = `••••${settings.phoneId.slice(-4)}`;
     }
@@ -97,10 +105,11 @@ export class WhatsappController {
   }
 
   @Get('order-reader-status')
+  @AllowDraftSiteSetup()
   @UseGuards(JwtAuthGuard)
   @ApiOperation({ summary: 'Estado de lectura automática para nuevo pedido' })
-  getOrderReaderStatus() {
-    return this.whatsappService.getOrderReaderStatus();
+  getOrderReaderStatus(@Request() req: any) {
+    return this.whatsappService.getOrderReaderStatus(req.user.siteId);
   }
 
   @Get('debug-pdf')
@@ -155,30 +164,48 @@ export class WhatsappController {
   }
 
   @Put('settings')
+  @AllowDraftSiteSetup()
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('ADMIN', 'SUPERADMIN')
   updateSettings(@Body() body: any, @Request() req: any) {
-    if (req.user.role !== 'SUPERADMIN') {
-      // Las credenciales core de Meta (WhatsApp Cloud API) solo las puede tocar el Super Admin
-      const { phoneId, token, verifyToken, businessPhone, ...allowed } = body;
-      return this.whatsappService.updateSettings(allowed);
+    // JwtStrategy always supplies globalRole. Keeping the database-derived
+    // SUPERADMIN role as a compatibility fallback avoids breaking existing
+    // authenticated sessions and internal callers created before that claim
+    // existed, without granting extra access to ordinary administrators.
+    const isSuperadmin = req.user.globalRole === 'SUPERADMIN' || req.user.role === 'SUPERADMIN';
+    if (!isSuperadmin) {
+      // Las credenciales de Meta y del proveedor de IA son técnicas. Los
+      // administradores operativos pueden ajustar el comportamiento del bot,
+      // pero no sustituir llaves, modelo ni cuenta de WhatsApp.
+      const {
+        phoneId,
+        token,
+        verifyToken,
+        businessPhone,
+        geminiApiKey,
+        geminiModel,
+        ...allowed
+      } = body;
+      return this.whatsappService.updateSettings(allowed, req.user.siteId);
     }
-    return this.whatsappService.updateSettings(body);
+    return this.whatsappService.updateSettings(body, req.user.siteId);
   }
 
   @Post('settings/regenerate-menu-text')
+  @AllowDraftSiteSetup()
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('ADMIN', 'SUPERADMIN')
-  async regenerateMenuText() {
-    const menuText = await this.whatsappService.regenerateMessagingMenuText();
+  async regenerateMenuText(@Request() req: any) {
+    const menuText = await this.whatsappService.regenerateMessagingMenuText(req.user.siteId);
     return { ok: true, menuText };
   }
 
   @Post('settings/payment-qr-file')
+  @AllowDraftSiteSetup()
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('ADMIN', 'SUPERADMIN')
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 5 * 1024 * 1024 } }))
-  async uploadPaymentQrFile(@UploadedFile() file: any) {
+  async uploadPaymentQrFile(@UploadedFile() file: any, @Request() req: any) {
     if (!file) {
       throw new BadRequestException('Archivo no provisto');
     }
@@ -186,15 +213,16 @@ export class WhatsappController {
       throw new BadRequestException('El QR debe ser una imagen JPG, PNG o WEBP');
     }
     const base64 = file.buffer.toString('base64');
-    await this.whatsappService.savePaymentQrFile(base64, file.originalname, file.mimetype);
+    await this.whatsappService.savePaymentQrFile(base64, file.originalname, file.mimetype, req.user.siteId);
     return { ok: true, name: file.originalname, mimeType: file.mimetype };
   }
 
   @Delete('settings/payment-qr-file')
+  @AllowDraftSiteSetup()
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('ADMIN', 'SUPERADMIN')
-  async deletePaymentQrFile() {
-    await this.whatsappService.deletePaymentQrFile();
+  async deletePaymentQrFile(@Request() req: any) {
+    await this.whatsappService.deletePaymentQrFile(req.user.siteId);
     return { ok: true };
   }
 
@@ -203,7 +231,7 @@ export class WhatsappController {
   @Permissions('whatsapp.view')
   async getSessionsStats(@Req() req: any) {
     const userId = req.user?.id;
-    return this.whatsappService.getSessionsStats(userId);
+    return this.whatsappService.getSessionsStats(userId, req.user.siteId);
   }
 
   @Get('sessions')
@@ -229,14 +257,15 @@ export class WhatsappController {
       userId,
       cursor,
       pagination === 'cursor',
+      req?.user?.siteId,
     );
   }
 
   @Get('sessions/:id')
   @UseGuards(JwtAuthGuard, PermissionsGuard)
   @Permissions('whatsapp.view')
-  async getSession(@Param('id') id: string) {
-    const session = await this.whatsappService.getSession(id);
+  async getSession(@Param('id') id: string, @Req() req: any) {
+    const session = await this.whatsappService.getSession(id, req.user.siteId);
     if (!session) throw new BadRequestException('Sesión no encontrada');
     return session;
   }
@@ -249,28 +278,31 @@ export class WhatsappController {
     @Query('before') before?: string,
     @Query('beforeId') beforeId?: string,
     @Query('limit') limit?: string,
+    @Req() req?: any,
   ) {
     return this.whatsappService.getSessionMessages(
       id,
       before,
       limit ? parseInt(limit, 10) : undefined,
       beforeId,
+      undefined,
+      req?.user?.siteId,
     );
   }
 
   @Post('sessions/:id/read')
   @UseGuards(JwtAuthGuard, PermissionsGuard)
   @Permissions('whatsapp.view')
-  async markSessionAsRead(@Param('id') id: string) {
-    await this.whatsappService.markSessionMessagesAsRead(id);
+  async markSessionAsRead(@Param('id') id: string, @Req() req: any) {
+    await this.whatsappService.markSessionMessagesAsRead(id, false, req.user.siteId);
     return { success: true };
   }
 
   @Delete('sessions/:id')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('ADMIN', 'SUPERADMIN')
-  deleteSession(@Param('id') id: string) {
-    return this.whatsappService.deleteSession(id);
+  deleteSession(@Param('id') id: string, @Req() req: any) {
+    return this.whatsappService.deleteSession(id, req.user.siteId);
   }
 
   @Put('sessions/:id')
@@ -278,23 +310,24 @@ export class WhatsappController {
   @Permissions('whatsapp.reply')
   updateSession(
     @Param('id') id: string,
-    @Body() body: { customerName?: string; customerPhone?: string }
+    @Body() body: { customerName?: string; customerPhone?: string },
+    @Req() req?: any,
   ) {
-    return this.whatsappService.updateSession(id, body);
+    return this.whatsappService.updateSession(id, body, req?.user?.siteId);
   }
 
   @Delete('messages/:id')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('ADMIN', 'SUPERADMIN')
-  deleteMessage(@Param('id') id: string, @Query('mode') mode?: string) {
-    return this.whatsappService.deleteMessage(id, mode);
+  deleteMessage(@Param('id') id: string, @Query('mode') mode: string | undefined, @Req() req: any) {
+    return this.whatsappService.deleteMessage(id, mode, req.user.siteId);
   }
 
   @Put('messages/:id')
   @UseGuards(JwtAuthGuard, PermissionsGuard)
   @Permissions('whatsapp.reply')
-  editMessage(@Param('id') id: string, @Body() body: { content: string }) {
-    return this.whatsappService.editMessage(id, body.content);
+  editMessage(@Param('id') id: string, @Body() body: { content: string }, @Req() req: any) {
+    return this.whatsappService.editMessage(id, body.content, req.user.siteId);
   }
 
   @Put('sessions/:id/assign')
@@ -304,7 +337,7 @@ export class WhatsappController {
     @Body('userId') userId: string | null,
     @Req() req: any,
   ) {
-    return this.whatsappService.assignSession(id, userId, req.user);
+    return this.whatsappService.assignSession(id, userId, req.user, req.user.siteId);
   }
 
   @Post('sessions/unassign-all')
@@ -312,15 +345,16 @@ export class WhatsappController {
   unassignAll(@Req() req: any) {
     const user = req.user;
     return this.whatsappService.unassignAllSessions(
-      user?.role === 'ADMIN' || user?.role === 'SUPERADMIN' ? undefined : user?.id
+      user?.role === 'ADMIN' || user?.role === 'SUPERADMIN' ? undefined : user?.id,
+      user?.siteId,
     );
   }
 
   @Post('send')
   @UseGuards(JwtAuthGuard, PermissionsGuard)
   @Permissions('whatsapp.reply')
-  async sendMessage(@Body() body: { phone: string; text: string; replyToWaMessageId?: string; replyToContent?: string; sessionId?: string; orderId?: string }) {
-    const result = await this.whatsappService.sendMessage(body.phone, body.text, body.replyToWaMessageId, body.replyToContent, body.sessionId, body.orderId);
+  async sendMessage(@Body() body: { phone: string; text: string; replyToWaMessageId?: string; replyToContent?: string; sessionId?: string; orderId?: string }, @Request() req: any) {
+    const result = await this.whatsappService.sendMessage(body.phone, body.text, body.replyToWaMessageId, body.replyToContent, body.sessionId, body.orderId, req.user.siteId);
     if (!result.sent) {
       const resAny = result as any;
       const errorMsg = resAny.error?.message 
@@ -337,13 +371,15 @@ export class WhatsappController {
   @UseGuards(JwtAuthGuard, PermissionsGuard)
   @Permissions('whatsapp.reply')
   async sendTemplate(
-    @Body() body: { phone: string; templateName: string; languageCode?: string; params?: string[] }
+    @Body() body: { phone: string; templateName: string; languageCode?: string; params?: string[] },
+    @Request() req: any,
   ) {
     const result = await this.whatsappService.sendTemplate(
       body.phone,
       body.templateName,
       body.languageCode || 'es',
-      body.params || []
+      body.params || [],
+      req.user.siteId,
     );
     if (!result.sent) {
       const errorMsg = result.data?.error?.message || result.reason || 'Error al enviar plantilla de WhatsApp';
@@ -356,9 +392,17 @@ export class WhatsappController {
   @UseGuards(JwtAuthGuard, PermissionsGuard)
   @Permissions('whatsapp.media')
   async sendLocation(
-    @Body() body: { phone: string; latitude: number; longitude: number; name?: string; address?: string }
+    @Body() body: { phone: string; latitude: number; longitude: number; name?: string; address?: string },
+    @Request() req: any,
   ) {
-    const result = await this.whatsappService.sendLocation(body.phone, body.latitude, body.longitude, body.name, body.address);
+    const result = await this.whatsappService.sendLocation(
+      body.phone,
+      body.latitude,
+      body.longitude,
+      body.name,
+      body.address,
+      req.user.siteId,
+    );
     if (!result.sent) {
       const errorMsg = result.data?.error?.message || result.reason || 'Error al enviar ubicación de WhatsApp';
       throw new BadRequestException(errorMsg);
@@ -371,6 +415,7 @@ export class WhatsappController {
   @Permissions('whatsapp.media')
   @UseInterceptors(FileInterceptor('file'))
   async sendMedia(
+    @Request() req: any,
     @Body('phone') phone: string,
     @Body('type') type: 'image' | 'audio' | 'document' | 'video',
     @Body('caption') caption: string,
@@ -381,7 +426,17 @@ export class WhatsappController {
     if (!file) {
       throw new BadRequestException('Archivo no provisto');
     }
-    const result = await this.whatsappService.sendMediaMessage(phone, file.buffer, file.originalname, file.mimetype, type, caption, sessionId, orderId);
+    const result = await this.whatsappService.sendMediaMessage(
+      phone,
+      file.buffer,
+      file.originalname,
+      file.mimetype,
+      type,
+      caption,
+      sessionId,
+      orderId,
+      req.user.siteId,
+    );
     if (!result.sent) {
       throw new BadRequestException(result.reason || 'Error al enviar multimedia');
     }
@@ -391,11 +446,11 @@ export class WhatsappController {
   @Post('send-menu')
   @UseGuards(JwtAuthGuard, PermissionsGuard)
   @Permissions('whatsapp.media', 'whatsapp.reply')
-  async sendMenu(@Body('phone') phone: string) {
+  async sendMenu(@Body('phone') phone: string, @Req() req: any) {
     if (!phone) {
       throw new BadRequestException('Teléfono no provisto');
     }
-    const result: any = await this.whatsappService.sendMenuCarta(phone);
+    const result: any = await this.whatsappService.sendMenuCarta(phone, req.user.siteId);
     if (!result.sent) {
       throw new BadRequestException(result.reason || result.error || 'Error al enviar la carta');
     }
@@ -409,11 +464,12 @@ export class WhatsappController {
     @Body('phone') phone: string,
     @Body('orderId') orderId?: string,
     @Body('sessionId') sessionId?: string,
+    @Req() req?: any,
   ) {
     if (!phone) {
       throw new BadRequestException('Teléfono no provisto');
     }
-    const result: any = await this.whatsappService.sendPaymentQr(phone, orderId, sessionId);
+    const result: any = await this.whatsappService.sendPaymentQr(phone, orderId, sessionId, req?.user?.siteId);
     if (!result.sent) {
       throw new BadRequestException(result.reason || result.error || 'Error al enviar el QR de pago');
     }
@@ -427,11 +483,12 @@ export class WhatsappController {
     @Body('phone') phone: string,
     @Body('content') content: string,
     @Body('type') type?: string,
+    @Req() req?: any,
   ) {
     if (!phone || !content) {
       throw new BadRequestException('Teléfono y contenido requeridos para reenviar');
     }
-    const result = await this.whatsappService.forwardMessage(phone, content, type);
+    const result = await this.whatsappService.forwardMessage(phone, content, type, req?.user?.siteId);
     if (!result.sent) {
       throw new BadRequestException(result.reason || 'Error al reenviar mensaje');
     }
@@ -439,21 +496,24 @@ export class WhatsappController {
   }
 
   @Post('test-meta')
+  @AllowDraftSiteSetup()
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('SUPERADMIN', 'ADMIN')
   @ApiOperation({ summary: 'Probar conexión y validez del token con Meta Cloud API' })
-  async testMeta(@Body() body?: { token?: string; phoneId?: string }) {
-    return this.whatsappService.testMetaConnection(body?.token, body?.phoneId);
+  async testMeta(@Body() body: { token?: string; phoneId?: string } | undefined, @Req() req: any) {
+    return this.whatsappService.testMetaConnection(body?.token, body?.phoneId, req.user.siteId);
   }
 
   @Post('test-gemini')
+  @AllowDraftSiteSetup()
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('SUPERADMIN')
-  async testGemini(@Body() body: { key?: string; prompt?: string; model?: string }) {
-    return this.whatsappService.testGeminiConnection(body?.key, body?.prompt, body?.model);
+  async testGemini(@Body() body: { key?: string; prompt?: string; model?: string }, @Req() req: any) {
+    return this.whatsappService.testGeminiConnection(body?.key, body?.prompt, body?.model, req.user.siteId);
   }
 
   @Post('test-gemini-chat')
+  @AllowDraftSiteSetup()
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('SUPERADMIN')
   @ApiOperation({ summary: 'Probar Gemini en un chat aislado sin enviar mensajes de WhatsApp' })
@@ -464,7 +524,7 @@ export class WhatsappController {
     useCandidates?: boolean;
     candidateExamples?: unknown;
     messages?: Array<{ role?: string; text?: string }>;
-  }) {
+  }, @Req() req: any) {
     return this.whatsappService.testGeminiChat(
       body?.messages,
       body?.key,
@@ -472,105 +532,116 @@ export class WhatsappController {
       body?.instructions,
       body?.useCandidates === true,
       body?.candidateExamples,
+      req.user.siteId,
     );
   }
 
   @Post('gemini-models')
+  @AllowDraftSiteSetup()
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('SUPERADMIN')
   @ApiOperation({ summary: 'Consultar modelos y límites publicados por Gemini' })
-  async getGeminiModels(@Body() body: { key?: string; model?: string }) {
-    return this.whatsappService.getGeminiModelInfo(body?.key, body?.model);
+  async getGeminiModels(@Body() body: { key?: string; model?: string }, @Req() req: any) {
+    return this.whatsappService.getGeminiModelInfo(body?.key, body?.model, req.user.siteId);
   }
   
 
   @Post('polish-rule')
+  @AllowDraftSiteSetup()
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('SUPERADMIN')
   @ApiOperation({ summary: 'Pulir y resumir una regla de instrucción usando Gemini' })
-  async polishRule(@Body() body: { text?: string; model?: string }) {
-    return this.whatsappService.polishAiInstruction(body?.text || '', body?.model);
+  async polishRule(@Body() body: { text?: string; model?: string }, @Req() req: any) {
+    return this.whatsappService.polishAiInstruction(body?.text || '', body?.model, req.user.siteId);
   }
 
   @Get('auto-training')
+  @AllowDraftSiteSetup()
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('SUPERADMIN')
   @ApiOperation({ summary: 'Obtener estado y ejemplos del auto-entrenamiento nocturno' })
-  async getAutoTraining() {
-    return this.whatsappService.getAutoTrainingConfig();
+  async getAutoTraining(@Req() req: any) {
+    return this.whatsappService.getAutoTrainingConfig(req.user.siteId);
   }
 
   @Post('auto-training/toggle')
+  @AllowDraftSiteSetup()
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('SUPERADMIN')
   @ApiOperation({ summary: 'Activar o pausar el auto-entrenamiento nocturno' })
-  async toggleAutoTraining(@Body() body: { enabled?: boolean }) {
+  async toggleAutoTraining(@Body() body: { enabled?: boolean }, @Req() req: any) {
     if (typeof body?.enabled !== 'boolean') {
       throw new BadRequestException('El estado de la programación debe ser verdadero o falso.');
     }
-    return this.whatsappService.toggleAutoTraining(body.enabled);
+    return this.whatsappService.toggleAutoTraining(body.enabled, req.user.siteId);
   }
 
   @Post('auto-training/examples/toggle')
+  @AllowDraftSiteSetup()
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('SUPERADMIN')
   @ApiOperation({ summary: 'Activar o pausar el uso de ejemplos aprobados en la IA' })
-  async toggleAutoTrainingExamples(@Body() body: { enabled?: boolean; approvedVersionId?: string }) {
+  async toggleAutoTrainingExamples(@Body() body: { enabled?: boolean; approvedVersionId?: string }, @Req() req: any) {
     if (typeof body?.enabled !== 'boolean') {
       throw new BadRequestException('El estado de los ejemplos debe ser verdadero o falso.');
     }
-    return this.whatsappService.toggleAutoTrainingExamples(body.enabled, body.approvedVersionId);
+    return this.whatsappService.toggleAutoTrainingExamples(body.enabled, body.approvedVersionId, req.user.siteId);
   }
 
   @Post('auto-training/run')
+  @AllowDraftSiteSetup()
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('SUPERADMIN')
   @ApiOperation({ summary: 'Ejecutar auto-entrenamiento manualmente con chats recientes' })
-  async runAutoTraining() {
-    return this.whatsappService.runAutoTrainingNow();
+  async runAutoTraining(@Req() req: any) {
+    return this.whatsappService.runAutoTrainingNow('manual', req.user.siteId);
   }
 
   @Post('auto-training/approve')
+  @AllowDraftSiteSetup()
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('SUPERADMIN')
   @ApiOperation({ summary: 'Aprobar ejemplos revisados y guardar una versión reversible' })
-  async approveAutoTraining(@Body() body: { examples?: unknown; candidateSetId?: string }) {
-    return this.whatsappService.approveAutoTrainingExamples(body?.examples, body?.candidateSetId);
+  async approveAutoTraining(@Body() body: { examples?: unknown; candidateSetId?: string }, @Req() req: any) {
+    return this.whatsappService.approveAutoTrainingExamples(body?.examples, body?.candidateSetId, req.user.siteId);
   }
 
   @Post('auto-training/reject')
+  @AllowDraftSiteSetup()
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('SUPERADMIN')
   @ApiOperation({ summary: 'Descartar los candidatos pendientes sin cambiar los aprobados' })
-  async rejectAutoTraining(@Body() body?: { candidateSetId?: string }) {
-    return this.whatsappService.rejectAutoTrainingCandidates(body?.candidateSetId);
+  async rejectAutoTraining(@Body() body: { candidateSetId?: string } | undefined, @Req() req: any) {
+    return this.whatsappService.rejectAutoTrainingCandidates(body?.candidateSetId, req.user.siteId);
   }
 
   @Post('auto-training/rollback')
+  @AllowDraftSiteSetup()
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('SUPERADMIN')
   @ApiOperation({ summary: 'Restaurar una versión aprobada anterior' })
-  async rollbackAutoTraining(@Body() body: { versionId?: string }) {
-    return this.whatsappService.rollbackAutoTrainingVersion(body?.versionId);
+  async rollbackAutoTraining(@Body() body: { versionId?: string }, @Req() req: any) {
+    return this.whatsappService.rollbackAutoTrainingVersion(body?.versionId, req.user.siteId);
   }
 
   @Get('gemini-metrics')
+  @AllowDraftSiteSetup()
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('SUPERADMIN', 'ADMIN')
   @ApiOperation({ summary: 'Consultar métricas agregadas de uso y errores de Gemini' })
-  async getGeminiMetrics(@Query('days') days?: string) {
+  async getGeminiMetrics(@Query('days') days: string | undefined, @Req() req: any) {
     const daysNum = Math.min(30, Math.max(1, Number(days) || 14));
-    return this.whatsappService.getGeminiMetrics(daysNum);
+    return this.whatsappService.getGeminiMetrics(daysNum, req.user.siteId);
   }
 
   @Post('parse-order')
   @UseGuards(JwtAuthGuard, PermissionsGuard)
   @Permissions('whatsapp.order_create')
-  async parseOrder(@Body('text') text: string) {
+  async parseOrder(@Body('text') text: string, @Request() req: any) {
     if (!text) {
       throw new BadRequestException('Texto del chat no provisto');
     }
-    return this.whatsappService.parseOrderWithGemini(text);
+    return this.whatsappService.parseOrderWithGemini(text, req.user.siteId);
   }
 
   @Get('order-chat/:orderId')
@@ -582,12 +653,14 @@ export class WhatsappController {
     @Query('before') before?: string,
     @Query('beforeId') beforeId?: string,
     @Query('limit') limit?: string,
+    @Req() req?: any,
   ) {
     return this.whatsappService.getOrderChat(
       orderId,
       before,
       limit ? Number.parseInt(limit, 10) : undefined,
       beforeId,
+      req?.user?.siteId,
     );
   }
 
@@ -599,9 +672,11 @@ export class WhatsappController {
     @Param('orderId') orderId: string,
     @Param('proofId') proofId: string,
     @Res() res: express.Response,
+    @Req() req: any,
+    @Headers('if-none-match') ifNoneMatch?: string,
   ) {
-    const proof = await this.whatsappService.getOrderChatProof(orderId, proofId);
-    return this.sendPrivateOrderChatProof(res, proof);
+    const proof = await this.whatsappService.getOrderChatProof(orderId, proofId, req.user.siteId);
+    return this.sendPrivateOrderChatProof(res, proof, ifNoneMatch);
   }
 
   @Post('order-chat/:orderId/send')
@@ -611,10 +686,11 @@ export class WhatsappController {
   async sendOrderChatMessage(
     @Param('orderId') orderId: string,
     @Body('text') text: string,
+    @Req() req: any,
   ) {
     if (!text || !text.trim()) {
       throw new BadRequestException('El mensaje no puede estar vacío');
     }
-    return this.whatsappService.sendOrderChatMessage(orderId, text.trim());
+    return this.whatsappService.sendOrderChatMessage(orderId, text.trim(), req.user.siteId);
   }
 }

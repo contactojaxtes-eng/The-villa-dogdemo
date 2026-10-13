@@ -24,7 +24,9 @@ import { basename, isAbsolute, join, relative } from 'path';
 import { SuperadminModule } from './superadmin/superadmin.module';
 import { RolesModule } from './roles/roles.module';
 import { TablesModule } from './tables/tables.module';
+import { SiteSettingsModule } from './site-settings/site-settings.module';
 import { AppController } from './app.controller';
+import { MultisiteBootstrapService } from './common/multisite-bootstrap.service';
 
 const clientDistPath = join(__dirname, '..', '..', 'client', 'dist');
 const clientAssetsPath = join(clientDistPath, 'assets');
@@ -70,9 +72,11 @@ export function isImmutableViteAsset(filePath: string): boolean {
     CustomersModule,
     DeliveryDriversModule,
     TablesModule,
+    SiteSettingsModule,
     SuperadminModule,
   ],
   controllers: [AppController],
+  providers: [MultisiteBootstrapService],
 })
 export class AppModule {}
  

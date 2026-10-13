@@ -51,8 +51,9 @@ import {
   allNavItems,
   getHiddenModules,
   hasNavItemAccess,
-  MODULE_VISIBILITY_STORAGE_KEY,
+  saveHiddenModules,
 } from '@/lib/navigation'
+import type { ModuleVisibilityResponse } from '@/lib/moduleVisibility'
 
 interface ModuleDef {
   id: string
@@ -195,6 +196,16 @@ const toTimeInput = (value: string, fallback: string) => {
   return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`
 }
 
+interface MetaConnectionTestResult {
+  success: boolean
+  message: string
+  displayPhoneNumber?: string
+  verifiedName?: string
+  qualityRating?: string
+  status?: string
+  hint?: string
+}
+
 const parseRestaurantSchedule = (value: string) => {
   const [opening, closing] = String(value || '').split('-').map(part => part.trim())
   return { openingTime: toTimeInput(opening, '12:00'), closingTime: toTimeInput(closing, '23:00') }
@@ -215,10 +226,13 @@ const getErrorMessage = (error: unknown, fallback: string) => error instanceof E
 
 export default function ModuleSettingsPage() {
   const { user } = useAuth()
-  const [activeTab, setActiveTab] = useState<SettingsTab>('MODULES')
-  const [hiddenModules, setHiddenModules] = useState<string[]>(() => getHiddenModules())
+  const activeSiteId = user?.activeSite?.id
+  const preparationMode = user?.activeSite?.preparationMode === true
+  const [activeTab, setActiveTab] = useState<SettingsTab>(() => preparationMode ? 'WHATSAPP' : 'MODULES')
+  const [hiddenModules, setHiddenModules] = useState<string[]>(() => getHiddenModules(activeSiteId))
   const [loadingOperations, setLoadingOperations] = useState(true)
   const [savingSection, setSavingSection] = useState<SettingsTab | null>(null)
+  const [savingModules, setSavingModules] = useState(false)
   const [downloadingBridge, setDownloadingBridge] = useState(false)
   const [uploadingQr, setUploadingQr] = useState(false)
   const [testingPrinterId, setTestingPrinterId] = useState<string | null>(null)
@@ -236,6 +250,19 @@ export default function ModuleSettingsPage() {
   const [busyCookId, setBusyCookId] = useState<string | null>(null)
   const [clockNow, setClockNow] = useState(Date.now())
   const [regeneratingMenu, setRegeneratingMenu] = useState(false)
+  const [testingMeta, setTestingMeta] = useState(false)
+  const [metaTestResult, setMetaTestResult] = useState<MetaConnectionTestResult | null>(null)
+
+  useEffect(() => {
+    const syncModules = () => setHiddenModules(getHiddenModules(activeSiteId))
+    syncModules()
+    window.addEventListener('storage', syncModules)
+    window.addEventListener('the-villa-dog-modules-changed', syncModules)
+    return () => {
+      window.removeEventListener('storage', syncModules)
+      window.removeEventListener('the-villa-dog-modules-changed', syncModules)
+    }
+  }, [activeSiteId])
 
   const accessibleModules = useMemo(
     () => MODULE_DEFINITIONS.filter(def => allNavItems.some(item => item.module === def.id && hasNavItemAccess(user, item))),
@@ -272,7 +299,9 @@ export default function ModuleSettingsPage() {
       api.get<PrinterSettings>('/print/settings').catch(() => null),
       api.get<Array<{ id: string; name: string }>>('/menu/categories?includeInactive=true').catch(() => []),
       api.get<KitchenUser[]>('/users').catch(() => []),
-      api.get<Record<string, CookStatus>>('/kitchen/delivery/cooks/status').catch(() => ({})),
+      preparationMode
+        ? Promise.resolve({} as Record<string, CookStatus>)
+        : api.get<Record<string, CookStatus>>('/kitchen/delivery/cooks/status').catch(() => ({})),
     ]).then(([wa, kitchenSettings, stationRows, printerSettings, categoryRows, userRows, cookStatuses]) => {
       if (!active) return
       if (wa) {
@@ -322,12 +351,13 @@ export default function ModuleSettingsPage() {
   }, [])
 
   useEffect(() => {
+    if (preparationMode) return
     const timer = window.setInterval(() => setClockNow(Date.now()), 30000)
     return () => window.clearInterval(timer)
-  }, [])
+  }, [preparationMode])
 
   useEffect(() => {
-    if (!user?.id) return
+    if (!user?.id || preparationMode) return
     const socketUrl = import.meta.env.VITE_API_URL || window.location.origin
     const socket = io(`${socketUrl}/the-villa-dog`, { transports: ['websocket', 'polling'] })
     socket.on('whatsappSettingsUpdated', (updated: Partial<WhatsappSettings>) => {
@@ -354,16 +384,31 @@ export default function ModuleSettingsPage() {
       api.get<KitchenStation[]>('/kitchen/stations').then(rows => setStations(rows || [])).catch(() => {})
     })
     return () => { socket.disconnect() }
-  }, [user?.id])
+  }, [preparationMode, user?.id])
 
-  const persistModules = (next: string[]) => {
+  const persistModules = async (next: string[], successMessage?: string) => {
+    if (savingModules) return
+    const previous = hiddenModules
     const sanitized = next.filter(id => id !== 'settings' && id !== 'superadmin')
     setHiddenModules(sanitized)
-    localStorage.setItem(MODULE_VISIBILITY_STORAGE_KEY, JSON.stringify(sanitized))
-    window.dispatchEvent(new Event('the-villa-dog-modules-changed'))
+    setSavingModules(true)
+    try {
+      const updated = await api.put<ModuleVisibilityResponse>('/site-settings/module-visibility', {
+        hiddenModules: sanitized,
+      })
+      const saved = saveHiddenModules(updated.hiddenModules, activeSiteId)
+      setHiddenModules(saved)
+      if (successMessage) alerts.toast(successMessage)
+    } catch (error: unknown) {
+      setHiddenModules(previous)
+      alerts.error('No se guardaron los módulos', getErrorMessage(error, 'Inténtalo nuevamente.'))
+    } finally {
+      setSavingModules(false)
+    }
   }
 
   const toggleModule = (moduleId: string) => {
+    if (savingModules) return
     if (moduleId === 'settings' || moduleId === 'superadmin') {
       alerts.warning('Módulo permanente', 'Configuración debe permanecer visible.')
       return
@@ -371,18 +416,19 @@ export default function ModuleSettingsPage() {
     const next = hiddenModules.includes(moduleId)
       ? hiddenModules.filter(id => id !== moduleId)
       : [...hiddenModules, moduleId]
-    persistModules(next)
+    void persistModules(next)
   }
 
   const showAll = () => {
-    persistModules([])
-    alerts.toast('Todos los módulos están visibles')
+    void persistModules([], 'Todos los módulos están visibles en esta sede')
   }
 
   const useSalonMode = () => {
     const essentials = ['tables', 'tables_new', 'tables_history', 'kitchen', 'cash_registers', 'cash_control', 'settings', 'dashboard']
-    persistModules(accessibleModules.filter(module => !essentials.includes(module.id) && !module.isPermanent).map(module => module.id))
-    alerts.toast('Vista de salón aplicada')
+    void persistModules(
+      accessibleModules.filter(module => !essentials.includes(module.id) && !module.isPermanent).map(module => module.id),
+      'Vista de salón aplicada a esta sede',
+    )
   }
 
   const saveWhatsapp = async () => {
@@ -427,6 +473,26 @@ export default function ModuleSettingsPage() {
       alerts.error('No se pudo guardar', getErrorMessage(error, 'Inténtalo nuevamente.'))
     } finally {
       setSavingSection(null)
+    }
+  }
+
+  const testMetaConnection = async () => {
+    setTestingMeta(true)
+    setMetaTestResult(null)
+    try {
+      const result = await api.post<MetaConnectionTestResult>('/whatsapp/test-meta', {})
+      setMetaTestResult(result)
+      if (result.success) {
+        alerts.success('Conexión Meta verificada', result.message)
+      } else {
+        alerts.error('Meta rechazó la conexión', result.hint ? `${result.message} ${result.hint}` : result.message)
+      }
+    } catch (error: unknown) {
+      const message = getErrorMessage(error, 'No se pudo comprobar la conexión con Meta.')
+      setMetaTestResult({ success: false, message })
+      alerts.error('No se pudo probar Meta', message)
+    } finally {
+      setTestingMeta(false)
     }
   }
 
@@ -821,11 +887,12 @@ export default function ModuleSettingsPage() {
   }
 
   const activeCount = accessibleModules.filter(module => !hiddenModules.includes(module.id)).length
-  const tabs: Array<{ id: SettingsTab; label: string; description: string; icon: LucideIcon }> = [
+  const allTabs: Array<{ id: SettingsTab; label: string; description: string; icon: LucideIcon }> = [
     { id: 'MODULES', label: 'Módulos', description: 'Organiza el menú lateral', icon: SlidersHorizontal },
     { id: 'WHATSAPP', label: 'WhatsApp y envíos', description: 'Bot, carta y cobros', icon: MessageCircle },
     { id: 'DELIVERY_KITCHEN', label: 'Cocina domicilios', description: 'Comandas, tablets e impresoras', icon: ChefHat },
   ]
+  const tabs = allTabs
 
   return (
     <div className="mx-auto max-w-[1500px] space-y-4 pb-8">
@@ -834,7 +901,7 @@ export default function ModuleSettingsPage() {
           <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[var(--accent)] text-[var(--accent-fg)]"><Settings className="h-5 w-5" /></div>
           <div><h1 className="text-xl font-black text-[var(--text-primary)]">Configuración</h1><p className="text-xs text-[var(--text-muted)]">Ajustes diarios de operación en un solo lugar.</p></div>
         </div>
-        <div className="flex items-center gap-2 rounded-xl bg-emerald-500/10 px-3 py-2 text-xs font-bold text-emerald-600"><CheckCircle2 className="h-4 w-4" /> WhatsApp y cocina se sincronizan en tiempo real</div>
+        <div className={cn('flex items-center gap-2 rounded-xl px-3 py-2 text-xs font-bold', preparationMode ? 'bg-amber-500/10 text-amber-700' : 'bg-emerald-500/10 text-emerald-600')}><CheckCircle2 className="h-4 w-4" /> {preparationMode ? 'Configuración aislada; tiempo real desactivado hasta activar la sede' : 'WhatsApp y cocina se sincronizan en tiempo real'}</div>
       </div>
 
       <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
@@ -853,8 +920,8 @@ export default function ModuleSettingsPage() {
       {activeTab === 'MODULES' && (
         <div className="space-y-3">
           <Card className="flex flex-col gap-3 rounded-2xl border-[var(--border-subtle)] bg-[var(--bg-panel)] p-4 sm:flex-row sm:items-center sm:justify-between">
-            <div><p className="text-sm font-black text-[var(--text-primary)]">{activeCount} de {accessibleModules.length} módulos visibles</p><p className="text-xs text-[var(--text-muted)]">Deja a cada equipo solo las funciones que usa.</p></div>
-            <div className="flex flex-wrap gap-2"><Button variant="outline" onClick={useSalonMode} className="h-9 rounded-xl text-xs font-bold"><Sparkles className="mr-1.5 h-4 w-4 text-[var(--accent)]" /> Solo salón</Button><Button variant="outline" onClick={showAll} className="h-9 rounded-xl text-xs font-bold text-emerald-600"><RotateCcw className="mr-1.5 h-4 w-4" /> Mostrar todo</Button></div>
+            <div><p className="text-sm font-black text-[var(--text-primary)]">{activeCount} de {accessibleModules.length} módulos visibles</p><p className="text-xs text-[var(--text-muted)]">Esta selección se comparte con todos los usuarios y dispositivos de {user?.activeSite?.name || 'la sede'}.</p></div>
+            <div className="flex flex-wrap gap-2"><Button variant="outline" onClick={useSalonMode} disabled={savingModules} className="h-9 rounded-xl text-xs font-bold"><Sparkles className="mr-1.5 h-4 w-4 text-[var(--accent)]" /> Solo salón</Button><Button variant="outline" onClick={showAll} disabled={savingModules} className="h-9 rounded-xl text-xs font-bold text-emerald-600"><RotateCcw className="mr-1.5 h-4 w-4" /> Mostrar todo</Button></div>
           </Card>
           <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
             {groupedModules.map(([section, modules]) => (
@@ -869,7 +936,7 @@ export default function ModuleSettingsPage() {
                         <span className={cn('flex h-9 w-9 shrink-0 items-center justify-center rounded-xl', visible ? 'bg-[var(--accent)]/10 text-[var(--accent)]' : 'bg-[var(--bg-elevated)] text-[var(--text-muted)]')}><Icon className="h-4 w-4" /></span>
                         <div className="min-w-0 flex-1"><p className="truncate text-sm font-bold text-[var(--text-primary)]">{module.name}</p><p className="truncate text-[11px] text-[var(--text-muted)]">{module.description}</p></div>
                         {module.isPermanent ? <span className="flex h-8 items-center gap-1 rounded-lg bg-blue-500/10 px-2 text-[10px] font-bold text-blue-600"><Lock className="h-3 w-3" /> Fijo</span> : (
-                          <button type="button" role="switch" aria-checked={visible} aria-label={`${visible ? 'Ocultar' : 'Mostrar'} ${module.name}`} onClick={() => toggleModule(module.id)} className={cn('relative h-6 w-11 shrink-0 rounded-full transition', visible ? 'bg-emerald-500' : 'bg-slate-300 dark:bg-slate-700')}><span className={cn('absolute top-1 h-4 w-4 rounded-full bg-white shadow transition-all', visible ? 'left-6' : 'left-1')} /></button>
+                          <button type="button" role="switch" aria-checked={visible} aria-label={`${visible ? 'Ocultar' : 'Mostrar'} ${module.name}`} disabled={savingModules} onClick={() => toggleModule(module.id)} className={cn('relative h-6 w-11 shrink-0 rounded-full transition disabled:cursor-wait disabled:opacity-60', visible ? 'bg-emerald-500' : 'bg-slate-300 dark:bg-slate-700')}><span className={cn('absolute top-1 h-4 w-4 rounded-full bg-white shadow transition-all', visible ? 'left-6' : 'left-1')} /></button>
                         )}
                       </div>
                     )
@@ -883,6 +950,29 @@ export default function ModuleSettingsPage() {
 
       {activeTab === 'WHATSAPP' && (loadingOperations ? <LoadingPanel label="Cargando configuración de WhatsApp..." /> : (
         <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+          {preparationMode && (
+            <Card className="rounded-2xl border-blue-500/25 bg-blue-500/5 p-4 xl:col-span-2">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <p className="text-sm font-black text-[var(--text-primary)]">Comprobar el número propio de esta sede</p>
+                  <p className="mt-1 text-[11px] leading-5 text-[var(--text-secondary)]">La prueba consulta los datos del número en Meta usando las variables de Railway. No envía mensajes, no descarga archivos y no habilita el webhook operativo.</p>
+                </div>
+                <Button type="button" variant="outline" onClick={() => void testMetaConnection()} disabled={testingMeta} className="h-10 shrink-0 rounded-xl font-black">
+                  {testingMeta ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <BadgeCheck className="mr-2 h-4 w-4" />}
+                  Probar conexión Meta
+                </Button>
+              </div>
+              {metaTestResult && (
+                <div className={cn('mt-3 rounded-xl border px-3 py-2 text-xs leading-5', metaTestResult.success ? 'border-emerald-500/25 bg-emerald-500/5 text-emerald-700 dark:text-emerald-300' : 'border-red-500/25 bg-red-500/5 text-red-700 dark:text-red-300')}>
+                  <p className="font-black">{metaTestResult.success ? 'Conexión correcta' : 'Conexión pendiente'}</p>
+                  <p>{metaTestResult.message}</p>
+                  {metaTestResult.success && (metaTestResult.verifiedName || metaTestResult.displayPhoneNumber) && (
+                    <p className="mt-1 opacity-80">{[metaTestResult.verifiedName, metaTestResult.displayPhoneNumber].filter(Boolean).join(' · ')}</p>
+                  )}
+                </div>
+              )}
+            </Card>
+          )}
           <Card className="rounded-2xl border-[var(--border-subtle)] bg-[var(--bg-panel)] p-5">
             <div className="mb-5 flex items-start justify-between gap-3">
               <div className="flex gap-3"><span className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-500/10 text-emerald-600"><Bot className="h-5 w-5" /></span><div><h2 className="font-black text-[var(--text-primary)]">WhatsApp y chatbot</h2><p className="text-xs text-[var(--text-muted)]">Controla la atención automática desde aquí o desde el chat.</p></div></div>
@@ -973,7 +1063,7 @@ export default function ModuleSettingsPage() {
                   </div>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
-                  <Button type="button" onClick={downloadConfiguredBridge} disabled={downloadingBridge} className="h-10 rounded-xl bg-sky-600 px-4 text-xs font-black text-white shadow-sm transition hover:bg-sky-700">
+                  <Button type="button" onClick={downloadConfiguredBridge} disabled={downloadingBridge} title={preparationMode ? 'Instala el puente aislado de esta sede para probarlo antes de activarla' : undefined} className="h-10 rounded-xl bg-sky-600 px-4 text-xs font-black text-white shadow-sm transition hover:bg-sky-700">
                     {downloadingBridge ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Download className="mr-1.5 h-4 w-4" />} Instalar automáticamente
                   </Button>
                   <Button type="button" onClick={downloadStandaloneExe} className="h-10 rounded-xl bg-emerald-600 px-4 text-xs font-black text-white shadow-sm transition hover:bg-emerald-700">
@@ -1017,7 +1107,7 @@ export default function ModuleSettingsPage() {
                     <div key={station.id} className={cn('overflow-hidden rounded-2xl border bg-[var(--bg-elevated)]', station.active ? 'border-[var(--border-subtle)]' : 'border-amber-500/30 opacity-80')}>
                       <div className="flex items-center gap-3 border-b border-[var(--border-subtle)] p-3">
                         <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-white" style={{ backgroundColor: station.color || '#F97316' }}><Tablet className="h-4 w-4" /></span>
-                        <div className="min-w-0 flex-1"><p className="truncate text-sm font-black text-[var(--text-primary)]">{station.name}</p><p className="text-[10px] text-[var(--text-muted)]">Tablet {index + 1} · {station.active ? 'recibiendo pedidos' : 'pausada'}</p></div>
+                        <div className="min-w-0 flex-1"><p className="truncate text-sm font-black text-[var(--text-primary)]">{station.name}</p><p className="text-[10px] text-[var(--text-muted)]">Tablet {index + 1} · {preparationMode ? (station.active ? 'preparada' : 'desactivada') : station.active ? 'recibiendo pedidos' : 'pausada'}</p></div>
                         <button type="button" onClick={() => openDeliveryStationEditor(station)} className="flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--border-subtle)] text-[var(--text-secondary)]" title="Editar puesto"><Edit2 className="h-3.5 w-3.5" /></button>
                         <button type="button" onClick={() => setDeliveryStationActive(station, !station.active)} className={cn('h-8 rounded-lg border px-2.5 text-[10px] font-black', station.active ? 'border-amber-500/30 text-amber-600' : 'border-emerald-500/30 text-emerald-600')}>{station.active ? 'Pausar tablet' : 'Activar tablet'}</button>
                       </div>
@@ -1036,9 +1126,9 @@ export default function ModuleSettingsPage() {
                                 <span className="min-w-28 flex-1 truncate text-xs font-bold text-[var(--text-primary)]">{cook.name}</span>
                                 <span className="text-[9px] font-bold text-[var(--text-muted)]">{onBreak ? `${status.breakReason || 'Descanso'} · ${remainingMinutes} min` : active ? 'Disponible' : 'Fuera del reparto'}</span>
                                 {busyCookId === cook.id ? <Loader2 className="h-4 w-4 animate-spin text-[var(--accent)]" /> : onBreak ? (
-                                  <button type="button" onClick={() => updateDeliveryCookStatus(cook.id, { onBreak: false })} className="h-7 rounded-lg bg-emerald-500/10 px-2 text-[9px] font-black text-emerald-600">Reincorporar</button>
+                                  <button type="button" disabled={preparationMode} onClick={() => updateDeliveryCookStatus(cook.id, { onBreak: false })} className="h-7 rounded-lg bg-emerald-500/10 px-2 text-[9px] font-black text-emerald-600 disabled:opacity-40">Reincorporar</button>
                                 ) : (
-                                  <><button type="button" disabled={!active} onClick={() => updateDeliveryCookStatus(cook.id, { onBreak: true, breakMinutes: 15, breakReason: 'Descanso' })} className="h-7 rounded-lg bg-amber-500/10 px-2 text-[9px] font-black text-amber-700 disabled:opacity-40">Descanso 15m</button><button type="button" onClick={() => updateDeliveryCookStatus(cook.id, { active: !active })} className="h-7 rounded-lg border border-[var(--border-subtle)] px-2 text-[9px] font-black text-[var(--text-secondary)]">{active ? 'Sacar' : 'Activar'}</button></>
+                                  <><button type="button" disabled={!active || preparationMode} onClick={() => updateDeliveryCookStatus(cook.id, { onBreak: true, breakMinutes: 15, breakReason: 'Descanso' })} className="h-7 rounded-lg bg-amber-500/10 px-2 text-[9px] font-black text-amber-700 disabled:opacity-40">Descanso 15m</button><button type="button" disabled={preparationMode} onClick={() => updateDeliveryCookStatus(cook.id, { active: !active })} className="h-7 rounded-lg border border-[var(--border-subtle)] px-2 text-[9px] font-black text-[var(--text-secondary)] disabled:opacity-40">{active ? 'Sacar' : 'Activar'}</button></>
                                 )}
                               </div>
                             )
@@ -1054,7 +1144,7 @@ export default function ModuleSettingsPage() {
 
             {['PRINT', 'BOTH'].includes(kitchen.deliveryKitchenMode) && (
             <Card className="rounded-2xl border-[var(--border-subtle)] bg-[var(--bg-panel)] p-5">
-              <div className="mb-4 flex flex-wrap items-center justify-between gap-3"><div><h2 className="font-black text-[var(--text-primary)]">Impresoras de preparación</h2><p className="text-xs text-[var(--text-muted)]">La IP se cambia aquí y el puente local la recibe desde el servidor.</p></div><div className="flex items-center gap-2"><Button variant="outline" onClick={clearPrintQueue} disabled={clearingQueue} className="h-9 rounded-xl border-rose-500/30 text-xs font-bold text-rose-500 hover:bg-rose-500/10" title="Elimina comandas pendientes acumuladas">{clearingQueue ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <Trash2 className="mr-1 h-3.5 w-3.5" />} Limpiar cola pendiente</Button><Button variant="outline" onClick={addPrinter} className="h-9 rounded-xl text-xs font-bold"><Plus className="mr-1 h-4 w-4" /> Agregar</Button></div></div>
+              <div className="mb-4 flex flex-wrap items-center justify-between gap-3"><div><h2 className="font-black text-[var(--text-primary)]">Impresoras de preparación</h2><p className="text-xs text-[var(--text-muted)]">La IP se cambia aquí y el puente local la recibe desde el servidor.</p></div><div className="flex items-center gap-2"><Button variant="outline" onClick={clearPrintQueue} disabled={clearingQueue} className="h-9 rounded-xl border-rose-500/30 text-xs font-bold text-rose-500 hover:bg-rose-500/10" title={preparationMode ? 'Elimina solamente las pruebas pendientes de esta sede' : 'Elimina comandas pendientes acumuladas'}>{clearingQueue ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <Trash2 className="mr-1 h-3.5 w-3.5" />} Limpiar cola pendiente</Button><Button variant="outline" onClick={addPrinter} className="h-9 rounded-xl text-xs font-bold"><Plus className="mr-1 h-4 w-4" /> Agregar</Button></div></div>
               {deliveryPrinters.length === 0 ? (
                 <button type="button" onClick={addPrinter} className="w-full rounded-2xl border border-dashed border-[var(--border-default)] p-8 text-sm font-bold text-[var(--text-muted)] hover:text-[var(--accent)]"><Plus className="mx-auto mb-2 h-5 w-5" /> Agregar impresora de domicilios</button>
               ) : (
@@ -1075,7 +1165,7 @@ export default function ModuleSettingsPage() {
                         <p className="mt-2 text-[10px] text-[var(--text-muted)]">{isUsb ? 'Escribe el nombre de la impresora tal como aparece en Windows (ej: XP-80C). El puente la detecta e imprime directamente sin necesidad de compartirla.' : 'La IP puede cambiarse desde aquí, incluso estando fuera del restaurante.'}</p>
                         <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
                           <div className="flex items-center gap-3"><label className="flex items-center gap-1.5 text-xs font-bold text-[var(--text-secondary)]"><input type="checkbox" checked={printer.enabled !== false} onChange={event => updatePrinter(printer.id, { enabled: event.target.checked })} className="accent-[var(--accent)]" /> Activa</label><select value={printer.paper || '80'} onChange={event => updatePrinter(printer.id, { paper: event.target.value })} className="h-8 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-panel)] px-2 text-xs text-[var(--text-primary)]"><option value="80">Papel 80 mm</option><option value="58">Papel 58 mm</option></select></div>
-                          <button type="button" disabled={testingPrinterId === printer.id || !hasValidPrinterAddress(printer)} onClick={() => testPrinter(printer)} className="flex h-8 items-center gap-1.5 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-panel)] px-3 text-xs font-bold text-[var(--text-secondary)] disabled:opacity-50" title="Enviar una comanda de prueba a esta impresora">{testingPrinterId === printer.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Printer className="h-3.5 w-3.5" />} Probar impresora</button>
+                          <button type="button" disabled={testingPrinterId === printer.id || !hasValidPrinterAddress(printer)} onClick={() => testPrinter(printer)} className="flex h-8 items-center gap-1.5 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-panel)] px-3 text-xs font-bold text-[var(--text-secondary)] disabled:opacity-50" title={preparationMode ? 'Envía una hoja de prueba solo a la cola aislada de esta sede' : 'Enviar una comanda de prueba a esta impresora'}>{testingPrinterId === printer.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Printer className="h-3.5 w-3.5" />} Probar impresora</button>
                         </div>
                       </div>
                     )

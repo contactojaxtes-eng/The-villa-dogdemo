@@ -8,43 +8,51 @@ datasource db {
 }
 
 model User {
-  id            String          @id @default(uuid())
-  name          String
-  email         String          @unique
-  password      String
-  phone         String?
-  photo         String?
-  role          String          @default("CASHIER")
-  permissions   Json?
-  active        Boolean         @default(true)
+  id                  String    @id @default(uuid())
+  name                String
+  email               String    @unique
+  password            String
+  phone               String?
+  photo               String?
+  role                String    @default("CASHIER")
+  // Cuenta con control administrativo de toda la organización. Se mantiene
+  // separado del rol operativo ADMIN, que puede existir solamente dentro de
+  // una sede mediante UserSiteMembership.
+  isOrganizationAdmin Boolean   @default(false)
+  permissions         Json?
+  active              Boolean   @default(true)
   failedLoginAttempts Int       @default(0)
-  lockoutUntil  DateTime?
-  mustVerifyEmail Boolean       @default(false)
-  emailVerified Boolean         @default(true)
-  createdAt     DateTime        @default(now())
-  updatedAt     DateTime        @updatedAt
+  lockoutUntil        DateTime?
+  mustVerifyEmail     Boolean   @default(false)
+  emailVerified       Boolean   @default(true)
+  lastActiveSiteId    String?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
 
-  orders           Order[]
-  assignedOrders   Order[]         @relation("OrderAssignment")
-  cancelledOrders  Order[]         @relation("OrderCancellation")
-  expenses         Expense[]
-  cashClosings     CashClosing[]
-  managedRegisters CashRegister[]  @relation("RegisterManager")
-  waiterMetrics    WaiterMetric[]
-  waiterBadges     WaiterBadge[]
-  shifts           Shift[]
-  notifications    Notification[]
-  whatsappSessions WhatsAppSession[]
-  passwordResetTokens PasswordResetToken[]
-  diningTables    DiningTable[]
-  kitchenTickets  KitchenTicket[] @relation("KitchenTicketAssignee")
-  kitchenStations KitchenStation[] @relation("KitchenStationUsers")
-  orderChangeLogs OrderChangeLog[]
-  transferProofs  TransferProof[] @relation("TransferProofSubmittedBy")
-  reviewedProofs  TransferProof[] @relation("TransferProofReviewedBy")
-  receivedDriverSettlements DriverSettlement[] @relation("DriverSettlementReceiver")
-  deliveryDriverProfile DeliveryDriver? @relation("DeliveryDriverAccount")
+  lastActiveSite            Site?                @relation("UserLastActiveSite", fields: [lastActiveSiteId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  siteMemberships           UserSiteMembership[]
+  orders                    Order[]
+  assignedOrders            Order[]              @relation("OrderAssignment")
+  cancelledOrders           Order[]              @relation("OrderCancellation")
+  expenses                  Expense[]
+  cashClosings              CashClosing[]
+  managedRegisters          CashRegister[]       @relation("RegisterManager")
+  waiterMetrics             WaiterMetric[]
+  waiterBadges              WaiterBadge[]
+  shifts                    Shift[]
+  notifications             Notification[]
+  whatsappSessions          WhatsAppSession[]
+  passwordResetTokens       PasswordResetToken[]
+  diningTables              DiningTable[]
+  kitchenTickets            KitchenTicket[]      @relation("KitchenTicketAssignee")
+  kitchenStations           KitchenStation[]     @relation("KitchenStationUsers")
+  orderChangeLogs           OrderChangeLog[]
+  transferProofs            TransferProof[]      @relation("TransferProofSubmittedBy")
+  reviewedProofs            TransferProof[]      @relation("TransferProofReviewedBy")
+  receivedDriverSettlements DriverSettlement[]   @relation("DriverSettlementReceiver")
+  deliveryDriverProfiles    DeliveryDriver[]     @relation("DeliveryDriverAccount")
 
+  @@index([lastActiveSiteId])
   @@map("users")
 }
 
@@ -55,11 +63,103 @@ model PasswordResetToken {
   usedAt    DateTime?
   createdAt DateTime  @default(now())
 
-  userId    String
-  user      User      @relation(fields: [userId], references: [id])
+  userId String
+  user   User   @relation(fields: [userId], references: [id])
 
   @@index([userId])
   @@map("password_reset_tokens")
+}
+
+model Organization {
+  id        String   @id @default(uuid())
+  name      String
+  slug      String   @unique
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  sites Site[]
+
+  @@index([active])
+  @@map("organizations")
+}
+
+model Site {
+  id             String   @id @default(uuid())
+  organizationId String
+  code           String
+  name           String
+  timezone       String   @default("America/Bogota")
+  address        String?
+  phone          String?
+  active         Boolean  @default(false)
+  isDefault      Boolean  @default(false)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization      Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  usersLastActive   User[]               @relation("UserLastActiveSite")
+  memberships       UserSiteMembership[]
+  settings          SiteSetting[]
+  deliveryZones     DeliveryZone[]
+  cashRegisters     CashRegister[]
+  cashClosings      CashClosing[]
+  expenseCategories ExpenseCategory[]
+  expenses          Expense[]
+  customerPayments  CustomerPayment[]
+  customers         Customer[]
+  orders            Order[]
+  printJobs         PrintJob[]
+  deliveryDrivers   DeliveryDriver[]
+  driverSettlements DriverSettlement[]
+  diningTables      DiningTable[]
+  kitchenStations   KitchenStation[]
+  kitchenTickets    KitchenTicket[]
+  whatsappAccount   WhatsAppAccount?
+  whatsappSessions  WhatsAppSession[]
+  notifications     Notification[]
+  waiterMetrics     WaiterMetric[]
+  waiterBadges      WaiterBadge[]
+  menuCategories    MenuCategory[]
+  menuItems         MenuItem[]
+
+  @@unique([organizationId, code])
+  @@index([organizationId, active])
+  @@index([active, isDefault])
+  @@map("sites")
+}
+
+model UserSiteMembership {
+  userId      String
+  siteId      String
+  role        String
+  permissions Json?
+  active      Boolean  @default(true)
+  isDefault   Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  site Site @relation(fields: [siteId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+
+  @@id([userId, siteId])
+  @@index([siteId, active])
+  @@index([userId, active, isDefault])
+  @@map("user_site_memberships")
+}
+
+model SiteSetting {
+  id        String   @id @default(uuid())
+  siteId    String
+  key       String
+  value     String
+  updatedAt DateTime @updatedAt
+
+  site Site @relation(fields: [siteId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+
+  @@unique([siteId, key])
+  @@index([siteId])
+  @@map("site_settings")
 }
 
 model AuditLog {
@@ -93,147 +193,167 @@ model ErrorLog {
 }
 
 model MenuCategory {
-  id          String     @id @default(uuid())
+  id          String   @id @default(uuid())
+  siteId      String   @default("00000000-0000-4000-8000-000000000101")
   name        String
   description String?
-  active      Boolean    @default(true)
-  sortOrder   Int        @default(0)
-  createdAt   DateTime   @default(now())
+  active      Boolean  @default(true)
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now())
 
-  items       MenuItem[]
+  site            Site       @relation(fields: [siteId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  items           MenuItem[]
   kitchenStations KitchenStation[]
 
+  @@index([siteId, active, sortOrder])
   @@map("menu_categories")
 }
 
 model MenuItem {
-  id          String       @id @default(uuid())
-  name        String
-  code        String?      @unique
-  description String?
-  price       Float        @default(0)
-  image       String?
-  active      Boolean      @default(true)
-  availableForDelivery Boolean @default(true)
-  sortOrder   Int          @default(0)
-  categoryId  String
-  type        String       @default("NORMAL")
-  comboItems  Json?
-  prepTime    Int          @default(10)
-  createdAt   DateTime     @default(now())
-  updatedAt   DateTime     @updatedAt
+  id                   String   @id @default(uuid())
+  siteId               String   @default("00000000-0000-4000-8000-000000000101")
+  name                 String
+  code                 String?
+  description          String?
+  price                Float    @default(0)
+  image                String?
+  active               Boolean  @default(true)
+  availableForDelivery Boolean  @default(true)
+  sortOrder            Int      @default(0)
+  categoryId           String
+  type                 String   @default("NORMAL")
+  comboItems           Json?
+  prepTime             Int      @default(10)
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
 
-  category    MenuCategory @relation(fields: [categoryId], references: [id])
-  orderItems  OrderItem[]
-  recipe      Recipe?
+  site               Site                @relation(fields: [siteId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  category           MenuCategory        @relation(fields: [categoryId], references: [id])
+  orderItems         OrderItem[]
+  recipe             Recipe?
   kitchenTicketItems KitchenTicketItem[]
 
+  @@unique([siteId, code])
+  @@index([siteId, categoryId, active, sortOrder])
   @@map("menu_items")
 }
 
 model DeliveryZone {
-  id          String   @id @default(uuid())
-  name        String
-  zoneGroup   String   @default("General")
-  rate        Float    @default(0)
-  km          Float?
-  latitude    Float?
-  longitude   Float?
-  active      Boolean  @default(true)
-  createdAt   DateTime @default(now())
+  id        String   @id @default(uuid())
+  name      String
+  zoneGroup String   @default("General")
+  rate      Float    @default(0)
+  km        Float?
+  latitude  Float?
+  longitude Float?
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
 
-  orders      Order[]
+  siteId String @default("00000000-0000-4000-8000-000000000101")
+  site   Site   @relation(fields: [siteId], references: [id])
 
+  orders Order[]
+
+  @@index([siteId, active])
   @@map("delivery_zones")
 }
 
 model CashRegister {
-  id          String        @id @default(uuid())
+  id          String   @id @default(uuid())
   name        String
   description String?
-  purpose     String        @default("GENERAL")
-  active      Boolean       @default(true)
-  createdAt   DateTime      @default(now())
+  purpose     String   @default("GENERAL")
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
 
-  managerId   String?
-  manager     User?         @relation("RegisterManager", fields: [managerId], references: [id])
-  closings    CashClosing[]
-  orders      Order[]
+  siteId String @default("00000000-0000-4000-8000-000000000101")
+  site   Site   @relation(fields: [siteId], references: [id])
+
+  managerId    String?
+  manager      User?         @relation("RegisterManager", fields: [managerId], references: [id])
+  closings     CashClosing[]
+  orders       Order[]
   diningTables DiningTable[]
 
-  @@index([purpose, active])
+  @@index([siteId, purpose, active])
   @@map("cash_registers")
 }
 
 model Order {
-  id                String   @id @default(uuid())
-  orderNumber       Int
-  invoiceNumber     Int?
-  customerName      String
-  customerPhone     String
-  customerAddress   String
-  addressReference  String?
-  latitude          Float?
-  longitude         Float?
-  notes             String?
-  subtotal          Float    @default(0)
-  tax               Float    @default(0)
-  deliveryFee       Float    @default(0)
-  total             Float    @default(0)
-  tip               Float    @default(0)
-  status            String   @default("PENDING")
-  orderType         String   @default("DELIVERY")
-  source            String   @default("MANUAL")
-  paymentMethod     String   @default("CASH")
+  id                    String    @id @default(uuid())
+  orderNumber           Int
+  invoiceNumber         Int?
+  customerName          String
+  customerPhone         String
+  customerAddress       String
+  addressReference      String?
+  latitude              Float?
+  longitude             Float?
+  notes                 String?
+  subtotal              Float     @default(0)
+  tax                   Float     @default(0)
+  deliveryFee           Float     @default(0)
+  total                 Float     @default(0)
+  tip                   Float     @default(0)
+  status                String    @default("PENDING")
+  orderType             String    @default("DELIVERY")
+  source                String    @default("MANUAL")
+  paymentMethod         String    @default("CASH")
   originalPaymentMethod String?
-  cashAmount        Float?   @default(0)
-  transferAmount    Float?   @default(0)
-  paymentStatus     String   @default("PENDING")
-  paymentReference  String?
-  rated             Boolean  @default(false)
-  rating            Int?
-  cancellationReason String?
-  cancelledAt       DateTime?
-  whatsappMessageId String?
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
+  cashAmount            Float?    @default(0)
+  transferAmount        Float?    @default(0)
+  paymentStatus         String    @default("PENDING")
+  paymentReference      String?
+  rated                 Boolean   @default(false)
+  rating                Int?
+  cancellationReason    String?
+  cancelledAt           DateTime?
+  whatsappMessageId     String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
 
-  waiterId          String
-  zoneId            String?
-  assignedTo        String?
-  cancelledById     String?
-  cashRegisterId    String?
-  cashClosingId     String?
+  siteId String @default("00000000-0000-4000-8000-000000000101")
+  site   Site   @relation(fields: [siteId], references: [id])
+
+  waiterId           String
+  zoneId             String?
+  assignedTo         String?
+  cancelledById      String?
+  cashRegisterId     String?
+  cashClosingId      String?
   driverSettlementId String?
-  customerId        String?
-  deliveryDriverId  String?
-  chatSessionId     String?
-  tableId           String?
-  kitchenStatus     String   @default("NOT_SENT")
-  sentToKitchenAt   DateTime?
-  servedAt          DateTime?
-  clientMutationId  String?  @unique
+  customerId         String?
+  deliveryDriverId   String?
+  chatSessionId      String?
+  tableId            String?
+  kitchenStatus      String    @default("NOT_SENT")
+  sentToKitchenAt    DateTime?
+  servedAt           DateTime?
+  clientMutationId   String?
 
-  waiter            User            @relation(fields: [waiterId], references: [id])
-  zone              DeliveryZone?   @relation(fields: [zoneId], references: [id])
-  assignee          User?           @relation("OrderAssignment", fields: [assignedTo], references: [id])
-  cancelledBy       User?           @relation("OrderCancellation", fields: [cancelledById], references: [id])
-  cashRegister      CashRegister?   @relation(fields: [cashRegisterId], references: [id])
-  cashClosing       CashClosing?    @relation(fields: [cashClosingId], references: [id])
-  driverSettlement  DriverSettlement? @relation(fields: [driverSettlementId], references: [id])
-  customer          Customer?       @relation(fields: [customerId], references: [id])
-  deliveryDriver    DeliveryDriver? @relation(fields: [deliveryDriverId], references: [id])
-  items             OrderItem[]
-  payment           Payment?
-  stockMovements    StockMovement[]
-  diningTable       DiningTable? @relation(fields: [tableId], references: [id])
-  kitchenTickets    KitchenTicket[]
-  changeLogs        OrderChangeLog[]
-  transferProofs    TransferProof[]
-  chatMessages      WhatsAppMessage[]
+  waiter           User              @relation(fields: [waiterId], references: [id])
+  zone             DeliveryZone?     @relation(fields: [zoneId], references: [id])
+  assignee         User?             @relation("OrderAssignment", fields: [assignedTo], references: [id])
+  cancelledBy      User?             @relation("OrderCancellation", fields: [cancelledById], references: [id])
+  cashRegister     CashRegister?     @relation(fields: [cashRegisterId], references: [id])
+  cashClosing      CashClosing?      @relation(fields: [cashClosingId], references: [id])
+  driverSettlement DriverSettlement? @relation(fields: [driverSettlementId], references: [id])
+  customer         Customer?         @relation(fields: [customerId], references: [id])
+  deliveryDriver   DeliveryDriver?   @relation(fields: [deliveryDriverId], references: [id])
+  items            OrderItem[]
+  payment          Payment?
+  stockMovements   StockMovement[]
+  diningTable      DiningTable?      @relation(fields: [tableId], references: [id])
+  kitchenTickets   KitchenTicket[]
+  changeLogs       OrderChangeLog[]
+  transferProofs   TransferProof[]
+  chatMessages     WhatsAppMessage[]
 
-  @@index([createdAt])
-  @@index([status])
+  @@unique([siteId, clientMutationId])
+  @@index([siteId, createdAt])
+  @@index([siteId, status])
+  @@index([siteId, orderNumber, createdAt])
+  @@index([siteId, invoiceNumber])
   @@index([customerPhone])
   @@index([waiterId])
   @@index([assignedTo])
@@ -244,23 +364,23 @@ model Order {
   @@index([chatSessionId])
   @@index([tableId])
   @@index([kitchenStatus])
-  @@index([orderType, createdAt])
-  @@index([orderType, status, createdAt])
+  @@index([siteId, orderType, createdAt])
+  @@index([siteId, orderType, status, createdAt])
   @@map("orders")
 }
 
 model OrderItem {
-  id         String   @id @default(uuid())
-  quantity   Int      @default(1)
-  unitPrice  Float    @default(0)
-  totalPrice Float    @default(0)
+  id         String  @id @default(uuid())
+  quantity   Int     @default(1)
+  unitPrice  Float   @default(0)
+  totalPrice Float   @default(0)
   notes      String?
 
   orderId    String
   menuItemId String
 
-  order      Order    @relation(fields: [orderId], references: [id])
-  menuItem   MenuItem @relation(fields: [menuItemId], references: [id])
+  order              Order               @relation(fields: [orderId], references: [id])
+  menuItem           MenuItem            @relation(fields: [menuItemId], references: [id])
   kitchenTicketItems KitchenTicketItem[]
 
   @@index([orderId])
@@ -269,21 +389,21 @@ model OrderItem {
 }
 
 model Payment {
-  id          String   @id @default(uuid())
-  amount      Float    @default(0)
-  method      String   @default("CASH")
-  cashAmount  Float?   @default(0)
-  transferAmount Float? @default(0)
-  reference   String?
-  proofImage  String?
-  settlementId String?
-  status      String   @default("PENDING")
-  confirmedAt DateTime?
-  confirmedBy String?
-  createdAt   DateTime @default(now())
+  id             String    @id @default(uuid())
+  amount         Float     @default(0)
+  method         String    @default("CASH")
+  cashAmount     Float?    @default(0)
+  transferAmount Float?    @default(0)
+  reference      String?
+  proofImage     String?
+  settlementId   String?
+  status         String    @default("PENDING")
+  confirmedAt    DateTime?
+  confirmedBy    String?
+  createdAt      DateTime  @default(now())
 
-  orderId     String   @unique
-  order       Order    @relation(fields: [orderId], references: [id])
+  orderId        String          @unique
+  order          Order           @relation(fields: [orderId], references: [id])
   transferProofs TransferProof[]
 
   @@index([settlementId])
@@ -304,9 +424,9 @@ model Ingredient {
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 
-  recipeItems      RecipeIngredient[]
-  movements        StockMovement[]
-  purchaseItems    PurchaseItem[]
+  recipeItems   RecipeIngredient[]
+  movements     StockMovement[]
+  purchaseItems PurchaseItem[]
 
   @@map("ingredients")
 }
@@ -317,42 +437,42 @@ model Recipe {
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
-  menuItem   MenuItem           @relation(fields: [menuItemId], references: [id])
-  items      RecipeIngredient[]
+  menuItem MenuItem           @relation(fields: [menuItemId], references: [id])
+  items    RecipeIngredient[]
 
   @@map("recipes")
 }
 
 model RecipeIngredient {
-  id              String @id @default(uuid())
-  quantity        Float  @default(1)
-  wastePercentage Float  @default(0)
+  id              String  @id @default(uuid())
+  quantity        Float   @default(1)
+  wastePercentage Float   @default(0)
   unit            String?
   recipeId        String
   ingredientId    String
 
-  recipe          Recipe     @relation(fields: [recipeId], references: [id], onDelete: Cascade)
-  ingredient      Ingredient @relation(fields: [ingredientId], references: [id])
+  recipe     Recipe     @relation(fields: [recipeId], references: [id], onDelete: Cascade)
+  ingredient Ingredient @relation(fields: [ingredientId], references: [id])
 
   @@unique([recipeId, ingredientId])
   @@map("recipe_ingredients")
 }
 
 model StockMovement {
-  id           String   @id @default(uuid())
-  type         String
-  quantity     Float
-  stockBefore  Float
-  stockAfter   Float
-  notes        String?
-  createdAt    DateTime @default(now())
+  id          String   @id @default(uuid())
+  type        String
+  quantity    Float
+  stockBefore Float
+  stockAfter  Float
+  notes       String?
+  createdAt   DateTime @default(now())
 
   ingredientId String
   orderId      String?
   userId       String?
 
-  ingredient   Ingredient @relation(fields: [ingredientId], references: [id])
-  order        Order?     @relation(fields: [orderId], references: [id])
+  ingredient Ingredient @relation(fields: [ingredientId], references: [id])
+  order      Order?     @relation(fields: [orderId], references: [id])
 
   @@index([ingredientId])
   @@index([orderId])
@@ -360,63 +480,75 @@ model StockMovement {
 }
 
 model ExpenseCategory {
-  id          String    @id @default(uuid())
+  id          String  @id @default(uuid())
   name        String
   description String?
-  active      Boolean   @default(true)
+  active      Boolean @default(true)
 
-  expenses    Expense[]
+  siteId String @default("00000000-0000-4000-8000-000000000101")
+  site   Site   @relation(fields: [siteId], references: [id])
 
+  expenses Expense[]
+
+  @@index([siteId, active])
   @@map("expense_categories")
 }
 
 model Expense {
-  id           String          @id @default(uuid())
+  id           String   @id @default(uuid())
   description  String
-  amount       Float           @default(0)
-  date         DateTime        @default(now())
+  amount       Float    @default(0)
+  date         DateTime @default(now())
   receiptImage String?
-  createdAt    DateTime        @default(now())
+  createdAt    DateTime @default(now())
 
-  categoryId   String
-  userId       String
+  siteId String @default("00000000-0000-4000-8000-000000000101")
+  site   Site   @relation(fields: [siteId], references: [id])
 
-  category     ExpenseCategory @relation(fields: [categoryId], references: [id])
-  user         User            @relation(fields: [userId], references: [id])
+  categoryId String
+  userId     String
 
+  category ExpenseCategory @relation(fields: [categoryId], references: [id])
+  user     User            @relation(fields: [userId], references: [id])
+
+  @@index([siteId, createdAt])
+  @@index([siteId, categoryId])
   @@map("expenses")
 }
 
 model CashClosing {
-  id             String   @id @default(uuid())
-  shiftStart     DateTime
-  shiftEnd       DateTime @default(now())
-  initialCash    Float    @default(0)
-  totalCash      Float    @default(0)
-  totalTransfers Float    @default(0)
-  totalNequi     Float    @default(0)
-  totalBancolombia Float  @default(0)
-  totalDaviplata Float    @default(0)
-  totalSales     Float    @default(0)
-  totalTips      Float    @default(0)
-  totalExpenses  Float    @default(0)
-  discrepancy    Float    @default(0)
-  notes          String?
-  isOpen         Boolean  @default(false)
-  createdAt      DateTime @default(now())
+  id               String   @id @default(uuid())
+  shiftStart       DateTime
+  shiftEnd         DateTime @default(now())
+  initialCash      Float    @default(0)
+  totalCash        Float    @default(0)
+  totalTransfers   Float    @default(0)
+  totalNequi       Float    @default(0)
+  totalBancolombia Float    @default(0)
+  totalDaviplata   Float    @default(0)
+  totalSales       Float    @default(0)
+  totalTips        Float    @default(0)
+  totalExpenses    Float    @default(0)
+  discrepancy      Float    @default(0)
+  notes            String?
+  isOpen           Boolean  @default(false)
+  createdAt        DateTime @default(now())
+
+  siteId String @default("00000000-0000-4000-8000-000000000101")
+  site   Site   @relation(fields: [siteId], references: [id])
 
   userId         String
   cashRegisterId String?
 
-  user           User          @relation(fields: [userId], references: [id])
-  cashRegister   CashRegister? @relation(fields: [cashRegisterId], references: [id])
-  diningTables   DiningTable[]
-  orders         Order[]
+  user              User               @relation(fields: [userId], references: [id])
+  cashRegister      CashRegister?      @relation(fields: [cashRegisterId], references: [id])
+  diningTables      DiningTable[]
+  orders            Order[]
   driverSettlements DriverSettlement[]
-  transferProofs TransferProof[]
+  transferProofs    TransferProof[]
 
-  @@index([userId, isOpen])
-  @@index([cashRegisterId, isOpen])
+  @@index([siteId, userId, isOpen])
+  @@index([siteId, cashRegisterId, isOpen])
   @@map("cash_closings")
 }
 
@@ -432,52 +564,60 @@ model WaiterMetric {
   ratingCount     Int      @default(0)
   createdAt       DateTime @default(now())
 
-  userId          String
-  user            User     @relation(fields: [userId], references: [id])
+  userId String
+  user   User   @relation(fields: [userId], references: [id])
 
-  @@unique([userId, date])
+  siteId String @default("00000000-0000-4000-8000-000000000101")
+  site   Site   @relation(fields: [siteId], references: [id])
+
+  @@unique([siteId, userId, date])
+  @@index([siteId, date])
   @@map("waiter_metrics")
 }
 
 model Badge {
-  id             String        @id @default(uuid())
+  id             String   @id @default(uuid())
   name           String
   description    String
   icon           String
   condition      String
-  pointsRequired Int           @default(0)
-  active         Boolean       @default(true)
-  createdAt      DateTime      @default(now())
+  pointsRequired Int      @default(0)
+  active         Boolean  @default(true)
+  createdAt      DateTime @default(now())
 
-  waiterBadges   WaiterBadge[]
+  waiterBadges WaiterBadge[]
 
   @@map("badges")
 }
 
 model WaiterBadge {
-  id        String   @id @default(uuid())
-  earnedAt  DateTime @default(now())
-  week      String
+  id       String   @id @default(uuid())
+  earnedAt DateTime @default(now())
+  week     String
 
-  userId    String
-  badgeId   String
+  userId  String
+  badgeId String
 
-  user      User     @relation(fields: [userId], references: [id])
-  badge     Badge    @relation(fields: [badgeId], references: [id])
+  user  User  @relation(fields: [userId], references: [id])
+  badge Badge @relation(fields: [badgeId], references: [id])
 
-  @@unique([userId, badgeId, week])
+  siteId String @default("00000000-0000-4000-8000-000000000101")
+  site   Site   @relation(fields: [siteId], references: [id])
+
+  @@unique([siteId, userId, badgeId, week])
+  @@index([siteId, week])
   @@map("waiter_badges")
 }
 
 model Shift {
-  id        String   @id @default(uuid())
+  id        String    @id @default(uuid())
   startTime DateTime
   endTime   DateTime?
-  active    Boolean  @default(true)
-  createdAt DateTime @default(now())
+  active    Boolean   @default(true)
+  createdAt DateTime  @default(now())
 
-  userId    String
-  user      User     @relation(fields: [userId], references: [id])
+  userId String
+  user   User   @relation(fields: [userId], references: [id])
 
   @@map("shifts")
 }
@@ -490,15 +630,38 @@ model Notification {
   read      Boolean  @default(false)
   createdAt DateTime @default(now())
 
-  userId    String
-  user      User     @relation(fields: [userId], references: [id])
+  userId String
+  user   User   @relation(fields: [userId], references: [id])
 
+  siteId String @default("00000000-0000-4000-8000-000000000101")
+  site   Site   @relation(fields: [siteId], references: [id])
+
+  @@index([siteId, userId, read, createdAt])
   @@map("notifications")
+}
+
+model WhatsAppAccount {
+  id                 String   @id @default(uuid())
+  siteId             String   @unique
+  phoneNumberId      String   @unique
+  businessAccountId  String?
+  displayPhoneNumber String?
+  accessTokenEnvKey  String?
+  verifyTokenEnvKey  String?
+  active             Boolean  @default(false)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  site Site @relation(fields: [siteId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+
+  @@index([active])
+  @@index([businessAccountId])
+  @@map("whatsapp_accounts")
 }
 
 model WhatsAppSession {
   id                String   @id @default(uuid())
-  phone             String   @unique
+  phone             String
   customerPhone     String?
   customerName      String?
   lastMessageAt     DateTime @default(now())
@@ -506,16 +669,19 @@ model WhatsAppSession {
   waitingForAdvisor Boolean  @default(false)
   createdAt         DateTime @default(now())
 
-  assignedToId      String?
-  assignedTo        User?    @relation(fields: [assignedToId], references: [id])
-  messages          WhatsAppMessage[]
+  siteId       String            @default("00000000-0000-4000-8000-000000000101")
+  site         Site              @relation(fields: [siteId], references: [id])
+  assignedToId String?
+  assignedTo   User?             @relation(fields: [assignedToId], references: [id])
+  messages     WhatsAppMessage[]
 
-  @@index([lastMessageAt])
-  @@index([active])
-  @@index([waitingForAdvisor])
-  @@index([customerPhone])
-  @@index([active, lastMessageAt])
-  @@index([active, assignedToId, lastMessageAt])
+  @@unique([siteId, phone])
+  @@index([siteId, lastMessageAt])
+  @@index([siteId, active])
+  @@index([siteId, waitingForAdvisor])
+  @@index([siteId, customerPhone])
+  @@index([siteId, active, lastMessageAt])
+  @@index([siteId, active, assignedToId, lastMessageAt])
   @@map("whatsapp_sessions")
 }
 
@@ -532,10 +698,10 @@ model WhatsAppMessage {
   replyToDirection String?
   createdAt        DateTime @default(now())
 
-  sessionId   String
-  session     WhatsAppSession @relation(fields: [sessionId], references: [id])
-  orderId     String?
-  order       Order? @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  sessionId String
+  session   WhatsAppSession @relation(fields: [sessionId], references: [id])
+  orderId   String?
+  order     Order?          @relation(fields: [orderId], references: [id], onDelete: SetNull)
 
   @@index([sessionId])
   @@index([createdAt])
@@ -562,115 +728,136 @@ model PrintJob {
   impreso     Boolean  @default(false)
   createdAt   DateTime @default(now()) @map("fecha_creacion")
 
-  @@index([impreso, id], map: "cola_impresion_impreso_id_idx")
+  siteId String @default("00000000-0000-4000-8000-000000000101")
+  site   Site   @relation(fields: [siteId], references: [id])
+
+  @@index([siteId, impreso, id], map: "cola_impresion_site_impreso_id_idx")
   @@map("cola_impresion")
 }
 
 model Supplier {
-  id          String      @id @default(uuid())
-  name        String
-  nit         String?
-  phone       String?
-  address     String?
-  active      Boolean     @default(true)
-  createdAt   DateTime    @default(now())
-  updatedAt   DateTime    @updatedAt
-  purchases   Purchase[]
+  id        String     @id @default(uuid())
+  name      String
+  nit       String?
+  phone     String?
+  address   String?
+  active    Boolean    @default(true)
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+  purchases Purchase[]
 
   @@map("suppliers")
 }
 
 model Purchase {
-  id            String          @id @default(uuid())
+  id            String   @id @default(uuid())
   invoiceNumber String
-  purchaseDate  DateTime        @default(now())
-  total         Float           @default(0)
+  purchaseDate  DateTime @default(now())
+  total         Float    @default(0)
   notes         String?
-  createdAt     DateTime        @default(now())
-  updatedAt     DateTime        @updatedAt
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
-  supplierId    String
-  supplier      Supplier        @relation(fields: [supplierId], references: [id])
-  items         PurchaseItem[]
+  supplierId String
+  supplier   Supplier       @relation(fields: [supplierId], references: [id])
+  items      PurchaseItem[]
 
   @@map("purchases")
 }
 
 model PurchaseItem {
-  id            String      @id @default(uuid())
-  quantity      Float       @default(1)
-  unitCost      Float       @default(0)
-  totalCost     Float       @default(0)
+  id        String @id @default(uuid())
+  quantity  Float  @default(1)
+  unitCost  Float  @default(0)
+  totalCost Float  @default(0)
 
-  purchaseId    String
-  ingredientId  String
-  purchase      Purchase    @relation(fields: [purchaseId], references: [id], onDelete: Cascade)
-  ingredient    Ingredient  @relation(fields: [ingredientId], references: [id])
+  purchaseId   String
+  ingredientId String
+  purchase     Purchase   @relation(fields: [purchaseId], references: [id], onDelete: Cascade)
+  ingredient   Ingredient @relation(fields: [ingredientId], references: [id])
 
   @@map("purchase_items")
 }
 
 model Customer {
-  id          String            @id @default(uuid())
-  name        String
-  phone       String            @unique
-  address     String?
-  active      Boolean           @default(true)
-  createdAt   DateTime          @default(now())
-  updatedAt   DateTime          @updatedAt
-  orders      Order[]
-  payments    CustomerPayment[]
+  id        String            @id @default(uuid())
+  name      String
+  phone     String
+  address   String?
+  active    Boolean           @default(true)
+  createdAt DateTime          @default(now())
+  updatedAt DateTime          @updatedAt
+  siteId    String            @default("00000000-0000-4000-8000-000000000101")
+  site      Site              @relation(fields: [siteId], references: [id])
+  orders    Order[]
+  payments  CustomerPayment[]
+
+  @@unique([siteId, phone])
+  @@index([siteId, active])
+  @@index([siteId, createdAt])
 
   @@map("customers")
 }
 
 model CustomerPayment {
-  id             String        @id @default(uuid())
+  id             String   @id @default(uuid())
   amount         Float
-  method         String        @default("CASH")
+  method         String   @default("CASH")
   reference      String?
   notes          String?
-  createdAt      DateTime      @default(now())
+  createdAt      DateTime @default(now())
+  siteId         String   @default("00000000-0000-4000-8000-000000000101")
+  site           Site     @relation(fields: [siteId], references: [id])
   customerId     String
-  customer       Customer      @relation(fields: [customerId], references: [id])
+  customer       Customer @relation(fields: [customerId], references: [id])
   cashRegisterId String?
   confirmedById  String?
+
+  @@index([siteId, createdAt])
+  @@index([siteId, cashRegisterId, createdAt])
 }
 
 model DeliveryDriver {
-  id        String   @id @default(uuid())
-  name      String
-  phone     String
-  active    Boolean  @default(true)
-  userId    String?  @unique
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  user      User?    @relation("DeliveryDriverAccount", fields: [userId], references: [id], onDelete: SetNull)
-  orders    Order[]
+  id          String             @id @default(uuid())
+  name        String
+  phone       String
+  active      Boolean            @default(true)
+  userId      String?
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+  siteId      String             @default("00000000-0000-4000-8000-000000000101")
+  site        Site               @relation(fields: [siteId], references: [id])
+  user        User?              @relation("DeliveryDriverAccount", fields: [userId], references: [id], onDelete: SetNull)
+  orders      Order[]
   settlements DriverSettlement[]
 
+  @@unique([siteId, userId])
+  @@index([siteId, active])
   @@map("delivery_drivers")
 }
 
 model DriverSettlement {
-  id             String   @id @default(uuid())
-  expectedCash   Float
-  receivedCash   Float
-  difference     Float    @default(0)
-  notes          String?
-  createdAt      DateTime @default(now())
+  id           String   @id @default(uuid())
+  expectedCash Float
+  receivedCash Float
+  difference   Float    @default(0)
+  notes        String?
+  createdAt    DateTime @default(now())
 
-  driverId       String
-  cashClosingId  String
-  receivedById   String
+  siteId String @default("00000000-0000-4000-8000-000000000101")
+  site   Site   @relation(fields: [siteId], references: [id])
 
-  driver         DeliveryDriver @relation(fields: [driverId], references: [id])
-  cashClosing    CashClosing    @relation(fields: [cashClosingId], references: [id])
-  receivedBy     User           @relation("DriverSettlementReceiver", fields: [receivedById], references: [id])
-  orders         Order[]
+  driverId      String
+  cashClosingId String
+  receivedById  String
 
-  @@index([driverId, createdAt])
-  @@index([cashClosingId, createdAt])
+  driver      DeliveryDriver @relation(fields: [driverId], references: [id])
+  cashClosing CashClosing    @relation(fields: [cashClosingId], references: [id])
+  receivedBy  User           @relation("DriverSettlementReceiver", fields: [receivedById], references: [id])
+  orders      Order[]
+
+  @@index([siteId, driverId, createdAt])
+  @@index([siteId, cashClosingId, createdAt])
   @@map("driver_settlements")
 }
 
@@ -691,27 +878,30 @@ model CustomRole {
 }
 
 model DiningTable {
-  id             String    @id @default(uuid())
-  label          String
-  status         String    @default("OPEN")
-  notes          String?
-  openedAt       DateTime  @default(now())
-  closedAt       DateTime?
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
+  id        String    @id @default(uuid())
+  label     String
+  status    String    @default("OPEN")
+  notes     String?
+  openedAt  DateTime  @default(now())
+  closedAt  DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  siteId String @default("00000000-0000-4000-8000-000000000101")
+  site   Site   @relation(fields: [siteId], references: [id])
 
   openedById     String
   cashRegisterId String?
   cashClosingId  String?
 
-  openedBy       User          @relation(fields: [openedById], references: [id])
-  cashRegister   CashRegister? @relation(fields: [cashRegisterId], references: [id])
-  cashClosing    CashClosing?  @relation(fields: [cashClosingId], references: [id])
+  openedBy       User            @relation(fields: [openedById], references: [id])
+  cashRegister   CashRegister?   @relation(fields: [cashRegisterId], references: [id])
+  cashClosing    CashClosing?    @relation(fields: [cashClosingId], references: [id])
   orders         Order[]
   kitchenTickets KitchenTicket[]
   transferProofs TransferProof[]
 
-  @@index([status])
+  @@index([siteId, status])
   @@index([openedById])
   @@index([cashRegisterId])
   @@index([cashClosingId])
@@ -719,19 +909,22 @@ model DiningTable {
 }
 
 model KitchenStation {
-  id          String   @id @default(uuid())
-  name        String
-  active      Boolean  @default(true)
-  priority    Int      @default(0)
-  color       String?  @default("#F97316")
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id        String   @id @default(uuid())
+  name      String
+  active    Boolean  @default(true)
+  priority  Int      @default(0)
+  color     String?  @default("#F97316")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  categories  MenuCategory[]
-  users       User[] @relation("KitchenStationUsers")
-  tickets     KitchenTicket[]
+  siteId String @default("00000000-0000-4000-8000-000000000101")
+  site   Site   @relation(fields: [siteId], references: [id])
 
-  @@index([active])
+  categories MenuCategory[]
+  users      User[]          @relation("KitchenStationUsers")
+  tickets    KitchenTicket[]
+
+  @@index([siteId, active])
   @@map("kitchen_stations")
 }
 
@@ -746,18 +939,21 @@ model KitchenTicket {
   readyAt       DateTime?
   servedAt      DateTime?
 
-  orderId       String
-  tableId       String?
-  stationId     String
-  assignedToId  String?
+  siteId String @default("00000000-0000-4000-8000-000000000101")
+  site   Site   @relation(fields: [siteId], references: [id])
 
-  order         Order          @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  table         DiningTable?   @relation(fields: [tableId], references: [id])
-  station       KitchenStation @relation(fields: [stationId], references: [id])
-  assignedTo    User?          @relation("KitchenTicketAssignee", fields: [assignedToId], references: [id])
-  items         KitchenTicketItem[]
+  orderId      String
+  tableId      String?
+  stationId    String
+  assignedToId String?
 
-  @@index([status])
+  order      Order               @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  table      DiningTable?        @relation(fields: [tableId], references: [id])
+  station    KitchenStation      @relation(fields: [stationId], references: [id])
+  assignedTo User?               @relation("KitchenTicketAssignee", fields: [assignedToId], references: [id])
+  items      KitchenTicketItem[]
+
+  @@index([siteId, status])
   @@index([orderId])
   @@index([tableId])
   @@index([stationId])
@@ -766,21 +962,21 @@ model KitchenTicket {
 }
 
 model KitchenTicketItem {
-  id             String   @id @default(uuid())
-  quantity       Int      @default(1)
-  nameSnapshot   String
-  notes          String?
-  changeType     String   @default("UNCHANGED")
-  previousQty    Int?
-  previousNotes  String?
+  id            String  @id @default(uuid())
+  quantity      Int     @default(1)
+  nameSnapshot  String
+  notes         String?
+  changeType    String  @default("UNCHANGED")
+  previousQty   Int?
+  previousNotes String?
 
-  ticketId       String
-  orderItemId    String?
-  menuItemId     String
+  ticketId    String
+  orderItemId String?
+  menuItemId  String
 
-  ticket         KitchenTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
-  orderItem      OrderItem?     @relation(fields: [orderItemId], references: [id])
-  menuItem       MenuItem       @relation(fields: [menuItemId], references: [id])
+  ticket    KitchenTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  orderItem OrderItem?    @relation(fields: [orderItemId], references: [id])
+  menuItem  MenuItem      @relation(fields: [menuItemId], references: [id])
 
   @@index([ticketId])
   @@index([orderItemId])
@@ -789,16 +985,16 @@ model KitchenTicketItem {
 }
 
 model OrderChangeLog {
-  id         String   @id @default(uuid())
-  summary    String
-  changes    Json
-  createdAt  DateTime @default(now())
+  id        String   @id @default(uuid())
+  summary   String
+  changes   Json
+  createdAt DateTime @default(now())
 
-  orderId    String
-  userId     String
+  orderId String
+  userId  String
 
-  order      Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  user       User  @relation(fields: [userId], references: [id])
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id])
 
   @@index([orderId])
   @@index([userId])
@@ -806,34 +1002,34 @@ model OrderChangeLog {
 }
 
 model TransferProof {
-  id             String    @id @default(uuid())
-  status         String    @default("PENDING")
-  method         String    @default("TRANSFER")
-  amount         Float     @default(0)
-  filePath       String?
-  fileBase64     String?   @db.Text
-  originalName   String?
-  mimeType       String?
-  fileSize       Int?
+  id              String    @id @default(uuid())
+  status          String    @default("PENDING")
+  method          String    @default("TRANSFER")
+  amount          Float     @default(0)
+  filePath        String?
+  fileBase64      String?   @db.Text
+  originalName    String?
+  mimeType        String?
+  fileSize        Int?
   rejectionReason String?
-  purgedAt       DateTime?
-  reviewedAt     DateTime?
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
+  purgedAt        DateTime?
+  reviewedAt      DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
 
-  paymentId      String
-  orderId        String
-  tableId        String?
-  cashClosingId  String?
-  submittedById  String
-  reviewedById   String?
+  paymentId     String
+  orderId       String
+  tableId       String?
+  cashClosingId String?
+  submittedById String
+  reviewedById  String?
 
-  payment        Payment      @relation(fields: [paymentId], references: [id], onDelete: Cascade)
-  order          Order        @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  table          DiningTable? @relation(fields: [tableId], references: [id])
-  cashClosing    CashClosing? @relation(fields: [cashClosingId], references: [id])
-  submittedBy    User        @relation("TransferProofSubmittedBy", fields: [submittedById], references: [id])
-  reviewedBy     User?       @relation("TransferProofReviewedBy", fields: [reviewedById], references: [id])
+  payment     Payment      @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  order       Order        @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  table       DiningTable? @relation(fields: [tableId], references: [id])
+  cashClosing CashClosing? @relation(fields: [cashClosingId], references: [id])
+  submittedBy User         @relation("TransferProofSubmittedBy", fields: [submittedById], references: [id])
+  reviewedBy  User?        @relation("TransferProofReviewedBy", fields: [reviewedById], references: [id])
 
   @@index([status])
   @@index([paymentId])
@@ -842,4 +1038,3 @@ model TransferProof {
   @@index([cashClosingId])
   @@map("transfer_proofs")
 }
-

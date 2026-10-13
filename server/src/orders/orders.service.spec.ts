@@ -1,6 +1,167 @@
 import { OrdersService } from './orders.service';
+import { DEFAULT_SITE_ID } from '../common/multisite.constants';
+
+describe('Order staff site access', () => {
+  const buildService = () =>
+    new OrdersService(
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      { notifyJobCreated: jest.fn() } as any,
+    );
+
+  it('allows the authenticated SUPERADMIN actor to create a table order in a site without membership', async () => {
+    const tx: any = {
+      userSiteMembership: { count: jest.fn() },
+    };
+
+    await expect(
+      (buildService() as any).assertOrderStaffBelongsToSite(
+        {
+          waiterId: 'superadmin-1',
+          userId: 'superadmin-1',
+          userRole: 'SUPERADMIN',
+        },
+        'site-2',
+        tx,
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(tx.userSiteMembership.count).not.toHaveBeenCalled();
+  });
+
+  it('still requires membership for staff explicitly selected by a SUPERADMIN', async () => {
+    const tx: any = {
+      userSiteMembership: { count: jest.fn().mockResolvedValue(0) },
+    };
+
+    await expect(
+      (buildService() as any).assertOrderStaffBelongsToSite(
+        {
+          waiterId: 'waiter-from-another-site',
+          assignedTo: 'superadmin-1',
+          userId: 'superadmin-1',
+          userRole: 'SUPERADMIN',
+        },
+        'site-2',
+        tx,
+      ),
+    ).rejects.toThrow(
+      'Uno de los responsables del pedido no pertenece a esta sede.',
+    );
+
+    expect(tx.userSiteMembership.count).toHaveBeenCalledWith({
+      where: {
+        siteId: 'site-2',
+        active: true,
+        userId: { in: ['waiter-from-another-site'] },
+      },
+    });
+  });
+
+  it('keeps the membership requirement unchanged for regular actors', async () => {
+    const tx: any = {
+      userSiteMembership: { count: jest.fn().mockResolvedValue(0) },
+    };
+
+    await expect(
+      (buildService() as any).assertOrderStaffBelongsToSite(
+        {
+          waiterId: 'waiter-1',
+          assignedTo: 'waiter-1',
+          userId: 'waiter-1',
+          userRole: 'WAITER',
+        },
+        'site-2',
+        tx,
+      ),
+    ).rejects.toThrow(
+      'Uno de los responsables del pedido no pertenece a esta sede.',
+    );
+
+    expect(tx.userSiteMembership.count).toHaveBeenCalledWith({
+      where: {
+        siteId: 'site-2',
+        active: true,
+        userId: { in: ['waiter-1'] },
+      },
+    });
+  });
+});
 
 describe('Delivery order boundaries', () => {
+  it('rejects a new order when its WhatsApp session belongs to another site', async () => {
+    const tx: any = {
+      userSiteMembership: { count: jest.fn().mockResolvedValue(1) },
+      whatsAppSession: { findFirst: jest.fn().mockResolvedValue(null) },
+    };
+    const service = new OrdersService(
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      { notifyJobCreated: jest.fn() } as any,
+    );
+
+    await expect((service as any).createWithinTransaction({
+      siteId: 'site-2',
+      waiterId: 'advisor-2',
+      customerName: 'Cliente sede 2',
+      customerPhone: '3001234567',
+      customerAddress: 'Dirección sede 2',
+      chatSessionId: 'chat-from-site-1',
+      items: [{ menuItemId: 'item-1', quantity: 1 }],
+    }, tx)).rejects.toThrow('La conversación de WhatsApp no pertenece a esta sede');
+
+    expect(tx.whatsAppSession.findFirst).toHaveBeenCalledWith({
+      where: { id: 'chat-from-site-1', siteId: 'site-2' },
+      select: { id: true },
+    });
+  });
+
+  it('rejects moving an existing order to a WhatsApp session from another site', async () => {
+    const tx: any = {
+      order: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: 'order-2',
+          siteId: 'site-2',
+          status: 'PENDING',
+          paymentStatus: 'PENDING',
+          chatSessionId: null,
+          items: [],
+        }),
+      },
+      whatsAppSession: { findFirst: jest.fn().mockResolvedValue(null) },
+    };
+    const service = new OrdersService(
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      { notifyJobCreated: jest.fn() } as any,
+    );
+
+    await expect((service as any).updateWithinTransaction(
+      'order-2',
+      {
+        customerName: 'Cliente sede 2',
+        customerPhone: '3001234567',
+        customerAddress: 'Dirección sede 2',
+        chatSessionId: 'chat-from-site-1',
+        items: [{ menuItemId: 'item-1', quantity: 1 }],
+      },
+      tx,
+      { id: 'advisor-2', role: 'ADMIN', siteId: 'site-2' },
+      'site-2',
+    )).rejects.toThrow('La conversación de WhatsApp no pertenece a esta sede');
+
+    expect(tx.whatsAppSession.findFirst).toHaveBeenCalledWith({
+      where: { id: 'chat-from-site-1', siteId: 'site-2' },
+      select: { id: true },
+    });
+  });
+
   it('replays a client mutation without creating or notifying a duplicate order', async () => {
     const existingOrder = {
       id: 'order-1',
@@ -10,7 +171,7 @@ describe('Delivery order boundaries', () => {
     };
     const tx: any = {
       $queryRaw: jest.fn().mockResolvedValue([{ locked: 1 }]),
-      order: { findUnique: jest.fn().mockResolvedValue(existingOrder) },
+      order: { findFirst: jest.fn().mockResolvedValue(existingOrder) },
     };
     const prisma: any = {
       $transaction: jest.fn((callback: (transaction: any) => unknown) => callback(tx)),
@@ -25,6 +186,9 @@ describe('Delivery order boundaries', () => {
     });
 
     expect(result).toEqual({ ...existingOrder, idempotentReplay: true });
+    expect(tx.order.findFirst).toHaveBeenCalledWith({
+      where: { siteId: DEFAULT_SITE_ID, clientMutationId: 'mutation-1' },
+    });
     expect(socket.emitNewOrder).not.toHaveBeenCalled();
     expect(socket.server.emit).not.toHaveBeenCalled();
   });
@@ -38,7 +202,7 @@ describe('Delivery order boundaries', () => {
     await service.findAll({ orderType: 'DELIVERY,PICKUP' });
 
     expect(prisma.order.findMany).toHaveBeenCalledWith(expect.objectContaining({
-      where: { orderType: { in: ['DELIVERY', 'PICKUP'] } },
+      where: { siteId: DEFAULT_SITE_ID, orderType: { in: ['DELIVERY', 'PICKUP'] } },
     }));
   });
 
@@ -123,12 +287,17 @@ describe('Delivery order boundaries', () => {
     });
 
     expect(prisma.order.findMany).toHaveBeenCalledWith(expect.objectContaining({
-      where: { orderType: { in: ['DELIVERY', 'PICKUP'] }, status: 'DELIVERED' },
+      where: { siteId: DEFAULT_SITE_ID, orderType: { in: ['DELIVERY', 'PICKUP'] }, status: 'DELIVERED' },
       skip: 20,
       take: 20,
     }));
     expect(prisma.order.aggregate).toHaveBeenCalledWith(expect.objectContaining({
-      where: { orderType: { in: ['DELIVERY', 'PICKUP'] }, status: 'DELIVERED', paymentStatus: 'CONFIRMED' },
+      where: {
+        siteId: DEFAULT_SITE_ID,
+        orderType: { in: ['DELIVERY', 'PICKUP'] },
+        status: 'DELIVERED',
+        paymentStatus: 'CONFIRMED',
+      },
     }));
     expect(result).toMatchObject({
       pagination: { page: 2, total: 21, totalPages: 2 },
@@ -279,7 +448,7 @@ describe('Delivery order boundaries', () => {
   it('refuses an individual confirmed payment while a delivery is still in the kitchen', async () => {
     const prisma: any = {
       order: {
-        findUnique: jest.fn().mockResolvedValue({
+        findFirst: jest.fn().mockResolvedValue({
           id: 'order-kitchen',
           orderNumber: 308,
           status: 'PENDING',

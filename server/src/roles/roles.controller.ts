@@ -2,6 +2,7 @@ import { Controller, Get, Post, Put, Delete, Body, Param, UseGuards } from '@nes
 import { RolesService } from './roles.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard, Roles } from '../auth/guards/roles.guard';
+import { GlobalSiteManagerGuard } from '../auth/guards/global-site-manager.guard';
 
 @Controller('roles')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -21,6 +22,7 @@ export class RolesController {
 
   @Post()
   @Roles('SUPERADMIN', 'ADMIN')
+  @UseGuards(GlobalSiteManagerGuard)
   async create(
     @Body()
     body: {
@@ -37,6 +39,7 @@ export class RolesController {
 
   @Put(':id')
   @Roles('SUPERADMIN', 'ADMIN')
+  @UseGuards(GlobalSiteManagerGuard)
   async update(
     @Param('id') id: string,
     @Body()
@@ -54,6 +57,7 @@ export class RolesController {
 
   @Delete(':id')
   @Roles('SUPERADMIN', 'ADMIN')
+  @UseGuards(GlobalSiteManagerGuard)
   async remove(@Param('id') id: string) {
     return this.rolesService.remove(id);
   }

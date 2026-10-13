@@ -1,22 +1,24 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { DEFAULT_SITE_ID } from '../common/multisite.constants';
 
 @Injectable()
 export class RankingService {
   constructor(private prisma: PrismaService) {}
 
-  async getWeeklyRanking(weekStart?: string) {
+  async getWeeklyRanking(weekStart?: string, siteId = DEFAULT_SITE_ID) {
     const start = weekStart ? new Date(weekStart) : this.getMondayOfCurrentWeek();
     const end = new Date(start);
     end.setDate(end.getDate() + 7);
 
-    const waiters = await this.prisma.user.findMany({
-      where: { role: 'DELIVERY_MANAGER', active: true },
-      select: { id: true, name: true, photo: true },
+    const memberships = await this.prisma.userSiteMembership.findMany({
+      where: { siteId, role: 'DELIVERY_MANAGER', active: true, user: { active: true } },
+      include: { user: { select: { id: true, name: true, photo: true } } },
     });
+    const waiters = memberships.map((membership) => membership.user);
 
     const metrics = await this.prisma.waiterMetric.findMany({
-      where: { date: { gte: start, lt: end } },
+      where: { siteId, date: { gte: start, lt: end } },
     });
 
     const ranking = waiters.map(waiter => {
@@ -38,19 +40,20 @@ export class RankingService {
     return ranking.map((r, index) => ({ ...r, position: index + 1 }));
   }
 
-  async getMonthlyRanking(month?: string) {
+  async getMonthlyRanking(month?: string, siteId = DEFAULT_SITE_ID) {
     const now = new Date();
     const start = month ? new Date(month + '-01') : new Date(now.getFullYear(), now.getMonth(), 1);
     const end = new Date(start);
     end.setMonth(end.getMonth() + 1);
 
-    const waiters = await this.prisma.user.findMany({
-      where: { role: 'DELIVERY_MANAGER', active: true },
-      select: { id: true, name: true, photo: true },
+    const memberships = await this.prisma.userSiteMembership.findMany({
+      where: { siteId, role: 'DELIVERY_MANAGER', active: true, user: { active: true } },
+      include: { user: { select: { id: true, name: true, photo: true } } },
     });
+    const waiters = memberships.map((membership) => membership.user);
 
     const metrics = await this.prisma.waiterMetric.findMany({
-      where: { date: { gte: start, lt: end } },
+      where: { siteId, date: { gte: start, lt: end } },
     });
 
     const ranking = waiters.map(waiter => {
@@ -72,21 +75,21 @@ export class RankingService {
     return ranking.map((r, index) => ({ ...r, position: index + 1 }));
   }
 
-  async getWaiterStats(userId: string) {
+  async getWaiterStats(userId: string, siteId = DEFAULT_SITE_ID) {
     const now = new Date();
     const weekStart = this.getMondayOfCurrentWeek();
     const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
 
     const weeklyMetrics = await this.prisma.waiterMetric.findMany({
-      where: { userId, date: { gte: weekStart, lt: now } },
+      where: { siteId, userId, date: { gte: weekStart, lt: now } },
     });
 
     const monthlyMetrics = await this.prisma.waiterMetric.findMany({
-      where: { userId, date: { gte: monthStart, lt: now } },
+      where: { siteId, userId, date: { gte: monthStart, lt: now } },
     });
 
     const badges = await this.prisma.waiterBadge.findMany({
-      where: { userId },
+      where: { siteId, userId },
       include: { badge: true },
       orderBy: { earnedAt: 'desc' },
     });
@@ -108,19 +111,21 @@ export class RankingService {
     };
   }
 
-  async recalculateMetrics(date?: string) {
+  async recalculateMetrics(date?: string, siteId = DEFAULT_SITE_ID) {
     const targetDate = date ? new Date(date) : new Date();
     targetDate.setHours(0, 0, 0, 0);
     const nextDay = new Date(targetDate);
     nextDay.setDate(nextDay.getDate() + 1);
 
-    const waiters = await this.prisma.user.findMany({
-      where: { role: 'DELIVERY_MANAGER', active: true },
+    const memberships = await this.prisma.userSiteMembership.findMany({
+      where: { siteId, role: 'DELIVERY_MANAGER', active: true, user: { active: true } },
+      include: { user: true },
     });
+    const waiters = memberships.map((membership) => membership.user);
 
     for (const waiter of waiters) {
       const orders = await this.prisma.order.findMany({
-        where: { assignedTo: waiter.id, createdAt: { gte: targetDate, lt: nextDay } },
+        where: { siteId, assignedTo: waiter.id, createdAt: { gte: targetDate, lt: nextDay } },
       });
 
       const totalOrders = orders.length;
@@ -139,9 +144,9 @@ export class RankingService {
         : 0;
 
       await this.prisma.waiterMetric.upsert({
-        where: { userId_date: { userId: waiter.id, date: targetDate } },
+        where: { siteId_userId_date: { siteId, userId: waiter.id, date: targetDate } },
         update: { totalOrders, ordersDelivered, totalSales, totalTips, avgDeliveryTime, avgRating, ratingCount: ratedOrders.length },
-        create: { userId: waiter.id, date: targetDate, totalOrders, ordersDelivered, totalSales, totalTips, avgDeliveryTime, avgRating, ratingCount: ratedOrders.length },
+        create: { siteId, userId: waiter.id, date: targetDate, totalOrders, ordersDelivered, totalSales, totalTips, avgDeliveryTime, avgRating, ratingCount: ratedOrders.length },
       });
     }
 
@@ -160,8 +165,8 @@ export class RankingService {
     return this.prisma.badge.update({ where: { id }, data });
   }
 
-  async awardBadges() {
-    const ranking = await this.getWeeklyRanking();
+  async awardBadges(siteId = DEFAULT_SITE_ID) {
+    const ranking = await this.getWeeklyRanking(undefined, siteId);
     const weekId = this.getWeekIdentifier(new Date());
     const badges = await this.prisma.badge.findMany({ where: { active: true } });
     const awarded: any[] = [];
@@ -174,7 +179,7 @@ export class RankingService {
 
       for (const badge of badges) {
         if (badge.name.includes('Ventas') || badge.condition.includes('ventas')) {
-          await this.giveBadge(topSales.userId, badge.id, weekId);
+          await this.giveBadge(topSales.userId, badge.id, weekId, siteId);
           awarded.push({ badge: badge.name, user: topSales.name });
         }
       }
@@ -183,12 +188,12 @@ export class RankingService {
     return { awarded, week: weekId };
   }
 
-  private async giveBadge(userId: string, badgeId: string, week: string) {
+  private async giveBadge(userId: string, badgeId: string, week: string, siteId: string) {
     const existing = await this.prisma.waiterBadge.findUnique({
-      where: { userId_badgeId_week: { userId, badgeId, week } },
+      where: { siteId_userId_badgeId_week: { siteId, userId, badgeId, week } },
     });
     if (!existing) {
-      await this.prisma.waiterBadge.create({ data: { userId, badgeId, week } });
+      await this.prisma.waiterBadge.create({ data: { siteId, userId, badgeId, week } });
     }
   }
 

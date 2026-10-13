@@ -1,9 +1,13 @@
 import { AppController } from './app.controller';
 import { PrintQueueSignalService } from './print/print-queue-signal.service';
+import { DEFAULT_SITE_ID } from './common/multisite.constants';
+
+const SECOND_SITE_ID = '00000000-0000-4000-8000-000000000202';
 
 describe('AppController print queue', () => {
   let signal: PrintQueueSignalService;
   let prisma: any;
+  let printService: any;
   let controller: AppController;
 
   beforeEach(() => {
@@ -14,9 +18,15 @@ describe('AppController print queue', () => {
         findMany: jest.fn(),
         deleteMany: jest.fn(),
       },
-      appSetting: { findMany: jest.fn().mockResolvedValue([]) },
     };
-    controller = new AppController(prisma, signal);
+    printService = {
+      getPrinterSettings: jest.fn().mockResolvedValue({
+        printers: [],
+        caja: { ip: '', port: 9100 },
+        cocina: { ip: '', port: 9100 },
+      }),
+    };
+    controller = new AppController(prisma, signal, printService);
   });
 
   afterEach(() => {
@@ -30,6 +40,9 @@ describe('AppController print queue', () => {
     await expect(controller.getPrintQueue('0')).resolves.toEqual([]);
 
     expect(prisma.printJob.findMany).toHaveBeenCalledTimes(1);
+    expect(prisma.printJob.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { siteId: DEFAULT_SITE_ID, impreso: false },
+    }));
   });
 
   it('despierta y vuelve a consultar cuando se encola un trabajo', async () => {
@@ -43,14 +56,21 @@ describe('AppController print queue', () => {
       .mockResolvedValueOnce([])
       .mockResolvedValueOnce([job]);
 
-    const response = controller.getPrintQueue('25000');
+    const response = controller.getPrintQueue('25000', {
+      printBridgeSiteId: SECOND_SITE_ID,
+      once: jest.fn(),
+      off: jest.fn(),
+    } as any);
     await Promise.resolve();
-    signal.notifyJobCreated();
+    signal.notifyJobCreated(SECOND_SITE_ID);
 
     await expect(response).resolves.toEqual([
       expect.objectContaining({ id: 7, impresora_ip: 'USB:COCINA', payload: job.payload }),
     ]);
     expect(prisma.printJob.findMany).toHaveBeenCalledTimes(2);
+    expect(prisma.printJob.findMany).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      where: { siteId: SECOND_SITE_ID, impreso: false },
+    }));
   });
 
   it('devuelve una cola vacía al vencer la espera sin repetir la consulta', async () => {
@@ -88,5 +108,18 @@ describe('AppController print queue', () => {
     expect(cappedResolved).toBe(false);
     await jest.advanceTimersByTimeAsync(1);
     await expect(capped).resolves.toEqual([]);
+  });
+
+  it('confirma solamente trabajos pertenecientes a la sede del puente', async () => {
+    prisma.printJob.deleteMany.mockResolvedValue({ count: 1 });
+
+    await expect(controller.confirmPrint(
+      { ids: [7, 9] },
+      { printBridgeSiteId: SECOND_SITE_ID } as any,
+    )).resolves.toEqual({ ok: true });
+
+    expect(prisma.printJob.deleteMany).toHaveBeenCalledWith({
+      where: { siteId: SECOND_SITE_ID, id: { in: [7, 9] } },
+    });
   });
 });

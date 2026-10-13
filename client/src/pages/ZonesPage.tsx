@@ -13,6 +13,7 @@ import { formatCurrency } from '@/lib/utils'
 import { Plus, MapPin, Pencil, Trash2, Download, Search, AlertTriangle } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { alerts } from '@/lib/alerts'
+import { useAuth } from '@/hooks/useAuth'
 
 interface Zone { id: string; name: string; rate: number; km?: number | null; active: boolean; zoneGroup: string }
 
@@ -29,6 +30,8 @@ const itemVariants = {
 } as const
 
 export default function ZonesPage() {
+  const { user } = useAuth()
+  const preparationMode = user?.activeSite?.preparationMode === true
   const [zones, setZones] = useState<Zone[]>([])
   const [sectors, setSectors] = useState<string[]>([])
   const [loading, setLoading] = useState(true)
@@ -67,6 +70,7 @@ export default function ZonesPage() {
   }, [])
 
   useEffect(() => {
+    if (preparationMode) return
     const socketUrl = import.meta.env.VITE_API_URL || window.location.origin
     const socket = io(`${socketUrl}/the-villa-dog`, {
       transports: ['websocket', 'polling'],
@@ -80,7 +84,7 @@ export default function ZonesPage() {
     return () => {
       socket.disconnect()
     }
-  }, [])
+  }, [preparationMode])
 
   const seedBarrios = async () => {
     setSeeding(true)

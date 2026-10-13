@@ -1,6 +1,8 @@
 import { Injectable, OnModuleDestroy } from '@nestjs/common';
+import { DEFAULT_SITE_ID } from '../common/multisite.constants';
 
 type QueueWaiter = {
+  siteId: string;
   resolve: (changed: boolean) => void;
   timer: NodeJS.Timeout;
   signal?: AbortSignal;
@@ -13,26 +15,32 @@ type QueueWaiter = {
  */
 @Injectable()
 export class PrintQueueSignalService implements OnModuleDestroy {
-  private revision = 0;
+  private readonly revisions = new Map<string, number>();
   private readonly waiters = new Set<QueueWaiter>();
 
-  currentRevision() {
-    return this.revision;
+  currentRevision(siteId = DEFAULT_SITE_ID) {
+    return this.revisions.get(siteId) || 0;
   }
 
-  notifyJobCreated() {
-    this.revision += 1;
+  notifyJobCreated(siteId = DEFAULT_SITE_ID) {
+    this.revisions.set(siteId, this.currentRevision(siteId) + 1);
     for (const waiter of [...this.waiters]) {
-      this.finishWaiter(waiter, true);
+      if (waiter.siteId === siteId) this.finishWaiter(waiter, true);
     }
   }
 
-  waitForChange(revision: number, timeoutMs: number, signal?: AbortSignal): Promise<boolean> {
-    if (revision !== this.revision) return Promise.resolve(true);
+  waitForChange(
+    revision: number,
+    timeoutMs: number,
+    signal?: AbortSignal,
+    siteId = DEFAULT_SITE_ID,
+  ): Promise<boolean> {
+    if (revision !== this.currentRevision(siteId)) return Promise.resolve(true);
     if (timeoutMs <= 0 || signal?.aborted) return Promise.resolve(false);
 
     return new Promise<boolean>((resolve) => {
       const waiter = {} as QueueWaiter;
+      waiter.siteId = siteId;
       waiter.resolve = resolve;
       waiter.timer = setTimeout(() => this.finishWaiter(waiter, false), timeoutMs);
       waiter.signal = signal;
@@ -41,7 +49,7 @@ export class PrintQueueSignalService implements OnModuleDestroy {
       if (signal && waiter.abortListener) signal.addEventListener('abort', waiter.abortListener, { once: true });
 
       // Cierra la carrera entre capturar la revisión y registrar el waiter.
-      if (revision !== this.revision) this.finishWaiter(waiter, true);
+      if (revision !== this.currentRevision(siteId)) this.finishWaiter(waiter, true);
     });
   }
 

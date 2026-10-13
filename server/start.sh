@@ -1,17 +1,16 @@
 #!/bin/sh
+set -eu
 
-# Ejecutar migraciones de Prisma
-echo "Ejecutando npx prisma migrate deploy..."
-npx prisma migrate deploy || true
+# Usa el mismo arranque seguro de Railway: primero ejecuta el preflight
+# idempotente y `prisma db push`; si algo falla, el proceso se detiene antes
+# de cargar NestJS. No se permiten migraciones fallidas ocultas con `|| true`.
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+REPO_ROOT=$(dirname -- "$SCRIPT_DIR")
 
-# Iniciar la aplicación con selector seguro de ruta
-echo "Iniciando NestJS..."
-if [ -f "dist/main.js" ]; then
-  exec node dist/main.js
-elif [ -f "dist/src/main.js" ]; then
-  exec node dist/src/main.js
-elif [ -f "server.js" ]; then
-  exec node server.js
-else
-  exec node dist/main
+if [ ! -f "$REPO_ROOT/server.js" ]; then
+  echo "[Startup Error] No se encontro $REPO_ROOT/server.js" >&2
+  exit 1
 fi
+
+cd "$REPO_ROOT"
+exec node server.js

@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Put, Delete, Body, Param, Query, UseGuards, Request, UploadedFiles, UseInterceptors, Res } from '@nestjs/common';
+import { Controller, Get, Post, Put, Delete, Body, Headers, Param, Query, UseGuards, Request, UploadedFiles, UseInterceptors, Res } from '@nestjs/common';
 import { AnyFilesInterceptor } from '@nestjs/platform-express';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { DeliveryDriversService } from './delivery-drivers.service';
@@ -7,6 +7,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard, Roles } from '../auth/guards/roles.guard';
 import { PermissionsGuard, Permissions } from '../auth/guards/permissions.guard';
 import * as express from 'express';
+import { sendPrivateFileResponse } from '../common/private-file-response';
 
 @ApiTags('Delivery Drivers')
 @ApiBearerAuth()
@@ -19,8 +20,8 @@ export class DeliveryDriversController {
   @Permissions('drivers.manage')
   @UseGuards(PermissionsGuard)
   @ApiOperation({ summary: 'Crear un nuevo domiciliario' })
-  create(@Body() body: CreateDriverDto) {
-    return this.deliveryDriversService.create(body);
+  create(@Body() body: CreateDriverDto, @Request() req: any) {
+    return this.deliveryDriversService.create(body, req.user.siteId);
   }
 
   @Get()
@@ -36,15 +37,15 @@ export class DeliveryDriversController {
   ) {
     const active = activeOnly === 'true';
     const includePortalAccount = ['ADMIN', 'SUPERADMIN'].includes(req?.user?.role);
-    return this.deliveryDriversService.findAll(active, filterType || 'CURRENT', cashClosingId, selectedDate, includePortalAccount);
+    return this.deliveryDriversService.findAll(active, filterType || 'CURRENT', cashClosingId, selectedDate, includePortalAccount, req.user.siteId);
   }
 
   @Post('merge-duplicates')
   @Roles('ADMIN', 'SUPERADMIN')
   @UseGuards(RolesGuard)
   @ApiOperation({ summary: 'Unificar manualmente domiciliarios duplicados conservando el de más entregas' })
-  async mergeDuplicates() {
-    await this.deliveryDriversService.autoMergeDuplicates();
+  async mergeDuplicates(@Request() req: any) {
+    await this.deliveryDriversService.autoMergeDuplicates(req.user.siteId);
     return { success: true, message: 'Domiciliarios duplicados unificados exitosamente.' };
   }
 
@@ -52,16 +53,16 @@ export class DeliveryDriversController {
   @Permissions('dispatch.view', 'cash.view')
   @UseGuards(PermissionsGuard)
   @ApiOperation({ summary: 'Efectivo pendiente por entregar de los domiciliarios' })
-  getPendingSettlements() {
-    return this.deliveryDriversService.getPendingSettlements();
+  getPendingSettlements(@Request() req: any) {
+    return this.deliveryDriversService.getPendingSettlements(req.user.siteId);
   }
 
   @Get('access/candidates')
   @Roles('ADMIN', 'SUPERADMIN')
   @UseGuards(RolesGuard)
   @ApiOperation({ summary: 'Usuarios disponibles para vincular a un domiciliario' })
-  getAccessCandidates() {
-    return this.deliveryDriversService.getAccessCandidates();
+  getAccessCandidates(@Request() req: any) {
+    return this.deliveryDriversService.getAccessCandidates(req.user.siteId);
   }
 
   @Get('me')
@@ -69,7 +70,7 @@ export class DeliveryDriversController {
   @UseGuards(RolesGuard)
   @ApiOperation({ summary: 'Portal privado del domiciliario autenticado' })
   getMyPortal(@Request() req: any) {
-    return this.deliveryDriversService.getMyPortal(req.user.id);
+    return this.deliveryDriversService.getMyPortal(req.user.id, req.user.siteId);
   }
 
   @Get('me/orders/:orderId/snapshot')
@@ -80,7 +81,7 @@ export class DeliveryDriversController {
     @Param('orderId') orderId: string,
     @Request() req: any,
   ) {
-    return this.deliveryDriversService.getMyOrderSnapshot(req.user.id, orderId);
+    return this.deliveryDriversService.getMyOrderSnapshot(req.user.id, orderId, req.user.siteId);
   }
 
   @Get('me/orders/:orderId/chat')
@@ -100,6 +101,7 @@ export class DeliveryDriversController {
       before,
       limit ? Number.parseInt(limit, 10) : undefined,
       beforeId,
+      req.user.siteId,
     );
   }
 
@@ -112,9 +114,10 @@ export class DeliveryDriversController {
     @Param('messageId') messageId: string,
     @Request() req: any,
     @Res() res: express.Response,
+    @Headers('if-none-match') ifNoneMatch?: string,
   ) {
-    const media = await this.deliveryDriversService.getMyOrderChatMedia(req.user.id, orderId, messageId);
-    return this.sendPrivateFile(res, media);
+    const media = await this.deliveryDriversService.getMyOrderChatMedia(req.user.id, orderId, messageId, req.user.siteId);
+    return this.sendPrivateFile(res, media, `driver-chat-media:${messageId}`, ifNoneMatch);
   }
 
   @Get('me/orders/:orderId/proofs/:proofId/image')
@@ -126,24 +129,24 @@ export class DeliveryDriversController {
     @Param('proofId') proofId: string,
     @Request() req: any,
     @Res() res: express.Response,
+    @Headers('if-none-match') ifNoneMatch?: string,
   ) {
-    const proof = await this.deliveryDriversService.getMyOrderProofImage(req.user.id, orderId, proofId);
-    return this.sendPrivateFile(res, proof);
+    const proof = await this.deliveryDriversService.getMyOrderProofImage(req.user.id, orderId, proofId, req.user.siteId);
+    return this.sendPrivateFile(res, proof, `transfer-proof:${proofId}`, ifNoneMatch);
   }
 
   private sendPrivateFile(
     res: express.Response,
     file: { buffer: Buffer; contentType: string },
+    resourceKey: string,
+    ifNoneMatch?: string,
   ) {
-    res.setHeader('Cache-Control', 'private, no-store, max-age=0');
-    res.setHeader('Pragma', 'no-cache');
-    res.setHeader('X-Content-Type-Options', 'nosniff');
-    res.setHeader('Content-Type', file.contentType);
-    if (file.contentType === 'application/octet-stream') {
-      res.setHeader('Content-Disposition', 'attachment');
-    }
-    res.setHeader('Content-Length', String(file.buffer.length));
-    return res.end(file.buffer);
+    return sendPrivateFileResponse(res, {
+      ...file,
+      resourceKey,
+      ifNoneMatch,
+      attachment: file.contentType === 'application/octet-stream',
+    });
   }
 
   @Post('me/orders/:orderId/complete')
@@ -163,7 +166,7 @@ export class DeliveryDriversController {
     @Request() req: any,
     @UploadedFiles() files?: any[],
   ) {
-    return this.deliveryDriversService.completeMyOrder(req.user.id, orderId, body, files);
+    return this.deliveryDriversService.completeMyOrder(req.user.id, orderId, body, files, req.user.siteId);
   }
 
   @Post('me/orders/:orderId/proof')
@@ -183,7 +186,7 @@ export class DeliveryDriversController {
     @Request() req: any,
     @UploadedFiles() files?: any[],
   ) {
-    return this.deliveryDriversService.uploadMyProof(req.user.id, orderId, body, files);
+    return this.deliveryDriversService.uploadMyProof(req.user.id, orderId, body, files, req.user.siteId);
   }
 
   @Put('me/orders/:orderId/payment')
@@ -195,23 +198,23 @@ export class DeliveryDriversController {
     @Body() body: CompleteDriverDeliveryDto,
     @Request() req: any,
   ) {
-    return this.deliveryDriversService.updateMyPayment(req.user.id, orderId, body);
+    return this.deliveryDriversService.updateMyPayment(req.user.id, orderId, body, req.user.siteId);
   }
 
   @Get(':id/access')
   @Roles('ADMIN', 'SUPERADMIN')
   @UseGuards(RolesGuard)
   @ApiOperation({ summary: 'Consultar acceso individual de un domiciliario' })
-  getAccess(@Param('id') id: string) {
-    return this.deliveryDriversService.getAccess(id);
+  getAccess(@Param('id') id: string, @Request() req: any) {
+    return this.deliveryDriversService.getAccess(id, req.user.siteId);
   }
 
   @Put(':id/access')
   @Roles('ADMIN', 'SUPERADMIN')
   @UseGuards(RolesGuard)
   @ApiOperation({ summary: 'Crear o vincular acceso individual para un domiciliario' })
-  configureAccess(@Param('id') id: string, @Body() body: ConfigureDriverAccessDto) {
-    return this.deliveryDriversService.configureAccess(id, body);
+  configureAccess(@Param('id') id: string, @Body() body: ConfigureDriverAccessDto, @Request() req: any) {
+    return this.deliveryDriversService.configureAccess(id, body, req.user.siteId);
   }
 
   @Post(':id/settlements')
@@ -223,47 +226,47 @@ export class DeliveryDriversController {
     @Body() body: { orderIds: string[]; receivedCash: number; notes?: string },
     @Request() req: any,
   ) {
-    return this.deliveryDriversService.settleCash(id, body, req.user.id);
+    return this.deliveryDriversService.settleCash(id, body, req.user.id, req.user.siteId);
   }
 
   @Get(':id/settlements')
   @Permissions('drivers.view', 'cash.view')
   @UseGuards(PermissionsGuard)
   @ApiOperation({ summary: 'Historial de liquidaciones de un domiciliario' })
-  getSettlements(@Param('id') id: string) {
-    return this.deliveryDriversService.getSettlements(id);
+  getSettlements(@Param('id') id: string, @Request() req: any) {
+    return this.deliveryDriversService.getSettlements(id, req.user.siteId);
   }
 
   @Get('queue')
   @Permissions('drivers.view', 'dispatch.view')
   @UseGuards(PermissionsGuard)
   @ApiOperation({ summary: 'Obtener la cola de turnos y estado de pausas de los domiciliarios' })
-  getQueue() {
-    return this.deliveryDriversService.getQueueState();
+  getQueue(@Request() req: any) {
+    return this.deliveryDriversService.getQueueState(req.user.siteId);
   }
 
   @Post('queue/reorder')
   @Roles('ADMIN', 'SUPERADMIN', 'DELIVERY_MANAGER', 'DISPATCHER')
   @UseGuards(RolesGuard)
   @ApiOperation({ summary: 'Reordenar la fila de turnos de domiciliarios' })
-  reorderQueue(@Body() body: { queue: string[] }) {
-    return this.deliveryDriversService.reorderQueue(body.queue);
+  reorderQueue(@Body() body: { queue: string[] }, @Request() req: any) {
+    return this.deliveryDriversService.reorderQueue(body.queue, req.user.siteId);
   }
 
   @Post(':id/break')
   @Roles('ADMIN', 'SUPERADMIN', 'DELIVERY_MANAGER', 'DISPATCHER')
   @UseGuards(RolesGuard)
   @ApiOperation({ summary: 'Asignar tiempo de cena / descanso a un domiciliario' })
-  startBreak(@Param('id') id: string, @Body() body: { minutes?: number }) {
-    return this.deliveryDriversService.startDriverBreak(id, body?.minutes || 15);
+  startBreak(@Param('id') id: string, @Body() body: { minutes?: number }, @Request() req: any) {
+    return this.deliveryDriversService.startDriverBreak(id, body?.minutes || 15, req.user.siteId);
   }
 
   @Post(':id/break/end')
   @Roles('ADMIN', 'SUPERADMIN', 'DELIVERY_MANAGER', 'DISPATCHER')
   @UseGuards(RolesGuard)
   @ApiOperation({ summary: 'Finalizar descanso de un domiciliario y reincorporarlo al final de la fila' })
-  endBreak(@Param('id') id: string) {
-    return this.deliveryDriversService.endDriverBreak(id);
+  endBreak(@Param('id') id: string, @Request() req: any) {
+    return this.deliveryDriversService.endDriverBreak(id, req.user.siteId);
   }
 
   @Get(':id')
@@ -275,23 +278,24 @@ export class DeliveryDriversController {
     @Query('filterType') filterType?: string,
     @Query('cashClosingId') cashClosingId?: string,
     @Query('selectedDate') selectedDate?: string,
+    @Request() req?: any,
   ) {
-    return this.deliveryDriversService.findOne(id, filterType, cashClosingId, selectedDate);
+    return this.deliveryDriversService.findOne(id, filterType, cashClosingId, selectedDate, req.user.siteId);
   }
 
   @Put(':id')
   @Permissions('drivers.manage')
   @UseGuards(PermissionsGuard)
   @ApiOperation({ summary: 'Actualizar un domiciliario' })
-  update(@Param('id') id: string, @Body() body: UpdateDriverDto) {
-    return this.deliveryDriversService.update(id, body);
+  update(@Param('id') id: string, @Body() body: UpdateDriverDto, @Request() req: any) {
+    return this.deliveryDriversService.update(id, body, req.user.siteId);
   }
 
   @Delete(':id')
   @Roles('ADMIN', 'SUPERADMIN')
   @UseGuards(RolesGuard)
   @ApiOperation({ summary: 'Eliminar (desactivar) un domiciliario' })
-  remove(@Param('id') id: string) {
-    return this.deliveryDriversService.remove(id);
+  remove(@Param('id') id: string, @Request() req: any) {
+    return this.deliveryDriversService.remove(id, req.user.siteId);
   }
 }

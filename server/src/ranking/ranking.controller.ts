@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Put, Body, Param, Query, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Put, Body, Param, Query, UseGuards, Request } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { RankingService } from './ranking.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -13,36 +13,36 @@ export class RankingController {
 
   @Get('weekly')
   @ApiOperation({ summary: 'Ranking semanal de meseros' })
-  getWeeklyRanking(@Query('weekStart') weekStart?: string) {
-    return this.rankingService.getWeeklyRanking(weekStart);
+  getWeeklyRanking(@Request() req: any, @Query('weekStart') weekStart?: string) {
+    return this.rankingService.getWeeklyRanking(weekStart, req.user.siteId);
   }
 
   @Get('monthly')
   @ApiOperation({ summary: 'Ranking mensual de meseros' })
-  getMonthlyRanking(@Query('month') month?: string) {
-    return this.rankingService.getMonthlyRanking(month);
+  getMonthlyRanking(@Request() req: any, @Query('month') month?: string) {
+    return this.rankingService.getMonthlyRanking(month, req.user.siteId);
   }
 
   @Get('waiter/:userId')
   @ApiOperation({ summary: 'Estadísticas de un mesero' })
-  getWaiterStats(@Param('userId') userId: string) {
-    return this.rankingService.getWaiterStats(userId);
+  getWaiterStats(@Param('userId') userId: string, @Request() req: any) {
+    return this.rankingService.getWaiterStats(userId, req.user.siteId);
   }
 
   @Post('recalculate')
   @Roles('ADMIN', 'SUPERADMIN')
   @UseGuards(RolesGuard)
   @ApiOperation({ summary: 'Recalcular métricas del día' })
-  recalculateMetrics(@Body('date') date?: string) {
-    return this.rankingService.recalculateMetrics(date);
+  recalculateMetrics(@Request() req: any, @Body('date') date?: string) {
+    return this.rankingService.recalculateMetrics(date, req.user.siteId);
   }
 
   @Post('award')
   @Roles('ADMIN', 'SUPERADMIN')
   @UseGuards(RolesGuard)
   @ApiOperation({ summary: 'Otorgar insignias semanales' })
-  awardBadges() {
-    return this.rankingService.awardBadges();
+  awardBadges(@Request() req: any) {
+    return this.rankingService.awardBadges(req.user.siteId);
   }
 
   @Get('badges')

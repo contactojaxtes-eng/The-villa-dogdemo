@@ -14,6 +14,10 @@ const MAX_PROOF_ITEMS = 40
 const MAX_PROOF_BYTES = 32 * 1024 * 1024
 const NEGATIVE_TTL_MS = 15 * 60 * 1000
 const MAX_NEGATIVE_ITEMS = 100
+// Incremented whenever the authenticated site/session changes.  A request
+// already in flight may still resolve, but it must not insert its object URL
+// into the cache belonging to the new site.
+let cacheGeneration = 0
 
 const totalBytes = () => [...proofCache.values()].reduce((sum, entry) => sum + entry.bytes, 0)
 
@@ -64,8 +68,12 @@ export async function acquireProofUrl(endpoint: string): Promise<string> {
 
   let pending = pendingProofs.get(endpoint)
   if (!pending) {
+    const requestGeneration = cacheGeneration
     pending = api.getBlob(endpoint)
       .then(blob => {
+        if (requestGeneration !== cacheGeneration) {
+          throw new Error('El contexto de la sede cambió mientras se cargaba el comprobante.')
+        }
         if (!blob || blob.size === 0) {
           negativeProofCache.set(endpoint, Date.now() + NEGATIVE_TTL_MS)
           pruneNegativeCache()
@@ -82,15 +90,22 @@ export async function acquireProofUrl(endpoint: string): Promise<string> {
         return entry
       })
       .catch(err => {
+        if (requestGeneration !== cacheGeneration) throw err
         negativeProofCache.set(endpoint, Date.now() + NEGATIVE_TTL_MS)
         pruneNegativeCache()
         throw err
       })
-      .finally(() => pendingProofs.delete(endpoint))
+      .finally(() => {
+        if (pendingProofs.get(endpoint) === pending) pendingProofs.delete(endpoint)
+      })
     pendingProofs.set(endpoint, pending)
   }
 
+  const requestGeneration = cacheGeneration
   const entry = await pending
+  if (requestGeneration !== cacheGeneration) {
+    throw new Error('El contexto de la sede cambió mientras se cargaba el comprobante.')
+  }
   entry.refs += 1
   entry.lastUsed = Date.now()
   pruneProofCache()
@@ -106,6 +121,7 @@ export function releaseProofUrl(endpoint: string): void {
 }
 
 export function clearProofCache(): void {
+  cacheGeneration += 1
   for (const entry of proofCache.values()) {
     try {
       URL.revokeObjectURL(entry.url)

@@ -3,6 +3,7 @@ import {
   BadgeCheck,
   BarChart3,
   Bike,
+  Building2,
   ChefHat,
   Crown,
   HardDrive,
@@ -18,12 +19,47 @@ import {
   Wallet,
   type LucideIcon,
 } from 'lucide-react'
+import { DEFAULT_SITE_ID } from './multisite'
 
 export const MODULE_VISIBILITY_STORAGE_KEY = 'the_villa_dog_hidden_modules'
 export const SIDEBAR_ORDER_STORAGE_KEY = 'the_villa_dog_sidebar_order'
 
+const PERMANENT_MODULES = new Set(['settings', 'superadmin'])
+
+function siteStorageKey(base: string, siteId?: string | null) {
+  const normalized = String(siteId || '').trim()
+  return normalized ? `${base}:${normalized}` : base
+}
+
+function readSiteStorage(base: string, siteId?: string | null) {
+  const scoped = siteStorageKey(base, siteId)
+  const scopedValue = localStorage.getItem(scoped)
+  if (scopedValue !== null) return scopedValue
+  // Keep existing principal customizations after the multisite rollout.  A
+  // secondary site never falls back to the principal preference.
+  if (siteId === DEFAULT_SITE_ID) return localStorage.getItem(base)
+  return siteId ? null : localStorage.getItem(base)
+}
+
+export function getSidebarOrder(siteId?: string | null): string[] {
+  try {
+    const saved = readSiteStorage(SIDEBAR_ORDER_STORAGE_KEY, siteId)
+    const values: unknown = saved ? JSON.parse(saved) : null
+    if (Array.isArray(values)) {
+      const valid = values.filter((value): value is string => typeof value === 'string')
+      if (valid.length) return valid
+    }
+  } catch {}
+  return allNavItems.map(item => item.href)
+}
+
+export function saveSidebarOrder(order: string[], siteId?: string | null) {
+  localStorage.setItem(siteStorageKey(SIDEBAR_ORDER_STORAGE_KEY, siteId), JSON.stringify(order))
+}
+
 export interface NavUser {
   role?: string
+  globalRole?: string | null
   permissions?: unknown
 }
 
@@ -66,25 +102,53 @@ export const allNavItems: NavItem[] = [
 
   // SECCIÓN SUPERADMIN
   { href: '/superadmin', label: 'Panel', icon: Crown, roles: ['SUPERADMIN'], section: 'SuperAdmin', module: 'superadmin' },
+  { href: '/superadmin/sites', label: 'Sedes', icon: Building2, roles: ['SUPERADMIN'], section: 'SuperAdmin', module: 'superadmin' },
   { href: '/superadmin/config', label: 'Configuración técnica', icon: Settings, roles: ['SUPERADMIN'], section: 'SuperAdmin', module: 'superadmin' },
   { href: '/superadmin/audit-logs', label: 'Auditoría y errores', icon: ScrollText, roles: ['SUPERADMIN'], section: 'SuperAdmin', module: 'superadmin' },
   { href: '/superadmin/maintenance', label: 'Estado y mantenimiento', icon: HardDrive, roles: ['SUPERADMIN'], section: 'SuperAdmin', module: 'superadmin' },
 ]
 
-export function getHiddenModules(): string[] {
+export function getHiddenModules(siteId?: string | null): string[] {
   try {
-    const saved = localStorage.getItem(MODULE_VISIBILITY_STORAGE_KEY)
+    const saved = readSiteStorage(MODULE_VISIBILITY_STORAGE_KEY, siteId)
     const values: unknown = saved ? JSON.parse(saved) : []
-    const list = Array.isArray(values) ? values.filter((value): value is string => typeof value === 'string') : []
-    // 'settings' y 'superadmin' NUNCA pueden ser ocultados para evitar bloqueos
-    return list.filter(id => id !== 'settings' && id !== 'superadmin')
+    return sanitizeHiddenModules(values)
   } catch {
     return []
   }
 }
 
+export function sanitizeHiddenModules(values: unknown): string[] {
+  if (!Array.isArray(values)) return []
+  return [...new Set(values
+    .filter((value): value is string => typeof value === 'string')
+    .map(value => value.trim())
+    .filter(value => /^[a-z][a-z0-9_]{0,63}$/.test(value))
+    // Configuración y SuperAdmin son rutas de recuperación permanentes.
+    .filter(value => !PERMANENT_MODULES.has(value)))]
+    .slice(0, 64)
+}
+
+export function saveHiddenModules(hiddenModules: unknown, siteId?: string | null) {
+  const sanitized = sanitizeHiddenModules(hiddenModules)
+  localStorage.setItem(
+    siteStorageKey(MODULE_VISIBILITY_STORAGE_KEY, siteId),
+    JSON.stringify(sanitized),
+  )
+  window.dispatchEvent(new CustomEvent('the-villa-dog-modules-changed', {
+    detail: { siteId: siteId || null, hiddenModules: sanitized },
+  }))
+  return sanitized
+}
+
 export function hasNavItemAccess(user: NavUser | null | undefined, item: NavItem) {
   if (!user) return false
+  // La gestión de sedes es el único acceso del ADMIN_GENERAL dentro del
+  // bloque técnico. Las demás pantallas SuperAdmin siguen reservadas al
+  // SuperAdmin real.
+  if (item.href === '/superadmin/sites') {
+    return user.globalRole === 'SUPERADMIN' || user.globalRole === 'ADMIN_GENERAL' || user.role === 'SUPERADMIN'
+  }
   if (item.section === 'SuperAdmin' || (item.roles.length === 1 && item.roles[0] === 'SUPERADMIN')) {
     return user.role === 'SUPERADMIN'
   }
@@ -118,8 +182,8 @@ export function hasNavItemAccess(user: NavUser | null | undefined, item: NavItem
   return item.roles.includes(user.role || '')
 }
 
-export function getFirstAllowedPath(user: NavUser | null | undefined) {
+export function getFirstAllowedPath(user: NavUser | null | undefined, siteId?: string | null) {
   if (user?.role === 'DELIVERY_DRIVER') return '/my-deliveries'
-  const hiddenModules = getHiddenModules()
+  const hiddenModules = getHiddenModules(siteId)
   return allNavItems.find(item => hasNavItemAccess(user, item) && !hiddenModules.includes(item.module))?.href
 }

@@ -16,24 +16,24 @@ export class CustomersController {
   @Permissions('customers.manage')
   @UseGuards(PermissionsGuard)
   @ApiOperation({ summary: 'Crear un nuevo cliente' })
-  create(@Body() body: { name: string; phone: string; address?: string }) {
-    return this.customersService.create(body);
+  create(@Body() body: { name: string; phone: string; address?: string }, @Request() req: any) {
+    return this.customersService.create(body, req.user.siteId);
   }
 
   @Get()
   @Permissions('customers.view')
   @UseGuards(PermissionsGuard)
   @ApiOperation({ summary: 'Listar todos los clientes' })
-  findAll(@Query('search') search?: string) {
-    return this.customersService.findAll(search);
+  findAll(@Request() req: any, @Query('search') search?: string) {
+    return this.customersService.findAll(search, req.user.siteId);
   }
 
   @Get(':id')
   @Permissions('customers.view')
   @UseGuards(PermissionsGuard)
   @ApiOperation({ summary: 'Obtener un cliente por ID con su historial' })
-  findOne(@Param('id') id: string) {
-    return this.customersService.findOne(id);
+  findOne(@Param('id') id: string, @Request() req: any) {
+    return this.customersService.findOne(id, req.user.siteId);
   }
 
   @Put(':id')
@@ -43,8 +43,9 @@ export class CustomersController {
   update(
     @Param('id') id: string,
     @Body() body: { name?: string; phone?: string; address?: string; active?: boolean },
+    @Request() req: any,
   ) {
-    return this.customersService.update(id, body);
+    return this.customersService.update(id, body, req.user.siteId);
   }
 
   @Post(':id/payments')
@@ -56,14 +57,14 @@ export class CustomersController {
     @Body() body: { amount: number; method: string; reference?: string; notes?: string },
     @Request() req: any,
   ) {
-    return this.customersService.addPayment(id, body, req.user.id);
+    return this.customersService.addPayment(id, body, req.user.id, req.user.siteId);
   }
 
   @Delete(':id')
   @Roles('ADMIN', 'SUPERADMIN')
   @UseGuards(RolesGuard)
   @ApiOperation({ summary: 'Eliminar (desactivar) un cliente' })
-  remove(@Param('id') id: string) {
-    return this.customersService.remove(id);
+  remove(@Param('id') id: string, @Request() req: any) {
+    return this.customersService.remove(id, req.user.siteId);
   }
 }

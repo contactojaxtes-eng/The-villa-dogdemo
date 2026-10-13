@@ -4,6 +4,7 @@ import { MailService } from '../mail/mail.service';
 import { WhatsappService } from '../whatsapp/whatsapp.service';
 import { AuditService } from '../audit/audit.service';
 import { SocketGateway } from '../socket/socket.gateway';
+import { DEFAULT_SITE_ID } from '../common/multisite.constants';
 
 const SMTP_SETTING_KEYS = ['smtp_host', 'smtp_port', 'smtp_user', 'smtp_pass', 'smtp_from'];
 
@@ -17,8 +18,8 @@ export class SuperadminService {
     private socketGateway: SocketGateway,
   ) {}
 
-  getConnectionCounts() {
-    return this.socketGateway.getConnectionCounts();
+  getConnectionCounts(siteId?: string) {
+    return this.socketGateway.getConnectionCounts(siteId);
   }
 
   async broadcastRefresh(actor: { id: string; name: string; role: string }) {
@@ -36,28 +37,41 @@ export class SuperadminService {
     return { ok: true, ...result };
   }
 
-  async getOverview() {
+  async getOverview(siteId = DEFAULT_SITE_ID) {
+    const resolvedSiteId = String(siteId || DEFAULT_SITE_ID).trim() || DEFAULT_SITE_ID;
     const [usersByRole, ordersTotal, todayStart, errorLogsLast24h, whatsappSessionsActive, dbSize, smtpConfig, whatsappSettings] = await Promise.all([
-      this.prisma.user.groupBy({ by: ['role'], _count: { _all: true }, where: { active: true } }),
-      this.prisma.order.count(),
+      // Operational users are memberships of the selected site. Reading the
+      // global User.role here would mix users from every site in the tenant.
+      this.prisma.userSiteMembership.groupBy({
+        by: ['role'],
+        _count: { _all: true },
+        where: { siteId: resolvedSiteId, active: true, user: { active: true } },
+      }),
+      this.prisma.order.count({ where: { siteId: resolvedSiteId } }),
       Promise.resolve(new Date(new Date().setHours(0, 0, 0, 0))),
+      // ErrorLog predates multisite and has no siteId. Keep this server-wide
+      // health signal explicit until error records are migrated safely.
       this.prisma.errorLog.count({ where: { createdAt: { gte: new Date(Date.now() - 24 * 60 * 60 * 1000) } } }),
-      this.prisma.whatsAppSession.count({ where: { active: true } }),
+      this.prisma.whatsAppSession.count({ where: { siteId: resolvedSiteId, active: true } }),
       this.getDbSize(),
       this.mailService.getSmtpConfig(),
-      this.whatsappService.getSettings(),
+      this.whatsappService.getSettings(resolvedSiteId),
     ]);
 
-    const ordersToday = await this.prisma.order.count({ where: { createdAt: { gte: todayStart } } });
+    const ordersToday = await this.prisma.order.count({ where: { siteId: resolvedSiteId, createdAt: { gte: todayStart } } });
 
     return {
+      siteId: resolvedSiteId,
       usersByRole: usersByRole.map(r => ({ role: r.role, count: r._count._all })),
       ordersToday,
       ordersTotal,
       errorLogsLast24h,
+      errorLogsScope: 'global',
       whatsappSessionsActive,
       dbTotalSize: dbSize.total,
+      dbScope: 'global',
       smtpConfigured: !!(smtpConfig.host && smtpConfig.user && smtpConfig.pass),
+      smtpScope: 'global',
       whatsappConfigured: whatsappSettings.configured,
     };
   }

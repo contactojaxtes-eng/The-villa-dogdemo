@@ -17,7 +17,10 @@ export class PublicMenuGateway {
   @WebSocketServer()
   server: Server;
 
-  emitMenuUpdated() {
-    this.server?.emit('menuUpdated', { updatedAt: new Date().toISOString() });
+  emitMenuUpdated(siteId: string) {
+    this.server?.emit('menuUpdated', {
+      siteId,
+      updatedAt: new Date().toISOString(),
+    });
   }
 }

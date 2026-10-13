@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
 import { io as connect } from 'socket.io-client'
+import { useParams } from 'react-router-dom'
 import { api } from '../lib/api'
 import { BrandLogo } from '@/components/brand/BrandLogo'
 import { ShoppingCart, Plus, Minus, X, Info, Send, Check, ChevronDown, ListFilter, MessageSquare, Edit3, PlusCircle, Bike, Store } from 'lucide-react'
@@ -36,7 +37,22 @@ interface CartItem {
   additions: MenuItem[]
 }
 
+const emptyCustomerInfo = {
+  name: '',
+  phone: '',
+  address: '',
+  neighborhood: '',
+  paymentMethod: 'CASH',
+  notes: '',
+}
+
 export default function PublicMenuPage() {
+  const { siteCode } = useParams<{ siteCode?: string }>()
+  const normalizedSiteCode = String(siteCode || '').trim().toLowerCase()
+  const publicSiteQuery = normalizedSiteCode ? `?site=${encodeURIComponent(normalizedSiteCode)}` : ''
+  const publicStorageSuffix = normalizedSiteCode || 'principal'
+  const customerStorageKey = `niche_customer_info:${publicStorageSuffix}`
+  const cartStorageKey = `niche_cart:${publicStorageSuffix}`
   const [categories, setCategories] = useState<Category[]>([])
   const [zones, setZones] = useState<Zone[]>([])
   const [loading, setLoading] = useState(true)
@@ -45,6 +61,8 @@ export default function PublicMenuPage() {
   const drawerRef = useRef<HTMLDivElement>(null)
 
   const [restaurantPhone, setRestaurantPhone] = useState('573003229261')
+  const publicSiteIdRef = useRef<string | null>(null)
+  const [publicSiteIdentityReady, setPublicSiteIdentityReady] = useState(!normalizedSiteCode)
   const [orderMode, setOrderMode] = useState<'DELIVERY' | 'PICKUP'>('DELIVERY')
 
   const [cart, setCart] = useState<CartItem[]>([])
@@ -60,14 +78,8 @@ export default function PublicMenuPage() {
   // Custom Neighborhood text when not in dropdown
   const [customNeighborhood, setCustomNeighborhood] = useState('')
 
-  const [customerInfo, setCustomerInfo] = useState({
-    name: '',
-    phone: '',
-    address: '',
-    neighborhood: '',
-    paymentMethod: 'CASH',
-    notes: ''
-  })
+  const [customerInfo, setCustomerInfo] = useState(emptyCustomerInfo)
+  const [hydratedCustomerKey, setHydratedCustomerKey] = useState('')
 
   const [submitting, setSubmitting] = useState(false)
   const publicAttempt = useRef({ signature: '', id: '' })
@@ -77,6 +89,19 @@ export default function PublicMenuPage() {
 
   const [isAdmin, setIsAdmin] = useState(false)
 
+  // A public menu can change site code without a full page reload.  Never
+  // carry the previous restaurant's cart into the newly selected site.
+  useEffect(() => {
+    setCart([])
+    setExpandedAdditions({})
+    setIsCartOpen(false)
+    setIsCheckout(false)
+    setOrderSuccess(false)
+    setPlacedOrderInfo(null)
+    setFormError('')
+    publicAttempt.current = { signature: '', id: '' }
+  }, [publicStorageSuffix])
+
   useEffect(() => {
     if (isCheckout && drawerRef.current) {
       drawerRef.current.scrollTop = 0
@@ -85,14 +110,19 @@ export default function PublicMenuPage() {
 
   // Load saved customer info from localStorage AND URL params on mount
   useEffect(() => {
+    let nextCustomerInfo = { ...emptyCustomerInfo }
+    let nextCustomNeighborhood = ''
     try {
-      const saved = localStorage.getItem('niche_customer_info')
+      // La clave histórica se lee únicamente para la sede principal. Cada
+      // sede secundaria conserva su formulario separado en el navegador.
+      const saved = localStorage.getItem(customerStorageKey)
+        || (!siteCode ? localStorage.getItem('niche_customer_info') : null)
       if (saved) {
         const parsed = JSON.parse(saved)
         if (parsed.name || parsed.phone || parsed.address || parsed.neighborhood) {
-          setCustomerInfo(prev => ({ ...prev, ...parsed }))
+          nextCustomerInfo = { ...nextCustomerInfo, ...parsed }
           if (parsed.customNeighborhood) {
-            setCustomNeighborhood(parsed.customNeighborhood)
+            nextCustomNeighborhood = parsed.customNeighborhood
           }
         }
       }
@@ -105,31 +135,36 @@ export default function PublicMenuPage() {
     const neighborhoodParam = params.get('neighborhood') || params.get('barrio')
 
     if (phoneParam || nameParam || addressParam || neighborhoodParam) {
-      setCustomerInfo(prev => ({
-        ...prev,
-        name: nameParam ? decodeURIComponent(nameParam) : prev.name,
-        phone: phoneParam ? phoneParam.replace(/\D/g, '') : prev.phone,
-        address: addressParam ? decodeURIComponent(addressParam) : prev.address,
-        neighborhood: neighborhoodParam ? decodeURIComponent(neighborhoodParam) : prev.neighborhood,
-      }))
+      nextCustomerInfo = {
+        ...nextCustomerInfo,
+        name: nameParam ? decodeURIComponent(nameParam) : nextCustomerInfo.name,
+        phone: phoneParam ? phoneParam.replace(/\D/g, '') : nextCustomerInfo.phone,
+        address: addressParam ? decodeURIComponent(addressParam) : nextCustomerInfo.address,
+        neighborhood: neighborhoodParam ? decodeURIComponent(neighborhoodParam) : nextCustomerInfo.neighborhood,
+      }
 
       if (neighborhoodParam) {
-        setCustomNeighborhood(decodeURIComponent(neighborhoodParam))
+        nextCustomNeighborhood = decodeURIComponent(neighborhoodParam)
       }
     }
-  }, [])
+
+    setCustomerInfo(nextCustomerInfo)
+    setCustomNeighborhood(nextCustomNeighborhood)
+    setHydratedCustomerKey(customerStorageKey)
+  }, [customerStorageKey, siteCode])
 
   // Auto-save customer info changes to localStorage
   useEffect(() => {
+    if (hydratedCustomerKey !== customerStorageKey) return
     try {
       if (customerInfo.name || customerInfo.phone || customerInfo.address || customerInfo.neighborhood) {
-        localStorage.setItem('niche_customer_info', JSON.stringify({
+        localStorage.setItem(customerStorageKey, JSON.stringify({
           ...customerInfo,
           customNeighborhood
         }))
       }
     } catch (e) {}
-  }, [customerInfo, customNeighborhood])
+  }, [customerInfo, customNeighborhood, customerStorageKey, hydratedCustomerKey])
 
   useEffect(() => {
     let active = true
@@ -141,9 +176,9 @@ export default function PublicMenuPage() {
     }
 
     Promise.all([
-      api.get<Category[]>('/public/menu/categories', { force: true }),
-      api.get<Zone[]>('/public/zones'),
-      api.get<{ whatsappPhone: string }>('/public/menu/info').catch(() => null)
+      api.get<Category[]>(`/public/menu/categories${publicSiteQuery}`, { force: true }),
+      api.get<Zone[]>(`/public/zones${publicSiteQuery}`),
+      api.get<{ whatsappPhone: string; site?: { id?: string } }>(`/public/menu/info${publicSiteQuery}`).catch(() => null)
     ])
     .then(([catRes, zoneRes, infoRes]) => {
       if (!active) return
@@ -152,8 +187,17 @@ export default function PublicMenuPage() {
       if (infoRes && infoRes.whatsappPhone) {
         setRestaurantPhone(infoRes.whatsappPhone)
       }
+      publicSiteIdRef.current = infoRes?.site?.id || null
+      // A secondary public menu must never fall back to the principal
+      // restaurant's WhatsApp number if its own identity endpoint fails.
+      setPublicSiteIdentityReady(
+        !normalizedSiteCode || Boolean(infoRes?.site?.id && infoRes?.whatsappPhone),
+      )
     })
-    .catch(err => console.error("Error cargando menú", err))
+    .catch(err => {
+      console.error("Error cargando menú", err)
+      if (normalizedSiteCode) setPublicSiteIdentityReady(false)
+    })
     .finally(() => { if (active) setLoading(false) })
 
     const token = localStorage.getItem('token')
@@ -164,8 +208,11 @@ export default function PublicMenuPage() {
       transports: ['websocket', 'polling'],
       reconnection: true,
     })
-    menuSocket.on('menuUpdated', () => {
-      api.get<Category[]>('/public/menu/categories', { force: true })
+    menuSocket.on('menuUpdated', (event?: { siteId?: string }) => {
+      // El namespace público es liviano y compartido, pero cada navegador
+      // vuelve a consultar únicamente cuando cambió la sede que está viendo.
+      if (event?.siteId && publicSiteIdRef.current && event.siteId !== publicSiteIdRef.current) return
+      api.get<Category[]>(`/public/menu/categories${publicSiteQuery}`, { force: true })
         .then(applyCategories)
         .catch(err => console.error('Error sincronizando la carta', err))
     })
@@ -174,7 +221,7 @@ export default function PublicMenuPage() {
       active = false
       menuSocket.disconnect()
     }
-  }, [])
+  }, [publicSiteQuery])
 
   // Extract addition items from any category containing "Adicion" or "Adicional"
   const availableAdditions = useMemo(() => {
@@ -312,6 +359,11 @@ export default function PublicMenuPage() {
     setFormError('')
     const cleanPhone = customerInfo.phone.replace(/\D/g, '')
 
+    if (normalizedSiteCode && !publicSiteIdentityReady) {
+      setFormErrorAndScroll('No se pudo identificar esta sede. Recarga el menú e inténtalo de nuevo.')
+      return
+    }
+
     if (!customerInfo.name.trim()) {
       setFormErrorAndScroll("Por favor ingresa tu Nombre Completo.")
       return
@@ -384,6 +436,7 @@ export default function PublicMenuPage() {
     if (publicAttempt.current.signature !== signature) publicAttempt.current = { signature, id: safeUUID() }
     try {
     const res = await api.post<any>('/public-orders', {
+      ...(normalizedSiteCode ? { siteCode: normalizedSiteCode } : {}),
       clientMutationId: publicAttempt.current.id,
       customerName: customerInfo.name,
       customerPhone: cleanPhone,
@@ -403,10 +456,10 @@ export default function PublicMenuPage() {
 
     setOrderSuccess(true)
     try {
-      localStorage.setItem('niche_last_placed_cart', JSON.stringify(cart))
+      localStorage.setItem(`niche_last_placed_cart:${publicStorageSuffix}`, JSON.stringify(cart))
     } catch (e) {}
     setCart([])
-    localStorage.removeItem('niche_cart')
+    localStorage.removeItem(cartStorageKey)
 
     // 2. Abrir WhatsApp de inmediato usando wa.me
     if (targetPhone) window.location.href = waUrl
@@ -554,7 +607,7 @@ export default function PublicMenuPage() {
           {/* Opción para Re-cargar y Modificar Pedido Anterior */}
           {(() => {
             try {
-              const savedLastCart = localStorage.getItem('niche_last_placed_cart')
+              const savedLastCart = localStorage.getItem(`niche_last_placed_cart:${publicStorageSuffix}`)
               if (savedLastCart) {
                 const parsedLast = JSON.parse(savedLastCart)
                 if (Array.isArray(parsedLast) && parsedLast.length > 0 && cart.length === 0) {

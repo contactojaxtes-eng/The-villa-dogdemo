@@ -40,10 +40,10 @@ describe('GeocodingController zone priority', () => {
     };
     const controller = new GeocodingController(zonesService);
 
-    const [result] = await controller.search('Centro Comercial Alamedas');
+    const [result] = await controller.search('Centro Comercial Alamedas', { user: { siteId: 'site-2' } });
 
-    expect(zonesService.suggestExactFreePlace).toHaveBeenCalledWith('Centro Comercial Alamedas');
-    expect(zonesService.suggestByName).toHaveBeenCalledWith('La Granja');
+    expect(zonesService.suggestExactFreePlace).toHaveBeenCalledWith('Centro Comercial Alamedas', 'site-2');
+    expect(zonesService.suggestByName).toHaveBeenCalledWith('La Granja', 'site-2');
     expect(result.suggestedZone).toEqual(expect.objectContaining({ id: 'zone-granja' }));
     expect(result.neighbourhood).toBe('La Granja');
   });
@@ -62,7 +62,7 @@ describe('GeocodingController zone priority', () => {
     };
     const controller = new GeocodingController(zonesService);
 
-    const [result] = await controller.search('Entrada Universidad de Córdoba Montería');
+    const [result] = await controller.search('Entrada Universidad de Córdoba Montería', { user: { siteId: 'site-2' } });
 
     expect(result.suggestedZone).toEqual(freePlace);
     expect(result.neighbourhood).toBe('Universidad de Córdoba');

@@ -4,6 +4,7 @@ import { SocketGateway } from '../socket/socket.gateway';
 import { DeliveryDriverGateway } from '../socket/delivery-driver.gateway';
 import { WhatsappService } from '../whatsapp/whatsapp.service';
 import { TablesService } from '../tables/tables.service';
+import { DEFAULT_SITE_ID } from '../common/multisite.constants';
 
 @Injectable()
 export class PaymentsService {
@@ -15,8 +16,8 @@ export class PaymentsService {
     @Optional() private deliveryDriverGateway?: DeliveryDriverGateway,
   ) {}
 
-  async findAll(params: { status?: string; method?: string; date?: string }, cashierId?: string) {
-    const where: any = {};
+  async findAll(params: { status?: string; method?: string; date?: string }, cashierId?: string, siteId = DEFAULT_SITE_ID) {
+    const where: any = { order: { siteId } };
     if (params.status) where.status = params.status;
     if (params.method) where.method = params.method;
     if (params.date) {
@@ -39,16 +40,16 @@ export class PaymentsService {
     });
   }
 
-  async confirmPayment(id: string, confirmedBy: string) {
+  async confirmPayment(id: string, confirmedBy: string, siteId = DEFAULT_SITE_ID) {
     const user = await this.prisma.user.findUnique({ where: { id: confirmedBy } });
-    const payment = await this.prisma.payment.findUnique({ where: { id } });
+    const payment = await this.prisma.payment.findFirst({ where: { id, order: { siteId } } });
     if (!payment) {
       // Conserva la protección de caja para cajeros incluso ante un enlace de
       // pago vencido o inválido; un domicilio válido se resuelve más abajo por
       // su propio turno compartido.
       if (user?.role === 'CASHIER') {
         const activeClosing = await this.prisma.cashClosing.findFirst({
-          where: { userId: confirmedBy, isOpen: true },
+          where: { siteId, userId: confirmedBy, isOpen: true },
         });
         if (!activeClosing) {
           throw new BadRequestException('Debes tener una caja abierta para registrar o confirmar cobros.');
@@ -57,8 +58,8 @@ export class PaymentsService {
       throw new NotFoundException('Pago no encontrado');
     }
 
-    const currentOrder = await this.prisma.order.findUnique({
-      where: { id: payment.orderId },
+    const currentOrder = await this.prisma.order.findFirst({
+      where: { id: payment.orderId, siteId },
       select: { cashClosingId: true, cashRegisterId: true, orderType: true },
     });
     if (!currentOrder) throw new NotFoundException('Pedido no encontrado');
@@ -71,7 +72,8 @@ export class PaymentsService {
       activeClosing = await this.prisma.cashClosing.findFirst({
         where: {
           isOpen: true,
-          cashRegister: { purpose: 'DELIVERY', active: true },
+          siteId,
+          cashRegister: { siteId, purpose: 'DELIVERY', active: true },
         },
         orderBy: { shiftStart: 'desc' },
       });
@@ -80,14 +82,14 @@ export class PaymentsService {
       }
     } else if (user?.role === 'CASHIER') {
       activeClosing = await this.prisma.cashClosing.findFirst({
-        where: { userId: confirmedBy, isOpen: true },
+        where: { siteId, userId: confirmedBy, isOpen: true },
       });
       if (!activeClosing) {
         throw new BadRequestException('Debes tener una caja abierta para registrar o confirmar cobros.');
       }
     } else {
       activeClosing = await this.prisma.cashClosing.findFirst({
-        where: { userId: confirmedBy, isOpen: true },
+        where: { siteId, userId: confirmedBy, isOpen: true },
       });
     }
 
@@ -104,31 +106,31 @@ export class PaymentsService {
           : {})
       },
     });
-    this.socketGateway.server.emit('paymentUpdated', updated);
-    this.socketGateway.server.emit('orderUpdated', updatedOrder);
-    this.socketGateway.server.emit('cashRegistersChanged');
+    this.socketGateway.emitToSite(siteId, 'paymentUpdated', updated);
+    this.socketGateway.emitToSite(siteId, 'orderUpdated', updatedOrder);
+    this.socketGateway.emitToSite(siteId, 'cashRegistersChanged');
     await this.deliveryDriverGateway?.emitForOrder(updatedOrder, {
       reason: 'payment_validated',
       orderId: updatedOrder.id,
     });
     if (updatedOrder.customerPhone) {
-      await this.whatsappService.unassignSessionByPhone(updatedOrder.customerPhone).catch(() => {});
+      await this.whatsappService.unassignSessionByPhone(updatedOrder.customerPhone, siteId).catch(() => {});
     }
     return updated;
   }
 
-  async rejectPayment(id: string, confirmedBy: string) {
+  async rejectPayment(id: string, confirmedBy: string, siteId = DEFAULT_SITE_ID) {
     const user = await this.prisma.user.findUnique({ where: { id: confirmedBy } });
     if (user?.role === 'CASHIER') {
       const activeClosing = await this.prisma.cashClosing.findFirst({
-        where: { userId: confirmedBy, isOpen: true },
+        where: { siteId, userId: confirmedBy, isOpen: true },
       });
       if (!activeClosing) {
         throw new BadRequestException('Debes tener una caja abierta para rechazar cobros.');
       }
     }
 
-    const payment = await this.prisma.payment.findUnique({ where: { id } });
+    const payment = await this.prisma.payment.findFirst({ where: { id, order: { siteId } } });
     if (!payment) throw new NotFoundException('Pago no encontrado');
     const updated = await this.prisma.payment.update({
       where: { id },
@@ -138,9 +140,9 @@ export class PaymentsService {
       where: { id: payment.orderId },
       data: { paymentStatus: 'REJECTED' },
     });
-    this.socketGateway.server.emit('paymentUpdated', updated);
-    this.socketGateway.server.emit('orderUpdated', updatedOrder);
-    this.socketGateway.server.emit('cashRegistersChanged');
+    this.socketGateway.emitToSite(siteId, 'paymentUpdated', updated);
+    this.socketGateway.emitToSite(siteId, 'orderUpdated', updatedOrder);
+    this.socketGateway.emitToSite(siteId, 'cashRegistersChanged');
     await this.deliveryDriverGateway?.emitForOrder(updatedOrder, {
       reason: 'payment_rejected',
       orderId: updatedOrder.id,
@@ -148,18 +150,18 @@ export class PaymentsService {
     return updated;
   }
 
-  async getCashClosingToday(userId: string, cashRegisterId?: string) {
+  async getCashClosingToday(userId: string, cashRegisterId?: string, siteId = DEFAULT_SITE_ID) {
     const user = await this.prisma.user.findUnique({ where: { id: userId } });
 
     let openCash = await this.prisma.cashClosing.findFirst({
       where: cashRegisterId
-        ? { cashRegisterId, isOpen: true }
-        : { userId, isOpen: true },
+        ? { siteId, cashRegisterId, isOpen: true }
+        : { siteId, userId, isOpen: true },
     });
 
     if (!openCash && !cashRegisterId && (user?.role === 'ADMIN' || user?.role === 'SUPERADMIN')) {
       openCash = await this.prisma.cashClosing.findFirst({
-        where: { isOpen: true },
+        where: { siteId, isOpen: true },
         orderBy: { shiftStart: 'desc' },
       });
     }
@@ -195,8 +197,8 @@ export class PaymentsService {
     const targetUser = await this.prisma.user.findUnique({ where: { id: targetUserId } });
     const targetIsCashier = targetUser?.role === 'CASHIER';
     const register = openCash.cashRegisterId
-      ? await this.prisma.cashRegister.findUnique({
-          where: { id: openCash.cashRegisterId },
+      ? await this.prisma.cashRegister.findFirst({
+          where: { id: openCash.cashRegisterId, siteId },
           select: { purpose: true },
         })
       : null;
@@ -207,12 +209,14 @@ export class PaymentsService {
       orders = await this.prisma.order.findMany({
         where: isDeliveryRegister
           ? {
+              siteId,
               cashClosingId: openCash.id,
               cashRegisterId: openCash.cashRegisterId!,
               orderType: { in: ['DELIVERY', 'PICKUP'] },
               status: { not: 'CANCELLED' },
             }
           : {
+              siteId,
               createdAt: { gte: start, lte: end },
               status: { not: 'CANCELLED' },
               orderType: 'LOCAL',
@@ -230,6 +234,7 @@ export class PaymentsService {
       console.warn('Error en consulta principal de órdenes en getCashClosingToday, reintentando con filtro básico:', err);
       orders = await this.prisma.order.findMany({
         where: {
+          siteId,
           createdAt: { gte: start, lte: end },
           status: { not: 'CANCELLED' },
           ...(isDeliveryRegister ? {} : { orderType: 'LOCAL' }),
@@ -260,6 +265,7 @@ export class PaymentsService {
           confirmedAt: { gte: start, lte: end },
           status: 'CONFIRMED',
           order: {
+            siteId,
             paymentMethod: 'CREDIT',
             ...(isDeliveryRegister
               ? { cashClosingId: openCash.id, orderType: { in: ['DELIVERY', 'PICKUP'] } }
@@ -279,6 +285,8 @@ export class PaymentsService {
     try {
       customerPayments = await this.prisma.customerPayment.findMany({
         where: {
+          siteId,
+          customer: { is: { siteId } },
           createdAt: { gte: start, lte: end },
           ...(openCash.cashRegisterId ? { cashRegisterId: openCash.cashRegisterId } : {}),
           ...(!openCash.cashRegisterId && targetIsCashier ? { confirmedById: targetUserId } : {})
@@ -325,6 +333,7 @@ export class PaymentsService {
     try {
       const expenses = await this.prisma.expense.findMany({
         where: { 
+          siteId,
           createdAt: { gte: start, lte: end },
           ...((targetIsCashier || isDeliveryRegister) ? { userId: targetUserId } : {})
         },
@@ -358,38 +367,42 @@ export class PaymentsService {
     };
   }
 
-  async getAllCashClosingsToday() {
+  async getAllCashClosingsToday(siteId = DEFAULT_SITE_ID) {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     const tomorrow = new Date(today);
     tomorrow.setDate(tomorrow.getDate() + 1);
 
     const openCashes = await this.prisma.cashClosing.findMany({
-      where: { isOpen: true },
+      where: { siteId, isOpen: true },
       include: { user: { select: { id: true, name: true } } },
     });
 
     return openCashes;
   }
 
-  async createCashClosing(userId: string, data: { shiftStart: string; notes?: string; cashRegisterId?: string }) {
+  async createCashClosing(userId: string, data: { shiftStart: string; notes?: string; cashRegisterId?: string }, siteId = DEFAULT_SITE_ID) {
     const openClosing = await this.prisma.cashClosing.findFirst({
       where: data.cashRegisterId
-        ? { cashRegisterId: data.cashRegisterId, isOpen: true }
-        : { userId, isOpen: true },
+        ? { siteId, cashRegisterId: data.cashRegisterId, isOpen: true }
+        : { siteId, userId, isOpen: true },
       orderBy: { createdAt: 'desc' },
     });
 
     const targetRegisterId = data.cashRegisterId || openClosing?.cashRegisterId;
     const targetRegister = targetRegisterId
-      ? await this.prisma.cashRegister.findUnique({
-          where: { id: targetRegisterId },
+      ? await this.prisma.cashRegister.findFirst({
+          where: { id: targetRegisterId, siteId },
           select: { purpose: true },
         })
       : null;
+    if (targetRegisterId && !targetRegister) {
+      throw new NotFoundException('Caja no encontrada en esta sede');
+    }
     const isDeliveryRegister = targetRegister?.purpose === 'DELIVERY';
     const pendingCount = await this.prisma.order.count({
       where: {
+        siteId,
         status: { in: ['PENDING', 'IN_ROUTE', 'READY'] },
         ...(isDeliveryRegister && openClosing
           ? {
@@ -407,6 +420,7 @@ export class PaymentsService {
     if (isDeliveryRegister && openClosing) {
       const pendingDriverCash = await this.prisma.order.count({
         where: {
+          siteId,
           cashClosingId: openClosing.id,
           orderType: 'DELIVERY',
           status: 'DELIVERED',
@@ -421,6 +435,7 @@ export class PaymentsService {
 
       const pendingPayments = await this.prisma.order.count({
         where: {
+          siteId,
           cashClosingId: openClosing.id,
           orderType: { in: ['DELIVERY', 'PICKUP'] },
           status: { not: 'CANCELLED' },
@@ -434,11 +449,11 @@ export class PaymentsService {
     }
 
     if (this.tablesService) {
-      await this.tablesService.assertNoOpenTableWork(targetRegisterId);
+      await this.tablesService.assertNoOpenTableWork(targetRegisterId, siteId);
     }
 
     const targetUserIdForStats = openClosing ? openClosing.userId : userId;
-    const stats = await this.getCashClosingToday(targetUserIdForStats, data.cashRegisterId);
+    const stats = await this.getCashClosingToday(targetUserIdForStats, data.cashRegisterId, siteId);
 
     const shiftStartDate = openClosing?.shiftStart || new Date(data.shiftStart);
 
@@ -469,6 +484,7 @@ export class PaymentsService {
     } else {
       closing = await this.prisma.cashClosing.create({
         data: {
+          siteId,
           userId,
           shiftStart: shiftStartDate,
           shiftEnd: new Date(),
@@ -491,21 +507,22 @@ export class PaymentsService {
     }
 
     const anyOpen = await this.prisma.cashClosing.findFirst({
-      where: { isOpen: true },
+      where: { siteId, isOpen: true },
     });
-    this.socketGateway.server.emit('cashStatusChanged', { isOpen: !!anyOpen });
-    this.socketGateway.server.emit('cashRegistersChanged');
+    this.socketGateway.emitToSite(siteId, 'cashStatusChanged', { isOpen: !!anyOpen });
+    this.socketGateway.emitToSite(siteId, 'cashRegistersChanged');
     if (isDeliveryRegister) {
-      await this.deliveryDriverGateway?.emitForAllDrivers({ reason: 'delivery_shift_closed' });
+      await this.deliveryDriverGateway?.emitForAllDrivers({ reason: 'delivery_shift_closed' }, siteId);
     }
     if (this.tablesService) {
-      await this.tablesService.purgeProofsForClosing(closing.id);
+      await this.tablesService.purgeProofsForClosing(closing.id, siteId);
     }
     return closing;
   }
 
-  async getCashClosings(params: { date?: string; userId?: string; cashRegisterId?: string }) {
+  async getCashClosings(params: { date?: string; userId?: string; cashRegisterId?: string }, siteId = DEFAULT_SITE_ID) {
     const where: any = {
+      siteId,
       isOpen: false,
     };
     if (params.userId) where.userId = params.userId;
@@ -532,15 +549,24 @@ export class PaymentsService {
     });
   }
 
-  async openCash(userId: string, data: { initialCash: number; cashRegisterId?: string }) {
+  async openCash(userId: string, data: { initialCash: number; cashRegisterId?: string }, siteId = DEFAULT_SITE_ID) {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     const tomorrow = new Date(today);
     tomorrow.setDate(tomorrow.getDate() + 1);
 
     const whereClause: any = data.cashRegisterId
-      ? { cashRegisterId: data.cashRegisterId, isOpen: true }
-      : { userId, isOpen: true };
+      ? { siteId, cashRegisterId: data.cashRegisterId, isOpen: true }
+      : { siteId, userId, isOpen: true };
+
+    let register: { purpose: string } | null = null;
+    if (data.cashRegisterId) {
+      register = await this.prisma.cashRegister.findFirst({
+        where: { id: data.cashRegisterId, siteId, active: true },
+        select: { purpose: true },
+      });
+      if (!register) throw new NotFoundException('Caja no encontrada en esta sede');
+    }
 
     const existingOpen = await this.prisma.cashClosing.findFirst({
       where: whereClause,
@@ -551,6 +577,7 @@ export class PaymentsService {
 
     const open = await this.prisma.cashClosing.create({
       data: {
+        siteId,
         userId,
         shiftStart: new Date(),
         initialCash: data.initialCash || 0,
@@ -559,23 +586,17 @@ export class PaymentsService {
       },
     });
 
-    this.socketGateway.server.emit('cashStatusChanged', { isOpen: true });
-    this.socketGateway.server.emit('cashRegistersChanged');
+    this.socketGateway.emitToSite(siteId, 'cashStatusChanged', { isOpen: true });
+    this.socketGateway.emitToSite(siteId, 'cashRegistersChanged');
 
-    if (data.cashRegisterId) {
-      const register = await this.prisma.cashRegister.findUnique({
-        where: { id: data.cashRegisterId },
-        select: { purpose: true },
-      });
-      if (register?.purpose === 'DELIVERY') {
-        await this.deliveryDriverGateway?.emitForAllDrivers({ reason: 'delivery_shift_opened' });
-      }
+    if (register?.purpose === 'DELIVERY') {
+      await this.deliveryDriverGateway?.emitForAllDrivers({ reason: 'delivery_shift_opened' }, siteId);
     }
 
     return open;
   }
 
-  async getOpenCash(userId: string) {
+  async getOpenCash(userId: string, siteId = DEFAULT_SITE_ID) {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     const tomorrow = new Date(today);
@@ -585,8 +606,9 @@ export class PaymentsService {
     if (user?.role === 'DELIVERY_MANAGER') {
       return this.prisma.cashClosing.findFirst({
         where: {
+          siteId,
           isOpen: true,
-          cashRegister: { purpose: 'DELIVERY', active: true },
+          cashRegister: { siteId, purpose: 'DELIVERY', active: true },
         },
         orderBy: { shiftStart: 'desc' },
       });
@@ -594,31 +616,42 @@ export class PaymentsService {
 
     if (user?.role === 'ADMIN' || user?.role === 'SUPERADMIN') {
       return this.prisma.cashClosing.findFirst({
-        where: { isOpen: true },
+        where: { siteId, isOpen: true },
       });
     }
 
     return this.prisma.cashClosing.findFirst({
-      where: { userId, isOpen: true },
+      where: { siteId, userId, isOpen: true },
     });
   }
 
   // --- Liquidar Crédito (Cartera) ---
-  async payCreditOrder(orderId: string, data: { method: string; reference?: string }, cashierId: string) {
-    const order = await this.prisma.order.findUnique({
-      where: { id: orderId },
+  async payCreditOrder(orderId: string, data: { method: string; reference?: string }, cashierId: string, siteId = DEFAULT_SITE_ID) {
+    const order = await this.prisma.order.findFirst({
+      where: { id: orderId, siteId },
       include: { payment: true },
     });
     if (!order) throw new NotFoundException('Pedido no encontrado');
     if (order.paymentMethod !== 'CREDIT') throw new BadRequestException('El pedido no fue registrado a crédito');
+
+    // Validate the association before changing the order or creating a
+    // settlement. Legacy rows can carry a customerId from another site even
+    // though the order itself is correctly scoped.
+    if (order.customerId) {
+      const customer = await this.prisma.customer.findFirst({
+        where: { id: order.customerId, siteId },
+        select: { id: true },
+      });
+      if (!customer) throw new NotFoundException('Cliente no encontrado');
+    }
 
     const isDeliveryOrder = ['DELIVERY', 'PICKUP'].includes(order.orderType);
     // Un abono de domicilio siempre se registra en Caja Domicilios. Un pago
     // hecho por un cajero no puede mover ese pedido a su caja personal.
     const activeClosing = await this.prisma.cashClosing.findFirst({
       where: isDeliveryOrder
-        ? { isOpen: true, cashRegister: { purpose: 'DELIVERY', active: true } }
-        : { userId: cashierId, isOpen: true },
+        ? { siteId, isOpen: true, cashRegister: { siteId, purpose: 'DELIVERY', active: true } }
+        : { siteId, userId: cashierId, isOpen: true },
       orderBy: isDeliveryOrder ? { shiftStart: 'desc' } : undefined,
     });
 
@@ -671,6 +704,7 @@ export class PaymentsService {
     if (order.customerId) {
       await this.prisma.customerPayment.create({
         data: {
+          siteId,
           customerId: order.customerId,
           amount: order.total,
           method: data.method,
@@ -682,25 +716,25 @@ export class PaymentsService {
       });
     }
 
-    this.socketGateway.server.emit('paymentUpdated', payment);
-    this.socketGateway.server.emit('orderUpdated', orderId);
-    this.socketGateway.server.emit('cashRegistersChanged');
+    this.socketGateway.emitToSite(siteId, 'paymentUpdated', payment);
+    this.socketGateway.emitToSite(siteId, 'orderUpdated', orderId);
+    this.socketGateway.emitToSite(siteId, 'cashRegistersChanged');
     await this.deliveryDriverGateway?.emitForOrder(orderId, {
       reason: 'payment_changed',
       orderId,
     });
 
     if (order.customerPhone) {
-      await this.whatsappService.unassignSessionByPhone(order.customerPhone).catch(() => {});
+      await this.whatsappService.unassignSessionByPhone(order.customerPhone, siteId).catch(() => {});
     }
 
     return payment;
   }
 
   // ── Detalle expandido de un cierre para Reporte Z profesional ──
-  async getClosingDetail(closingId: string) {
-    const closing = await this.prisma.cashClosing.findUnique({
-      where: { id: closingId },
+  async getClosingDetail(closingId: string, siteId = DEFAULT_SITE_ID) {
+    const closing = await this.prisma.cashClosing.findFirst({
+      where: { id: closingId, siteId },
       include: {
         user: { select: { id: true, name: true } },
         cashRegister: { select: { id: true, name: true, purpose: true } },
@@ -714,12 +748,14 @@ export class PaymentsService {
     // cuando se crean, así un reporte histórico no altera ni absorbe movimientos.
     const whereOrders: any = isDeliveryRegister
       ? {
+          siteId,
           cashClosingId: closing.id,
           cashRegisterId: closing.cashRegisterId,
           orderType: { in: ['DELIVERY', 'PICKUP'] },
           status: { not: 'CANCELLED' },
         }
       : {
+          siteId,
           createdAt: { gte: closing.shiftStart, lte: effectiveEnd },
           status: { not: 'CANCELLED' },
           orderType: 'LOCAL',
@@ -741,6 +777,7 @@ export class PaymentsService {
         confirmedAt: { gte: closing.shiftStart, lte: effectiveEnd },
         status: 'CONFIRMED',
         order: {
+          siteId,
           paymentMethod: 'CREDIT',
           ...(isDeliveryRegister
             ? { cashClosingId: closing.id, orderType: { in: ['DELIVERY', 'PICKUP'] } }
@@ -752,6 +789,7 @@ export class PaymentsService {
     // Gastos del turno con categoría
     const expenses = await this.prisma.expense.findMany({
       where: {
+        siteId,
         createdAt: { gte: closing.shiftStart, lte: effectiveEnd },
         ...(isDeliveryRegister ? { userId: closing.userId } : {}),
       },
@@ -844,6 +882,8 @@ export class PaymentsService {
 
     const customerPayments = await this.prisma.customerPayment.findMany({
       where: {
+        siteId,
+        customer: { is: { siteId } },
         createdAt: { gte: closing.shiftStart, lte: effectiveEnd },
         ...(closing.cashRegisterId ? { cashRegisterId: closing.cashRegisterId } : {}),
       },
@@ -926,7 +966,7 @@ export class PaymentsService {
     };
   }
 
-  async getConsolidatedClosing(dateStr?: string) {
+  async getConsolidatedClosing(dateStr?: string, siteId = DEFAULT_SITE_ID) {
     const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Bogota' });
     const isToday = !dateStr || dateStr === todayStr;
 
@@ -936,7 +976,7 @@ export class PaymentsService {
 
     if (isToday) {
       const activeClosing = await this.prisma.cashClosing.findFirst({
-        where: { isOpen: true },
+        where: { siteId, isOpen: true },
         orderBy: { shiftStart: 'desc' },
       });
 
@@ -944,11 +984,12 @@ export class PaymentsService {
         start = activeClosing.shiftStart;
         end = new Date();
         const openClosings = await this.prisma.cashClosing.findMany({
-          where: { isOpen: true },
+          where: { siteId, isOpen: true },
         });
         initialCashTotal = openClosings.reduce((s, c) => s + (c.initialCash || 0), 0);
       } else {
         const lastClosing = await this.prisma.cashClosing.findFirst({
+          where: { siteId },
           orderBy: { shiftEnd: 'desc' },
         });
         if (lastClosing && lastClosing.shiftEnd) {
@@ -965,6 +1006,7 @@ export class PaymentsService {
 
       const shiftForDate = await this.prisma.cashClosing.findFirst({
         where: {
+          siteId,
           shiftStart: { gte: start, lte: end },
         },
         orderBy: { shiftStart: 'desc' },
@@ -983,6 +1025,7 @@ export class PaymentsService {
     // Get all orders delivered or paid on this day for all registers
     const orders = await this.prisma.order.findMany({
       where: {
+        siteId,
         createdAt: { gte: start, lte: end },
         status: { not: 'CANCELLED' },
         OR: [
@@ -995,6 +1038,7 @@ export class PaymentsService {
 
     const expenses = await this.prisma.expense.findMany({
       where: {
+        siteId,
         createdAt: { gte: start, lte: end },
       },
       include: { category: { select: { name: true } } },
@@ -1048,6 +1092,7 @@ export class PaymentsService {
     // Find all cash closings belonging to this date range
     const closings = await this.prisma.cashClosing.findMany({
       where: {
+        siteId,
         isOpen: false,
         OR: [
           { shiftEnd: { gte: start, lte: end } },

@@ -4,8 +4,24 @@ import { api } from '../lib/api'
 import { hasUserPermission } from '../lib/permissions'
 import { clearProofCache } from '../lib/proofCache'
 import { clearMediaCache } from '../lib/mediaCache'
+import { clearChatCache, setChatCacheScope } from '../lib/chatCache'
+import { getAccessTokenContextKey } from '../lib/multisite'
+import { getFirstAllowedPath } from '../lib/navigation'
+import { syncModuleVisibility } from '../lib/moduleVisibility'
 
-interface User {
+export interface SiteSummary {
+  id: string
+  code: string
+  name: string
+  timezone: string
+  organizationId: string
+  organizationName: string
+  role: string
+  active: boolean
+  preparationMode: boolean
+}
+
+export interface User {
   id: string
   name: string
   email: string
@@ -15,6 +31,10 @@ interface User {
   photo?: string
   mustVerifyEmail?: boolean
   emailVerified?: boolean
+  globalRole?: string | null
+  isOrganizationAdmin?: boolean
+  activeSite?: Omit<SiteSummary, 'role'>
+  sites?: SiteSummary[]
 }
 
 const IMPERSONATION_KEY = 'niche_impersonation_original'
@@ -48,6 +68,10 @@ interface AuthContextType {
   isImpersonating: boolean
   startImpersonation: (userId: string) => Promise<void>
   stopImpersonation: () => Promise<void>
+  sites: SiteSummary[]
+  activeSite: SiteSummary | null
+  switchingSite: boolean
+  switchSite: (siteId: string) => Promise<void>
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined)
@@ -56,14 +80,31 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null)
   const [loading, setLoading] = useState(true)
   const [isImpersonating, setIsImpersonating] = useState(false)
+  const [switchingSite, setSwitchingSite] = useState(false)
   const navigate = useNavigate()
+
+  const clearScopedClientState = useCallback((siteId?: string | null) => {
+    clearProofCache()
+    clearMediaCache()
+    clearChatCache()
+    api.invalidateCache()
+    if (siteId !== undefined) setChatCacheScope(siteId)
+    window.dispatchEvent(new CustomEvent('the-villa-dog-session-changed', {
+      detail: { siteId: siteId || null },
+    }))
+  }, [])
 
   const refreshProfile = useCallback(async () => {
     const token = api.getToken()
     if (!token) return
+    const contextKey = getAccessTokenContextKey(token)
     try {
       const profile = await api.get<User>('/auth/profile')
+      // A response from the previous site/session must not overwrite the
+      // profile that now controls Socket.IO, USB and route permissions.
+      if (contextKey && getAccessTokenContextKey(api.getToken()) !== contextKey) return
       setUser(profile)
+      setChatCacheScope(profile.activeSite?.id)
     } catch (err) {
       console.error('Error al sincronizar perfil de usuario:', err)
     }
@@ -73,8 +114,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setIsImpersonating(!!sessionStorage.getItem(IMPERSONATION_KEY))
     const token = api.getToken()
     if (token) {
+      const contextKey = getAccessTokenContextKey(token)
       api.get<User>('/auth/profile')
-        .then(setUser)
+        .then(async profile => {
+          if (contextKey && getAccessTokenContextKey(api.getToken()) !== contextKey) return
+          await syncModuleVisibility(profile.activeSite?.id)
+          if (contextKey && getAccessTokenContextKey(api.getToken()) !== contextKey) return
+          setUser(profile)
+          setChatCacheScope(profile.activeSite?.id)
+        })
         .catch(() => api.clearToken())
         .finally(() => setLoading(false))
     } else {
@@ -87,23 +135,56 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     sessionStorage.removeItem(IMPERSONATION_KEY)
     setIsImpersonating(false)
     api.setTokens(data.accessToken, data.refreshToken)
+    clearScopedClientState(data.user.activeSite?.id)
+    await syncModuleVisibility(data.user.activeSite?.id)
     setUser(data.user)
+    setChatCacheScope(data.user.activeSite?.id)
   }
 
   const register = async (name: string, email: string, password: string, role?: string) => {
     const data = await api.post<{ accessToken: string; refreshToken: string; user: User }>('/auth/register', { name, email, password, role })
     api.setTokens(data.accessToken, data.refreshToken)
+    clearScopedClientState(data.user.activeSite?.id)
+    await syncModuleVisibility(data.user.activeSite?.id)
     setUser(data.user)
+    setChatCacheScope(data.user.activeSite?.id)
   }
 
   const logout = () => {
     sessionStorage.removeItem(IMPERSONATION_KEY)
     setIsImpersonating(false)
-    clearProofCache()
-    clearMediaCache()
     api.clearToken()
+    clearScopedClientState(null)
     setUser(null)
     navigate('/login', { replace: true })
+  }
+
+  const switchSite = async (siteId: string) => {
+    const cleanSiteId = String(siteId || '').trim()
+    if (!cleanSiteId || cleanSiteId === user?.activeSite?.id || switchingSite) return
+    setSwitchingSite(true)
+    try {
+      const data = await api.post<{
+        accessToken: string
+        refreshToken: string
+        user: User
+      }>('/auth/switch-site', { siteId: cleanSiteId })
+      // Install the new identity before notifying sockets and caches. This
+      // prevents a listener from reacting to the new site with the old JWT.
+      api.setTokens(data.accessToken, data.refreshToken)
+      clearScopedClientState(data.user.activeSite?.id || cleanSiteId)
+      setUser(data.user)
+      await syncModuleVisibility(data.user.activeSite?.id || cleanSiteId)
+      window.dispatchEvent(new CustomEvent('the-villa-dog-site-changed', {
+        detail: { siteId: data.user.activeSite?.id || cleanSiteId },
+      }))
+      const destination = data.user.activeSite?.preparationMode
+        ? '/superadmin/sites'
+        : (getFirstAllowedPath(data.user, data.user.activeSite?.id) || '/dashboard')
+      navigate(destination, { replace: true })
+    } finally {
+      setSwitchingSite(false)
+    }
   }
 
   const hasRole = (...roles: string[]) => {
@@ -126,12 +207,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const updateProfile = async (data: { name?: string; email?: string; phone?: string; photo?: string }) => {
     const updated = await api.patch<User>('/auth/profile', data)
-    setUser(updated)
+    setUser(current => current ? {
+      ...current,
+      ...updated,
+      activeSite: updated.activeSite || current.activeSite,
+      sites: updated.sites || current.sites,
+    } : updated)
   }
 
   const requestEmailChange = async (newEmail: string) => {
     const res = await api.post<{ step: number; requiresOtp: boolean; sentTo: string; currentEmail?: string; newEmail: string; email?: string; message: string; user?: User }>('/auth/profile/request-email-change', { newEmail })
-    if (res.user) setUser(res.user)
+    if (res.user) setUser(current => current ? {
+      ...current,
+      ...res.user,
+      activeSite: res.user?.activeSite || current.activeSite,
+      sites: res.user?.sites || current.sites,
+    } : res.user || null)
     return res
   }
 
@@ -142,7 +233,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const confirmNewEmailStep2 = async (newEmail: string, otpCode: string) => {
     const res = await api.post<{ success: boolean; message: string; user: User }>('/auth/profile/confirm-new-email-step2', { newEmail, otpCode })
     if (res.user) {
-      setUser(res.user)
+      setUser(current => current ? {
+        ...current,
+        ...res.user,
+        activeSite: res.user.activeSite || current.activeSite,
+        sites: res.user.sites || current.sites,
+      } : res.user)
     }
     return res
   }
@@ -151,7 +247,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const res = await api.post<{ success: boolean; message: string; accessToken: string; refreshToken?: string; user: User }>('/auth/unlock-account', { email, otpCode })
     if (res.accessToken && res.user) {
       api.setTokens(res.accessToken, res.refreshToken)
+      clearScopedClientState(res.user.activeSite?.id)
+      await syncModuleVisibility(res.user.activeSite?.id)
       setUser(res.user)
+      setChatCacheScope(res.user.activeSite?.id)
     }
     return res
   }
@@ -173,7 +272,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const data = await api.post<{ accessToken: string; user: User }>(`/superadmin/impersonate/${userId}`)
     sessionStorage.setItem(IMPERSONATION_KEY, JSON.stringify(original))
     api.setAccessTokenOnly(data.accessToken)
+    clearScopedClientState(data.user.activeSite?.id)
     setUser(data.user)
+    await syncModuleVisibility(data.user.activeSite?.id)
+    setChatCacheScope(data.user.activeSite?.id)
+    window.dispatchEvent(new CustomEvent('the-villa-dog-session-changed', { detail: { siteId: data.user.activeSite?.id || null } }))
     setIsImpersonating(true)
     navigate('/dashboard', { replace: true })
   }
@@ -184,10 +287,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const original: StashedSession = JSON.parse(raw)
     sessionStorage.removeItem(IMPERSONATION_KEY)
     api.setTokens(original.accessToken, original.refreshToken || undefined)
+    clearScopedClientState()
     setIsImpersonating(false)
     try {
       const profile = await api.get<User>('/auth/profile')
       setUser(profile)
+      await syncModuleVisibility(profile.activeSite?.id)
+      setChatCacheScope(profile.activeSite?.id)
+      window.dispatchEvent(new CustomEvent('the-villa-dog-session-changed', { detail: { siteId: profile.activeSite?.id || null } }))
     } catch (err) {
       console.error('Failed to refresh profile after stop impersonation', err)
     }
@@ -197,12 +304,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   return (
     <AuthContext.Provider value={{
       user, loading, login, register, logout, isAuthenticated: !!user, hasRole, hasPermission,
-      refreshProfile, updateCurrentUser: (newUser: User) => setUser(newUser),
+      refreshProfile,
+      updateCurrentUser: (newUser: User) => {
+        setUser(newUser)
+        setChatCacheScope(newUser.activeSite?.id)
+      },
       forgotPassword, resetPassword, updateProfile, 
       requestEmailChange, verifyCurrentEmailStep1, confirmNewEmailStep2,
       unlockAccount,
       changeOwnPassword, requestPasswordChange, confirmPasswordChange,
       isImpersonating, startImpersonation, stopImpersonation,
+      sites: user?.sites || [],
+      activeSite: user?.activeSite
+        ? { ...user.activeSite, role: user.role }
+        : null,
+      switchingSite, switchSite,
     }}>
       {children}
     </AuthContext.Provider>

@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { SocketGateway } from '../socket/socket.gateway';
+import { DEFAULT_SITE_ID } from '../common/multisite.constants';
 
 @Injectable()
 export class CustomersService {
@@ -9,10 +10,13 @@ export class CustomersService {
     private socketGateway: SocketGateway,
   ) {}
 
-  async create(data: { name: string; phone: string; address?: string }) {
+  async create(
+    data: { name: string; phone: string; address?: string },
+    siteId = DEFAULT_SITE_ID,
+  ) {
     const phoneClean = data.phone.replace(/\D/g, '');
     const existing = await this.prisma.customer.findUnique({
-      where: { phone: phoneClean },
+      where: { siteId_phone: { siteId, phone: phoneClean } },
     });
     if (existing) {
       throw new BadRequestException('Ya existe un cliente registrado con este número de teléfono.');
@@ -23,14 +27,15 @@ export class CustomersService {
         name: data.name,
         phone: phoneClean,
         address: data.address || null,
+        siteId,
       },
     });
-    this.socketGateway.server.emit('customersChanged');
+    this.socketGateway.emitToSite(siteId, 'customersChanged');
     return created;
   }
 
-  async findAll(search?: string) {
-    const where: any = { active: true };
+  async findAll(search?: string, siteId = DEFAULT_SITE_ID) {
+    const where: any = { siteId, active: true };
     if (search) {
       const cleanSearch = search.trim();
       where.OR = [
@@ -43,10 +48,11 @@ export class CustomersService {
       where,
       include: {
         orders: {
-          where: { paymentMethod: 'CREDIT' },
+          where: { siteId, paymentMethod: 'CREDIT' },
           select: { total: true },
         },
         payments: {
+          where: { siteId },
           select: { amount: true },
         },
       },
@@ -70,15 +76,17 @@ export class CustomersService {
     });
   }
 
-  async findOne(id: string) {
-    const customer = await this.prisma.customer.findUnique({
-      where: { id },
+  async findOne(id: string, siteId = DEFAULT_SITE_ID) {
+    const customer = await this.prisma.customer.findFirst({
+      where: { id, siteId },
       include: {
         orders: {
+          where: { siteId },
           orderBy: { createdAt: 'desc' },
           include: { zone: true, items: { include: { menuItem: true } } },
         },
         payments: {
+          where: { siteId },
           orderBy: { createdAt: 'desc' },
         },
       },
@@ -100,8 +108,12 @@ export class CustomersService {
     };
   }
 
-  async update(id: string, data: { name?: string; phone?: string; address?: string; active?: boolean }) {
-    const customer = await this.prisma.customer.findUnique({ where: { id } });
+  async update(
+    id: string,
+    data: { name?: string; phone?: string; address?: string; active?: boolean },
+    siteId = DEFAULT_SITE_ID,
+  ) {
+    const customer = await this.prisma.customer.findFirst({ where: { id, siteId } });
     if (!customer) throw new NotFoundException('Cliente no encontrado');
 
     const updateData: any = {};
@@ -111,7 +123,9 @@ export class CustomersService {
     if (data.phone !== undefined) {
       const phoneClean = data.phone.replace(/\D/g, '');
       if (phoneClean !== customer.phone) {
-        const existing = await this.prisma.customer.findUnique({ where: { phone: phoneClean } });
+        const existing = await this.prisma.customer.findUnique({
+          where: { siteId_phone: { siteId, phone: phoneClean } },
+        });
         if (existing) throw new BadRequestException('Ya existe otro cliente con este teléfono.');
         updateData.phone = phoneClean;
       }
@@ -121,12 +135,17 @@ export class CustomersService {
       where: { id },
       data: updateData,
     });
-    this.socketGateway.server.emit('customersChanged');
+    this.socketGateway.emitToSite(siteId, 'customersChanged');
     return updated;
   }
 
-  async addPayment(customerId: string, data: { amount: number; method: string; reference?: string; notes?: string }, userId: string) {
-    const customer = await this.prisma.customer.findUnique({ where: { id: customerId } });
+  async addPayment(
+    customerId: string,
+    data: { amount: number; method: string; reference?: string; notes?: string },
+    userId: string,
+    siteId = DEFAULT_SITE_ID,
+  ) {
+    const customer = await this.prisma.customer.findFirst({ where: { id: customerId, siteId } });
     if (!customer) throw new NotFoundException('Cliente no encontrado');
 
     if (data.amount <= 0) {
@@ -135,7 +154,7 @@ export class CustomersService {
 
     // Validar caja abierta
     const activeClosing = await this.prisma.cashClosing.findFirst({
-      where: { userId, isOpen: true },
+      where: { siteId, userId, isOpen: true },
     });
     const user = await this.prisma.user.findUnique({ where: { id: userId } });
     if (user?.role === 'CASHIER' && !activeClosing) {
@@ -144,6 +163,7 @@ export class CustomersService {
 
     const payment = await this.prisma.customerPayment.create({
       data: {
+        siteId,
         customerId,
         amount: data.amount,
         method: data.method,
@@ -153,18 +173,18 @@ export class CustomersService {
         confirmedById: userId,
       },
     });
-    this.socketGateway.server.emit('customersChanged');
+    this.socketGateway.emitToSite(siteId, 'customersChanged');
     return payment;
   }
 
-  async remove(id: string) {
-    const customer = await this.prisma.customer.findUnique({ where: { id } });
+  async remove(id: string, siteId = DEFAULT_SITE_ID) {
+    const customer = await this.prisma.customer.findFirst({ where: { id, siteId } });
     if (!customer) throw new NotFoundException('Cliente no encontrado');
     const removed = await this.prisma.customer.update({
       where: { id },
       data: { active: false },
     });
-    this.socketGateway.server.emit('customersChanged');
+    this.socketGateway.emitToSite(siteId, 'customersChanged');
     return removed;
   }
 }

@@ -1,5 +1,7 @@
 import { DeliveryDriversController } from './delivery-drivers.controller';
 
+const SITE_ID = '00000000-0000-4000-8000-000000000202';
+
 describe('DeliveryDriversController', () => {
   it('runs duplicate merging only through the explicit manual endpoint', async () => {
     const service: any = {
@@ -9,16 +11,16 @@ describe('DeliveryDriversController', () => {
     const controller = new DeliveryDriversController(service);
 
     await expect(controller.findAll(undefined, undefined, undefined, undefined, {
-      user: { role: 'SUPERADMIN' },
+      user: { role: 'SUPERADMIN', siteId: SITE_ID },
     })).resolves.toEqual([]);
     expect(service.autoMergeDuplicates).not.toHaveBeenCalled();
-    expect(service.findAll).toHaveBeenCalledWith(false, 'CURRENT', undefined, undefined, true);
+    expect(service.findAll).toHaveBeenCalledWith(false, 'CURRENT', undefined, undefined, true, SITE_ID);
 
-    await expect(controller.mergeDuplicates()).resolves.toEqual({
+    await expect(controller.mergeDuplicates({ user: { siteId: SITE_ID } })).resolves.toEqual({
       success: true,
       message: 'Domiciliarios duplicados unificados exitosamente.',
     });
-    expect(service.autoMergeDuplicates).toHaveBeenCalledTimes(1);
+    expect(service.autoMergeDuplicates).toHaveBeenCalledWith(SITE_ID);
   });
 
   it('requests a single private order snapshot for realtime reconciliation', async () => {
@@ -31,8 +33,8 @@ describe('DeliveryDriversController', () => {
     };
     const controller = new DeliveryDriversController(service);
 
-    await expect(controller.getMyOrderSnapshot('order-1', { user: { id: 'driver-user-1' } }))
+    await expect(controller.getMyOrderSnapshot('order-1', { user: { id: 'driver-user-1', siteId: SITE_ID } }))
       .resolves.toEqual(expect.objectContaining({ orderId: 'order-1', bucket: 'ACTIVE' }));
-    expect(service.getMyOrderSnapshot).toHaveBeenCalledWith('driver-user-1', 'order-1');
+    expect(service.getMyOrderSnapshot).toHaveBeenCalledWith('driver-user-1', 'order-1', SITE_ID);
   });
 });

@@ -4,6 +4,15 @@ import { PrismaService } from '../prisma/prisma.service';
 import { SocketGateway } from '../socket/socket.gateway';
 import { OrdersService } from '../orders/orders.service';
 import { PrintQueueSignalService } from './print-queue-signal.service';
+import { DEFAULT_SITE_ID } from '../common/multisite.constants';
+
+const PRINTER_SETTING_KEYS = [
+  'caja_printer_mode', 'caja_printer_ip', 'caja_printer_port', 'caja_printer_paper', 'caja_printer_name',
+  'cocina_printer_mode', 'cocina_printer_ip', 'cocina_printer_port', 'cocina_printer_paper', 'cocina_printer_name', 'cocina_printer_categories',
+  'bar_printer_mode', 'bar_printer_ip', 'bar_printer_port', 'bar_printer_paper', 'bar_printer_name', 'bar_printer_categories',
+  'printer_auto_print', 'custom_prep_printers',
+  'restaurant_name', 'restaurant_nit', 'restaurant_address', 'restaurant_phone', 'restaurant_hours',
+] as const;
 
 @Injectable()
 export class PrintService {
@@ -32,17 +41,21 @@ export class PrintService {
     return (this.isIpv4(host) || host === 'localhost') && extra.length === 0 && validPort;
   }
 
-  async getPrinterSettings() {
-    const keys = [
-      'caja_printer_mode', 'caja_printer_ip', 'caja_printer_port', 'caja_printer_paper', 'caja_printer_name',
-      'cocina_printer_mode', 'cocina_printer_ip', 'cocina_printer_port', 'cocina_printer_paper', 'cocina_printer_name', 'cocina_printer_categories',
-      'bar_printer_mode', 'bar_printer_ip', 'bar_printer_port', 'bar_printer_paper', 'bar_printer_name', 'bar_printer_categories',
-      'printer_auto_print', 'custom_prep_printers',
-      'restaurant_name', 'restaurant_nit', 'restaurant_address', 'restaurant_phone', 'restaurant_hours'
-    ];
-    const rows = await this.prisma.appSetting.findMany({ where: { key: { in: keys } } });
+  async getPrinterSettings(siteId = DEFAULT_SITE_ID) {
+    const rows = await this.prisma.siteSetting.findMany({
+      where: { siteId, key: { in: [...PRINTER_SETTING_KEYS] } },
+    });
     const map: Record<string, string> = {};
-    for (const r of rows) map[r.key] = r.value;
+
+    // La sede principal conserva la configuración histórica mientras se migra
+    // gradualmente desde AppSetting. SiteSetting siempre tiene prioridad.
+    if (siteId === DEFAULT_SITE_ID) {
+      const legacyRows = await this.prisma.appSetting.findMany({
+        where: { key: { in: [...PRINTER_SETTING_KEYS] } },
+      });
+      for (const row of legacyRows) map[row.key] = row.value;
+    }
+    for (const row of rows) map[row.key] = row.value;
 
     const parseCats = (raw?: string): string[] => {
       if (!raw) return [];
@@ -111,7 +124,7 @@ export class PrintService {
     };
   }
 
-  async savePrinterSettings(data: any) {
+  async savePrinterSettings(data: any, siteId = DEFAULT_SITE_ID) {
     const updates: { key: string; value: string }[] = [];
     if (data.restaurant) {
       if (data.restaurant.name) updates.push({ key: 'restaurant_name', value: data.restaurant.name });
@@ -159,15 +172,15 @@ export class PrintService {
       updates.push({ key: 'printer_auto_print', value: data.autoPrint ? 'true' : 'false' });
     }
     for (const u of updates) {
-      await this.prisma.appSetting.upsert({
-        where: { key: u.key },
-        create: u,
+      await this.prisma.siteSetting.upsert({
+        where: { siteId_key: { siteId, key: u.key } },
+        create: { siteId, ...u },
         update: { value: u.value },
       });
     }
-    const updated = await this.getPrinterSettings();
-    this.socketGateway.server?.emit('printerSettingsUpdated', updated);
-    this.socketGateway.server?.emit('settingsUpdated', updated);
+    const updated = await this.getPrinterSettings(siteId);
+    this.socketGateway.emitToSite(siteId, 'printerSettingsUpdated', updated);
+    this.socketGateway.emitToSite(siteId, 'settingsUpdated', updated);
     return updated;
   }
 
@@ -880,8 +893,8 @@ export class PrintService {
     return this.formatCajaInvoiceText(order, settings);
   }
 
-  async printCancellation(order: any) {
-    const settings = await this.getPrinterSettings();
+  async printCancellation(order: any, siteId = order?.siteId || DEFAULT_SITE_ID) {
+    const settings = await this.getPrinterSettings(siteId);
     const results: any[] = [];
     const processedPrinters = new Set<string>();
 
@@ -906,7 +919,7 @@ export class PrintService {
       const text = this.formatCancellationTicketText(order, printer.name, printer.categories, settings.printers, printer.paper);
       if (!text) continue; // No items for this station
 
-      const res = await this.dispatchPrintJob(printer.id || printer.name, text, printer, false);
+      const res = await this.dispatchPrintJob(printer.id || printer.name, text, printer, false, siteId);
       results.push(res);
     }
     return results;
@@ -997,7 +1010,13 @@ export class PrintService {
     return lines.join('\n');
   }
 
-  private async dispatchPrintJob(target: string, text: string, printerConfig: any, kickDrawer = false) {
+  private async dispatchPrintJob(
+    target: string,
+    text: string,
+    printerConfig: any,
+    kickDrawer = false,
+    siteId = DEFAULT_SITE_ID,
+  ) {
     if (!text || !text.trim()) return { ok: false, error: 'Texto de impresión vacío' };
 
     const targetIp = (printerConfig?.ip || '').trim();
@@ -1006,7 +1025,7 @@ export class PrintService {
     }
 
     if (this.socketGateway) {
-      this.socketGateway.server.emit('printJob', {
+      this.socketGateway.emitToSite(siteId, 'printJob', {
         target,
         text,
         mode: printerConfig.mode,
@@ -1025,12 +1044,13 @@ export class PrintService {
       const payload = buffer.toString('base64');
       await this.prisma.printJob.create({
         data: {
+          siteId,
           impresoraIp: printerConfig?.id || target,
           payload,
           tipo: target,
         },
       });
-      this.printQueueSignal.notifyJobCreated();
+      this.printQueueSignal.notifyJobCreated(siteId);
       return { ok: true, mode: 'local_bridge', message: `Pedido encolado para impresión local (${target}).` };
     }
 
@@ -1039,9 +1059,9 @@ export class PrintService {
 
   // Printing does NOT change order status. Status transitions are manual.
 
-  async printOrder(orderId: string, target?: string, kickDrawer = false) {
-    const order = await this.prisma.order.findUnique({
-      where: { id: orderId },
+  async printOrder(orderId: string, target?: string, kickDrawer = false, siteId = DEFAULT_SITE_ID) {
+    const order = await this.prisma.order.findFirst({
+      where: { id: orderId, siteId },
       include: {
         items: { include: { menuItem: { include: { category: true } } } },
         zone: true,
@@ -1052,13 +1072,13 @@ export class PrintService {
       },
     });
     if (!order) return { ok: false, error: 'Pedido no encontrado' };
-    const settings = await this.getPrinterSettings();
+    const settings = await this.getPrinterSettings(siteId);
 
     if (target) {
       if (target === 'caja') {
         const text = this.formatCajaInvoiceText(order, settings);
         const shouldKick = kickDrawer || order.paymentMethod === 'CASH';
-        const res = await this.dispatchPrintJob('caja', text, settings.caja, shouldKick);
+        const res = await this.dispatchPrintJob('caja', text, settings.caja, shouldKick, siteId);
         return {
           ...res,
           text,
@@ -1090,7 +1110,7 @@ export class PrintService {
           // Impresoras dinámicas tipo Caja: factura completa
           const text = this.formatCajaInvoiceText(order, settings);
           const shouldKick = kickDrawer || order.paymentMethod === 'CASH';
-          const res = await this.dispatchPrintJob(printer.id || target, text, printer, shouldKick);
+          const res = await this.dispatchPrintJob(printer.id || target, text, printer, shouldKick, siteId);
           return {
             ...res,
             text,
@@ -1102,7 +1122,7 @@ export class PrintService {
         // Estaciones de preparación: comanda filtrada por categorías
         const text = this.formatCocinaTicketText(order, printer.name, printer.categories, settings.printers, printer.paper);
         if (!text) return { ok: true, message: `No hay productos para la estación ${printer.name}` };
-        const res = await this.dispatchPrintJob(printer.id || target, text, printer, false);
+        const res = await this.dispatchPrintJob(printer.id || target, text, printer, false, siteId);
         return {
           ...res,
           text,
@@ -1118,7 +1138,7 @@ export class PrintService {
     const results: any[] = [];
     const cajaText = this.formatCajaInvoiceText(order, settings);
     const shouldKick = kickDrawer || order.paymentMethod === 'CASH';
-    const resCaja = await this.dispatchPrintJob('caja', cajaText, settings.caja, shouldKick);
+    const resCaja = await this.dispatchPrintJob('caja', cajaText, settings.caja, shouldKick, siteId);
     results.push(resCaja);
 
     const isDeliveryOrder = !order.tableId && ['DELIVERY', 'PICKUP'].includes(order.orderType);
@@ -1155,14 +1175,14 @@ export class PrintService {
         // Impresoras adicionales tipo Caja: imprimen factura completa
         const text = this.formatCajaInvoiceText(order, settings);
         dispatchedDestinations.add(destKey);
-        const res = await this.dispatchPrintJob(printer.id || printer.name.toLowerCase(), text, printer, kickDrawer);
+        const res = await this.dispatchPrintJob(printer.id || printer.name.toLowerCase(), text, printer, kickDrawer, siteId);
         results.push(res);
       } else {
         // Estaciones de preparación: imprimen comanda filtrada por categorías
         const text = this.formatCocinaTicketText(order, printer.name, printer.categories, settings.printers, printer.paper);
         if (text) {
           dispatchedDestinations.add(destKey);
-          const res = await this.dispatchPrintJob(printer.id || printer.name.toLowerCase(), text, printer, false);
+          const res = await this.dispatchPrintJob(printer.id || printer.name.toLowerCase(), text, printer, false, siteId);
           results.push(res);
         }
       }
@@ -1383,23 +1403,23 @@ export class PrintService {
     return lines.join('\n');
   }
 
-  async printOpening(openingId: string) {
-    const opening = await this.prisma.cashClosing.findUnique({
-      where: { id: openingId },
+  async printOpening(openingId: string, siteId = DEFAULT_SITE_ID) {
+    const opening = await this.prisma.cashClosing.findFirst({
+      where: { id: openingId, siteId },
       include: { 
         user: { select: { name: true } },
         cashRegister: { select: { name: true } }
       },
     });
     if (!opening) return { ok: false, error: 'Apertura de caja no encontrada' };
-    const settings = await this.getPrinterSettings();
+    const settings = await this.getPrinterSettings(siteId);
     const printerConfig = settings.caja;
 
     const text = this.formatCashOpeningText(opening, printerConfig.paper);
 
     // Emitir por WebSocket para el puente de impresión local
     if (this.socketGateway) {
-      this.socketGateway.server.emit('printJob', {
+      this.socketGateway.emitToSite(siteId, 'printJob', {
         target: 'caja',
         text,
         mode: printerConfig.mode,
@@ -1414,35 +1434,36 @@ export class PrintService {
       const payload = buffer.toString('base64');
       await this.prisma.printJob.create({
         data: {
+          siteId,
           impresoraIp: printerConfig.ip || 'caja',
           payload,
           tipo: 'caja',
         },
       });
-      this.printQueueSignal.notifyJobCreated();
+      this.printQueueSignal.notifyJobCreated(siteId);
       return { ok: true, mode: 'local_bridge', message: `Apertura de caja encolada para impresión local.` };
     }
 
     return { ok: true, mode: printerConfig.mode };
   }
 
-  async printClosing(closingId: string) {
-    const closing = await this.prisma.cashClosing.findUnique({
-      where: { id: closingId },
+  async printClosing(closingId: string, siteId = DEFAULT_SITE_ID) {
+    const closing = await this.prisma.cashClosing.findFirst({
+      where: { id: closingId, siteId },
       include: { 
         user: { select: { name: true } },
         cashRegister: { select: { name: true } }
       },
     });
     if (!closing) return { ok: false, error: 'Cierre de caja no encontrado' };
-    const settings = await this.getPrinterSettings();
+    const settings = await this.getPrinterSettings(siteId);
     const printerConfig = settings.caja;
 
     const text = this.formatCashClosingText(closing, printerConfig.paper);
 
     // Emitir por WebSocket para el puente de impresión local
     if (this.socketGateway) {
-      this.socketGateway.server.emit('printJob', {
+      this.socketGateway.emitToSite(siteId, 'printJob', {
         target: 'caja',
         text,
         mode: printerConfig.mode,
@@ -1457,12 +1478,13 @@ export class PrintService {
       const payload = buffer.toString('base64');
       await this.prisma.printJob.create({
         data: {
+          siteId,
           impresoraIp: printerConfig.ip || 'caja',
           payload,
           tipo: 'caja',
         },
       });
-      this.printQueueSignal.notifyJobCreated();
+      this.printQueueSignal.notifyJobCreated(siteId);
       return { ok: true, mode: 'local_bridge', message: `Cierre de caja encolado para impresión local.` };
     }
 
@@ -1477,8 +1499,8 @@ export class PrintService {
     }
   }
 
-  async testPrint(target: string = 'cocina') {
-    const settings = await this.getPrinterSettings();
+  async testPrint(target: string = 'cocina', siteId = DEFAULT_SITE_ID) {
+    const settings = await this.getPrinterSettings(siteId);
     let printerConfig: any = settings.caja;
     if (target !== 'caja') {
       const printer = settings.printers.find(p => p.id === target || (p.name && p.name.toLowerCase() === target.toLowerCase()));
@@ -1498,7 +1520,7 @@ export class PrintService {
     const text = `THE VILLA DOG - Prueba de impresion (${(printerConfig.name || target).toUpperCase()})\nMonteria, Cordoba\n========================\nSi ves esto, la impresora funciona.\n`;
 
     if (this.socketGateway) {
-      this.socketGateway.server.emit('printJob', {
+      this.socketGateway.emitToSite(siteId, 'printJob', {
         target,
         text,
         mode: printerConfig.mode,
@@ -1512,28 +1534,29 @@ export class PrintService {
     const payload = buffer.toString('base64');
     await this.prisma.printJob.create({
       data: {
+        siteId,
         impresoraIp: printerConfig.id || target,
         payload,
         tipo: target,
       },
     });
-    this.printQueueSignal.notifyJobCreated();
+    this.printQueueSignal.notifyJobCreated(siteId);
     return { ok: true, mode: 'local_bridge', message: `Prueba de impresion (${printerConfig.name || target}) enviada al puente local.` };
   }
 
-  async clearPrintQueue(target?: string) {
+  async clearPrintQueue(target?: string, siteId = DEFAULT_SITE_ID) {
     if (target) {
       const result = await this.prisma.printJob.deleteMany({
-        where: { tipo: target },
+        where: { siteId, tipo: target },
       });
       return { ok: true, deleted: result.count, message: `Cola de impresión para "${target}" limpiada (${result.count} trabajos eliminados).` };
     }
-    const result = await this.prisma.printJob.deleteMany({});
+    const result = await this.prisma.printJob.deleteMany({ where: { siteId } });
     return { ok: true, deleted: result.count, message: `Cola de impresión completa limpiada (${result.count} trabajos eliminados).` };
   }
 
-  async openDrawer() {
-    const settings = await this.getPrinterSettings();
+  async openDrawer(siteId = DEFAULT_SITE_ID) {
+    const settings = await this.getPrinterSettings(siteId);
     const printerConfig = settings.caja;
 
     // Pulso electrónico RJ11 para cajón monedero
@@ -1543,12 +1566,13 @@ export class PrintService {
       const payload = kick.toString('base64');
       await this.prisma.printJob.create({
         data: {
+          siteId,
           impresoraIp: printerConfig.ip || 'caja',
           payload,
           tipo: 'caja',
         },
       });
-      this.printQueueSignal.notifyJobCreated();
+      this.printQueueSignal.notifyJobCreated(siteId);
       return { ok: true, mode: 'local_bridge', message: 'Comando de apertura de monedero encolado para el puente local.' };
     }
 

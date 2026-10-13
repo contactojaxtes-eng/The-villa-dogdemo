@@ -1,5 +1,7 @@
 // Caché en memoria del espacio de WhatsApp. Sobrevive a la navegación entre
 // módulos durante la sesión y evita volver a mostrar bandejas o chats vacíos.
+import { DEFAULT_SITE_ID } from './multisite'
+
 export interface CachedSession {
   id: string
   phone: string
@@ -17,6 +19,7 @@ export interface CachedSession {
 type SessionCacheEntry = {
   sessions: CachedSession[]
   savedAt: number
+  siteId: string
 }
 
 const sessionQueries = new Map<string, SessionCacheEntry>()
@@ -27,6 +30,24 @@ const MAX_MESSAGES_PER_CHAT = 180
 export let globalSessionsCache: CachedSession[] | null = null
 export let globalActiveSessionIdCache: string | null = null
 export const globalMessagesCache: Record<string, any[]> = {}
+const messageCacheSites = new Map<string, string>()
+let activeChatSiteId: string | null = null
+
+/**
+ * Changes the in-memory cache namespace.  This is deliberately separate from
+ * the API cache: switching sites must make an old WhatsApp response harmless
+ * even if a component is still completing an asynchronous render.
+ */
+export function setChatCacheScope(siteId?: string | null) {
+  const normalized = String(siteId || DEFAULT_SITE_ID).trim() || DEFAULT_SITE_ID
+  if (activeChatSiteId === normalized) return
+  clearChatCache()
+  activeChatSiteId = normalized
+}
+
+export function getChatCacheScope() {
+  return activeChatSiteId
+}
 
 export function getSessionCacheKey(search = '', filter = 'TODAY') {
   return `${filter.trim().toUpperCase() || 'TODAY'}::${search.trim().toLowerCase()}`
@@ -35,7 +56,7 @@ export function getSessionCacheKey(search = '', filter = 'TODAY') {
 export function getCachedSessions(search = '', filter = 'TODAY') {
   const key = getSessionCacheKey(search, filter)
   const entry = sessionQueries.get(key)
-  if (!entry) return null
+  if (!entry || (activeChatSiteId && entry.siteId !== activeChatSiteId)) return null
   sessionQueries.delete(key)
   sessionQueries.set(key, entry)
   return entry.sessions
@@ -44,7 +65,11 @@ export function getCachedSessions(search = '', filter = 'TODAY') {
 export function setCachedSessions(search: string, filter: string, sessions: CachedSession[]) {
   const key = getSessionCacheKey(search, filter)
   sessionQueries.delete(key)
-  sessionQueries.set(key, { sessions, savedAt: Date.now() })
+  sessionQueries.set(key, {
+    sessions,
+    savedAt: Date.now(),
+    siteId: activeChatSiteId || DEFAULT_SITE_ID,
+  })
   if (!search.trim() && filter.toUpperCase() === 'TODAY') globalSessionsCache = sessions
 
   while (sessionQueries.size > MAX_SESSION_QUERIES) {
@@ -60,14 +85,18 @@ export function setGlobalSessionsCache(sessions: CachedSession[] | null) {
 }
 
 export function getCachedMessages(sessionId: string) {
+  if (activeChatSiteId && messageCacheSites.get(sessionId) !== activeChatSiteId) return null
   const cached = globalMessagesCache[sessionId]
   return cached?.length ? cached : null
 }
 
-export function setCachedMessages(sessionId: string, messages: any[]) {
+export function setCachedMessages(sessionId: string, messages: any[], siteId?: string | null) {
   if (!sessionId) return
+  const normalizedSiteId = String(siteId || activeChatSiteId || DEFAULT_SITE_ID).trim() || DEFAULT_SITE_ID
+  if (activeChatSiteId && normalizedSiteId !== activeChatSiteId) return
   delete globalMessagesCache[sessionId]
   globalMessagesCache[sessionId] = messages.slice(-MAX_MESSAGES_PER_CHAT)
+  messageCacheSites.set(sessionId, normalizedSiteId)
 
   const ids = Object.keys(globalMessagesCache)
   while (ids.length > MAX_MESSAGE_CHATS) {
@@ -78,6 +107,7 @@ export function setCachedMessages(sessionId: string, messages: any[]) {
 
 export function removeCachedMessages(sessionId: string) {
   delete globalMessagesCache[sessionId]
+  messageCacheSites.delete(sessionId)
 }
 
 export function cacheWhatsappMessage(payload: {
@@ -93,8 +123,15 @@ export function cacheWhatsappMessage(payload: {
   createdAt?: string
   assignedToId?: string | null
   assignedTo?: { id: string; name: string } | null
+  siteId?: string | null
 }) {
   if (!payload.sessionId) return
+  const payloadSiteId = String(payload.siteId || '').trim()
+  // Secondary-site socket payloads must carry their site.  Legacy principal
+  // events can omit it for compatibility, but an event explicitly tagged for
+  // another site is always ignored.
+  if (activeChatSiteId && payloadSiteId && payloadSiteId !== activeChatSiteId) return
+  if (activeChatSiteId && activeChatSiteId !== DEFAULT_SITE_ID && !payloadSiteId) return
   const sessionId = payload.sessionId
 
   const messageId = payload.id || payload.waMessageId || `socket-${Date.now()}`
@@ -169,9 +206,19 @@ export function cacheWhatsappMessage(payload: {
     existing.id === message.id ||
     Boolean(message.waMessageId && existing.waMessageId === message.waMessageId)
   )
-  if (!alreadyCached) setCachedMessages(sessionId, [...currentMessages, message])
+  if (!alreadyCached) setCachedMessages(sessionId, [...currentMessages, message], payloadSiteId || activeChatSiteId)
 }
 
 export function setGlobalActiveSessionIdCache(id: string | null) {
   globalActiveSessionIdCache = id
+}
+
+export function clearChatCache() {
+  sessionQueries.clear()
+  globalSessionsCache = null
+  globalActiveSessionIdCache = null
+  for (const sessionId of Object.keys(globalMessagesCache)) {
+    delete globalMessagesCache[sessionId]
+  }
+  messageCacheSites.clear()
 }

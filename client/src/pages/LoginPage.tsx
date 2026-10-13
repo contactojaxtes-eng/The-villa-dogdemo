@@ -157,7 +157,7 @@ export default function LoginPage() {
         setShowLockoutModal(false)
         if (res.user) {
           if (res.user.role === 'SUPERADMIN') {
-            navigate(getFirstAllowedPath(user) || '/profile', { replace: true })
+            navigate(getFirstAllowedPath(res.user, res.user.activeSite?.id) || '/profile', { replace: true })
           } else {
             navigate('/', { replace: true })
           }
@@ -173,7 +173,7 @@ export default function LoginPage() {
   useEffect(() => {
     if (isAuthenticated) {
       if (user?.role === 'SUPERADMIN') {
-        navigate(getFirstAllowedPath(user) || '/profile', { replace: true })
+        navigate(getFirstAllowedPath(user, user?.activeSite?.id) || '/profile', { replace: true })
       } else {
         navigate('/', { replace: true })
       }

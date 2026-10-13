@@ -1,15 +1,20 @@
-import { Controller, Post, Body, BadRequestException } from '@nestjs/common';
+import { Controller, Post, Body, BadRequestException, Req } from '@nestjs/common';
 import { ApiTags, ApiOperation } from '@nestjs/swagger';
 import { OrdersService } from './orders.service';
+import { PrismaService } from '../prisma/prisma.service';
+import { resolvePublicSite } from '../common/public-site';
 
 @ApiTags('Public Orders')
 @Controller('public-orders')
 export class PublicOrdersController {
-  constructor(private ordersService: OrdersService) {}
+  constructor(
+    private ordersService: OrdersService,
+    private prisma: PrismaService,
+  ) {}
 
   @Post()
   @ApiOperation({ summary: 'Crear pedido desde el menú digital público' })
-  async createPublicOrder(@Body() body: any) {
+  async createPublicOrder(@Body() body: any, @Req() req?: any) {
     if (!body || !Array.isArray(body.items) || body.items.length === 0 || body.items.length > 100) {
       throw new BadRequestException('El pedido no contiene productos');
     }
@@ -23,6 +28,8 @@ export class PublicOrdersController {
     if (!['PICKUP', 'DELIVERY'].includes(body.orderType)) throw new BadRequestException('Tipo de pedido inválido');
     if (!['CASH', 'TRANSFER', 'NEQUI', 'BANCOLOMBIA', 'DAVIPLATA'].includes(body.paymentMethod)) throw new BadRequestException('Método de pago inválido');
 
+    const site = await resolvePublicSite(this.prisma, body.siteCode);
+    if (req) req.trafficSiteId = site.id;
     const orderData = {
       customerName: String(body.customerName || body.name || 'Cliente Web').trim().slice(0, 100),
       customerPhone: phone,
@@ -35,7 +42,8 @@ export class PublicOrdersController {
       clientMutationId: typeof body.clientMutationId === 'string' && body.clientMutationId.length <= 100 ? body.clientMutationId : undefined,
       source: 'WEB',
       waiterId: null,
-      status: 'PENDING'
+      status: 'PENDING',
+      siteId: site.id,
     };
 
     const order = await this.ordersService.create(orderData);

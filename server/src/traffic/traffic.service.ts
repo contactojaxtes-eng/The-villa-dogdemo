@@ -2,6 +2,7 @@ import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/commo
 import { randomUUID } from 'crypto';
 import type { Request, Response } from 'express';
 import { PrismaService } from '../prisma/prisma.service';
+import { DEFAULT_SITE_ID } from '../common/multisite.constants';
 
 const SETTING_PREFIX = 'http_traffic_v1:';
 const FLUSH_INTERVAL_MS = 5 * 60 * 1000;
@@ -114,6 +115,26 @@ export class TrafficService implements OnModuleInit, OnModuleDestroy {
     await this.flush().catch(() => this.logger.warn('No se pudo guardar la última medición HTTP.'));
   }
 
+  private metricKey(siteId: string, date: string) {
+    return `${siteId}|${date}`;
+  }
+
+  private parseMetricKey(key: string) {
+    const separator = key.lastIndexOf('|');
+    if (separator <= 0) return null;
+    const siteId = key.slice(0, separator);
+    const date = key.slice(separator + 1);
+    return /^\d{4}-\d{2}-\d{2}$/.test(date) ? { siteId, date } : null;
+  }
+
+  private requestSiteId(req: Request) {
+    const request = req as Request & {
+      user?: { siteId?: string | null };
+      trafficSiteId?: string | null;
+    };
+    return String(request.trafficSiteId || request.user?.siteId || DEFAULT_SITE_ID).trim() || DEFAULT_SITE_ID;
+  }
+
   observe(req: Request, res: Response) {
     // The dashboard itself should not alter the totals while it is being inspected.
     if (req.path === '/api/superadmin/traffic') return;
@@ -135,6 +156,8 @@ export class TrafficService implements OnModuleInit, OnModuleDestroy {
     res.once('finish', () => {
       const now = new Date().toISOString();
       const date = now.slice(0, 10);
+      const siteId = this.requestSiteId(req);
+      const metricKey = this.metricKey(siteId, date);
       const route = trafficRouteLabel(req.path, req.route?.path);
       const method = /^[A-Z]{1,10}$/.test(req.method) ? req.method : 'OTHER';
       const length = responseBodyLength(method, res.statusCode, res.getHeader('content-length') ?? logicalContentLength);
@@ -143,10 +166,10 @@ export class TrafficService implements OnModuleInit, OnModuleDestroy {
         : res.statusCode >= 400 ? 'status4xx'
         : res.statusCode >= 300 ? 'status3xx'
         : 'status2xx';
-      let day = this.days.get(date);
+      let day = this.days.get(metricKey);
       if (!day) {
         day = emptyDay(date, now);
-        this.days.set(date, day);
+        this.days.set(metricKey, day);
       }
       day.lastSeenAt = now;
       day.requests++;
@@ -166,7 +189,7 @@ export class TrafficService implements OnModuleInit, OnModuleDestroy {
       totals.unknownBytesRequests += Number(length === null);
       totals.errors += Number(isError);
       totals[statusKey] = (totals[statusKey] || 0) + 1;
-      this.dirty.add(date);
+      this.dirty.add(metricKey);
     });
   }
 
@@ -181,18 +204,29 @@ export class TrafficService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async flushDirtyDays() {
-    for (const date of Array.from(this.dirty)) {
-      const day = this.days.get(date);
-      if (!day) { this.dirty.delete(date); continue; }
+    for (const metricKey of Array.from(this.dirty)) {
+      const parsedKey = this.parseMetricKey(metricKey);
+      const day = this.days.get(metricKey);
+      if (!parsedKey || !day) { this.dirty.delete(metricKey); continue; }
+      const { siteId, date } = parsedKey;
       const snapshot = JSON.stringify(day);
       try {
-        await this.prisma.appSetting.upsert({
-          where: { key: this.settingKey(date) },
-          create: { key: this.settingKey(date), value: snapshot },
-          update: { value: snapshot },
-        });
+        const key = this.settingKey(date);
+        if (siteId === DEFAULT_SITE_ID) {
+          await this.prisma.appSetting.upsert({
+            where: { key },
+            create: { key, value: snapshot },
+            update: { value: snapshot },
+          });
+        } else {
+          await this.prisma.siteSetting.upsert({
+            where: { siteId_key: { siteId, key } },
+            create: { siteId, key, value: snapshot },
+            update: { value: snapshot },
+          });
+        }
         // Requests that arrived during the database write must be flushed again.
-        if (JSON.stringify(day) === snapshot) this.dirty.delete(date);
+        if (JSON.stringify(day) === snapshot) this.dirty.delete(metricKey);
       } catch {
         this.logger.warn('No se pudo guardar la medición HTTP; se reintentará.');
       }
@@ -212,43 +246,71 @@ export class TrafficService implements OnModuleInit, OnModuleDestroy {
     const cutoff = new Date(`${today}T00:00:00.000Z`);
     cutoff.setUTCDate(cutoff.getUTCDate() - 13);
     const oldest = cutoff.toISOString().slice(0, 10);
-    for (const date of this.days.keys()) {
-      if (date < oldest) { this.days.delete(date); this.dirty.delete(date); }
+    for (const metricKey of this.days.keys()) {
+      const parsedKey = this.parseMetricKey(metricKey);
+      if (parsedKey && parsedKey.date < oldest) {
+        this.days.delete(metricKey);
+        this.dirty.delete(metricKey);
+      }
     }
     const keys = await this.prisma.appSetting.findMany({
       where: { key: { startsWith: SETTING_PREFIX } }, select: { key: true },
     });
     const expired = keys.map(row => row.key).filter(key => /^http_traffic_v1:[0-9a-f-]{36}:\d{4}-\d{2}-\d{2}$/.test(key) && key.slice(-10) < oldest);
     if (expired.length) await this.prisma.appSetting.deleteMany({ where: { key: { in: expired } } });
+
+    const siteKeys = await this.prisma.siteSetting.findMany({
+      where: { key: { startsWith: SETTING_PREFIX } },
+      select: { id: true, key: true },
+    });
+    const expiredSiteIds = siteKeys
+      .filter(row => /^http_traffic_v1:[0-9a-f-]{36}:\d{4}-\d{2}-\d{2}$/.test(row.key) && row.key.slice(-10) < oldest)
+      .map(row => row.id);
+    if (expiredSiteIds.length) {
+      await this.prisma.siteSetting.deleteMany({ where: { id: { in: expiredSiteIds } } });
+    }
   }
 
-  async getLastSevenDays() {
+  async getLastSevenDays(siteId = DEFAULT_SITE_ID) {
     const today = new Date();
     const cutoff = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate() - 6));
     const oldest = cutoff.toISOString().slice(0, 10);
-    const rows = await this.prisma.appSetting.findMany({
-      where: { key: { startsWith: SETTING_PREFIX } }, select: { key: true, value: true },
-    });
+    const rows = siteId === DEFAULT_SITE_ID
+      ? await this.prisma.appSetting.findMany({
+          where: { key: { startsWith: SETTING_PREFIX } }, select: { key: true, value: true },
+        })
+      : await this.prisma.siteSetting.findMany({
+          where: { siteId, key: { startsWith: SETTING_PREFIX } },
+          select: { key: true, value: true },
+        });
     const byDay = new Map<string, DayTotals>();
     for (const row of rows) {
       const match = /^http_traffic_v1:([0-9a-f-]{36}):(\d{4}-\d{2}-\d{2})$/.exec(row.key);
       if (!match || match[2] < oldest || match[2] > today.toISOString().slice(0, 10)) continue;
       // In-memory data is newer than this instance's persisted snapshot.
-      if (match[1] === this.instanceId && this.days.has(match[2])) continue;
+      if (match[1] === this.instanceId && this.days.has(this.metricKey(siteId, match[2]))) continue;
       try {
         const parsed: unknown = JSON.parse(row.value);
         if (isDayTotals(parsed) && parsed.date === match[2]) this.mergeDay(byDay, parsed);
       } catch { /* Ignore a corrupt snapshot. */ }
     }
-    for (const [date, day] of this.days) {
-      if (date >= oldest && date <= today.toISOString().slice(0, 10)) this.mergeDay(byDay, day);
+    for (const [metricKey, day] of this.days) {
+      const parsedKey = this.parseMetricKey(metricKey);
+      if (
+        parsedKey?.siteId === siteId &&
+        parsedKey.date >= oldest &&
+        parsedKey.date <= today.toISOString().slice(0, 10)
+      ) {
+        this.mergeDay(byDay, day);
+      }
     }
     return {
       days: Array.from(byDay.values()).sort((a, b) => a.date.localeCompare(b.date)).map(day => ({
         ...day,
         routes: day.routes.sort((a, b) => b.bytes - a.bytes || b.requests - a.requests),
       })),
-      note: 'Medición desde que se despliega esta versión: tamaño lógico de respuestas HTTP con Content-Length conocido, antes de compresión y sin cabeceras. Las respuestas sin longitud figuran como desconocidas; no incluye WebSocket, tráfico saliente hacia Meta/Gemini ni overhead del proxy Railway. Errores = respuestas HTTP 5xx. Fechas UTC.',
+      siteId,
+      note: 'Medición de la sede activa desde que se despliega esta versión: tamaño lógico de respuestas HTTP con Content-Length conocido, antes de compresión y sin cabeceras. Las respuestas sin longitud figuran como desconocidas; no incluye WebSocket, tráfico saliente hacia Meta/Gemini ni overhead del proxy Railway. El uso de CPU, RAM, disco y la factura de Railway pertenecen al proyecto completo. Errores = respuestas HTTP 5xx. Fechas UTC.',
     };
   }
 

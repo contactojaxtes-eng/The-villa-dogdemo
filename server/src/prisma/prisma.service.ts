@@ -1,5 +1,6 @@
 import { Injectable, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import { PrismaClient } from '@prisma/client';
+import { DEFAULT_SITE_ID } from '../common/multisite.constants';
 
 @Injectable()
 export class PrismaService extends PrismaClient implements OnModuleInit, OnModuleDestroy {
@@ -155,9 +156,15 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
         ALTER TABLE "delivery_drivers"
         ADD COLUMN IF NOT EXISTS "userId" TEXT;
       `);
+      // Prisma prepara cada llamada como una sola sentencia. Mantener DROP y
+      // CREATE separados evita que PostgreSQL rechace el arranque por recibir
+      // varios comandos en el mismo prepared statement.
+      await this.$executeRawUnsafe(
+        `DROP INDEX IF EXISTS "delivery_drivers_userId_key";`,
+      );
       await this.$executeRawUnsafe(`
-        CREATE UNIQUE INDEX IF NOT EXISTS "delivery_drivers_userId_key"
-        ON "delivery_drivers"("userId");
+        CREATE UNIQUE INDEX IF NOT EXISTS "delivery_drivers_siteId_userId_key"
+        ON "delivery_drivers"("siteId", "userId");
       `);
       await this.$executeRawUnsafe(`
         DO $$
@@ -220,6 +227,7 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
     try {
       await this.cashRegister.updateMany({
         where: {
+          siteId: DEFAULT_SITE_ID,
           purpose: 'GENERAL',
           name: { contains: 'domicil', mode: 'insensitive' },
         },
@@ -227,7 +235,7 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
       });
 
       const deliveryRegister = await this.cashRegister.findFirst({
-        where: { purpose: 'DELIVERY' },
+        where: { siteId: DEFAULT_SITE_ID, purpose: 'DELIVERY' },
         select: { id: true, active: true },
         orderBy: [{ active: 'desc' }, { createdAt: 'asc' }],
       });
@@ -242,6 +250,7 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
             description: 'Domicilios y pedidos para recoger',
             purpose: 'DELIVERY',
             active: true,
+            siteId: DEFAULT_SITE_ID,
           },
           update: { purpose: 'DELIVERY' },
         });

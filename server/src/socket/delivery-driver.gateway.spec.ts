@@ -1,4 +1,7 @@
 import { DeliveryDriverGateway } from './delivery-driver.gateway';
+import { DEFAULT_SITE_ID } from '../common/multisite.constants';
+
+const SECOND_SITE_ID = '00000000-0000-4000-8000-000000000202';
 
 describe('DeliveryDriverGateway private channel', () => {
   let middleware: any;
@@ -11,6 +14,7 @@ describe('DeliveryDriverGateway private channel', () => {
     jwt = {
       verifyAsync: jest.fn().mockResolvedValue({
         sub: 'driver-user-1',
+        siteId: SECOND_SITE_ID,
         exp: Math.floor(Date.now() / 1000) + 60,
       }),
     };
@@ -20,20 +24,24 @@ describe('DeliveryDriverGateway private channel', () => {
           id: 'driver-user-1',
           role: 'DELIVERY_DRIVER',
           active: true,
+          siteMemberships: [{ role: 'DELIVERY_DRIVER' }],
         }),
       },
       deliveryDriver: {
-        findUnique: jest.fn().mockResolvedValue({ id: 'driver-1', active: true, userId: 'driver-user-1' }),
+        findFirst: jest.fn().mockResolvedValue({
+          id: 'driver-1',
+          siteId: SECOND_SITE_ID,
+          active: true,
+          userId: 'driver-user-1',
+        }),
         findMany: jest.fn().mockResolvedValue([
-          { userId: 'driver-user-1' },
-          { userId: 'driver-user-2' },
+          { userId: 'driver-user-1', siteId: SECOND_SITE_ID },
+          { userId: 'driver-user-2', siteId: DEFAULT_SITE_ID },
         ]),
       },
       order: {
-        findUnique: jest.fn().mockResolvedValue({
-          deliveryDriver: { userId: 'driver-user-1' },
-        }),
         findFirst: jest.fn().mockResolvedValue({
+          siteId: SECOND_SITE_ID,
           deliveryDriver: { userId: 'driver-user-1', active: true },
         }),
       },
@@ -61,25 +69,42 @@ describe('DeliveryDriverGateway private channel', () => {
     gateway.handleConnection(client);
 
     expect(next).toHaveBeenCalledWith();
+    expect(prisma.user.findUnique).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: 'driver-user-1' },
+      select: expect.objectContaining({
+        siteMemberships: expect.objectContaining({
+          where: { siteId: SECOND_SITE_ID, active: true, site: { active: true } },
+        }),
+      }),
+    }));
+    expect(prisma.deliveryDriver.findFirst).toHaveBeenCalledWith({
+      where: { userId: 'driver-user-1', siteId: SECOND_SITE_ID },
+      select: { id: true, active: true },
+    });
     expect(client.join.mock.calls).toEqual([
-      ['driver-user:driver-user-1'],
-      ['driver-profile:driver-1'],
+      [`site:${SECOND_SITE_ID}:driver-user:driver-user-1`],
+      [`site:${SECOND_SITE_ID}:driver-profile:driver-1`],
     ]);
     gateway.handleDisconnect(client);
   });
 
   it('rejects every non-driver role even with a valid access token', async () => {
-    prisma.user.findUnique.mockResolvedValue({ id: 'admin-1', role: 'ADMIN', active: true });
+    prisma.user.findUnique.mockResolvedValue({
+      id: 'admin-1',
+      role: 'ADMIN',
+      active: true,
+      siteMemberships: [{ role: 'ADMIN' }],
+    });
     const next = jest.fn();
 
     await middleware({ handshake: { auth: { token: 'access-token' } }, data: {} }, next);
 
     expect(next.mock.calls[0][0].message).toBe('UNAUTHORIZED');
-    expect(prisma.deliveryDriver.findUnique).not.toHaveBeenCalled();
+    expect(prisma.deliveryDriver.findFirst).not.toHaveBeenCalled();
   });
 
   it('rejects a driver account that is not linked to an active profile', async () => {
-    prisma.deliveryDriver.findUnique.mockResolvedValue(null);
+    prisma.deliveryDriver.findFirst.mockResolvedValue(null);
     const next = jest.fn();
 
     await middleware({ handshake: { auth: { token: 'access-token' } }, data: {} }, next);
@@ -92,10 +117,10 @@ describe('DeliveryDriverGateway private channel', () => {
       reason: 'assignment_changed',
       orderId: 'order-123',
       at: '2026-09-18T12:00:00.000Z',
-    });
+    }, SECOND_SITE_ID);
 
     expect(gateway.server.to).toHaveBeenCalledTimes(1);
-    expect(gateway.server.to).toHaveBeenCalledWith('driver-user:driver-user-1');
+    expect(gateway.server.to).toHaveBeenCalledWith(`site:${SECOND_SITE_ID}:driver-user:driver-user-1`);
     expect(gateway.server.emit).not.toHaveBeenCalled();
     expect(roomEmitter.emit).toHaveBeenCalledWith('driverPortalUpdated', {
       reason: 'assignment_changed',
@@ -113,11 +138,11 @@ describe('DeliveryDriverGateway private channel', () => {
 
     expect(prisma.deliveryDriver.findMany).toHaveBeenCalledWith({
       where: { id: { in: ['driver-1', 'driver-2'] } },
-      select: { userId: true },
+      select: { userId: true, siteId: true },
     });
     expect((gateway.server.to as jest.Mock).mock.calls).toEqual([
-      ['driver-user:driver-user-1'],
-      ['driver-user:driver-user-2'],
+      [`site:${SECOND_SITE_ID}:driver-user:driver-user-1`],
+      [`site:${DEFAULT_SITE_ID}:driver-user:driver-user-2`],
     ]);
     expect(gateway.server.emit).not.toHaveBeenCalled();
   });
@@ -152,9 +177,9 @@ describe('DeliveryDriverGateway private channel', () => {
           },
         ],
       },
-      select: { deliveryDriver: { select: { userId: true, active: true } } },
+      select: { siteId: true, deliveryDriver: { select: { userId: true, active: true } } },
     });
-    expect(gateway.server.to).toHaveBeenCalledWith('driver-user:driver-user-1');
+    expect(gateway.server.to).toHaveBeenCalledWith(`site:${SECOND_SITE_ID}:driver-user:driver-user-1`);
     expect(roomEmitter.emit).toHaveBeenCalledWith('driverOrderChatMessage', {
       orderId: 'order-1',
       message,

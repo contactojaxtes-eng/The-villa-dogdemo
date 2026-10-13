@@ -22,15 +22,16 @@ export class TablesController {
     @Query('currentShift') currentShift?: string,
     @Query('summary') summary?: string,
     @Query('view') view?: string,
+    @Request() req?: any,
   ) {
-    return this.tablesService.listTables({ status, search, waiterId, currentShift, summary, view });
+    return this.tablesService.listTables({ status, search, waiterId, currentShift, summary, view }, req?.user?.siteId);
   }
 
   @Get(':id')
   @Roles('ADMIN', 'SUPERADMIN', 'CASHIER', 'WAITER')
   @ApiOperation({ summary: 'Detalle de mesa/cuenta' })
-  findOne(@Param('id') id: string) {
-    return this.tablesService.findTable(id);
+  findOne(@Param('id') id: string, @Request() req: any) {
+    return this.tablesService.findTable(id, undefined, req.user.siteId);
   }
 
   @Post()

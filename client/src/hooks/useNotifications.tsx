@@ -4,7 +4,7 @@ import { api } from '@/lib/api'
 import { toast } from 'sonner'
 import { useAuth } from './useAuth'
 import { Bike, Bell, CheckCircle2, XCircle, MessageCircle, UserPlus, UtensilsCrossed } from 'lucide-react'
-import { getUsbDevice, printUsb, buildEscPosBuffer } from '@/lib/useUsbPrinter'
+import { getUsbDevice, printUsb, buildEscPosBuffer, setUsbPrinterSiteScope } from '@/lib/useUsbPrinter'
 import { playUrgentBell } from '@/lib/sound'
 import { cacheWhatsappMessage } from '@/lib/chatCache'
 import type { DiningTableSummary, KitchenTicketSummary } from '@/lib/tableTypes'
@@ -16,6 +16,8 @@ import {
 import { hasUserPermission } from '@/lib/permissions'
 import { alerts } from '@/lib/alerts'
 import { formatCurrency } from '@/lib/utils'
+import { DEFAULT_SITE_ID } from '@/lib/multisite'
+import { saveHiddenModules } from '@/lib/navigation'
 
 // Simple notification sound using Web Audio API
 function playNotificationSound(type: 'message' | 'urgent' = 'message') {
@@ -71,6 +73,10 @@ function closeBrowserNotification(tag: string) {
   activeNotifications.delete(tag)
 }
 
+function closeAllBrowserNotifications() {
+  for (const tag of [...activeNotifications.keys()]) closeBrowserNotification(tag)
+}
+
 function showBrowserNotification(
   title: string,
   body: string,
@@ -116,6 +122,13 @@ export function useNotifications() {
   useEffect(() => {
     if (!isAuthenticated || !user) return
 
+    setUsbPrinterSiteScope(user.activeSite?.id, user.activeSite?.preparationMode !== true)
+
+    // Una sede en preparación solo permite configurar datos maestros. No debe
+    // pedir permisos del navegador, abrir sockets, consultar cocina ni recibir
+    // trabajos de impresión hasta que haya sido activada.
+    if (user.activeSite?.preparationMode) return
+
     // El portal del domiciliario mantiene su propia sincronización y no debe
     // recibir alertas globales de pedidos, chats, caja o impresión ajenos.
     if (user.role === 'DELIVERY_DRIVER') return
@@ -131,6 +144,16 @@ export function useNotifications() {
       query: { userId: user.id, userName: user.name, userRole: user.role },
       transports: ['websocket', 'polling'],
     })
+
+    // Site/session changes invalidate notifications just like they invalidate
+    // API and media caches.  Otherwise a persistent rejection or browser card
+    // from the previous site could remain visible after switching.
+    const handleSessionBoundary = () => {
+      toast.dismiss()
+      closeAllBrowserNotifications()
+    }
+    window.addEventListener('the-villa-dog-session-changed', handleSessionBoundary)
+    window.addEventListener('the-villa-dog-site-changed', handleSessionBoundary)
 
     const isMuted = () => localStorage.getItem('the_villa_dog_mute_notifications') === 'true'
     const recentWhatsappMessages = new Map<string, number>()
@@ -667,7 +690,10 @@ export function useNotifications() {
       createdAt?: string
       assignedToId?: string | null
       assignedTo?: { id: string; name: string } | null
+      siteId?: string | null
     }) => {
+      if (payload.siteId && payload.siteId !== user.activeSite?.id) return
+      if (user.activeSite?.id && user.activeSite.id !== DEFAULT_SITE_ID && !payload.siteId) return
       // Solo los roles operativos con permiso de WhatsApp reciben estos avisos.
       // La gestora de domicilios sí atiende chats y debe ver los escalados.
       if (['KITCHEN', 'WAITER', 'DISPATCHER'].includes(user.role || '')) return
@@ -725,7 +751,10 @@ export function useNotifications() {
       phone: string
       customerName: string
       sessionId: string
+      siteId?: string | null
     }) => {
+      if (data.siteId && data.siteId !== user.activeSite?.id) return
+      if (user.activeSite?.id && user.activeSite.id !== DEFAULT_SITE_ID && !data.siteId) return
       if (['KITCHEN', 'WAITER', 'DISPATCHER'].includes(user.role || '')) return
       if (!hasUserPermission(user, 'whatsapp.view')) return
 
@@ -814,11 +843,19 @@ export function useNotifications() {
       }, 2500)
     })
 
+    socket.on('moduleVisibilityUpdated', (payload: { hiddenModules?: string[] }) => {
+      saveHiddenModules(payload?.hiddenModules || [], user.activeSite?.id)
+    })
+
     return () => {
       clearInterval(breakInterval)
       clearInterval(diningDelayInterval)
       window.removeEventListener('the-villa-dog-mute-changed', handleMuteChanged)
+      window.removeEventListener('the-villa-dog-session-changed', handleSessionBoundary)
+      window.removeEventListener('the-villa-dog-site-changed', handleSessionBoundary)
       for (const ticketId of openDiningDelayToasts) clearDiningDelay(ticketId)
+      toast.dismiss()
+      closeAllBrowserNotifications()
       publishDiningKitchenDelays([])
       socket.disconnect()
     }

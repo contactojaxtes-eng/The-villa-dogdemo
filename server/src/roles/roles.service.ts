@@ -149,6 +149,25 @@ export class RolesService {
       );
     }
 
+    // En multisede el rol operativo vive en la membresía. El campo role de
+    // User puede no reflejar una sede secundaria, por lo que también debemos
+    // impedir la baja cuando exista una membresía activa con este código.
+    const memberships = (this.prisma as any).userSiteMembership;
+    const membershipsWithRole = memberships?.count
+      ? await memberships.count({
+          where: {
+            role: role.code,
+            active: true,
+            user: { active: true },
+          },
+        })
+      : 0;
+    if (Number(membershipsWithRole) > 0) {
+      throw new BadRequestException(
+        `No se puede eliminar el rol "${role.name}" porque todavía está asignado en ${membershipsWithRole} membresía(s) activa(s). Reasigna las sedes antes de eliminarlo.`,
+      );
+    }
+
     const deactivated = await this.prisma.customRole.update({
       where: { id: role.id },
       data: { active: false },

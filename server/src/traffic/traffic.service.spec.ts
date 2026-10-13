@@ -83,4 +83,101 @@ describe('HTTP traffic measurements', () => {
     expect(totals.days[0].status4xx).toBe(1);
   });
 
+  it('keeps authenticated and public traffic isolated by site', async () => {
+    const secondSiteId = '00000000-0000-4000-8000-000000000202';
+    const prisma = {
+      appSetting: { findMany: jest.fn().mockResolvedValue([]) },
+      siteSetting: { findMany: jest.fn().mockResolvedValue([]) },
+    } as any;
+    const traffic = new TrafficService(prisma);
+    const responseFor = (length: string) => {
+      const response = new EventEmitter() as any;
+      response.statusCode = 200;
+      response.getHeader = () => length;
+      return response;
+    };
+
+    const principalRequest = {
+      path: '/api/orders',
+      route: { path: '/api/orders' },
+      method: 'GET',
+      user: { siteId: '00000000-0000-4000-8000-000000000101' },
+    } as any;
+    const secondaryPublicRequest = {
+      path: '/api/public/menu/categories',
+      route: { path: '/api/public/menu/categories' },
+      method: 'GET',
+      trafficSiteId: secondSiteId,
+    } as any;
+    const principalResponse = responseFor('100');
+    const secondaryResponse = responseFor('250');
+
+    traffic.observe(principalRequest, principalResponse);
+    traffic.observe(secondaryPublicRequest, secondaryResponse);
+    principalResponse.emit('finish');
+    secondaryResponse.emit('finish');
+
+    const principal = await traffic.getLastSevenDays();
+    const secondary = await traffic.getLastSevenDays(secondSiteId);
+    expect(principal.days[0]).toMatchObject({ requests: 1, bytes: 100 });
+    expect(secondary.days[0]).toMatchObject({ requests: 1, bytes: 250 });
+    expect(secondary.siteId).toBe(secondSiteId);
+    expect(prisma.siteSetting.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ siteId: secondSiteId }) }),
+    );
+  });
+
+  it('persists secondary-site snapshots in SiteSetting without mixing them into principal metrics', async () => {
+    const secondSiteId = '00000000-0000-4000-8000-000000000202';
+    const prisma = {
+      appSetting: {
+        upsert: jest.fn().mockResolvedValue({}),
+        findMany: jest.fn().mockResolvedValue([]),
+        deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
+      },
+      siteSetting: {
+        upsert: jest.fn().mockResolvedValue({}),
+        findMany: jest.fn().mockResolvedValue([]),
+        deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
+      },
+    } as any;
+    const traffic = new TrafficService(prisma);
+    const request = {
+      path: '/api/public/menu/categories',
+      route: { path: '/api/public/menu/categories' },
+      method: 'GET',
+      trafficSiteId: secondSiteId,
+    } as any;
+    const response = new EventEmitter() as any;
+    response.statusCode = 200;
+    response.getHeader = () => '512';
+
+    traffic.observe(request, response);
+    response.emit('finish');
+    await (traffic as any).flush();
+
+    expect(prisma.siteSetting.upsert).toHaveBeenCalledTimes(1);
+    expect(prisma.siteSetting.upsert).toHaveBeenCalledWith({
+      where: {
+        siteId_key: {
+          siteId: secondSiteId,
+          key: expect.stringMatching(
+            /^http_traffic_v1:[0-9a-f-]{36}:\d{4}-\d{2}-\d{2}$/,
+          ),
+        },
+      },
+      create: expect.objectContaining({
+        siteId: secondSiteId,
+        key: expect.stringMatching(
+          /^http_traffic_v1:[0-9a-f-]{36}:\d{4}-\d{2}-\d{2}$/,
+        ),
+        value: expect.stringContaining('"bytes":512'),
+      }),
+      update: {
+        value: expect.stringContaining('"bytes":512'),
+      },
+    });
+    expect(prisma.appSetting.upsert).not.toHaveBeenCalled();
+  });
+
 });

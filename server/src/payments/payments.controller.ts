@@ -16,42 +16,42 @@ export class PaymentsController {
   @ApiOperation({ summary: 'Listar todos los pagos' })
   findAll(@Query('status') status?: string, @Query('method') method?: string, @Query('date') date?: string, @Request() req?: any) {
     const isCashier = req.user?.role === 'CASHIER';
-    return this.paymentsService.findAll({ status, method, date }, isCashier ? req.user.id : undefined);
+    return this.paymentsService.findAll({ status, method, date }, isCashier ? req.user.id : undefined, req.user.siteId);
   }
 
   @Put(':id/confirm')
   @Permissions('payment_validation.cash', 'payment_validation.transfer')
   @ApiOperation({ summary: 'Confirmar pago' })
   confirmPayment(@Param('id') id: string, @Request() req: any) {
-    return this.paymentsService.confirmPayment(id, req.user.id);
+    return this.paymentsService.confirmPayment(id, req.user.id, req.user.siteId);
   }
 
   @Put(':id/reject')
   @Permissions('payment_validation.reject')
   @ApiOperation({ summary: 'Rechazar pago' })
   rejectPayment(@Param('id') id: string, @Request() req: any) {
-    return this.paymentsService.rejectPayment(id, req.user.id);
+    return this.paymentsService.rejectPayment(id, req.user.id, req.user.siteId);
   }
 
   @Get('closing/today')
   @Permissions('cash.view')
   @ApiOperation({ summary: 'Resumen de caja del día' })
   getTodayClosing(@Request() req: any, @Query('cashRegisterId') cashRegisterId?: string) {
-    return this.paymentsService.getCashClosingToday(req.user.id, cashRegisterId);
+    return this.paymentsService.getCashClosingToday(req.user.id, cashRegisterId, req.user.siteId);
   }
 
   @Get('closing/all-today')
   @Permissions('cash.control')
   @ApiOperation({ summary: 'Todas las cajas abiertas del día' })
-  getAllTodayClosings() {
-    return this.paymentsService.getAllCashClosingsToday();
+  getAllTodayClosings(@Request() req: any) {
+    return this.paymentsService.getAllCashClosingsToday(req.user.siteId);
   }
 
   @Post('closing')
   @Permissions('cash.open_close')
   @ApiOperation({ summary: 'Realizar cierre de caja' })
   createCashClosing(@Body() body: any, @Request() req: any) {
-    return this.paymentsService.createCashClosing(req.user.id, body);
+    return this.paymentsService.createCashClosing(req.user.id, body, req.user.siteId);
   }
 
   @Get('closing/history')
@@ -60,35 +60,35 @@ export class PaymentsController {
   getCashClosings(@Query('date') date?: string, @Query('userId') userIdQuery?: string, @Query('cashRegisterId') cashRegisterId?: string, @Request() req?: any) {
     const isCashier = req.user?.role === 'CASHIER';
     const userId = isCashier ? req.user.id : userIdQuery;
-    return this.paymentsService.getCashClosings({ date, userId, cashRegisterId });
+    return this.paymentsService.getCashClosings({ date, userId, cashRegisterId }, req.user.siteId);
   }
 
   @Get('closing/:id/detail')
   @Permissions('cash.view', 'drivers.view')
   @ApiOperation({ summary: 'Detalle expandido de un cierre para Reporte Z' })
-  getClosingDetail(@Param('id') id: string) {
-    return this.paymentsService.getClosingDetail(id);
+  getClosingDetail(@Param('id') id: string, @Request() req: any) {
+    return this.paymentsService.getClosingDetail(id, req.user.siteId);
   }
 
   @Get('closing/consolidated/report')
   @Permissions('cash.control')
   @ApiOperation({ summary: 'Reporte consolidado de todas las cajas por fecha' })
-  getConsolidatedClosing(@Query('date') date?: string) {
-    return this.paymentsService.getConsolidatedClosing(date);
+  getConsolidatedClosing(@Query('date') date: string | undefined, @Request() req: any) {
+    return this.paymentsService.getConsolidatedClosing(date, req.user.siteId);
   }
 
   @Post('opening')
   @Permissions('cash.open_close')
   @ApiOperation({ summary: 'Apertura de caja' })
   openCash(@Body() body: { initialCash: number; cashRegisterId?: string }, @Request() req: any) {
-    return this.paymentsService.openCash(req.user.id, body);
+    return this.paymentsService.openCash(req.user.id, body, req.user.siteId);
   }
 
   @Get('opening/status')
   @Permissions('cash.view', 'orders.create')
   @ApiOperation({ summary: 'Verificar si hay caja abierta' })
   getOpenCash(@Request() req: any) {
-    return this.paymentsService.getOpenCash(req.user.id);
+    return this.paymentsService.getOpenCash(req.user.id, req.user.siteId);
   }
 
   @Put('credit/:orderId/pay')
@@ -99,6 +99,6 @@ export class PaymentsController {
     @Body() body: { method: string; reference?: string },
     @Request() req: any
   ) {
-    return this.paymentsService.payCreditOrder(orderId, body, req.user.id);
+    return this.paymentsService.payCreditOrder(orderId, body, req.user.id, req.user.siteId);
   }
 }

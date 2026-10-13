@@ -18,6 +18,7 @@ import type { ComandaOrder } from '@/components/orders/ComandaPrint'
 import { AddressSearch, type AddressResult } from '@/components/orders/AddressSearch'
 import { globalSessionsCache } from '@/lib/chatCache'
 import { sanitizeOrderNote } from '@/lib/order-notes'
+import { DEFAULT_SITE_ID, scopedStorageKey } from '@/lib/multisite'
 import { ArrowLeft, ShoppingCart, Trash2, Search, Save, Sparkles, Clock, Bike, Store, Loader2, Plus, Minus, MapPin, DollarSign, AlertTriangle, Route, Pizza, CupSoda, ChefHat, Flame, UtensilsCrossed, X, Users, CheckCircle2, Mic, MicOff, ChevronDown, MessageCircle, Send, FileText, Phone, ExternalLink, Download, Eye, RotateCw, ZoomIn, ZoomOut, Edit } from 'lucide-react'
 
 function ChatDrawerMedia({ mediaId, type }: { mediaId: string; type: string }) {
@@ -560,8 +561,8 @@ function AdditionDropdown({
 
 const draftKey = 'niche-new-order-draft'
 const createClientMutationId = () => globalThis.crypto?.randomUUID?.() || `order-${Date.now()}-${Math.random().toString(36).slice(2)}`
-const cleanupStaleChatDrafts = () => {
-  const prefix = `${draftKey}:chat:`
+const cleanupStaleChatDrafts = (siteId: string) => {
+  const prefix = `${scopedStorageKey(draftKey, siteId)}:chat:`
   const validDrafts: { key: string; updatedAt: number }[] = []
   const expiresBefore = Date.now() - 7 * 24 * 60 * 60 * 1000
   for (let index = localStorage.length - 1; index >= 0; index -= 1) {
@@ -579,8 +580,8 @@ const cleanupStaleChatDrafts = () => {
   validDrafts.sort((a, b) => b.updatedAt - a.updatedAt)
   validDrafts.slice(20).forEach(draft => localStorage.removeItem(draft.key))
 }
-let globalCategoriesCache: Category[] = []
-let globalZonesCache: Zone[] = []
+const globalCategoriesCache = new Map<string, Category[]>()
+const globalZonesCache = new Map<string, Zone[]>()
 
 export type EmbeddedOrderParams = {
   editOrderId?: string | null
@@ -612,9 +613,14 @@ export default function NewOrderPage({
   const initialName = embedded ? (embeddedParams?.name || '') : (searchParams.get('name') || '')
   const initialAddress = embedded ? (embeddedParams?.address || '') : (searchParams.get('address') || '')
   const initialZone = embedded ? (embeddedParams?.zone || '') : (searchParams.get('zone') || '')
-  const activeDraftKey = chatSessionId ? `${draftKey}:chat:${chatSessionId}` : draftKey
+  const { user, activeSite } = useAuth()
+  const siteId = activeSite?.id || DEFAULT_SITE_ID
+  const siteDraftKey = scopedStorageKey(draftKey, siteId)
+  const activeDraftKey = chatSessionId ? `${siteDraftKey}:chat:${chatSessionId}` : siteDraftKey
+  const legacyDraftKey = chatSessionId ? `${draftKey}:chat:${chatSessionId}` : draftKey
   const chatReturnPath = chatSessionId ? `/chat?session=${encodeURIComponent(chatSessionId)}` : '/chat'
-  const { user } = useAuth()
+  const cachedCategories = globalCategoriesCache.get(siteId) || []
+  const cachedZones = globalZonesCache.get(siteId) || []
 
   const closeOrderPanel = () => {
     if (embedded) {
@@ -625,8 +631,8 @@ export default function NewOrderPage({
   }
 
   const [step, setStep] = useState<'menu' | 'delivery'>('menu')
-  const [categories, setCategories] = useState<Category[]>(globalCategoriesCache)
-  const [zones, setZones] = useState<Zone[]>(globalZonesCache)
+  const [categories, setCategories] = useState<Category[]>(cachedCategories)
+  const [zones, setZones] = useState<Zone[]>(cachedZones)
   const [customerName, setCustomerName] = useState('')
   const [customerPhone, setCustomerPhone] = useState('')
   const [exactAddress, setExactAddress] = useState('')
@@ -678,7 +684,7 @@ export default function NewOrderPage({
   const [isCartCollapsed, setIsCartCollapsed] = useState(false)
   const [isCartDrawerOpen, setIsCartDrawerOpen] = useState(false)
   const [initialLoading, setInitialLoading] = useState(
-    globalCategoriesCache.length === 0 || globalZonesCache.length === 0
+    cachedCategories.length === 0 || cachedZones.length === 0
   )
   const [editOrderLoaded, setEditOrderLoaded] = useState(false)
 
@@ -723,8 +729,8 @@ export default function NewOrderPage({
   const userClearedDraftRef = useRef(false)
 
   useEffect(() => {
-    cleanupStaleChatDrafts()
-  }, [])
+    cleanupStaleChatDrafts(siteId)
+  }, [siteId])
 
   const handleVoiceSearchMenu = () => {
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
@@ -771,24 +777,33 @@ export default function NewOrderPage({
   }
 
   useEffect(() => {
+    let active = true
+    const siteCategories = globalCategoriesCache.get(siteId) || []
+    const siteZones = globalZonesCache.get(siteId) || []
+    setCategories(siteCategories)
+    setZones(siteZones)
+    setInitialLoading(siteCategories.length === 0 || siteZones.length === 0)
+
     Promise.all([
       api.get<Category[]>('/menu/categories').then(cats => {
-        if (cats && Array.isArray(cats)) {
-          globalCategoriesCache = cats
+        if (active && cats && Array.isArray(cats)) {
+          globalCategoriesCache.set(siteId, cats)
           setCategories(cats)
         }
       }).catch(err => console.warn('Error cargando categorias:', err)),
       api.get<Zone[]>('/zones').then(zs => {
-        if (zs && Array.isArray(zs)) {
-          globalZonesCache = zs
+        if (active && zs && Array.isArray(zs)) {
+          globalZonesCache.set(siteId, zs)
           setZones(zs)
         }
       }).catch(err => console.warn('Error cargando zonas:', err)),
       api.get<{ allowed: boolean; reason?: string | null }>('/orders/can-create')
-        .then(res => setCanCreate(res || { allowed: true }))
-        .catch(() => setCanCreate({ allowed: false, reason: 'No se pudo verificar la caja' })),
-    ]).finally(() => setInitialLoading(false))
-  }, [])
+        .then(res => { if (active) setCanCreate(res || { allowed: true }) })
+        .catch(() => { if (active) setCanCreate({ allowed: false, reason: 'No se pudo verificar la caja' }) }),
+    ]).finally(() => { if (active) setInitialLoading(false) })
+
+    return () => { active = false }
+  }, [siteId])
 
   useEffect(() => {
     const socketUrl = import.meta.env.VITE_API_URL || window.location.origin
@@ -813,7 +828,7 @@ export default function NewOrderPage({
     socket.on('menuUpdated', () => {
       api.get<Category[]>('/menu/categories').then(cats => {
         if (cats && Array.isArray(cats)) {
-          globalCategoriesCache = cats
+          globalCategoriesCache.set(siteId, cats)
           setCategories(cats)
         }
       }).catch(() => {})
@@ -822,7 +837,7 @@ export default function NewOrderPage({
     socket.on('zonesChanged', () => {
       api.get<Zone[]>('/zones').then(zs => {
         if (zs && Array.isArray(zs)) {
-          globalZonesCache = zs
+          globalZonesCache.set(siteId, zs)
           setZones(zs)
         }
       }).catch(() => {})
@@ -906,7 +921,7 @@ export default function NewOrderPage({
     return () => {
       socket.disconnect()
     }
-  }, [])
+  }, [siteId])
 
   useEffect(() => {
     if (editOrderId) {
@@ -1013,7 +1028,14 @@ export default function NewOrderPage({
       setOrderType('delivery')
       setClientMutationId(createClientMutationId())
     }
-    const stored = localStorage.getItem(activeDraftKey)
+    let stored = localStorage.getItem(activeDraftKey)
+    if (!stored && siteId === DEFAULT_SITE_ID && legacyDraftKey !== activeDraftKey) {
+      stored = localStorage.getItem(legacyDraftKey)
+      if (stored) {
+        localStorage.setItem(activeDraftKey, stored)
+        localStorage.removeItem(legacyDraftKey)
+      }
+    }
     if (stored) {
       try {
         const draft = JSON.parse(stored)
@@ -1064,7 +1086,7 @@ export default function NewOrderPage({
     }
     setLoadedDraftKey(activeDraftKey)
     setDraftLoaded(true)
-  }, [editOrderId, activeDraftKey])
+  }, [editOrderId, activeDraftKey, legacyDraftKey, siteId])
 
   const loadCustomerHistory = async (
     phone: string, 

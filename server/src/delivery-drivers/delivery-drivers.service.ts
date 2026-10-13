@@ -9,6 +9,7 @@ import { detectReceiptMime, receiptSummary, sanitizeReceipt, validateReceipt } f
 import { WhatsappService } from '../whatsapp/whatsapp.service';
 import { extractDriverChatMediaId, toDriverOrderChatMessage } from '../whatsapp/order-chat-message';
 import { CompleteDriverDeliveryDto, ConfigureDriverAccessDto, CreateDriverDto, UpdateDriverDto } from './dto';
+import { DEFAULT_SITE_ID } from '../common/multisite.constants';
 
 @Injectable()
 export class DeliveryDriversService {
@@ -18,6 +19,10 @@ export class DeliveryDriversService {
     @Optional() private deliveryDriverGateway?: DeliveryDriverGateway,
     @Optional() private whatsappService?: WhatsappService,
   ) {}
+
+  private resolveSiteId(siteId?: string | null) {
+    return siteId || DEFAULT_SITE_ID;
+  }
 
   private readonly portalUserSelect = {
     id: true,
@@ -54,20 +59,33 @@ export class DeliveryDriversService {
   private async assertAccessIdentityAvailable(
     driver: { id: string; name: string; userId?: string | null },
     email: string,
+    siteId = DEFAULT_SITE_ID,
   ) {
+    const resolvedSiteId = this.resolveSiteId(siteId);
     const requestedEmailKey = this.normalizeAccessIdentity(email);
     const requestedNameKey = this.normalizeAccessIdentity(driver.name);
 
     const users = await this.prisma.user.findMany({
-      select: { id: true, name: true, email: true, role: true },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        role: true,
+        siteMemberships: {
+          where: { siteId: resolvedSiteId, active: true },
+          select: { role: true },
+          take: 1,
+        },
+      },
     });
     const duplicate = users.find(user => {
       if (user.id === driver.userId || user.email.toLowerCase().startsWith('deleted_')) return false;
       const existingEmailKey = this.normalizeAccessIdentity(user.email);
       const existingNameKey = this.normalizeAccessIdentity(user.name);
+      const siteRole = user.siteMemberships?.[0]?.role;
 
       if (existingEmailKey === requestedEmailKey) return true;
-      if (existingNameKey === requestedNameKey && user.role !== 'DELIVERY_DRIVER') return true;
+      if (siteRole && existingNameKey === requestedNameKey && siteRole !== 'DELIVERY_DRIVER') return true;
       return false;
     });
 
@@ -157,24 +175,27 @@ export class DeliveryDriversService {
     };
   }
 
-  async create(data: CreateDriverDto) {
+  async create(data: CreateDriverDto, siteId = DEFAULT_SITE_ID) {
+    const resolvedSiteId = this.resolveSiteId(siteId);
     const cleanPhone = data.phone.replace(/\D/g, '');
     if (cleanPhone.length !== 10 || !cleanPhone.startsWith('3')) {
       throw new BadRequestException('El número de celular debe tener exactamente 10 dígitos y empezar con 3 (Ej: 3001234567)');
     }
 
     const payload = {
+      siteId: resolvedSiteId,
       name: data.name.trim(),
       phone: cleanPhone,
       active: data.active ?? true,
     };
 
     const created = await this.prisma.deliveryDriver.create({ data: payload });
-    this.socketGateway.server.emit('driversChanged');
+    this.socketGateway.emitToSite(resolvedSiteId, 'driversChanged');
     return created;
   }
 
-  private async buildOrderFilter(filterType = 'CURRENT', cashClosingId?: string, selectedDate?: string) {
+  private async buildOrderFilter(filterType = 'CURRENT', cashClosingId?: string, selectedDate?: string, siteId = DEFAULT_SITE_ID) {
+    const resolvedSiteId = this.resolveSiteId(siteId);
     let orderDateFilter: any = {};
 
     const getBogotaStartOfDay = (dateObj: Date) => {
@@ -223,7 +244,7 @@ export class DeliveryDriversService {
       }
     } else if (filterType === 'CLOSING') {
       const closing = cashClosingId
-        ? await this.prisma.cashClosing.findUnique({ where: { id: cashClosingId } })
+        ? await this.prisma.cashClosing.findFirst({ where: { id: cashClosingId, siteId: resolvedSiteId } })
         : null;
       if (closing) {
         orderDateFilter = {
@@ -240,6 +261,7 @@ export class DeliveryDriversService {
       // Default: 'CURRENT' (Turno Actual)
       const activeClosing = await this.prisma.cashClosing.findFirst({
         where: {
+          siteId: resolvedSiteId,
           isOpen: true,
           cashRegister: { purpose: 'DELIVERY', active: true },
         },
@@ -255,12 +277,19 @@ export class DeliveryDriversService {
     return orderDateFilter;
   }
 
-  async autoMergeDuplicates(): Promise<void> {
+  async autoMergeDuplicates(siteId = DEFAULT_SITE_ID): Promise<void> {
+    const resolvedSiteId = this.resolveSiteId(siteId);
     try {
       const allDrivers = await this.prisma.deliveryDriver.findMany({
+        where: { siteId: resolvedSiteId },
         include: {
           user: { select: { id: true, email: true } },
-          _count: { select: { orders: true, settlements: true } },
+          _count: {
+            select: {
+              orders: { where: { siteId: resolvedSiteId } },
+              settlements: { where: { siteId: resolvedSiteId } },
+            },
+          },
         },
       });
 
@@ -323,34 +352,47 @@ export class DeliveryDriversService {
 
         // 1. Reasignar pedidos al ganador
         await this.prisma.order.updateMany({
-          where: { deliveryDriverId: { in: loserIds } },
+          where: { siteId: resolvedSiteId, deliveryDriverId: { in: loserIds } },
           data: { deliveryDriverId: winner.id },
         });
 
         // 2. Reasignar liquidaciones al ganador
         await this.prisma.driverSettlement.updateMany({
-          where: { driverId: { in: loserIds } },
+          where: { siteId: resolvedSiteId, driverId: { in: loserIds } },
           data: { driverId: winner.id },
         });
 
         // 3. Desvincular usuarios de los duplicados para evitar conflictos de Foreign Key
         await this.prisma.deliveryDriver.updateMany({
-          where: { id: { in: loserIds } },
+          where: { siteId: resolvedSiteId, id: { in: loserIds } },
           data: { userId: null },
         });
 
-        // 4. Inactivar y renombrar usuarios huérfanos de los duplicados para liberar el login
+        // 4. Retirar el acceso de esta sede. La cuenta global solo se desactiva
+        // cuando ya no conserva ninguna membresía activa en otra sede.
         for (const uId of loserUserIds) {
           try {
             const u = await this.prisma.user.findUnique({ where: { id: uId } });
             if (u) {
+              await this.prisma.userSiteMembership.updateMany({
+                where: { userId: uId, siteId: resolvedSiteId },
+                data: { active: false },
+              });
+              const remainingMembership = await this.prisma.userSiteMembership.findFirst({
+                where: { userId: uId, active: true },
+                select: { siteId: true },
+                orderBy: [{ isDefault: 'desc' }, { createdAt: 'asc' }],
+              });
               await this.prisma.user.update({
                 where: { id: uId },
-                data: {
-                  active: false,
-                  email: `deleted_${Date.now()}_${u.email}`,
-                  phone: null,
-                },
+                data: remainingMembership
+                  ? { lastActiveSiteId: remainingMembership.siteId }
+                  : {
+                      active: false,
+                      email: `deleted_${Date.now()}_${u.email}`,
+                      phone: null,
+                      lastActiveSiteId: null,
+                    },
               });
             }
           } catch (userErr) {
@@ -366,11 +408,11 @@ export class DeliveryDriversService {
 
         // 6. Eliminar físicamente los duplicados de delivery_drivers
         await this.prisma.deliveryDriver.deleteMany({
-          where: { id: { in: loserIds } },
+          where: { siteId: resolvedSiteId, id: { in: loserIds } },
         });
 
         // 7. Limpiar la fila de turnos
-        const queueState = await this.getRawQueueState();
+        const queueState = await this.getRawQueueState(resolvedSiteId);
         let queueChanged = false;
         for (const id of loserIds) {
           if (queueState.queue.includes(id) || queueState.breaks[id] || queueState.tripOrderCounts[id]) {
@@ -385,7 +427,7 @@ export class DeliveryDriversService {
           queueChanged = true;
         }
         if (queueChanged) {
-          await this.saveQueueState(queueState);
+          await this.saveQueueState(queueState, resolvedSiteId);
         }
 
         console.log(`[autoMergeDuplicates] Unificación completada exitosamente para ${winner.name}`);
@@ -395,17 +437,23 @@ export class DeliveryDriversService {
     }
   }
 
-  async findAll(activeOnly = false, filterType = 'CURRENT', cashClosingId?: string, selectedDate?: string, includePortalAccount = false) {
-    const driverWhere: any = activeOnly ? { active: true } : {};
-    const orderDateFilter = await this.buildOrderFilter(filterType, cashClosingId, selectedDate);
+  async findAll(activeOnly = false, filterType = 'CURRENT', cashClosingId?: string, selectedDate?: string, includePortalAccount = false, siteId = DEFAULT_SITE_ID) {
+    const resolvedSiteId = this.resolveSiteId(siteId);
+    const driverWhere: any = { siteId: resolvedSiteId, ...(activeOnly ? { active: true } : {}) };
+    const orderDateFilter = await this.buildOrderFilter(filterType, cashClosingId, selectedDate, resolvedSiteId);
 
     const drivers = await this.prisma.deliveryDriver.findMany({
       where: driverWhere,
       include: {
         user: { select: this.portalUserSelect },
-        _count: { select: { orders: true, settlements: true } },
+        _count: {
+          select: {
+            orders: { where: { siteId: resolvedSiteId } },
+            settlements: { where: { siteId: resolvedSiteId } },
+          },
+        },
         orders: {
-          where: orderDateFilter,
+          where: { siteId: resolvedSiteId, ...orderDateFilter },
           select: {
             id: true,
             orderNumber: true,
@@ -468,9 +516,12 @@ export class DeliveryDriversService {
     });
   }
 
-  async getAccessCandidates() {
+  async getAccessCandidates(siteId = DEFAULT_SITE_ID) {
+    const resolvedSiteId = this.resolveSiteId(siteId);
     const linkedAccounts = await this.prisma.deliveryDriver.findMany({
-      where: { userId: { not: null } },
+      // Una misma persona puede trabajar en más de una sede, pero solo puede
+      // tener un perfil de domiciliario dentro de cada sede.
+      where: { siteId: resolvedSiteId, userId: { not: null } },
       select: { userId: true },
     });
     const linkedIds = linkedAccounts.map(item => item.userId).filter((id): id is string => Boolean(id));
@@ -478,10 +529,12 @@ export class DeliveryDriversService {
     return this.prisma.user.findMany({
       where: {
         active: true,
-        // Nunca convertir una cuenta operativa existente (asignadores,
-        // gestoras, caja, meseras, etc.). Solo se puede vincular una cuenta
-        // que ya fue creada explícitamente como domiciliario.
-        role: 'DELIVERY_DRIVER',
+        // Nunca convertir una cuenta operativa de esta sede (asignadores,
+        // gestoras, caja, meseras, etc.). La membresía local debe haber sido
+        // creada explícitamente para domiciliario.
+        siteMemberships: {
+          some: { siteId: resolvedSiteId, active: true, role: 'DELIVERY_DRIVER' },
+        },
         ...(linkedIds.length ? { id: { notIn: linkedIds } } : {}),
       },
       select: this.portalUserSelect,
@@ -490,9 +543,10 @@ export class DeliveryDriversService {
     });
   }
 
-  async getAccess(driverId: string) {
-    const driver = await this.prisma.deliveryDriver.findUnique({
-      where: { id: driverId },
+  async getAccess(driverId: string, siteId = DEFAULT_SITE_ID) {
+    const resolvedSiteId = this.resolveSiteId(siteId);
+    const driver = await this.prisma.deliveryDriver.findFirst({
+      where: { id: driverId, siteId: resolvedSiteId },
       include: { user: { select: this.portalUserSelect } },
     });
     if (!driver) throw new NotFoundException('Domiciliario no encontrado');
@@ -502,9 +556,10 @@ export class DeliveryDriversService {
     };
   }
 
-  async configureAccess(driverId: string, data: ConfigureDriverAccessDto) {
-    const driver = await this.prisma.deliveryDriver.findUnique({
-      where: { id: driverId },
+  async configureAccess(driverId: string, data: ConfigureDriverAccessDto, siteId = DEFAULT_SITE_ID) {
+    const resolvedSiteId = this.resolveSiteId(siteId);
+    const driver = await this.prisma.deliveryDriver.findFirst({
+      where: { id: driverId, siteId: resolvedSiteId },
       include: { user: { select: this.portalUserSelect } },
     });
     if (!driver) throw new NotFoundException('Domiciliario no encontrado');
@@ -514,18 +569,27 @@ export class DeliveryDriversService {
         throw new BadRequestException('La contraseña inicial debe tener al menos 4 caracteres.');
       }
       const email = this.normalizeLogin(data.login);
-      await this.assertAccessIdentityAvailable(driver, email);
+      await this.assertAccessIdentityAvailable(driver, email, resolvedSiteId);
 
       const password = await bcrypt.hash(data.password.trim(), 10);
       if (driver.userId) {
         const currentAccount = await this.prisma.user.findUnique({
           where: { id: driver.userId },
-          select: { id: true, role: true },
+          select: {
+            id: true,
+            role: true,
+            siteMemberships: {
+              where: { siteId: resolvedSiteId, active: true },
+              select: { role: true },
+              take: 1,
+            },
+          },
         });
         if (!currentAccount) {
           throw new NotFoundException('La cuenta vinculada a este domiciliario ya no existe.');
         }
-        if (currentAccount.role !== 'DELIVERY_DRIVER') {
+        const currentSiteRole = currentAccount.siteMemberships?.[0]?.role || currentAccount.role;
+        if (currentSiteRole !== 'DELIVERY_DRIVER') {
           throw new ForbiddenException(
             'La cuenta vinculada pertenece a otro perfil de trabajo. No se modificó su rol; vincula o crea una cuenta exclusiva para domiciliario.',
           );
@@ -541,7 +605,20 @@ export class DeliveryDriversService {
             active: true,
             mustVerifyEmail: false,
             emailVerified: true,
+            lastActiveSiteId: resolvedSiteId,
           },
+        });
+        await this.prisma.userSiteMembership.upsert({
+          where: { userId_siteId: { userId: driver.userId, siteId: resolvedSiteId } },
+          create: {
+            userId: driver.userId,
+            siteId: resolvedSiteId,
+            role: 'DELIVERY_DRIVER',
+            permissions: [],
+            active: true,
+            isDefault: true,
+          },
+          update: { role: 'DELIVERY_DRIVER', permissions: [], active: true },
         });
         await this.prisma.deliveryDriver.update({ where: { id: driver.id }, data: { active: true } });
       } else {
@@ -556,6 +633,16 @@ export class DeliveryDriversService {
             active: true,
             mustVerifyEmail: false,
             emailVerified: true,
+            lastActiveSiteId: resolvedSiteId,
+            siteMemberships: {
+              create: {
+                siteId: resolvedSiteId,
+                role: 'DELIVERY_DRIVER',
+                permissions: [],
+                active: true,
+                isDefault: true,
+              },
+            },
           },
           select: { id: true },
         });
@@ -566,18 +653,35 @@ export class DeliveryDriversService {
       if (driver.userId && driver.userId !== data.userId) {
         throw new ConflictException('Este domiciliario ya tiene una cuenta. Restablece su acceso desde esta misma ficha.');
       }
-      const account = await this.prisma.user.findUnique({ where: { id: data.userId } });
+      const account = await this.prisma.user.findFirst({
+        where: {
+          id: data.userId,
+          siteMemberships: {
+            some: { siteId: resolvedSiteId, active: true, role: 'DELIVERY_DRIVER' },
+          },
+        },
+        include: {
+          siteMemberships: {
+            where: { siteId: resolvedSiteId, active: true },
+            select: { role: true },
+            take: 1,
+          },
+        },
+      });
       if (!account?.active) throw new NotFoundException('El usuario seleccionado no está activo.');
-      if (account.role !== 'DELIVERY_DRIVER') {
+      if (account.siteMemberships?.[0]?.role !== 'DELIVERY_DRIVER') {
         throw new ForbiddenException('Solo puedes vincular una cuenta creada previamente para domiciliario. Crea una cuenta nueva para no modificar otro perfil de trabajo.');
       }
       await this.assertAccessIdentityAvailable(
         { id: driver.id, name: driver.name, userId: account.id },
         account.email,
+        resolvedSiteId,
       );
-      const linkedDriver = await this.prisma.deliveryDriver.findFirst({ where: { userId: account.id } });
+      const linkedDriver = await this.prisma.deliveryDriver.findFirst({
+        where: { siteId: resolvedSiteId, userId: account.id },
+      });
       if (linkedDriver && linkedDriver.id !== driver.id) {
-        throw new ConflictException('Ese usuario ya está vinculado a otro domiciliario.');
+        throw new ConflictException('Ese usuario ya está vinculado a otro domiciliario de esta sede.');
       }
       await this.prisma.$transaction([
         this.prisma.user.update({
@@ -587,21 +691,23 @@ export class DeliveryDriversService {
             phone: driver.phone,
             permissions: [],
             active: true,
+            lastActiveSiteId: resolvedSiteId,
           },
         }),
         this.prisma.deliveryDriver.update({ where: { id: driver.id }, data: { userId: account.id, active: true } }),
       ]);
     }
 
-    const result = await this.getAccess(driver.id);
-    this.socketGateway.server.emit('usersChanged');
-    this.socketGateway.server.emit('driversChanged');
+    const result = await this.getAccess(driver.id, resolvedSiteId);
+    this.socketGateway.emitToSite(resolvedSiteId, 'usersChanged');
+    this.socketGateway.emitToSite(resolvedSiteId, 'driversChanged');
     return result;
   }
 
-  async getMyPortal(userId: string) {
-    const driver = await this.prisma.deliveryDriver.findUnique({
-      where: { userId },
+  async getMyPortal(userId: string, siteId = DEFAULT_SITE_ID) {
+    const resolvedSiteId = this.resolveSiteId(siteId);
+    const driver = await this.prisma.deliveryDriver.findFirst({
+      where: { userId, siteId: resolvedSiteId },
       include: { user: { select: this.portalUserSelect } },
     });
     if (!driver?.active) {
@@ -609,7 +715,7 @@ export class DeliveryDriversService {
     }
 
     const activeClosing = await this.prisma.cashClosing.findFirst({
-      where: { isOpen: true, cashRegister: { purpose: 'DELIVERY', active: true } },
+      where: { siteId: resolvedSiteId, isOpen: true, cashRegister: { purpose: 'DELIVERY', active: true } },
       select: {
         id: true,
         shiftStart: true,
@@ -623,6 +729,7 @@ export class DeliveryDriversService {
       this.prisma.order.findMany({
         where: {
           deliveryDriverId: driver.id,
+          siteId: resolvedSiteId,
           orderType: 'DELIVERY',
           status: { notIn: ['DELIVERED', 'CANCELLED'] },
         },
@@ -633,6 +740,7 @@ export class DeliveryDriversService {
         ? this.prisma.order.findMany({
           where: {
             deliveryDriverId: driver.id,
+            siteId: resolvedSiteId,
             orderType: 'DELIVERY',
             status: 'DELIVERED',
             cashClosingId: activeClosing.id,
@@ -644,7 +752,7 @@ export class DeliveryDriversService {
         : Promise.resolve([]),
       activeClosing
         ? this.prisma.driverSettlement.findMany({
-          where: { driverId: driver.id, cashClosingId: activeClosing.id },
+          where: { siteId: resolvedSiteId, driverId: driver.id, cashClosingId: activeClosing.id },
           include: {
             receivedBy: { select: { id: true, name: true } },
             orders: { select: { id: true, orderNumber: true, total: true, paymentMethod: true } },
@@ -686,9 +794,10 @@ export class DeliveryDriversService {
     };
   }
 
-  async getMyOrderSnapshot(userId: string, orderId: string) {
-    const driver = await this.prisma.deliveryDriver.findUnique({
-      where: { userId },
+  async getMyOrderSnapshot(userId: string, orderId: string, siteId = DEFAULT_SITE_ID) {
+    const resolvedSiteId = this.resolveSiteId(siteId);
+    const driver = await this.prisma.deliveryDriver.findFirst({
+      where: { userId, siteId: resolvedSiteId },
       select: { id: true, active: true },
     });
     if (!driver?.active) {
@@ -698,6 +807,7 @@ export class DeliveryDriversService {
     const order = await this.prisma.order.findFirst({
       where: {
         id: orderId,
+        siteId: resolvedSiteId,
         deliveryDriverId: driver.id,
         orderType: 'DELIVERY',
       },
@@ -712,7 +822,7 @@ export class DeliveryDriversService {
     }
     if (order.status === 'DELIVERED') {
       const activeClosing = await this.prisma.cashClosing.findFirst({
-        where: { isOpen: true, cashRegister: { purpose: 'DELIVERY', active: true } },
+        where: { siteId: resolvedSiteId, isOpen: true, cashRegister: { purpose: 'DELIVERY', active: true } },
         select: { id: true },
         orderBy: { shiftStart: 'desc' },
       });
@@ -723,9 +833,10 @@ export class DeliveryDriversService {
     return { orderId, bucket: 'ACTIVE', order };
   }
 
-  private async getOwnedDeliveryOrder(userId: string, orderId: string, select: any) {
-    const driver = await this.prisma.deliveryDriver.findUnique({
-      where: { userId },
+  private async getOwnedDeliveryOrder(userId: string, orderId: string, select: any, siteId = DEFAULT_SITE_ID) {
+    const resolvedSiteId = this.resolveSiteId(siteId);
+    const driver = await this.prisma.deliveryDriver.findFirst({
+      where: { userId, siteId: resolvedSiteId },
       select: { id: true, active: true },
     });
     if (!driver?.active) {
@@ -735,6 +846,7 @@ export class DeliveryDriversService {
     const order = await this.prisma.order.findFirst({
       where: {
         id: orderId,
+        siteId: resolvedSiteId,
         deliveryDriverId: driver.id,
         orderType: 'DELIVERY',
         OR: [
@@ -763,7 +875,9 @@ export class DeliveryDriversService {
     before?: string,
     requestedLimit?: number,
     beforeId?: string,
+    siteId = DEFAULT_SITE_ID,
   ) {
+    const resolvedSiteId = this.resolveSiteId(siteId);
     let beforeDate: Date | undefined;
     if (before) {
       beforeDate = new Date(before);
@@ -801,7 +915,7 @@ export class DeliveryDriversService {
           createdAt: true,
         },
       },
-    });
+    }, siteId);
 
     const messageCursor = beforeDate
       ? beforeId
@@ -814,7 +928,7 @@ export class DeliveryDriversService {
         : { createdAt: { lt: beforeDate } }
       : {};
 
-    await this.whatsappService?.ensureLegacyOrderMessageLinks(order.id);
+    await this.whatsappService?.ensureLegacyOrderMessageLinks(order.id, resolvedSiteId);
 
     const rows = order.chatSessionId
       ? await this.prisma.whatsAppMessage.findMany({
@@ -857,11 +971,12 @@ export class DeliveryDriversService {
     };
   }
 
-  async getMyOrderChatMedia(userId: string, orderId: string, messageId: string) {
+  async getMyOrderChatMedia(userId: string, orderId: string, messageId: string, siteId = DEFAULT_SITE_ID) {
+    const resolvedSiteId = this.resolveSiteId(siteId);
     const order: any = await this.getOwnedDeliveryOrder(userId, orderId, {
       id: true,
       chatSessionId: true,
-    });
+    }, siteId);
     if (!order.chatSessionId) throw new NotFoundException('Este pedido no tiene chat asociado.');
 
     const message = await this.prisma.whatsAppMessage.findFirst({
@@ -876,7 +991,7 @@ export class DeliveryDriversService {
     if (!mediaId) throw new NotFoundException('Este mensaje no contiene multimedia disponible.');
     if (!this.whatsappService) throw new BadRequestException('El servicio de multimedia no está disponible.');
 
-    const media = await this.whatsappService.getMediaBuffer(mediaId);
+    const media = await this.whatsappService.getMediaBuffer(mediaId, resolvedSiteId);
     if (!media?.buffer?.length) throw new NotFoundException('La multimedia ya no está disponible.');
     const normalizedType = String(media.contentType || '').split(';')[0].trim().toLowerCase();
     const safeRasterTypes = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif']);
@@ -889,8 +1004,8 @@ export class DeliveryDriversService {
     return { buffer: media.buffer, contentType };
   }
 
-  async getMyOrderProofImage(userId: string, orderId: string, proofId: string) {
-    await this.getOwnedDeliveryOrder(userId, orderId, { id: true });
+  async getMyOrderProofImage(userId: string, orderId: string, proofId: string, siteId = DEFAULT_SITE_ID) {
+    await this.getOwnedDeliveryOrder(userId, orderId, { id: true }, siteId);
     const proof = await this.prisma.transferProof.findFirst({
       where: { id: proofId, orderId },
       select: { fileBase64: true, filePath: true },
@@ -916,7 +1031,8 @@ export class DeliveryDriversService {
     throw new NotFoundException('La imagen del comprobante no está disponible.');
   }
 
-  async completeMyOrder(userId: string, orderId: string, data: CompleteDriverDeliveryDto, files?: any[]) {
+  async completeMyOrder(userId: string, orderId: string, data: CompleteDriverDeliveryDto, files?: any[], siteId = DEFAULT_SITE_ID) {
+    const resolvedSiteId = this.resolveSiteId(siteId);
     const method = this.getDriverPaymentMethod(data.method);
     const proofFiles = this.getProofFiles(files);
     // Fotos de comprobantes de transferencia (pueden ser 1, 2 o más si pagaron en partes).
@@ -926,11 +1042,11 @@ export class DeliveryDriversService {
 
     const result = await this.prisma.$transaction(async tx => {
       await lockOperation(tx);
-      const driver = await tx.deliveryDriver.findUnique({ where: { userId } });
+      const driver = await tx.deliveryDriver.findFirst({ where: { userId, siteId: resolvedSiteId } });
       if (!driver?.active) throw new ForbiddenException('Tu cuenta no tiene un domiciliario activo asociado.');
 
       const order = await tx.order.findFirst({
-        where: { id: orderId, deliveryDriverId: driver.id, orderType: 'DELIVERY' },
+        where: { id: orderId, siteId: resolvedSiteId, deliveryDriverId: driver.id, orderType: 'DELIVERY' },
         include: { payment: true },
       });
       if (!order) throw new NotFoundException('No puedes cobrar un pedido que no te fue asignado.');
@@ -939,7 +1055,7 @@ export class DeliveryDriversService {
       }
 
       const closing = await tx.cashClosing.findFirst({
-        where: { isOpen: true, cashRegister: { purpose: 'DELIVERY', active: true } },
+        where: { siteId: resolvedSiteId, isOpen: true, cashRegister: { purpose: 'DELIVERY', active: true } },
         select: { id: true, cashRegisterId: true },
         orderBy: { shiftStart: 'desc' },
       });
@@ -1045,27 +1161,29 @@ export class DeliveryDriversService {
       return { order: updatedOrder, payment, proof: sanitizeReceipt(proof), isTransfer: hasTransferPart };
     }, operationTransaction);
 
-    this.socketGateway.emitOrderStatusChange(orderId, 'DELIVERED', result.order);
-    this.socketGateway.server.emit('paymentUpdated', result.payment);
+    this.socketGateway.emitOrderStatusChange(orderId, 'DELIVERED', result.order, resolvedSiteId);
+    this.socketGateway.emitToSite(resolvedSiteId, 'paymentUpdated', result.payment);
 
     await this.deliveryDriverGateway?.emitForOrder(result.order, {
       reason: 'delivery_completed',
       orderId,
-    });
+    }, resolvedSiteId);
     return result;
   }
 
-  async updateMyPayment(userId: string, orderId: string, data: CompleteDriverDeliveryDto) {
+  async updateMyPayment(userId: string, orderId: string, data: CompleteDriverDeliveryDto, siteId = DEFAULT_SITE_ID) {
+    const resolvedSiteId = this.resolveSiteId(siteId);
     const method = this.getDriverPaymentMethod(data.method);
 
     const result = await this.prisma.$transaction(async tx => {
       await lockOperation(tx);
-      const driver = await tx.deliveryDriver.findUnique({ where: { userId } });
+      const driver = await tx.deliveryDriver.findFirst({ where: { userId, siteId: resolvedSiteId } });
       if (!driver?.active) throw new ForbiddenException('Tu cuenta no tiene un domiciliario activo asociado.');
 
       const order = await tx.order.findFirst({
         where: {
           id: orderId,
+          siteId: resolvedSiteId,
           deliveryDriverId: driver.id,
           orderType: 'DELIVERY',
           status: 'DELIVERED',
@@ -1078,7 +1196,7 @@ export class DeliveryDriversService {
       }
 
       const closing = await tx.cashClosing.findFirst({
-        where: { isOpen: true, cashRegister: { purpose: 'DELIVERY', active: true } },
+        where: { siteId: resolvedSiteId, isOpen: true, cashRegister: { purpose: 'DELIVERY', active: true } },
         select: { id: true, cashRegisterId: true },
         orderBy: { shiftStart: 'desc' },
       });
@@ -1161,16 +1279,17 @@ export class DeliveryDriversService {
       return { order: updatedOrder, payment };
     }, operationTransaction);
 
-    this.socketGateway.server.emit('paymentUpdated', result.payment);
-    this.socketGateway.server.emit('orderUpdated', result.order);
+    this.socketGateway.emitToSite(resolvedSiteId, 'paymentUpdated', result.payment);
+    this.socketGateway.emitToSite(resolvedSiteId, 'orderUpdated', result.order);
     await this.deliveryDriverGateway?.emitForOrder(result.order, {
       reason: 'payment_changed',
       orderId,
-    });
+    }, resolvedSiteId);
     return result;
   }
 
-  async uploadMyProof(userId: string, orderId: string, data: CompleteDriverDeliveryDto, files?: any[]) {
+  async uploadMyProof(userId: string, orderId: string, data: CompleteDriverDeliveryDto, files?: any[], siteId = DEFAULT_SITE_ID) {
+    const resolvedSiteId = this.resolveSiteId(siteId);
     const method = this.getDriverPaymentMethod(data.method);
     if (method === 'CASH') throw new BadRequestException('El comprobante solo aplica a pagos por transferencia.');
     const proofFiles = this.getProofFiles(files);
@@ -1183,10 +1302,10 @@ export class DeliveryDriversService {
 
     const result = await this.prisma.$transaction(async tx => {
       await lockOperation(tx);
-      const driver = await tx.deliveryDriver.findUnique({ where: { userId } });
+      const driver = await tx.deliveryDriver.findFirst({ where: { userId, siteId: resolvedSiteId } });
       if (!driver?.active) throw new ForbiddenException('Tu cuenta no tiene un domiciliario activo asociado.');
       const order = await tx.order.findFirst({
-        where: { id: orderId, deliveryDriverId: driver.id, orderType: 'DELIVERY', status: 'DELIVERED' },
+        where: { id: orderId, siteId: resolvedSiteId, deliveryDriverId: driver.id, orderType: 'DELIVERY', status: 'DELIVERED' },
         include: { payment: true },
       });
       if (!order) throw new NotFoundException('No puedes adjuntar comprobantes a este pedido.');
@@ -1201,7 +1320,7 @@ export class DeliveryDriversService {
       }
 
       const closing = await tx.cashClosing.findFirst({
-        where: { isOpen: true, cashRegister: { purpose: 'DELIVERY', active: true } },
+        where: { siteId: resolvedSiteId, isOpen: true, cashRegister: { purpose: 'DELIVERY', active: true } },
         select: { id: true, cashRegisterId: true },
         orderBy: { shiftStart: 'desc' },
       });
@@ -1326,17 +1445,19 @@ export class DeliveryDriversService {
       return { order: updatedOrder, payment, proof: sanitizeReceipt(proof), isTransfer: true };
     }, operationTransaction);
 
-    this.socketGateway.server.emit('paymentUpdated', result.payment);
+    this.socketGateway.emitToSite(resolvedSiteId, 'paymentUpdated', result.payment);
     await this.deliveryDriverGateway?.emitForOrder(result.order, {
       reason: 'proof_changed',
       orderId,
-    });
+    }, resolvedSiteId);
     return result;
   }
 
-  async getPendingSettlements() {
+  async getPendingSettlements(siteId = DEFAULT_SITE_ID) {
+    const resolvedSiteId = this.resolveSiteId(siteId);
     const openClosing = await this.prisma.cashClosing.findFirst({
       where: {
+        siteId: resolvedSiteId,
         isOpen: true,
         cashRegister: { purpose: 'DELIVERY', active: true },
       },
@@ -1347,6 +1468,7 @@ export class DeliveryDriversService {
 
     const orders = await this.prisma.order.findMany({
       where: {
+        siteId: resolvedSiteId,
         cashClosingId: openClosing.id,
         orderType: 'DELIVERY',
         status: 'DELIVERED',
@@ -1394,7 +1516,9 @@ export class DeliveryDriversService {
     driverId: string,
     data: { orderIds: string[]; receivedCash: number; notes?: string },
     receivedById: string,
+    siteId = DEFAULT_SITE_ID,
   ) {
+    const resolvedSiteId = this.resolveSiteId(siteId);
     const orderIds = [...new Set((data.orderIds || []).filter(Boolean))];
     if (!orderIds.length || orderIds.length > 100) {
       throw new BadRequestException('Selecciona al menos un pedido pendiente de liquidar.');
@@ -1405,8 +1529,14 @@ export class DeliveryDriversService {
     }
 
     const result = await this.prisma.$transaction(async tx => {
+      const driver = await tx.deliveryDriver.findFirst({
+        where: { id: driverId, siteId: resolvedSiteId, active: true },
+        select: { id: true },
+      });
+      if (!driver) throw new NotFoundException('Domiciliario no encontrado en esta sede.');
       const openClosing = await tx.cashClosing.findFirst({
         where: {
+          siteId: resolvedSiteId,
           isOpen: true,
           cashRegister: { purpose: 'DELIVERY', active: true },
         },
@@ -1417,6 +1547,7 @@ export class DeliveryDriversService {
 
       const orders = await tx.order.findMany({
         where: {
+          siteId: resolvedSiteId,
           id: { in: orderIds },
           deliveryDriverId: driverId,
           cashClosingId: openClosing.id,
@@ -1439,6 +1570,7 @@ export class DeliveryDriversService {
       );
       const settlement = await tx.driverSettlement.create({
         data: {
+          siteId: resolvedSiteId,
           driverId,
           cashClosingId: openClosing.id,
           receivedById,
@@ -1449,7 +1581,7 @@ export class DeliveryDriversService {
         },
       });
       const linked = await tx.order.updateMany({
-        where: { id: { in: orderIds }, driverSettlementId: null },
+        where: { siteId: resolvedSiteId, id: { in: orderIds }, driverSettlementId: null },
         data: { driverSettlementId: settlement.id },
       });
       if (linked.count !== orderIds.length) {
@@ -1464,7 +1596,7 @@ export class DeliveryDriversService {
         .map(order => order.id);
       if (cashOnlyOrderIds.length) {
         await tx.order.updateMany({
-          where: { id: { in: cashOnlyOrderIds }, driverSettlementId: settlement.id },
+          where: { siteId: resolvedSiteId, id: { in: cashOnlyOrderIds }, driverSettlementId: settlement.id },
           data: { paymentStatus: 'CONFIRMED' },
         });
         await tx.payment.updateMany({
@@ -1486,36 +1618,41 @@ export class DeliveryDriversService {
       });
     });
 
-    this.socketGateway.server.emit('driverSettlementCreated', result);
-    this.socketGateway.server.emit('driversChanged');
-    this.socketGateway.server.emit('cashRegistersChanged');
+    this.socketGateway.emitToSite(resolvedSiteId, 'driverSettlementCreated', result);
+    this.socketGateway.emitToSite(resolvedSiteId, 'driversChanged');
+    this.socketGateway.emitToSite(resolvedSiteId, 'cashRegistersChanged');
     await this.deliveryDriverGateway?.emitForDriver(driverId, {
       reason: 'settlement_changed',
-    });
+    }, resolvedSiteId);
     return result;
   }
 
-  async getSettlements(driverId: string) {
-    await this.findOne(driverId, 'ALL');
+  async getSettlements(driverId: string, siteId = DEFAULT_SITE_ID) {
+    const resolvedSiteId = this.resolveSiteId(siteId);
+    await this.findOne(driverId, 'ALL', undefined, undefined, resolvedSiteId);
     return this.prisma.driverSettlement.findMany({
-      where: { driverId },
+      where: { siteId: resolvedSiteId, driverId },
       include: {
         receivedBy: { select: { id: true, name: true } },
-        orders: { select: { id: true, orderNumber: true } },
+        orders: {
+          where: { siteId: resolvedSiteId },
+          select: { id: true, orderNumber: true },
+        },
       },
       orderBy: { createdAt: 'desc' },
       take: 100,
     });
   }
 
-  async findOne(id: string, filterType = 'CURRENT', cashClosingId?: string, selectedDate?: string) {
-    const orderDateFilter = await this.buildOrderFilter(filterType, cashClosingId, selectedDate);
+  async findOne(id: string, filterType = 'CURRENT', cashClosingId?: string, selectedDate?: string, siteId = DEFAULT_SITE_ID) {
+    const resolvedSiteId = this.resolveSiteId(siteId);
+    const orderDateFilter = await this.buildOrderFilter(filterType, cashClosingId, selectedDate, resolvedSiteId);
 
-    const driver = await this.prisma.deliveryDriver.findUnique({
-      where: { id },
+    const driver = await this.prisma.deliveryDriver.findFirst({
+      where: { id, siteId: resolvedSiteId },
       include: {
         orders: {
-          where: orderDateFilter,
+          where: { siteId: resolvedSiteId, ...orderDateFilter },
           orderBy: { createdAt: 'desc' },
           take: 50,
         },
@@ -1525,8 +1662,9 @@ export class DeliveryDriversService {
     return driver;
   }
 
-  async update(id: string, data: UpdateDriverDto) {
-    const driver = await this.prisma.deliveryDriver.findUnique({ where: { id } });
+  async update(id: string, data: UpdateDriverDto, siteId = DEFAULT_SITE_ID) {
+    const resolvedSiteId = this.resolveSiteId(siteId);
+    const driver = await this.prisma.deliveryDriver.findFirst({ where: { id, siteId: resolvedSiteId } });
     if (!driver) throw new NotFoundException('Domiciliario no encontrado');
 
     const payload: any = { ...data };
@@ -1549,29 +1687,54 @@ export class DeliveryDriversService {
         data: {
           ...(payload.name ? { name: payload.name } : {}),
           ...(payload.phone ? { phone: payload.phone } : {}),
+          ...(payload.active === true ? { active: true } : {}),
+        },
+      });
+      await this.prisma.userSiteMembership.upsert({
+        where: { userId_siteId: { userId: driver.userId, siteId: resolvedSiteId } },
+        create: {
+          userId: driver.userId,
+          siteId: resolvedSiteId,
+          role: 'DELIVERY_DRIVER',
+          permissions: [],
+          active: payload.active !== false,
+          isDefault: true,
+        },
+        update: {
+          role: 'DELIVERY_DRIVER',
+          permissions: [],
           ...(typeof payload.active === 'boolean' ? { active: payload.active } : {}),
         },
       });
-      this.socketGateway.server.emit('usersChanged');
+      if (payload.active === false) {
+        const activeMemberships = await this.prisma.userSiteMembership.count({
+          where: { userId: driver.userId, active: true },
+        });
+        if (activeMemberships === 0) {
+          await this.prisma.user.update({ where: { id: driver.userId }, data: { active: false } });
+        }
+      }
+      this.socketGateway.emitToSite(resolvedSiteId, 'usersChanged');
     }
 
     if (payload.active === false) {
-      const queueState = await this.getRawQueueState();
+      const queueState = await this.getRawQueueState(resolvedSiteId);
       if (queueState.queue.includes(id) || queueState.breaks[id]) {
         queueState.queue = queueState.queue.filter(driverId => driverId !== id);
         delete queueState.breaks[id];
         delete queueState.tripOrderCounts[id];
-        await this.saveQueueState(queueState);
+        await this.saveQueueState(queueState, resolvedSiteId);
       }
     }
 
-    this.socketGateway.server.emit('driversChanged');
+    this.socketGateway.emitToSite(resolvedSiteId, 'driversChanged');
     return updated;
   }
 
-  async remove(id: string) {
-    const driver = await this.prisma.deliveryDriver.findUnique({
-      where: { id },
+  async remove(id: string, siteId = DEFAULT_SITE_ID) {
+    const resolvedSiteId = this.resolveSiteId(siteId);
+    const driver = await this.prisma.deliveryDriver.findFirst({
+      where: { id, siteId: resolvedSiteId },
       include: {
         _count: {
           select: { orders: true, settlements: true },
@@ -1582,6 +1745,7 @@ export class DeliveryDriversService {
     const activeOrder = await this.prisma.order.findFirst({
       where: {
         deliveryDriverId: id,
+        siteId: resolvedSiteId,
         orderType: 'DELIVERY',
         status: { notIn: ['DELIVERED', 'CANCELLED'] },
       },
@@ -1596,6 +1760,7 @@ export class DeliveryDriversService {
     const duplicateDriver = await this.prisma.deliveryDriver.findFirst({
       where: {
         id: { not: id },
+        siteId: resolvedSiteId,
         OR: [
           ...(cleanPhone.length === 10 ? [{ phone: { contains: cleanPhone } }] : []),
           { name: { equals: driver.name, mode: 'insensitive' } },
@@ -1606,11 +1771,11 @@ export class DeliveryDriversService {
     if (duplicateDriver) {
       // Reasignar los pedidos y liquidaciones al domiciliario duplicado para no perder trazabilidad
       await this.prisma.order.updateMany({
-        where: { deliveryDriverId: id },
+        where: { siteId: resolvedSiteId, deliveryDriverId: id },
         data: { deliveryDriverId: duplicateDriver.id },
       });
       await this.prisma.driverSettlement.updateMany({
-        where: { driverId: id },
+        where: { siteId: resolvedSiteId, driverId: id },
         data: { driverId: duplicateDriver.id },
       });
       await this.prisma.deliveryDriver.update({
@@ -1620,11 +1785,11 @@ export class DeliveryDriversService {
     } else {
       // Si no hay duplicado, desvincular los pedidos históricos para no romper integridad foránea
       await this.prisma.order.updateMany({
-        where: { deliveryDriverId: id },
+        where: { siteId: resolvedSiteId, deliveryDriverId: id },
         data: { deliveryDriverId: null },
       });
       await this.prisma.driverSettlement.deleteMany({
-        where: { driverId: id },
+        where: { siteId: resolvedSiteId, driverId: id },
       });
     }
 
@@ -1637,14 +1802,23 @@ export class DeliveryDriversService {
       try {
         const u = await this.prisma.user.findUnique({ where: { id: driver.userId } });
         if (u) {
-          await this.prisma.user.update({
-            where: { id: driver.userId },
-            data: {
-              active: false,
-              email: `deleted_${Date.now()}_${u.email}`,
-              phone: null,
-            },
+          await this.prisma.userSiteMembership.updateMany({
+            where: { userId: driver.userId, siteId: resolvedSiteId },
+            data: { active: false },
           });
+          const remainingMemberships = await this.prisma.userSiteMembership.count({
+            where: { userId: driver.userId, active: true },
+          });
+          if (remainingMemberships === 0) {
+            await this.prisma.user.update({
+              where: { id: driver.userId },
+              data: {
+                active: false,
+                email: `deleted_${Date.now()}_${u.email}`,
+                phone: null,
+              },
+            });
+          }
         }
       } catch (userErr) {
         console.warn(`[remove] Error al inactivar usuario huérfano ${driver.userId}:`, userErr);
@@ -1655,23 +1829,23 @@ export class DeliveryDriversService {
     await this.prisma.deliveryDriver.delete({ where: { id } });
 
     // Limpiar de la fila de turnos
-    const queueState = await this.getRawQueueState();
+    const queueState = await this.getRawQueueState(resolvedSiteId);
     if (queueState.queue.includes(id) || queueState.breaks[id] || queueState.tripOrderCounts[id]) {
       queueState.queue = queueState.queue.filter(driverId => driverId !== id);
       delete queueState.breaks[id];
       delete queueState.tripOrderCounts[id];
-      await this.saveQueueState(queueState);
+      await this.saveQueueState(queueState, resolvedSiteId);
     }
 
-    if (driver.userId) this.socketGateway.server.emit('usersChanged');
-    this.socketGateway.server.emit('driversChanged');
+    if (driver.userId) this.socketGateway.emitToSite(resolvedSiteId, 'usersChanged');
+    this.socketGateway.emitToSite(resolvedSiteId, 'driversChanged');
     return { message: 'Domiciliario eliminado definitivamente.', deleted: true };
   }
 
   // ── Queue & Break Management (Cola de Turnos Equitativa & Cena/Descanso) ──
   private static readonly QUEUE_SETTING_KEY = 'delivery_driver_queue_state';
 
-  private async getRawQueueState(): Promise<{
+  private async getRawQueueState(siteId = DEFAULT_SITE_ID): Promise<{
     queue: string[];
     tripOrderCounts: Record<string, number>;
     breaks: Record<string, {
@@ -1683,9 +1857,20 @@ export class DeliveryDriversService {
       notifiedFinished?: boolean;
     }>;
   }> {
-    const setting = await this.prisma.appSetting.findUnique({
-      where: { key: DeliveryDriversService.QUEUE_SETTING_KEY },
+    const resolvedSiteId = this.resolveSiteId(siteId);
+    let setting = await this.prisma.siteSetting.findUnique({
+      where: {
+        siteId_key: {
+          siteId: resolvedSiteId,
+          key: DeliveryDriversService.QUEUE_SETTING_KEY,
+        },
+      },
     }).catch(() => null);
+    if (!setting && resolvedSiteId === DEFAULT_SITE_ID) {
+      setting = await this.prisma.appSetting.findUnique({
+        where: { key: DeliveryDriversService.QUEUE_SETTING_KEY },
+      }).catch(() => null);
+    }
 
     let state: any = { queue: [], tripOrderCounts: {}, breaks: {} };
     if (setting?.value) {
@@ -1699,17 +1884,24 @@ export class DeliveryDriversService {
     return state;
   }
 
-  private async saveQueueState(state: any): Promise<void> {
-    await this.prisma.appSetting.upsert({
-      where: { key: DeliveryDriversService.QUEUE_SETTING_KEY },
+  private async saveQueueState(state: any, siteId = DEFAULT_SITE_ID): Promise<void> {
+    const resolvedSiteId = this.resolveSiteId(siteId);
+    await this.prisma.siteSetting.upsert({
+      where: {
+        siteId_key: {
+          siteId: resolvedSiteId,
+          key: DeliveryDriversService.QUEUE_SETTING_KEY,
+        },
+      },
       update: { value: JSON.stringify(state) },
-      create: { key: DeliveryDriversService.QUEUE_SETTING_KEY, value: JSON.stringify(state) },
+      create: { siteId: resolvedSiteId, key: DeliveryDriversService.QUEUE_SETTING_KEY, value: JSON.stringify(state) },
     });
-    this.socketGateway.server.emit('driverQueueUpdated', state);
+    this.socketGateway.emitToSite(resolvedSiteId, 'driverQueueUpdated', state);
   }
 
-  async checkExpiredDriverBreaks(): Promise<boolean> {
-    const state = await this.getRawQueueState();
+  async checkExpiredDriverBreaks(siteId = DEFAULT_SITE_ID): Promise<boolean> {
+    const resolvedSiteId = this.resolveSiteId(siteId);
+    const state = await this.getRawQueueState(resolvedSiteId);
     let changed = false;
     const now = Date.now();
 
@@ -1722,8 +1914,8 @@ export class DeliveryDriversService {
       // Al terminar su tiempo de cena se reincorpora al final de la fila
       state.queue = state.queue.filter(id => id !== driverId).concat(driverId);
 
-      const driver = await this.prisma.deliveryDriver.findUnique({
-        where: { id: driverId },
+      const driver = await this.prisma.deliveryDriver.findFirst({
+        where: { id: driverId, siteId: resolvedSiteId },
         select: { name: true },
       }).catch(() => null);
 
@@ -1734,21 +1926,22 @@ export class DeliveryDriversService {
         breakReason: 'Cena / Descanso',
         breakMinutes: b.breakMinutes || 15,
       };
-      this.socketGateway.server.emit('driverBreakFinished', payload);
+      this.socketGateway.emitToSite(resolvedSiteId, 'driverBreakFinished', payload);
     }
 
     if (changed) {
-      await this.saveQueueState(state);
+      await this.saveQueueState(state, resolvedSiteId);
     }
     return changed;
   }
 
-  async getQueueState(): Promise<any> {
-    await this.checkExpiredDriverBreaks();
-    const state = await this.getRawQueueState();
+  async getQueueState(siteId = DEFAULT_SITE_ID): Promise<any> {
+    const resolvedSiteId = this.resolveSiteId(siteId);
+    await this.checkExpiredDriverBreaks(resolvedSiteId);
+    const state = await this.getRawQueueState(resolvedSiteId);
 
     const activeDrivers = await this.prisma.deliveryDriver.findMany({
-      where: { active: true },
+      where: { siteId: resolvedSiteId, active: true },
       select: { id: true, name: true, phone: true },
     });
 
@@ -1763,7 +1956,7 @@ export class DeliveryDriversService {
 
     if (updatedQueue.length !== state.queue.length || updatedQueue.some((id, i) => id !== state.queue[i])) {
       state.queue = updatedQueue;
-      await this.saveQueueState(state);
+      await this.saveQueueState(state, resolvedSiteId);
     }
 
     const driverMap = new Map(activeDrivers.map(d => [d.id, d]));
@@ -1796,12 +1989,13 @@ export class DeliveryDriversService {
     };
   }
 
-  async startDriverBreak(driverId: string, minutes: number): Promise<any> {
-    const driver = await this.prisma.deliveryDriver.findUnique({ where: { id: driverId } });
+  async startDriverBreak(driverId: string, minutes: number, siteId = DEFAULT_SITE_ID): Promise<any> {
+    const resolvedSiteId = this.resolveSiteId(siteId);
+    const driver = await this.prisma.deliveryDriver.findFirst({ where: { id: driverId, siteId: resolvedSiteId } });
     if (!driver) throw new NotFoundException('Domiciliario no encontrado');
 
     const duration = Math.max(1, Math.min(240, Number(minutes) || 15));
-    const state = await this.getRawQueueState();
+    const state = await this.getRawQueueState(resolvedSiteId);
     const now = Date.now();
 
     state.breaks[driverId] = {
@@ -1813,7 +2007,7 @@ export class DeliveryDriversService {
       notifiedFinished: false,
     };
 
-    await this.saveQueueState(state);
+    await this.saveQueueState(state, resolvedSiteId);
 
     const payload = {
       driverId,
@@ -1822,18 +2016,19 @@ export class DeliveryDriversService {
       breakUntil: state.breaks[driverId].breakUntil,
       breakReason: 'Cena / Descanso',
     };
-    this.socketGateway.server.emit('driverBreakStarted', payload);
+    this.socketGateway.emitToSite(resolvedSiteId, 'driverBreakStarted', payload);
 
-    setTimeout(() => this.checkExpiredDriverBreaks().catch(() => {}), Math.max(500, duration * 60 * 1000));
+    setTimeout(() => this.checkExpiredDriverBreaks(resolvedSiteId).catch(() => {}), Math.max(500, duration * 60 * 1000));
 
-    return this.getQueueState();
+    return this.getQueueState(resolvedSiteId);
   }
 
-  async endDriverBreak(driverId: string): Promise<any> {
-    const driver = await this.prisma.deliveryDriver.findUnique({ where: { id: driverId } });
+  async endDriverBreak(driverId: string, siteId = DEFAULT_SITE_ID): Promise<any> {
+    const resolvedSiteId = this.resolveSiteId(siteId);
+    const driver = await this.prisma.deliveryDriver.findFirst({ where: { id: driverId, siteId: resolvedSiteId } });
     if (!driver) throw new NotFoundException('Domiciliario no encontrado');
 
-    const state = await this.getRawQueueState();
+    const state = await this.getRawQueueState(resolvedSiteId);
     if (state.breaks[driverId]) {
       state.breaks[driverId].onBreak = false;
       state.breaks[driverId].breakUntil = null;
@@ -1843,7 +2038,7 @@ export class DeliveryDriversService {
     // Regla 2: Cuando termine su tiempo de cena se reincorpora al final de la fila
     state.queue = state.queue.filter(id => id !== driverId).concat(driverId);
 
-    await this.saveQueueState(state);
+    await this.saveQueueState(state, resolvedSiteId);
 
     const payload = {
       driverId,
@@ -1851,15 +2046,20 @@ export class DeliveryDriversService {
       finishedAt: Date.now(),
       breakReason: 'Cena / Descanso',
     };
-    this.socketGateway.server.emit('driverBreakFinished', payload);
+    this.socketGateway.emitToSite(resolvedSiteId, 'driverBreakFinished', payload);
 
-    return this.getQueueState();
+    return this.getQueueState(resolvedSiteId);
   }
 
   async onOrdersAssigned(driverId: string, count: number): Promise<void> {
     if (!driverId || count <= 0) return;
     try {
-      const state = await this.getRawQueueState();
+      const driver = await this.prisma.deliveryDriver.findUnique({
+        where: { id: driverId },
+        select: { siteId: true, active: true },
+      });
+      if (!driver?.active) return;
+      const state = await this.getRawQueueState(driver.siteId);
       const currentCount = (state.tripOrderCounts[driverId] || 0) + count;
 
       // Regla 3: Cuenta como un turno completo cuando lleve 10 pedidos asignados
@@ -1871,7 +2071,7 @@ export class DeliveryDriversService {
         state.tripOrderCounts[driverId] = currentCount;
       }
 
-      await this.saveQueueState(state);
+      await this.saveQueueState(state, driver.siteId);
     } catch (err) {
       console.error('Error actualizando cola tras asignación de pedidos:', err);
     }
@@ -1880,33 +2080,40 @@ export class DeliveryDriversService {
   async onOrderDelivered(driverId?: string): Promise<void> {
     if (!driverId) return;
     try {
+      const driver = await this.prisma.deliveryDriver.findUnique({
+        where: { id: driverId },
+        select: { siteId: true },
+      });
+      if (!driver) return;
       // Regla 1: Debe reingresar automáticamente al final de la lista cuando
       // el gestor de pedido le haya dado entregado a ese pedido de ese domiciliario
       // y dicho domiciliario cuando entregue todos sus domicilios queda al final de la fila.
       const remainingInRoute = await this.prisma.order.count({
         where: {
           deliveryDriverId: driverId,
+          siteId: driver.siteId,
           status: 'IN_ROUTE',
           orderType: 'DELIVERY',
         },
       });
 
       if (remainingInRoute === 0) {
-        const state = await this.getRawQueueState();
+        const state = await this.getRawQueueState(driver.siteId);
         state.queue = state.queue.filter(id => id !== driverId).concat(driverId);
         state.tripOrderCounts[driverId] = 0;
-        await this.saveQueueState(state);
+        await this.saveQueueState(state, driver.siteId);
       }
     } catch (err) {
       console.error('Error rotando domiciliario tras entrega:', err);
     }
   }
 
-  async reorderQueue(newQueue: string[]): Promise<any> {
+  async reorderQueue(newQueue: string[], siteId = DEFAULT_SITE_ID): Promise<any> {
+    const resolvedSiteId = this.resolveSiteId(siteId);
     if (!Array.isArray(newQueue)) throw new BadRequestException('Formato de cola inválido');
-    const state = await this.getRawQueueState();
+    const state = await this.getRawQueueState(resolvedSiteId);
     const activeDrivers = await this.prisma.deliveryDriver.findMany({
-      where: { active: true },
+      where: { siteId: resolvedSiteId, active: true },
       select: { id: true },
     });
     const validIds = new Set(activeDrivers.map(d => d.id));
@@ -1917,7 +2124,7 @@ export class DeliveryDriversService {
     }
 
     state.queue = filtered;
-    await this.saveQueueState(state);
-    return this.getQueueState();
+    await this.saveQueueState(state, resolvedSiteId);
+    return this.getQueueState(resolvedSiteId);
   }
 }

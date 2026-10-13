@@ -10,6 +10,7 @@ import { PrintService } from '../src/print/print.service';
 import { PrintQueueSignalService } from '../src/print/print-queue-signal.service';
 import { MailService } from '../src/mail/mail.service';
 import { CacheService } from '../src/cache/cache.service';
+import { DEFAULT_SITE_ID } from '../src/common/multisite.constants';
 
 describe('Security & Logic Audit Tests', () => {
   let ordersService: OrdersService;
@@ -43,6 +44,7 @@ describe('Security & Logic Audit Tests', () => {
     },
     payment: {
       create: jest.fn(),
+      findFirst: jest.fn(),
       findUnique: jest.fn(),
       update: jest.fn(),
       updateMany: jest.fn(),
@@ -80,6 +82,7 @@ describe('Security & Logic Audit Tests', () => {
   const mockSocket = {
     emitNewOrder: jest.fn(),
     emitOrderStatusChange: jest.fn(),
+    emitToSite: jest.fn(),
     server: {
       emit: jest.fn(),
     },
@@ -149,7 +152,7 @@ describe('Security & Logic Audit Tests', () => {
     });
 
     it('should throw BadRequestException if order update has item.quantity <= 0', async () => {
-      mockPrisma.order.findUnique.mockResolvedValue({ id: 'order-1', status: 'PENDING' });
+      mockPrisma.order.findFirst.mockResolvedValue({ id: 'order-1', status: 'PENDING' });
 
       const updateData = {
         customerName: 'Jose Test',
@@ -180,7 +183,7 @@ describe('Security & Logic Audit Tests', () => {
     });
 
     it('should throw BadRequestException when CASHIER role tries to pay credit order with closed cash register', async () => {
-      mockPrisma.order.findUnique.mockResolvedValue({ id: 'order-1', paymentMethod: 'CREDIT', total: 5000 });
+      mockPrisma.order.findFirst.mockResolvedValue({ id: 'order-1', paymentMethod: 'CREDIT', total: 5000 });
       mockPrisma.user.findUnique.mockResolvedValue({ id: 'cashier-1', role: 'CASHIER' });
       mockPrisma.cashClosing.findFirst.mockResolvedValue(null); // No active closing
 
@@ -191,14 +194,15 @@ describe('Security & Logic Audit Tests', () => {
 
     it('should ALLOW ADMIN/SUPERADMIN role to confirm/reject/pay credit even with no active cash closing', async () => {
       mockPrisma.user.findUnique.mockResolvedValue({ id: 'admin-1', role: 'ADMIN' });
-      mockPrisma.payment.findUnique.mockResolvedValue({ id: 'payment-1', orderId: 'order-1' });
+      mockPrisma.payment.findFirst.mockResolvedValue({ id: 'payment-1', orderId: 'order-1' });
       mockPrisma.payment.update.mockResolvedValue({ id: 'payment-1', status: 'CONFIRMED' });
+      mockPrisma.order.findFirst.mockResolvedValue({ id: 'order-1', cashClosingId: null, cashRegisterId: null, orderType: 'LOCAL' });
       mockPrisma.order.update.mockResolvedValue({ id: 'order-1', paymentStatus: 'CONFIRMED' });
 
       const res = await paymentsService.confirmPayment('payment-1', 'admin-1');
       expect(res.status).toBe('CONFIRMED');
       expect(mockPrisma.cashClosing.findFirst).toHaveBeenCalledWith({
-        where: { userId: 'admin-1', isOpen: true },
+        where: { siteId: DEFAULT_SITE_ID, userId: 'admin-1', isOpen: true },
       });
     });
   });

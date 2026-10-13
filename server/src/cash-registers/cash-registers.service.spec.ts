@@ -1,11 +1,14 @@
 import { CashRegistersService } from './cash-registers.service';
+import { DEFAULT_SITE_ID } from '../common/multisite.constants';
+
+const SECOND_SITE_ID = '00000000-0000-4000-8000-000000000102';
 
 describe('CashRegistersService delivery isolation', () => {
   it('summarizes only orders linked to the open delivery shift', async () => {
     const shiftStart = new Date('2026-09-05T17:00:00.000Z');
     const prisma: any = {
       cashRegister: {
-        findUnique: jest.fn().mockResolvedValue({ id: 'delivery-register', purpose: 'DELIVERY' }),
+        findFirst: jest.fn().mockResolvedValue({ id: 'delivery-register', purpose: 'DELIVERY' }),
       },
       cashClosing: {
         findFirst: jest.fn().mockResolvedValue({
@@ -27,7 +30,7 @@ describe('CashRegistersService delivery isolation', () => {
       },
       expense: { findMany: jest.fn().mockResolvedValue([]) },
     };
-    const socket: any = { server: { emit: jest.fn() } };
+    const socket: any = { emitToSite: jest.fn() };
     const service = new CashRegistersService(prisma, socket);
 
     const summary = await service.getSummary('delivery-register');
@@ -35,6 +38,7 @@ describe('CashRegistersService delivery isolation', () => {
     expect(prisma.order.updateMany).not.toHaveBeenCalled();
     expect(prisma.order.findMany).toHaveBeenCalledWith({
       where: {
+        siteId: DEFAULT_SITE_ID,
         cashClosingId: 'delivery-shift',
         cashRegisterId: 'delivery-register',
         orderType: { in: ['DELIVERY', 'PICKUP'] },
@@ -62,12 +66,12 @@ describe('CashRegistersService delivery isolation', () => {
   it('keeps the required delivery register active and preserves its history', async () => {
     const prisma: any = {
       cashRegister: {
-        findUnique: jest.fn().mockResolvedValue({ id: 'delivery-register', purpose: 'DELIVERY', active: true }),
+        findFirst: jest.fn().mockResolvedValue({ id: 'delivery-register', purpose: 'DELIVERY', active: true }),
         update: jest.fn(),
       },
       cashClosing: { findFirst: jest.fn() },
     };
-    const service = new CashRegistersService(prisma, { server: { emit: jest.fn() } } as any);
+    const service = new CashRegistersService(prisma, { emitToSite: jest.fn() } as any);
 
     await expect(service.remove('delivery-register')).rejects.toThrow('La Caja Domicilios es necesaria');
     expect(prisma.cashRegister.update).not.toHaveBeenCalled();
@@ -76,7 +80,7 @@ describe('CashRegistersService delivery isolation', () => {
   it('keeps a regular cash-register summary read-only when several registers are open', async () => {
     const prisma: any = {
       cashRegister: {
-        findUnique: jest.fn().mockResolvedValue({ id: 'regular-register', purpose: 'GENERAL' }),
+        findFirst: jest.fn().mockResolvedValue({ id: 'regular-register', purpose: 'GENERAL' }),
         findMany: jest.fn().mockResolvedValue([]),
       },
       cashClosing: {
@@ -97,7 +101,7 @@ describe('CashRegistersService delivery isolation', () => {
       diningTable: { updateMany: jest.fn() },
       expense: { findMany: jest.fn().mockResolvedValue([]) },
     };
-    const service = new CashRegistersService(prisma, { server: { emit: jest.fn() } } as any);
+    const service = new CashRegistersService(prisma, { emitToSite: jest.fn() } as any);
 
     await service.getSummary('regular-register');
 
@@ -105,7 +109,65 @@ describe('CashRegistersService delivery isolation', () => {
     expect(prisma.diningTable.updateMany).not.toHaveBeenCalled();
     expect(prisma.cashClosing.update).not.toHaveBeenCalled();
     expect(prisma.order.findMany).toHaveBeenCalledWith(expect.objectContaining({
-      where: expect.objectContaining({ orderType: 'LOCAL' }),
+      where: expect.objectContaining({ siteId: DEFAULT_SITE_ID, orderType: 'LOCAL' }),
+    }));
+  });
+
+  it('creates one delivery register per site and emits only to that site', async () => {
+    const created = { id: 'delivery-b', siteId: SECOND_SITE_ID, purpose: 'DELIVERY' };
+    const prisma: any = {
+      cashRegister: {
+        findFirst: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockResolvedValue(created),
+      },
+    };
+    const socket: any = { emitToSite: jest.fn() };
+    const service = new CashRegistersService(prisma, socket);
+
+    await expect(service.create({ name: 'Domicilios', purpose: 'DELIVERY' }, SECOND_SITE_ID)).resolves.toBe(created);
+    expect(prisma.cashRegister.findFirst).toHaveBeenCalledWith({
+      where: { siteId: SECOND_SITE_ID, purpose: 'DELIVERY', active: true },
+      select: { id: true },
+    });
+    expect(prisma.cashRegister.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ siteId: SECOND_SITE_ID, purpose: 'DELIVERY' }),
+    }));
+    expect(socket.emitToSite).toHaveBeenCalledWith(SECOND_SITE_ID, 'cashRegistersChanged');
+  });
+
+  it('does not expose a cash register from another site', async () => {
+    const prisma: any = {
+      cashRegister: { findFirst: jest.fn().mockResolvedValue(null) },
+    };
+    const service = new CashRegistersService(prisma, { emitToSite: jest.fn() } as any);
+
+    await expect(service.findOne('principal-register', SECOND_SITE_ID)).rejects.toThrow('Caja no encontrada');
+    expect(prisma.cashRegister.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: 'principal-register', siteId: SECOND_SITE_ID },
+    }));
+  });
+
+  it('rejects a manager without an active membership in the site', async () => {
+    const prisma: any = {
+      userSiteMembership: { findFirst: jest.fn().mockResolvedValue(null) },
+      cashRegister: { findFirst: jest.fn(), create: jest.fn() },
+    };
+    const service = new CashRegistersService(prisma, { emitToSite: jest.fn() } as any);
+
+    await expect(service.create({ name: 'Caja 2', managerId: 'manager-principal' }, SECOND_SITE_ID))
+      .rejects.toThrow('El responsable no pertenece a esta sede');
+    expect(prisma.cashRegister.create).not.toHaveBeenCalled();
+  });
+
+  it('filters manual sales by the active site', async () => {
+    const prisma: any = {
+      order: { findMany: jest.fn().mockResolvedValue([]) },
+    };
+    const service = new CashRegistersService(prisma, { emitToSite: jest.fn() } as any);
+
+    await service.getSummary('manual', undefined, SECOND_SITE_ID);
+    expect(prisma.order.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ siteId: SECOND_SITE_ID, cashRegisterId: null }),
     }));
   });
 });

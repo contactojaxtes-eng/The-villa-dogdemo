@@ -4,6 +4,7 @@ import { Activity, ArrowLeft, CheckCircle2, Database, HardDrive, Info, Loader2, 
 import { Card } from '@/components/ui/card'
 import { api } from '@/lib/api'
 import { alerts } from '@/lib/alerts'
+import { useAuth } from '@/hooks/useAuth'
 
 interface DbSize {
   total: string
@@ -32,6 +33,7 @@ interface TrafficDay {
 
 interface TrafficReport {
   days: TrafficDay[]
+  siteId: string
   note: string
   connections?: { users: number; sockets: number }
 }
@@ -84,6 +86,7 @@ const summarizeTraffic = (days: TrafficDay[]) => {
 const getErrorMessage = (error: unknown) => error instanceof Error ? error.message : 'No se pudo consultar el estado del sistema.'
 
 export default function MaintenancePage() {
+  const { activeSite } = useAuth()
   const [dbSize, setDbSize] = useState<DbSize | null>(null)
   const [loading, setLoading] = useState(true)
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
@@ -112,10 +115,14 @@ export default function MaintenancePage() {
       setTrafficError(true)
       alerts.error('No se pudo consultar el tráfico', getErrorMessage(error))
     })
-    .finally(() => setTrafficLoading(false)), [])
+    .finally(() => setTrafficLoading(false)), [activeSite?.id])
 
   useEffect(() => { void loadDbSize() }, [loadDbSize])
-  useEffect(() => { void loadTraffic() }, [loadTraffic])
+  useEffect(() => {
+    setTraffic(null)
+    setTrafficLoading(true)
+    void loadTraffic()
+  }, [loadTraffic])
 
   const selectedDays = useMemo(() => {
     const yesterdayUtc = utcDateOffset(todayUtc, -1)
@@ -151,7 +158,7 @@ export default function MaintenancePage() {
       </Card>
 
       <div className="grid gap-4 sm:grid-cols-3">
-        <Card className="rounded-2xl border-[var(--border-subtle)] bg-[var(--bg-panel)] p-4 shadow-sm"><div className="flex items-center gap-3"><span className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-500/10 text-emerald-600"><Database className="h-5 w-5" /></span><div><p className="text-[10px] font-black uppercase tracking-wider text-[var(--text-muted)]">Base de datos</p><p className="text-xl font-black text-[var(--text-primary)]">{dbSize?.total || (loading ? '…' : 'Sin datos')}</p></div></div></Card>
+        <Card className="rounded-2xl border-[var(--border-subtle)] bg-[var(--bg-panel)] p-4 shadow-sm"><div className="flex items-center gap-3"><span className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-500/10 text-emerald-600"><Database className="h-5 w-5" /></span><div><p className="text-[10px] font-black uppercase tracking-wider text-[var(--text-muted)]">Base de datos total</p><p className="text-xl font-black text-[var(--text-primary)]">{dbSize?.total || (loading ? '…' : 'Sin datos')}</p></div></div></Card>
         <Card className="rounded-2xl border-[var(--border-subtle)] bg-[var(--bg-panel)] p-4 shadow-sm"><div className="flex items-center gap-3"><span className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-500/10 text-blue-600"><Table2 className="h-5 w-5" /></span><div><p className="text-[10px] font-black uppercase tracking-wider text-[var(--text-muted)]">Tablas monitoreadas</p><p className="text-xl font-black text-[var(--text-primary)]">{dbSize?.tables.length ?? (loading ? '…' : 0)}</p></div></div></Card>
         <Card className="rounded-2xl border-[var(--border-subtle)] bg-[var(--bg-panel)] p-4 shadow-sm"><div className="flex items-center gap-3"><span className="flex h-10 w-10 items-center justify-center rounded-xl bg-[var(--accent)]/10 text-[var(--accent)]"><Activity className="h-5 w-5" /></span><div><p className="text-[10px] font-black uppercase tracking-wider text-[var(--text-muted)]">Última revisión</p><p className="text-sm font-black text-[var(--text-primary)]">{lastUpdated ? lastUpdated.toLocaleTimeString('es-CO') : 'Pendiente'}</p></div></div></Card>
       </div>
@@ -159,8 +166,8 @@ export default function MaintenancePage() {
       <Card className="overflow-hidden rounded-2xl border-[var(--border-subtle)] bg-[var(--bg-panel)] shadow-sm">
         <div className="flex flex-col gap-3 border-b border-[var(--border-subtle)] p-4 sm:flex-row sm:items-center sm:justify-between sm:p-5">
           <div>
-            <div className="flex items-center gap-2"><Wifi className="h-5 w-5 text-[var(--accent)]" /><h2 className="text-base font-black text-[var(--text-primary)]">Tráfico HTTP por ruta</h2></div>
-            <p className="mt-1 text-xs text-[var(--text-muted)]">Fechas UTC · El registro empieza al desplegar la medición; no reconstruye el tráfico anterior.</p>
+            <div className="flex items-center gap-2"><Wifi className="h-5 w-5 text-[var(--accent)]" /><h2 className="text-base font-black text-[var(--text-primary)]">Tráfico HTTP de {activeSite?.name || 'la sede activa'}</h2></div>
+            <p className="mt-1 text-xs text-[var(--text-muted)]">Fechas UTC · Cambia de sede desde el selector superior para consultar otra. El registro separado empieza al desplegar esta versión.</p>
           </div>
           <div className="flex flex-wrap gap-2" aria-label="Periodo de tráfico">
             {([['today', 'Hoy'], ['yesterday', 'Ayer'], ['seven', 'Últimos 7 días']] as const).map(([range, label]) => <button key={range} type="button" onClick={() => setTrafficRange(range)} aria-pressed={trafficRange === range} className={`rounded-xl px-3 py-2 text-xs font-black transition ${trafficRange === range ? 'bg-[var(--accent)] text-[var(--accent-fg)]' : 'border border-[var(--border-subtle)] bg-[var(--bg-elevated)] text-[var(--text-secondary)] hover:border-[var(--accent)]'}`}>{label}</button>)}
@@ -191,7 +198,7 @@ export default function MaintenancePage() {
       </Card>
 
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1.35fr)_minmax(300px,0.65fr)]">
-        <Card className="overflow-hidden rounded-2xl border-[var(--border-subtle)] bg-[var(--bg-panel)] shadow-sm"><div className="flex items-center justify-between border-b border-[var(--border-subtle)] p-5"><div><h2 className="text-base font-black text-[var(--text-primary)]">Uso por tabla</h2><p className="mt-1 text-xs text-[var(--text-muted)]">Las diez tablas que más almacenamiento ocupan.</p></div><Database className="h-5 w-5 text-[var(--text-muted)]" /></div><div className="p-4 sm:p-5">{loading ? <div className="flex items-center justify-center gap-2 py-12 text-xs font-bold text-[var(--text-muted)]"><Loader2 className="h-5 w-5 animate-spin text-[var(--accent)]" /> Consultando PostgreSQL…</div> : dbSize?.tables.length ? <div className="grid gap-2 sm:grid-cols-2">{dbSize.tables.map(row => <div key={row.table} className="flex items-center justify-between gap-3 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] px-3 py-3"><span className="flex min-w-0 items-center gap-2 text-xs font-bold text-[var(--text-secondary)]"><Table2 className="h-4 w-4 shrink-0 text-[var(--accent)]" /><span className="truncate">{row.table}</span></span><span className="shrink-0 text-xs font-black text-[var(--text-primary)]">{row.size}</span></div>)}</div> : <p className="py-12 text-center text-xs text-[var(--text-muted)]">No hay datos de almacenamiento para mostrar.</p>}</div></Card>
+        <Card className="overflow-hidden rounded-2xl border-[var(--border-subtle)] bg-[var(--bg-panel)] shadow-sm"><div className="flex items-center justify-between border-b border-[var(--border-subtle)] p-5"><div><h2 className="text-base font-black text-[var(--text-primary)]">Uso total por tabla</h2><p className="mt-1 text-xs text-[var(--text-muted)]">PostgreSQL informa el tamaño físico conjunto de todas las sedes.</p></div><Database className="h-5 w-5 text-[var(--text-muted)]" /></div><div className="p-4 sm:p-5">{loading ? <div className="flex items-center justify-center gap-2 py-12 text-xs font-bold text-[var(--text-muted)]"><Loader2 className="h-5 w-5 animate-spin text-[var(--accent)]" /> Consultando PostgreSQL…</div> : dbSize?.tables.length ? <div className="grid gap-2 sm:grid-cols-2">{dbSize.tables.map(row => <div key={row.table} className="flex items-center justify-between gap-3 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] px-3 py-3"><span className="flex min-w-0 items-center gap-2 text-xs font-bold text-[var(--text-secondary)]"><Table2 className="h-4 w-4 shrink-0 text-[var(--accent)]" /><span className="truncate">{row.table}</span></span><span className="shrink-0 text-xs font-black text-[var(--text-primary)]">{row.size}</span></div>)}</div> : <p className="py-12 text-center text-xs text-[var(--text-muted)]">No hay datos de almacenamiento para mostrar.</p>}</div></Card>
 
         <div className="space-y-4">
           <Card className="rounded-2xl border-emerald-500/20 bg-emerald-500/5 p-5 shadow-sm"><div className="flex items-start gap-3"><CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-emerald-600" /><div><h2 className="text-sm font-black text-[var(--text-primary)]">Protección activa</h2><p className="mt-1 text-xs leading-5 text-[var(--text-secondary)]">Este módulo es de solo lectura. No existe un botón para borrar la base de datos desde el panel.</p></div></div></Card>

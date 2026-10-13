@@ -30,6 +30,7 @@ export class OrdersController {
     @Query('chatSessionId') chatSessionId?: string,
     @Query('limit') limit?: string,
     @Query('compact') compact?: string,
+    @Request() req?: any,
   ) {
     return this.ordersService.findAll({
       status,
@@ -45,6 +46,7 @@ export class OrdersController {
       chatSessionId,
       limit: limit ? parseInt(limit, 10) : undefined,
       compact: compact === 'true',
+      siteId: req?.user?.siteId,
     });
   }
 
@@ -58,21 +60,27 @@ export class OrdersController {
     @Query('compact') compact?: string,
     @Request() req?: any,
   ) {
-    return this.ordersService.getActiveOrders(search, req?.user?.role, orderType, compact === 'true');
+    return this.ordersService.getActiveOrders(
+      search,
+      req?.user?.role,
+      orderType,
+      compact === 'true',
+      req?.user?.siteId,
+    );
   }
 
   @Get('stats/today')
   @Roles('ADMIN', 'SUPERADMIN', 'CASHIER')
   @UseGuards(RolesGuard)
   @ApiOperation({ summary: 'Estadísticas del día' })
-  getTodayStats() {
-    return this.ordersService.getTodayStats();
+  getTodayStats(@Request() req: any) {
+    return this.ordersService.getTodayStats(req.user.siteId);
   }
 
   @Get('dashboard-stats')
   @ApiOperation({ summary: 'Estadísticas para el dashboard' })
-  getDashboardStats(@Query('startDate') startDate?: string, @Query('endDate') endDate?: string) {
-    return this.ordersService.getDashboardStats(startDate, endDate);
+  getDashboardStats(@Query('startDate') startDate: string | undefined, @Query('endDate') endDate: string | undefined, @Request() req: any) {
+    return this.ordersService.getDashboardStats(startDate, endDate, req.user.siteId);
   }
 
   @Get('can-create')
@@ -80,15 +88,15 @@ export class OrdersController {
   @Permissions('orders.create', 'whatsapp.order_create')
   @ApiOperation({ summary: 'Verificar si se pueden crear pedidos (caja abierta)' })
   canCreate(@Request() req: any, @Query('orderType') orderType?: string) {
-    return this.ordersService.checkCanCreateOrders(req.user.id, req.user.role, orderType || 'DELIVERY');
+    return this.ordersService.checkCanCreateOrders(req.user.id, req.user.role, orderType || 'DELIVERY', req.user.siteId);
   }
 
   @Get('history/:phone')
   @UseGuards(PermissionsGuard)
   @Permissions('orders.view', 'whatsapp.view')
   @ApiOperation({ summary: 'Historial de pedidos por teléfono' })
-  getCustomerHistory(@Param('phone') phone: string) {
-    return this.ordersService.getCustomerHistory(phone);
+  getCustomerHistory(@Param('phone') phone: string, @Request() req: any) {
+    return this.ordersService.getCustomerHistory(phone, req.user.siteId);
   }
 
   @Get('history')
@@ -103,6 +111,7 @@ export class OrdersController {
     @Query('orderType') orderType?: string,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
+    @Request() req?: any,
   ) {
     return this.ordersService.findDeliveryHistory({
       status,
@@ -112,6 +121,7 @@ export class OrdersController {
       orderType: orderType || 'DELIVERY,PICKUP',
       page: page ? Number(page) : 1,
       limit: limit ? Number(limit) : 20,
+      siteId: req?.user?.siteId,
     });
   }
 
@@ -119,24 +129,24 @@ export class OrdersController {
   @UseGuards(PermissionsGuard)
   @Permissions('orders.view', 'dispatch.view', 'whatsapp.view')
   @ApiOperation({ summary: 'Buscar por número de orden' })
-  findByNumber(@Param('orderNumber') orderNumber: string) {
-    return this.ordersService.findByNumber(parseInt(orderNumber));
+  findByNumber(@Param('orderNumber') orderNumber: string, @Request() req: any) {
+    return this.ordersService.findByNumber(parseInt(orderNumber), req.user.siteId);
   }
 
   @Get('cancellations/pending')
   @Roles('ADMIN', 'SUPERADMIN', 'CASHIER')
   @UseGuards(RolesGuard)
   @ApiOperation({ summary: 'Listar pedidos con cancelación pendiente de aprobación' })
-  listPendingCancellations() {
-    return this.ordersService.listPendingCancellations();
+  listPendingCancellations(@Request() req: any) {
+    return this.ordersService.listPendingCancellations(req.user.siteId);
   }
 
   @Get(':id')
   @UseGuards(PermissionsGuard)
   @Permissions('orders.view', 'dispatch.view', 'whatsapp.view')
   @ApiOperation({ summary: 'Obtener pedido por ID' })
-  findOne(@Param('id') id: string) {
-    return this.ordersService.findOne(id);
+  findOne(@Param('id') id: string, @Request() req: any) {
+    return this.ordersService.findOne(id, req.user.siteId);
   }
 
   @Post()
@@ -150,6 +160,7 @@ export class OrdersController {
       assignedTo: body.assignedTo || req.user?.id,
       userId: req.user?.id,
       userRole: req.user?.role,
+      siteId: req.user?.siteId,
     });
   }
 
@@ -241,14 +252,14 @@ export class OrdersController {
   @Permissions('orders.edit', 'dispatch.change_status')
   @UseGuards(PermissionsGuard)
   @ApiOperation({ summary: 'Asignar operador al pedido' })
-  assignOperator(@Param('id') id: string, @Body() body: { operatorId: string | null; operatorName: string | null }) {
-    return this.ordersService.assignOperator(id, body.operatorId, body.operatorName);
+  assignOperator(@Param('id') id: string, @Body() body: { operatorId: string | null; operatorName: string | null }, @Request() req: any) {
+    return this.ordersService.assignOperator(id, body.operatorId, body.operatorName, req.user.siteId);
   }
 
   @Put(':id/rate')
   @ApiOperation({ summary: 'Calificar pedido' })
-  rateOrder(@Param('id') id: string, @Body('rating') rating: number) {
-    return this.ordersService.rateOrder(id, rating);
+  rateOrder(@Param('id') id: string, @Body('rating') rating: number, @Request() req: any) {
+    return this.ordersService.rateOrder(id, rating, req.user.siteId);
   }
 
   @Put(':id/payment')

@@ -12,6 +12,8 @@
  * NO compatible: Firefox, Safari
  */
 
+import { DEFAULT_SITE_ID } from './multisite'
+
 export interface UsbPrinterState {
   supported: boolean
   connected: boolean
@@ -21,14 +23,128 @@ export interface UsbPrinterState {
   error: string | null
 }
 
-// Dynamic devices for USB printers (persist during the browser session)
+interface UsbDeviceBinding {
+  vendorId: number | null
+  productId: number | null
+  serialNumber: string | null
+  productName: string | null
+  manufacturerName: string | null
+}
+
+const USB_BINDINGS_STORAGE_KEY = 'the_villa_dog_usb_bindings_v1'
+
+// Dynamic devices for USB printers (persist during the browser session). The
+// key includes the site so changing sites can never reuse a device from another
+// restaurant by accident.
 const usbDevices: Record<string, any> = {}
+let activeUsbSiteScope = DEFAULT_SITE_ID
+let activeUsbOperational = false
+let usbContextVersion = 0
+
+function normalizeSiteScope(siteId?: string | null) {
+  const value = String(siteId || '').trim()
+  return value || DEFAULT_SITE_ID
+}
+
+function scopedTargetKey(target: string, siteId = activeUsbSiteScope) {
+  return `${normalizeSiteScope(siteId)}:${String(target || '').trim()}`
+}
+
+function readUsbBindings(): Record<string, UsbDeviceBinding> {
+  if (typeof window === 'undefined') return {}
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(USB_BINDINGS_STORAGE_KEY) || '{}')
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {}
+  } catch {
+    return {}
+  }
+}
+
+function writeUsbBindings(bindings: Record<string, UsbDeviceBinding>) {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem(USB_BINDINGS_STORAGE_KEY, JSON.stringify(bindings))
+  } catch {
+    // La impresión sigue funcionando durante la sesión aunque el navegador
+    // tenga el almacenamiento local bloqueado.
+  }
+}
+
+function bindingFromDevice(device: any): UsbDeviceBinding {
+  return {
+    vendorId: Number.isFinite(device?.vendorId) ? Number(device.vendorId) : null,
+    productId: Number.isFinite(device?.productId) ? Number(device.productId) : null,
+    serialNumber: device?.serialNumber ? String(device.serialNumber) : null,
+    productName: device?.productName ? String(device.productName) : null,
+    manufacturerName: device?.manufacturerName ? String(device.manufacturerName) : null,
+  }
+}
+
+function deviceMatchesBinding(device: any, binding: UsbDeviceBinding) {
+  if (binding.vendorId !== null && Number(device?.vendorId) !== binding.vendorId) return false
+  if (binding.productId !== null && Number(device?.productId) !== binding.productId) return false
+  if (binding.serialNumber) return String(device?.serialNumber || '') === binding.serialNumber
+  if (binding.productName && device?.productName) {
+    return String(device.productName) === binding.productName
+  }
+  return true
+}
+
+function rememberDeviceBinding(target: string, device: any, siteId = activeUsbSiteScope) {
+  const bindings = readUsbBindings()
+  bindings[scopedTargetKey(target, siteId)] = bindingFromDevice(device)
+  writeUsbBindings(bindings)
+}
+
+function forgetDeviceBinding(target: string, siteId = activeUsbSiteScope) {
+  const bindings = readUsbBindings()
+  delete bindings[scopedTargetKey(target, siteId)]
+  writeUsbBindings(bindings)
+}
+
+function captureUsbContext() {
+  return {
+    siteId: activeUsbSiteScope,
+    operational: activeUsbOperational,
+    version: usbContextVersion,
+  }
+}
+
+function isUsbContextCurrent(context: ReturnType<typeof captureUsbContext>) {
+  return (
+    context.version === usbContextVersion &&
+    context.siteId === activeUsbSiteScope &&
+    context.operational === activeUsbOperational
+  )
+}
+
+/** Selects the active site and whether it may perform operational USB work. */
+export function setUsbPrinterSiteScope(siteId?: string | null, operational = true) {
+  const nextSiteId = normalizeSiteScope(siteId)
+  if (nextSiteId !== activeUsbSiteScope || operational !== activeUsbOperational) {
+    activeUsbSiteScope = nextSiteId
+    activeUsbOperational = operational
+    usbContextVersion += 1
+  }
+}
+
+/** Disables USB only when the component being cleaned up still owns the scope. */
+export function disableUsbPrinterSiteScope(siteId?: string | null) {
+  const expectedSiteId = normalizeSiteScope(siteId)
+  if (expectedSiteId !== activeUsbSiteScope || !activeUsbOperational) return
+  activeUsbOperational = false
+  usbContextVersion += 1
+}
 
 export function isWebUsbSupported(): boolean {
   return typeof navigator !== 'undefined' && 'usb' in navigator
 }
 
 export async function connectUsbPrinter(target: string): Promise<{ ok: boolean; name?: string; error?: string }> {
+  const context = captureUsbContext()
+  if (!context.operational) {
+    return { ok: false, error: 'La impresión USB no está disponible mientras la sede está en preparación.' }
+  }
   if (!isWebUsbSupported()) {
     return { ok: false, error: 'WebUSB no soportado en este navegador. Usa Chrome o Edge.' }
   }
@@ -78,12 +194,17 @@ export async function connectUsbPrinter(target: string): Promise<{ ok: boolean; 
       } catch {}
     }
 
-    usbDevices[target] = device
+    if (!isUsbContextCurrent(context)) {
+      return { ok: false, error: 'La sede cambió durante la conexión. Vuelve a seleccionar la impresora.' }
+    }
+
+    usbDevices[scopedTargetKey(target, context.siteId)] = device
+    rememberDeviceBinding(target, device, context.siteId)
 
     const name = device.productName || device.manufacturerName || 'Impresora USB'
     return { ok: true, name }
   } catch (err: any) {
-    delete usbDevices[target]
+    delete usbDevices[scopedTargetKey(target, context.siteId)]
     if (err.name === 'NotFoundError') {
       return { ok: false, error: 'No se seleccionó ningún dispositivo' }
     }
@@ -92,25 +213,42 @@ export async function connectUsbPrinter(target: string): Promise<{ ok: boolean; 
 }
 
 export async function disconnectUsbPrinter(target: string): Promise<void> {
-  const device = usbDevices[target]
+  const context = captureUsbContext()
+  if (!context.operational) return
+  const key = scopedTargetKey(target, context.siteId)
+  const device = usbDevices[key]
   if (device) {
-    try {
-      await device.close()
-    } catch { /* ignorar */ }
-    delete usbDevices[target]
+    delete usbDevices[key]
+    const stillUsed = Object.values(usbDevices).some(candidate => candidate === device)
+    if (!stillUsed) {
+      try {
+        await device.close()
+      } catch { /* ignorar */ }
+    }
   }
+  forgetDeviceBinding(target, context.siteId)
 }
 
 export function getUsbDevice(target: string): any {
-  if (usbDevices[target] && usbDevices[target].opened) {
-    return usbDevices[target]
+  if (!activeUsbOperational) return null
+  const siteId = activeUsbSiteScope
+  const key = scopedTargetKey(target, siteId)
+  if (usbDevices[key] && usbDevices[key].opened) {
+    return usbDevices[key]
   }
-  // Fallback: Si no hay dispositivo específico para este target, buscar cualquier impresora USB conectada y abierta
-  const available = Object.values(usbDevices).find((d: any) => d && d.opened)
-  if (available) {
-    return available
+
+  // Compatibilidad con la sede principal: antes de multisede se reutilizaba la
+  // única impresora abierta para cualquier target. Las sedes adicionales exigen
+  // una vinculación explícita y nunca usan este fallback.
+  if (siteId === DEFAULT_SITE_ID) {
+    const prefix = `${siteId}:`
+    const available = Object.entries(usbDevices).find(
+      ([deviceKey, device]: [string, any]) => deviceKey.startsWith(prefix) && device?.opened,
+    )?.[1]
+    if (available) return available
   }
-  return usbDevices[target] || null
+
+  return usbDevices[key] || null
 }
 
 /**
@@ -123,26 +261,45 @@ export function getUsbDevice(target: string): any {
  */
 export async function autoReconnectUsbDevices(targets: string[] = ['caja', 'cocina', 'bar']): Promise<Record<string, string>> {
   const reconnected: Record<string, string> = {}
+  const context = captureUsbContext()
 
+  if (!context.operational) return reconnected
   if (!isWebUsbSupported()) return reconnected
 
   try {
     // getDevices() devuelve SOLO dispositivos previamente autorizados por el usuario
     const devices = await (navigator as any).usb.getDevices()
     if (!devices || devices.length === 0) return reconnected
+    if (!isUsbContextCurrent(context)) return reconnected
+
+    const bindings = readUsbBindings()
 
     for (const target of targets) {
+      if (!isUsbContextCurrent(context)) return reconnected
+      const key = scopedTargetKey(target, context.siteId)
       // Si ya está conectado, solo verificar que sigue vivo
-      if (usbDevices[target]) {
+      if (usbDevices[key]) {
         try {
-          if (usbDevices[target].opened) {
-            reconnected[target] = usbDevices[target].productName || usbDevices[target].manufacturerName || 'Impresora USB'
+          if (usbDevices[key].opened) {
+            reconnected[target] = usbDevices[key].productName || usbDevices[key].manufacturerName || 'Impresora USB'
             continue
           }
         } catch { /* dispositivo muerto, intentar reconectar */ }
       }
 
-      for (const device of devices) {
+      const savedBinding = bindings[key]
+      // La sede principal conserva el auto-enlace histórico. Una sede nueva solo
+      // puede reconectar un dispositivo que el usuario vinculó allí antes.
+      const matches = savedBinding
+        ? devices.filter((device: any) => deviceMatchesBinding(device, savedBinding))
+        : []
+      const candidates = context.siteId === DEFAULT_SITE_ID
+        ? [...matches, ...devices.filter((device: any) => !matches.includes(device))]
+        : savedBinding?.serialNumber
+          ? matches
+          : []
+
+      for (const device of candidates) {
         try {
           if (!device.opened) {
             await device.open()
@@ -179,7 +336,9 @@ export async function autoReconnectUsbDevices(targets: string[] = ['caja', 'coci
             } catch {}
           }
 
-          usbDevices[target] = device
+          if (!isUsbContextCurrent(context)) return reconnected
+          usbDevices[key] = device
+          rememberDeviceBinding(target, device, context.siteId)
           const name = device.productName || device.manufacturerName || 'Impresora USB'
           reconnected[target] = name
           console.log(`[WebUSB] ✓ Reconectado automáticamente: ${target} → ${name}`)
@@ -197,9 +356,16 @@ export async function autoReconnectUsbDevices(targets: string[] = ['caja', 'coci
 }
 
 export async function printUsb(data: Uint8Array, target: string): Promise<{ ok: boolean; error?: string }> {
+  const context = captureUsbContext()
+  if (!context.operational) {
+    return { ok: false, error: 'La impresión USB no está disponible mientras la sede está en preparación.' }
+  }
   let device = getUsbDevice(target)
   if (!device || !device.opened) {
     await autoReconnectUsbDevices([target, 'caja', 'cocina', 'bar'])
+    if (!isUsbContextCurrent(context)) {
+      return { ok: false, error: 'La sede cambió antes de imprimir. Intenta nuevamente.' }
+    }
     device = getUsbDevice(target)
   }
 
@@ -208,6 +374,9 @@ export async function printUsb(data: Uint8Array, target: string): Promise<{ ok: 
   }
 
   try {
+    if (!isUsbContextCurrent(context)) {
+      return { ok: false, error: 'La sede cambió antes de imprimir. Intenta nuevamente.' }
+    }
     if (!device.opened) {
       await device.open()
     }
@@ -251,19 +420,28 @@ export async function printUsb(data: Uint8Array, target: string): Promise<{ ok: 
       // Ya reclamada por la sesión actual
     }
 
+    if (!isUsbContextCurrent(context)) {
+      return { ok: false, error: 'La sede cambió antes de imprimir. Intenta nuevamente.' }
+    }
     await device.transferOut(endpointNumber, data)
     return { ok: true }
   } catch (err: any) {
     // Reintento con interfaz 0 en caso de que la impresora use endpoints genéricos
     try {
+      if (!isUsbContextCurrent(context)) {
+        return { ok: false, error: 'La sede cambió antes de imprimir. Intenta nuevamente.' }
+      }
       if (!device.opened) await device.open()
       if (device.configuration === null) await device.selectConfiguration(1)
       try { await device.claimInterface(0) } catch {}
+      if (!isUsbContextCurrent(context)) {
+        return { ok: false, error: 'La sede cambió antes de imprimir. Intenta nuevamente.' }
+      }
       await device.transferOut(1, data)
       return { ok: true }
     } catch (retryErr: any) {
       if (err.name === 'NotFoundError' || err.name === 'InvalidStateError') {
-        delete usbDevices[target]
+        delete usbDevices[scopedTargetKey(target, context.siteId)]
       }
       return { ok: false, error: err.message || 'Error enviando datos a la impresora' }
     }

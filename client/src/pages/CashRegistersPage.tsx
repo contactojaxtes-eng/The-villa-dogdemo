@@ -84,6 +84,7 @@ const itemVariants = {
 
 export default function CashRegistersPage() {
   const { user, hasRole } = useAuth()
+  const preparationMode = user?.activeSite?.preparationMode === true
   const isAdmin = hasRole('SUPERADMIN', 'ADMIN')
   const [registers, setRegisters] = useState<CashRegister[]>([])
   const [users, setUsers] = useState<UserOption[]>([])
@@ -127,12 +128,14 @@ export default function CashRegistersPage() {
       setUsers(usrs.filter(u => u.active !== false && ['CASHIER', 'ADMIN', 'SUPERADMIN', 'DELIVERY_MANAGER', 'DISPATCHER'].includes(u.role)))
 
       const sums: Record<string, Summary> = {}
-      for (const r of regs) {
-        try {
-          const s = await api.get<Summary>(`/cash-registers/${r.id}/summary`, { force: true })
-          if (s) sums[r.id] = s
-        } catch (err) {
-          console.error(`Error cargando sumario de caja ${r.id}:`, err)
+      if (!preparationMode) {
+        for (const r of regs) {
+          try {
+            const s = await api.get<Summary>(`/cash-registers/${r.id}/summary`, { force: true })
+            if (s) sums[r.id] = s
+          } catch (err) {
+            console.error(`Error cargando sumario de caja ${r.id}:`, err)
+          }
         }
       }
       setSummaries(sums)
@@ -145,6 +148,8 @@ export default function CashRegistersPage() {
 
   useEffect(() => {
     load().catch(console.error)
+
+    if (preparationMode) return
 
     const socketUrl = import.meta.env.VITE_API_URL || window.location.origin
     const socket = io(`${socketUrl}/the-villa-dog`, {
@@ -174,7 +179,7 @@ export default function CashRegistersPage() {
     return () => {
       socket.disconnect()
     }
-  }, [])
+  }, [preparationMode])
 
   const handleSave = async () => {
     if (!form.name.trim()) {
@@ -411,7 +416,7 @@ export default function CashRegistersPage() {
               const openClosing = reg.closings.find(c => c.isOpen)
               const isOpen = !!openClosing
               const isOperator = openClosing?.user?.id === user?.id
-          const canOperate = isAdmin || (isOpen ? isOperator : user?.role === 'CASHIER')
+          const canOperate = !preparationMode && (isAdmin || (isOpen ? isOperator : user?.role === 'CASHIER'))
 
           return (
             <motion.div key={reg.id} variants={itemVariants}>
@@ -866,13 +871,15 @@ export default function CashRegistersPage() {
                 <Label className="text-xs uppercase font-extrabold tracking-wider text-[var(--text-secondary)]">
                   Cajero Encargado (Opcional)
                 </Label>
-                <button
-                  type="button"
-                  className="text-xs font-bold text-[var(--accent)] hover:underline"
-                  onClick={() => setIsCreatingNewUser(!isCreatingNewUser)}
-                >
-                  {isCreatingNewUser ? 'Seleccionar existente' : '➕ Crear nuevo usuario'}
-                </button>
+                {!preparationMode && (
+                  <button
+                    type="button"
+                    className="text-xs font-bold text-[var(--accent)] hover:underline"
+                    onClick={() => setIsCreatingNewUser(!isCreatingNewUser)}
+                  >
+                    {isCreatingNewUser ? 'Seleccionar existente' : '➕ Crear nuevo usuario'}
+                  </button>
+                )}
               </div>
 
               {!isCreatingNewUser ? (

@@ -35,6 +35,7 @@ import { alerts } from '@/lib/alerts'
 import { io } from '@/lib/socket'
 import { playUrgentBell } from '@/lib/sound'
 import { toast } from 'sonner'
+import { useAuth } from '@/hooks/useAuth'
 
 interface Category {
   id: string
@@ -68,6 +69,8 @@ interface Station {
 }
 
 export default function KitchenStationsPage() {
+  const { user } = useAuth()
+  const preparationMode = user?.activeSite?.preparationMode === true
   const [stations, setStations] = useState<Station[]>([])
   const [categories, setCategories] = useState<Category[]>([])
   const [users, setUsers] = useState<User[]>([])
@@ -113,7 +116,9 @@ export default function KitchenStationsPage() {
         api.get<any[]>('/menu/categories?includeInactive=true'),
         api.get<User[]>('/users'),
         api.get<any>('/kitchen/settings').catch(() => ({ smartDrinkRouting: true, splitByChannel: true })),
-        api.get<Record<string, CookStatus>>('/kitchen/cooks/status').catch(() => ({})),
+        preparationMode
+          ? Promise.resolve({} as Record<string, CookStatus>)
+          : api.get<Record<string, CookStatus>>('/kitchen/cooks/status').catch(() => ({})),
       ])
       const stationChannels = settings?.stationChannels || {}
       setStations((sts || []).filter(station => {
@@ -144,6 +149,7 @@ export default function KitchenStationsPage() {
 
   // Socket en tiempo real para cambios de disponibilidad y fin de descansos
   useEffect(() => {
+    if (preparationMode) return
     const socketUrl = import.meta.env.VITE_API_URL || window.location.origin
     const socket = io(`${socketUrl}/the-villa-dog`, {
       transports: ['websocket', 'polling'],
@@ -166,10 +172,11 @@ export default function KitchenStationsPage() {
     })
 
     return () => { socket.disconnect() }
-  }, [])
+  }, [preparationMode])
 
   // Contador regresivo en tiempo real cada 1 segundo
   useEffect(() => {
+    if (preparationMode) return
     const interval = setInterval(() => {
       const current = Date.now()
       setNow(current)
@@ -196,7 +203,7 @@ export default function KitchenStationsPage() {
       })
     }, 1000)
     return () => clearInterval(interval)
-  }, [cookStatuses, users])
+  }, [cookStatuses, preparationMode, users])
 
   const getRemainingSeconds = (breakUntil?: number | null) => {
     if (!breakUntil) return 0
@@ -713,6 +720,7 @@ export default function KitchenStationsPage() {
                                   ) : (
                                     <button
                                       type="button"
+                                      disabled={preparationMode}
                                       onClick={() => toggleCookActive(u.id, isActive)}
                                       title={isActive ? 'Clic para desactivar (no recibirá pedidos)' : 'Clic para activar (recibirá pedidos)'}
                                       className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black transition cursor-pointer ${
@@ -760,6 +768,7 @@ export default function KitchenStationsPage() {
                                     </span>
                                     <button
                                       type="button"
+                                      disabled={preparationMode}
                                       onClick={() => openBreakModal(u)}
                                       className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-orange-500/10 hover:bg-orange-500 hover:text-white text-orange-600 dark:text-orange-400 font-bold transition cursor-pointer shrink-0 text-[10px]"
                                       title="Programar tiempo de cena o descanso"
@@ -782,13 +791,17 @@ export default function KitchenStationsPage() {
                 {/* Abrir pantalla */}
                 <div className="border-t border-[var(--border-subtle)] bg-[var(--bg-elevated)]/60 px-4 py-3 flex items-center justify-between">
                   <span className="text-[11px] text-[var(--text-muted)]">Pantalla KDS</span>
-                  <Link
-                    to={`/kitchen?station=${station.id}`}
-                    className="inline-flex items-center gap-1 rounded-lg border border-[var(--border-default)] bg-[var(--bg-panel)] px-2.5 py-1.5 text-[11px] font-black text-[var(--text-primary)] transition hover:bg-[var(--text-primary)] hover:text-[var(--bg-panel)]"
-                  >
-                    <span>Abrir Cocina</span>
-                    <ExternalLink className="h-3 w-3" />
-                  </Link>
+                  {preparationMode ? (
+                    <span className="rounded-lg border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-[10px] font-bold text-amber-800">Disponible al activar la sede</span>
+                  ) : (
+                    <Link
+                      to={`/kitchen?station=${station.id}`}
+                      className="inline-flex items-center gap-1 rounded-lg border border-[var(--border-default)] bg-[var(--bg-panel)] px-2.5 py-1.5 text-[11px] font-black text-[var(--text-primary)] transition hover:bg-[var(--text-primary)] hover:text-[var(--bg-panel)]"
+                    >
+                      <span>Abrir Cocina</span>
+                      <ExternalLink className="h-3 w-3" />
+                    </Link>
+                  )}
                 </div>
               </div>
             )

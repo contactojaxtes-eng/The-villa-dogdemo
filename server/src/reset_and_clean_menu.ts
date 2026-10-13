@@ -2,14 +2,40 @@ import { PrismaClient } from '@prisma/client';
 
 const prisma = new PrismaClient();
 
+const targetSiteId = String(process.env.TARGET_SITE_ID || '').trim();
+
+function requireTargetSite() {
+  if (!targetSiteId) {
+    throw new Error(
+      'Define TARGET_SITE_ID. La limpieza de menú nunca puede ejecutarse globalmente.',
+    );
+  }
+}
+
 async function resetCleanMenu() {
-  console.log('🧹 Limpiando y eliminando por completo todas las categorías y productos antiguos...');
+  requireTargetSite();
+  const site = await prisma.site.findUnique({
+    where: { id: targetSiteId },
+    select: { id: true, name: true },
+  });
+  if (!site) throw new Error(`La sede ${targetSiteId} no existe.`);
+
+  console.log(`🧹 Limpiando categorías y productos antiguos de ${site.name}...`);
+
+  const targetItems = await prisma.menuItem.findMany({
+    where: { siteId: targetSiteId },
+    select: { id: true },
+  });
+  const targetItemIds = targetItems.map((item) => item.id);
 
   // 1. Eliminar recetas vinculadas
-  await prisma.recipe.deleteMany({});
+  await prisma.recipe.deleteMany({
+    where: { menuItemId: { in: targetItemIds } },
+  });
 
   // 2. Obtener IDs de MenuItems usados en órdenes históricas
   const orderItems = await prisma.orderItem.findMany({
+    where: { menuItemId: { in: targetItemIds } },
     select: { menuItemId: true }
   });
   const usedMenuItemIds = Array.from(new Set(orderItems.map(oi => oi.menuItemId).filter(Boolean))) as string[];
@@ -19,6 +45,7 @@ async function resetCleanMenu() {
   // 3. Eliminar FÍSICAMENTE todos los MenuItems no usados en ventas
   const deletedItems = await prisma.menuItem.deleteMany({
     where: {
+      siteId: targetSiteId,
       id: { notIn: usedMenuItemIds }
     }
   });
@@ -26,7 +53,7 @@ async function resetCleanMenu() {
 
   // 4. Marcar como INACTIVOS y remover códigos únicos de los pocos MenuItems históricos que están en ventas pasadas
   await prisma.menuItem.updateMany({
-    where: { id: { in: usedMenuItemIds } },
+    where: { siteId: targetSiteId, id: { in: usedMenuItemIds } },
     data: {
       active: false,
       code: null // para evitar duplicación de códigos únicos con el nuevo menú
@@ -35,12 +62,14 @@ async function resetCleanMenu() {
 
   // 5. Eliminar FÍSICAMENTE todas las categorías que ya no tengan ítems activos o vinculados
   const itemsWithCats = await prisma.menuItem.findMany({
+    where: { siteId: targetSiteId },
     select: { categoryId: true }
   });
   const remainingCatIds = Array.from(new Set(itemsWithCats.map(i => i.categoryId).filter(Boolean))) as string[];
 
   const deletedCats = await prisma.menuCategory.deleteMany({
     where: {
+      siteId: targetSiteId,
       id: { notIn: remainingCatIds }
     }
   });
@@ -48,7 +77,7 @@ async function resetCleanMenu() {
 
   // Marcar inactivas las categorías que hayan quedado con referencias históricas
   await prisma.menuCategory.updateMany({
-    where: { id: { in: remainingCatIds } },
+    where: { siteId: targetSiteId, id: { in: remainingCatIds } },
     data: { active: false }
   });
 

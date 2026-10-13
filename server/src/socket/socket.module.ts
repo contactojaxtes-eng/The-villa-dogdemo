@@ -1,10 +1,10 @@
-import { JwtModule } from '@nestjs/jwt';
 import { Module } from '@nestjs/common';
 import { SocketGateway } from './socket.gateway';
 import { DeliveryDriverGateway } from './delivery-driver.gateway';
+import { AuthModule } from '../auth/auth.module';
 
 @Module({
-  imports: [JwtModule.register({})],
+  imports: [AuthModule],
   providers: [SocketGateway, DeliveryDriverGateway],
   exports: [SocketGateway, DeliveryDriverGateway],
 })

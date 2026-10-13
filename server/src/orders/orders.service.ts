@@ -10,6 +10,7 @@ import { TablesService } from '../tables/tables.service';
 import { DeliveryDriversService } from '../delivery-drivers/delivery-drivers.service';
 import { dashboardRange } from './dashboard-range';
 import { PrintQueueSignalService } from '../print/print-queue-signal.service';
+import { DEFAULT_SITE_ID } from '../common/multisite.constants';
 
 type OrderListParams = {
   status?: string;
@@ -26,6 +27,7 @@ type OrderListParams = {
   page?: number;
   limit?: number;
   compact?: boolean;
+  siteId?: string;
 };
 
 @Injectable()
@@ -115,26 +117,33 @@ export class OrdersService implements OnModuleInit {
     try {
       const nullInvoiceOrders = await this.prisma.order.findMany({
         where: { invoiceNumber: null },
-        orderBy: { createdAt: 'asc' },
+        orderBy: [{ siteId: 'asc' }, { createdAt: 'asc' }],
       });
 
       if (nullInvoiceOrders.length === 0) return;
 
-      const maxInvoiceOrder = await this.prisma.order.findFirst({
-        where: { invoiceNumber: { not: null } },
-        orderBy: { invoiceNumber: 'desc' },
-      });
-
-      let currentInvoice = maxInvoiceOrder?.invoiceNumber || 0;
-
+      const ordersBySite = new Map<string, typeof nullInvoiceOrders>();
       for (const order of nullInvoiceOrders) {
-        currentInvoice++;
-        await this.prisma.order.update({
-          where: { id: order.id },
-          data: { invoiceNumber: currentInvoice },
-        });
+        const siteOrders = ordersBySite.get(order.siteId) || [];
+        siteOrders.push(order);
+        ordersBySite.set(order.siteId, siteOrders);
       }
-      this.logger.log(`✅ Asignados consecutivos de factura a ${nullInvoiceOrders.length} pedidos. Última factura: #${currentInvoice}`);
+
+      for (const [siteId, siteOrders] of ordersBySite) {
+        const maxInvoiceOrder = await this.prisma.order.findFirst({
+          where: { siteId, invoiceNumber: { not: null } },
+          orderBy: { invoiceNumber: 'desc' },
+        });
+        let currentInvoice = maxInvoiceOrder?.invoiceNumber || 0;
+        for (const order of siteOrders) {
+          currentInvoice++;
+          await this.prisma.order.update({
+            where: { id: order.id },
+            data: { invoiceNumber: currentInvoice },
+          });
+        }
+        this.logger.log(`Asignados ${siteOrders.length} consecutivos de factura en sede ${siteId}. Última factura: #${currentInvoice}`);
+      }
     } catch (err) {
       this.logger.error('Error al backfillear números de factura:', err);
     }
@@ -187,11 +196,16 @@ export class OrdersService implements OnModuleInit {
     try {
       // 1. Si la orden tiene chatSessionId directo, enviar DIRECTAMENTE a esa sesión sin crear nada nuevo
       if (order.chatSessionId) {
-        const session = await this.prisma.whatsAppSession.findUnique({
-          where: { id: order.chatSessionId },
+        const session = await this.prisma.whatsAppSession.findFirst({
+          where: { id: order.chatSessionId, siteId: order.siteId || DEFAULT_SITE_ID },
         });
         if (session) {
-          await this.whatsappService.sendDirectToSession(session.id, text, order.id);
+          await this.whatsappService.sendDirectToSession(
+            session.id,
+            text,
+            order.id,
+            order.siteId || DEFAULT_SITE_ID,
+          );
           return;
         }
       }
@@ -202,6 +216,7 @@ export class OrdersService implements OnModuleInit {
       if (p10 && p10 !== '3000000000' && p10 !== '0000000000') {
         const session = await this.prisma.whatsAppSession.findFirst({
           where: {
+            siteId: order.siteId || DEFAULT_SITE_ID,
             OR: [order.customerPhone, p10, `57${p10}`, `+57${p10}`]
               .filter(Boolean)
               .map(phone => ({ phone })),
@@ -209,14 +224,27 @@ export class OrdersService implements OnModuleInit {
           orderBy: { lastMessageAt: 'desc' }
         });
         if (session) {
-          await this.whatsappService.sendDirectToSession(session.id, text);
+          await this.whatsappService.sendDirectToSession(
+            session.id,
+            text,
+            undefined,
+            order.siteId || DEFAULT_SITE_ID,
+          );
           return;
         }
       }
 
       // 3. Fallback: Si no existe sesión previa en la BD, enviar al número de teléfono
       if (this.isSendableWhatsAppPhone(order.customerPhone, order.orderType, order.customerName, order.tableId)) {
-        await this.whatsappService.sendMessage(order.customerPhone, text);
+        await this.whatsappService.sendMessage(
+          order.customerPhone,
+          text,
+          undefined,
+          undefined,
+          undefined,
+          order.id,
+          order.siteId || DEFAULT_SITE_ID,
+        );
       }
     } catch (err) {
       this.logger.error(`Error enviando notificación WhatsApp para pedido #${order?.orderNumber}:`, err);
@@ -224,7 +252,8 @@ export class OrdersService implements OnModuleInit {
   }
 
   private async buildOrderWhere(params: OrderListParams) {
-    const where: any = {};
+    const siteId = params.siteId || DEFAULT_SITE_ID;
+    const where: any = { siteId };
     if (params.status && params.status !== 'ALL') where.status = params.status;
     if (params.waiterId) where.waiterId = params.waiterId;
     if (params.paymentMethod) where.paymentMethod = params.paymentMethod;
@@ -249,6 +278,7 @@ export class OrdersService implements OnModuleInit {
 
       const shiftForDate = await this.prisma.cashClosing.findFirst({
         where: {
+          siteId,
           shiftStart: { gte: new Date(`${startDateStr}T00:00:00.000-05:00`), lte: new Date(`${endDateStr}T23:59:59.999-05:00`) },
         },
         orderBy: { shiftStart: 'desc' },
@@ -278,7 +308,7 @@ export class OrdersService implements OnModuleInit {
         end.setDate(end.getDate() + 1);
 
         const shiftForDate = await this.prisma.cashClosing.findFirst({
-          where: { shiftStart: { gte: new Date(`${params.date}T00:00:00.000-05:00`), lte: new Date(`${params.date}T23:59:59.999-05:00`) } },
+          where: { siteId, shiftStart: { gte: new Date(`${params.date}T00:00:00.000-05:00`), lte: new Date(`${params.date}T23:59:59.999-05:00`) } },
           orderBy: { shiftStart: 'desc' },
         });
         if (shiftForDate) {
@@ -483,9 +513,9 @@ export class OrdersService implements OnModuleInit {
     return this.prisma.order.findMany(queryOptions);
   }
 
-  async findOne(id: string) {
-    const order = await this.prisma.order.findUnique({
-      where: { id },
+  async findOne(id: string, siteId = DEFAULT_SITE_ID) {
+    const order = await this.prisma.order.findFirst({
+      where: { id, siteId },
       include: {
         waiter: { select: { id: true, name: true, phone: true } },
         assignee: { select: { id: true, name: true } },
@@ -502,9 +532,9 @@ export class OrdersService implements OnModuleInit {
     return order;
   }
 
-  async findByNumber(orderNumber: number) {
+  async findByNumber(orderNumber: number, siteId = DEFAULT_SITE_ID) {
     const order = await this.prisma.order.findFirst({
-      where: { orderNumber },
+      where: { siteId, orderNumber },
       orderBy: { createdAt: 'desc' },
       include: {
         waiter: true,
@@ -527,17 +557,17 @@ export class OrdersService implements OnModuleInit {
     return { today, tomorrow };
   }
 
-  async checkCanCreateOrders(userId: string, role: string, orderType = 'DELIVERY') {
+  async checkCanCreateOrders(userId: string, role: string, orderType = 'DELIVERY', siteId = DEFAULT_SITE_ID) {
     const isDeliveryOrder = ['DELIVERY', 'PICKUP'].includes(orderType);
     if (isDeliveryOrder) {
       const deliveryRegister = await this.prisma.cashRegister.findFirst({
-        where: { purpose: 'DELIVERY', active: true },
+        where: { siteId, purpose: 'DELIVERY', active: true },
         select: { id: true, name: true },
         orderBy: { createdAt: 'asc' },
       });
       if (deliveryRegister) {
         const deliveryClosing = await this.prisma.cashClosing.findFirst({
-          where: { cashRegisterId: deliveryRegister.id, isOpen: true },
+          where: { siteId, cashRegisterId: deliveryRegister.id, isOpen: true },
           select: { id: true },
         });
         return deliveryClosing
@@ -551,12 +581,12 @@ export class OrdersService implements OnModuleInit {
     }
 
     const openClosing = await this.prisma.cashClosing.findFirst({
-      where: { userId, isOpen: true },
+      where: { siteId, userId, isOpen: true },
     });
 
     if (!openClosing) {
       const anyOpen = await this.prisma.cashClosing.findFirst({
-        where: { isOpen: true },
+        where: { siteId, isOpen: true },
       });
       if (anyOpen) {
         return { allowed: true, reason: null };
@@ -567,18 +597,20 @@ export class OrdersService implements OnModuleInit {
     return { allowed: true, reason: null };
   }
 
-  private async assertCashOpenForOrder(userId: string, role: string, orderType = 'DELIVERY') {
-    const check = await this.checkCanCreateOrders(userId, role, orderType);
+  private async assertCashOpenForOrder(userId: string, role: string, orderType = 'DELIVERY', siteId = DEFAULT_SITE_ID) {
+    const check = await this.checkCanCreateOrders(userId, role, orderType, siteId);
     if (!check.allowed) {
       throw new BadRequestException(check.reason || 'Caja cerrada');
     }
   }
 
   async create(data: any) {
+    const siteId = data.siteId || DEFAULT_SITE_ID;
+    data.siteId = siteId;
     const result = await this.prisma.$transaction(async tx => {
       await lockOperation(tx);
       if (data.clientMutationId) {
-        const existing = await tx.order.findUnique({ where: { clientMutationId: data.clientMutationId } });
+        const existing = await tx.order.findFirst({ where: { siteId, clientMutationId: data.clientMutationId } });
         if (existing) {
           if (existing.waiterId !== (data.waiterId || null) || existing.customerPhone !== data.customerPhone) {
             throw new BadRequestException('El identificador del pedido ya está en uso');
@@ -590,6 +622,56 @@ export class OrdersService implements OnModuleInit {
     }, operationTransaction);
     if (!result.replay) await this.notifyCreated(result.order, data.notifyCustomer !== false);
     return result.replay ? { ...result.order, idempotentReplay: true } : result.order;
+  }
+
+  private async assertOrderStaffBelongsToSite(
+    data: {
+      waiterId?: string | null;
+      assignedTo?: string | null;
+      userId?: string;
+      userRole?: string;
+    },
+    siteId: string,
+    tx: Prisma.TransactionClient,
+  ) {
+    // SUPERADMIN already has authenticated global site access. Exempt only that
+    // exact actor; explicitly selected staff must still belong to the site.
+    const globallyAuthorizedActorId =
+      data.userRole === 'SUPERADMIN' ? data.userId : undefined;
+    const staffIds = [
+      ...new Set(
+        [data.waiterId, data.assignedTo, data.userId].filter(
+          (id): id is string => Boolean(id) && id !== globallyAuthorizedActorId,
+        ),
+      ),
+    ];
+
+    if (staffIds.length === 0) return;
+
+    const memberships = await tx.userSiteMembership.count({
+      where: { siteId, active: true, userId: { in: staffIds } },
+    });
+    if (memberships !== staffIds.length) {
+      throw new BadRequestException(
+        'Uno de los responsables del pedido no pertenece a esta sede.',
+      );
+    }
+  }
+
+  /**
+   * Customer IDs are opaque to the client, so every association must be
+   * resolved together with the active site. This prevents a valid ID from a
+   * different site being attached to a new or edited order.
+   */
+  private async assertCustomerBelongsToSite(db: any, customerId: string, siteId: string) {
+    const customer = await db.customer.findFirst({
+      where: { id: customerId, siteId },
+      select: { id: true, phone: true, name: true, address: true },
+    });
+    if (!customer) {
+      throw new NotFoundException('Cliente no encontrado');
+    }
+    return customer;
   }
 
   async createWithinTransaction(data: {
@@ -622,7 +704,9 @@ export class OrdersService implements OnModuleInit {
     tableId?: string;
     clientMutationId?: string;
     notifyCustomer?: boolean;
+    siteId?: string;
   }, tx: Prisma.TransactionClient) {
+    const siteId = data.siteId || DEFAULT_SITE_ID;
     if (!Array.isArray(data.items) || data.items.length > 100 || !data.items.length) {
       throw new BadRequestException('El pedido debe incluir al menos un producto');
     }
@@ -633,15 +717,35 @@ export class OrdersService implements OnModuleInit {
     }
 
     if (data.userId && data.userRole) {
-      await this.assertCashOpenForOrder(data.userId, data.userRole, data.orderType || 'DELIVERY');
+      await this.assertCashOpenForOrder(data.userId, data.userRole, data.orderType || 'DELIVERY', siteId);
+    }
+
+    await this.assertOrderStaffBelongsToSite(data, siteId, tx);
+
+    if (data.customerId) {
+      await this.assertCustomerBelongsToSite(tx, data.customerId, siteId);
+    }
+
+    if (data.tableId) {
+      const table = await tx.diningTable.findFirst({ where: { id: data.tableId, siteId }, select: { id: true } });
+      if (!table) throw new BadRequestException('La mesa seleccionada no pertenece a esta sede.');
+    }
+
+    if (data.cashRegisterId) {
+      const register = await tx.cashRegister.findFirst({ where: { id: data.cashRegisterId, siteId, active: true }, select: { id: true } });
+      if (!register) throw new BadRequestException('La caja seleccionada no pertenece a esta sede.');
     }
 
     if (data.chatSessionId) {
-      const sessionExists = await tx.whatsAppSession.findUnique({
-        where: { id: data.chatSessionId },
+      const sessionExists = await tx.whatsAppSession.findFirst({
+        where: { id: data.chatSessionId, siteId },
         select: { id: true },
       });
-      if (!sessionExists) throw new BadRequestException('La conversación de WhatsApp ya no existe.');
+      if (!sessionExists) {
+        throw new BadRequestException(
+          'La conversación de WhatsApp no pertenece a esta sede o ya no existe.',
+        );
+      }
     }
 
     if (data.customerPhone) {
@@ -659,13 +763,15 @@ export class OrdersService implements OnModuleInit {
     // Auto-recuperación de teléfono real si llega 3000000000 o vacío en pedidos que no son de mostrador
     if (data.orderType !== 'LOCAL' && (!data.customerPhone || data.customerPhone === '3000000000' || data.customerPhone === '0000000000')) {
       if (data.customerId) {
-        const cust = await tx.customer.findUnique({ where: { id: data.customerId } });
+        const cust = await this.assertCustomerBelongsToSite(tx, data.customerId, siteId);
         if (cust?.phone && cust.phone !== '3000000000' && cust.phone !== '0000000000') {
           data.customerPhone = cust.phone;
         }
       }
       if ((!data.customerPhone || data.customerPhone === '3000000000') && data.chatSessionId) {
-        const session = await tx.whatsAppSession.findUnique({ where: { id: data.chatSessionId } });
+        const session = await tx.whatsAppSession.findFirst({
+          where: { id: data.chatSessionId, siteId },
+        });
         const exactSessionPhone = session?.customerPhone || session?.phone;
         if (exactSessionPhone && !this.isDummyPhoneNumber(exactSessionPhone)) {
           const sc = exactSessionPhone.replace(/\D/g, '');
@@ -674,7 +780,7 @@ export class OrdersService implements OnModuleInit {
       }
     }
 
-    const resolvedZoneId = await this.findOrCreateZone(data.zoneId, data.zoneName, data.deliveryFee);
+    const resolvedZoneId = await this.findOrCreateZone(data.zoneId, data.zoneName, data.deliveryFee, siteId, tx);
 
     const normalizedOrderType = data.orderType || 'DELIVERY';
     let cashRegisterId = data.cashRegisterId;
@@ -683,13 +789,13 @@ export class OrdersService implements OnModuleInit {
 
     if (['DELIVERY', 'PICKUP'].includes(normalizedOrderType)) {
       const deliveryRegister = await tx.cashRegister.findFirst({
-        where: { purpose: 'DELIVERY', active: true },
+        where: { siteId, purpose: 'DELIVERY', active: true },
         select: { id: true },
         orderBy: { createdAt: 'asc' },
       });
       if (deliveryRegister) {
         activeClosing = await tx.cashClosing.findFirst({
-          where: { cashRegisterId: deliveryRegister.id, isOpen: true },
+          where: { siteId, cashRegisterId: deliveryRegister.id, isOpen: true },
           select: { id: true, cashRegisterId: true },
           orderBy: { shiftStart: 'desc' },
         });
@@ -701,21 +807,21 @@ export class OrdersService implements OnModuleInit {
 
     if (!activeClosing && cashRegisterId) {
       activeClosing = await tx.cashClosing.findFirst({
-        where: { cashRegisterId, isOpen: true },
+        where: { siteId, cashRegisterId, isOpen: true },
         select: { id: true, cashRegisterId: true },
         orderBy: { shiftStart: 'desc' },
       });
     }
     if (!activeClosing && data.userId) {
       activeClosing = await tx.cashClosing.findFirst({
-        where: { userId: data.userId, isOpen: true },
+        where: { siteId, userId: data.userId, isOpen: true },
         select: { id: true, cashRegisterId: true },
         orderBy: { shiftStart: 'desc' },
       });
     }
     if (!activeClosing) {
       activeClosing = await tx.cashClosing.findFirst({
-        where: { isOpen: true },
+        where: { siteId, isOpen: true },
         select: { id: true, cashRegisterId: true },
         orderBy: { shiftStart: 'desc' },
       });
@@ -739,6 +845,7 @@ export class OrdersService implements OnModuleInit {
       let searchStart = startOfDay;
       const activeClosingForNum = await tx.cashClosing.findFirst({
         where: {
+          siteId,
           isOpen: true,
           cashRegister: { purpose: { not: 'DELIVERY' } },
         },
@@ -750,6 +857,7 @@ export class OrdersService implements OnModuleInit {
 
       const lastOrderToday = await tx.order.findFirst({
         where: {
+          siteId,
           createdAt: { gte: searchStart },
           OR: [
             { tableId: { not: null } },
@@ -763,6 +871,7 @@ export class OrdersService implements OnModuleInit {
       let searchStart = startOfDay;
       const activeClosingForNum = await tx.cashClosing.findFirst({
         where: {
+          siteId,
           isOpen: true,
           cashRegister: { purpose: 'DELIVERY' },
         },
@@ -774,6 +883,7 @@ export class OrdersService implements OnModuleInit {
 
       const lastOrderToday = await tx.order.findFirst({
         where: {
+          siteId,
           createdAt: { gte: searchStart },
           tableId: null,
           orderType: { in: ['DELIVERY', 'PICKUP'] },
@@ -783,9 +893,9 @@ export class OrdersService implements OnModuleInit {
       orderNumber = lastOrderToday ? lastOrderToday.orderNumber + 1 : 1;
     }
 
-    const totalOrderCount = await tx.order.count();
+    const totalOrderCount = await tx.order.count({ where: { siteId } });
     const lastInvoiceOrder = await tx.order.findFirst({
-      where: { invoiceNumber: { not: null } },
+      where: { siteId, invoiceNumber: { not: null } },
       orderBy: { invoiceNumber: 'desc' },
     });
     const invoiceNumber = Math.max(lastInvoiceOrder?.invoiceNumber || 0, totalOrderCount) + 1;
@@ -794,7 +904,7 @@ export class OrdersService implements OnModuleInit {
     let subtotal = 0;
     const orderItems: any[] = [];
     const menuItemIds = data.items.map(i => i.menuItemId);
-    const menuItems = await tx.menuItem.findMany({ where: { id: { in: menuItemIds } } });
+    const menuItems = await tx.menuItem.findMany({ where: { id: { in: menuItemIds }, siteId } });
     const menuItemMap = new Map(menuItems.map(m => [m.id, m]));
 
     for (const item of data.items) {
@@ -823,7 +933,7 @@ export class OrdersService implements OnModuleInit {
       if (typeof data.deliveryFee === 'number') {
         deliveryFee = data.deliveryFee;
       } else if (resolvedZoneId) {
-        const zone = await tx.deliveryZone.findUnique({ where: { id: resolvedZoneId } });
+        const zone = await tx.deliveryZone.findFirst({ where: { id: resolvedZoneId, siteId } });
         if (zone) deliveryFee = zone.rate;
         else throw new BadRequestException('La zona de domicilio seleccionada ya no existe.');
       } else {
@@ -846,9 +956,14 @@ export class OrdersService implements OnModuleInit {
     if (digitsOnly.length >= 13 || (data.customerPhone || '').startsWith('@')) {
       try {
         const session = data.chatSessionId
-          ? await tx.whatsAppSession.findUnique({ where: { id: data.chatSessionId } })
+          ? await tx.whatsAppSession.findFirst({
+              where: { id: data.chatSessionId, siteId },
+            })
           : await tx.whatsAppSession.findFirst({
-              where: { OR: [{ phone: data.customerPhone }, { id: data.customerPhone }] },
+              where: {
+                siteId,
+                OR: [{ phone: data.customerPhone }, { id: data.customerPhone }],
+              },
             });
         if (session?.customerPhone) {
           const sDigits = session.customerPhone.replace(/\D/g, '');
@@ -866,13 +981,14 @@ export class OrdersService implements OnModuleInit {
       const p10 = (cleanP.length === 12 && cleanP.startsWith('57')) ? cleanP.slice(2) : cleanP;
       if (p10.length === 10 && p10.startsWith('3')) {
         try {
-          let cust = await tx.customer.findUnique({ where: { phone: p10 } });
+          let cust = await tx.customer.findFirst({ where: { siteId, phone: p10 } });
           if (!cust && data.customerName && data.customerName !== 'Cliente Mostrador' && data.customerName !== 'Cliente Recoger') {
             cust = await tx.customer.create({
               data: {
                 name: data.customerName.trim(),
                 phone: p10,
                 address: data.customerAddress || null,
+                siteId,
               }
             });
           } else if (cust && data.customerName && data.customerName !== 'Cliente Mostrador' && data.customerName !== 'Cliente Recoger' && (!cust.name || cust.name.startsWith('Cliente '))) {
@@ -891,6 +1007,7 @@ export class OrdersService implements OnModuleInit {
 
     const order = await tx.order.create({
       data: {
+        siteId,
         orderNumber,
         invoiceNumber,
         customerName: data.customerName,
@@ -938,8 +1055,8 @@ export class OrdersService implements OnModuleInit {
 
     if (data.chatSessionId) {
       try {
-        await tx.whatsAppSession.update({
-          where: { id: data.chatSessionId },
+        await tx.whatsAppSession.updateMany({
+          where: { id: data.chatSessionId, siteId },
           data: {
             customerPhone: effectiveCustomerPhone,
             ...(data.customerName && !data.customerName.startsWith('@') && data.customerName !== 'Cliente Mostrador' && data.customerName !== 'Cliente Recoger' ? { customerName: data.customerName.trim() } : {})
@@ -1009,9 +1126,9 @@ export class OrdersService implements OnModuleInit {
   }
 
   async notifyCreated(order: any, notifyCustomer = true) {
-    this.socketGateway.emitNewOrder(order);
+    this.socketGateway.emitNewOrder(order, order.siteId);
     if (order.source === 'WHATSAPP' || order.chatSessionId || (!order.tableId && order.orderType !== 'LOCAL')) {
-      this.socketGateway.emitWhatsApp('whatsappSessionUpdated', { orderCreated: true, sessionId: order.chatSessionId || undefined, phone: order.customerPhone, orderNumber: order.orderNumber, status: order.status });
+      this.socketGateway.emitWhatsApp('whatsappSessionUpdated', { siteId: order.siteId, orderCreated: true, sessionId: order.chatSessionId || undefined, phone: order.customerPhone, orderNumber: order.orderNumber, status: order.status });
     }
 
     // Los pedidos de domicilios se gestionan 100% por impresión térmica física independiente.
@@ -1068,18 +1185,19 @@ export class OrdersService implements OnModuleInit {
     }
 
     try {
-      const printerSettings = await this.printService.getPrinterSettings();
+      const siteId = order.siteId || DEFAULT_SITE_ID;
+      const printerSettings = await this.printService.getPrinterSettings(siteId);
       let deliveryAutoPrint = true;
       if (this.tablesService) {
-        const kSettings = await this.tablesService.getKitchenSettings().catch(() => null);
+        const kSettings = await this.tablesService.getKitchenSettings(undefined, siteId).catch(() => null);
         if (kSettings && kSettings.deliveryAutoPrint === false) deliveryAutoPrint = false;
       }
       const shouldPrint = this.isDeliveryKitchenOrder(order)
         ? deliveryAutoPrint
         : printerSettings?.autoPrint === true;
       if (shouldPrint) {
-        const fullOrder = await this.prisma.order.findUnique({
-          where: { id: order.id },
+        const fullOrder = await this.prisma.order.findFirst({
+          where: { id: order.id, siteId: order.siteId || DEFAULT_SITE_ID },
           include: {
             items: { include: { menuItem: { include: { category: true } } } },
             zone: true,
@@ -1110,13 +1228,14 @@ export class OrdersService implements OnModuleInit {
               const payload = buffer.toString('base64');
               await this.prisma.printJob.create({
                 data: {
+                  siteId: order.siteId || DEFAULT_SITE_ID,
                   // Resolver por id mantiene la cola ligada a la IP vigente en Configuración.
                   impresoraIp: p.id || p.name,
                   payload,
                   tipo: p.id || p.name,
                 },
               });
-              this.printQueueSignal.notifyJobCreated();
+              this.printQueueSignal.notifyJobCreated(siteId);
             }
           }
         }
@@ -1128,16 +1247,18 @@ export class OrdersService implements OnModuleInit {
     return order;
   }
 
-  async printOrder(orderId: string, target?: string) {
-    return this.printService.printOrder(orderId, target);
+  async printOrder(orderId: string, target?: string, siteId = DEFAULT_SITE_ID) {
+    return this.printService.printOrder(orderId, target, false, siteId);
   }
 
   async update(id: string, data: any, user?: any) {
+    const siteId = user?.siteId || DEFAULT_SITE_ID;
     const result = await this.prisma.$transaction(async tx => {
       await lockOperation(tx);
-      const order = await tx.order.findUnique({ where: { id } });
+      const order = await tx.order.findFirst({ where: { id, siteId } });
+      if (!order) throw new NotFoundException('Pedido no encontrado');
       if (order?.tableId) throw new BadRequestException('Edita este pedido desde su cuenta en Mesas');
-      return this.updateWithinTransaction(id, data, tx, user);
+      return this.updateWithinTransaction(id, data, tx, user, siteId);
     }, operationTransaction);
     await this.notifyUpdated(id, result.updated, result.existing, data, user);
 
@@ -1165,23 +1286,34 @@ export class OrdersService implements OnModuleInit {
     customerId?: string;
     chatSessionId?: string;
     notifyCustomer?: boolean;
-  }, tx: Prisma.TransactionClient, user?: any) {
-    const existing = await tx.order.findUnique({
-      where: { id },
+  }, tx: Prisma.TransactionClient, user?: any, siteId = DEFAULT_SITE_ID) {
+    const existing = await tx.order.findFirst({
+      where: { id, siteId },
       include: { items: true },
     });
     if (!existing) throw new NotFoundException('Pedido no encontrado');
     if (existing.status === 'CANCELLED') throw new BadRequestException('No se puede editar un pedido cancelado');
 
+    if (data.customerId) {
+      await this.assertCustomerBelongsToSite(tx, data.customerId, siteId);
+    }
+    if (existing.customerId && !data.customerId) {
+      await this.assertCustomerBelongsToSite(tx, existing.customerId, siteId);
+    }
+
     if (data.chatSessionId) {
       if (existing.chatSessionId && existing.chatSessionId !== data.chatSessionId) {
         throw new ConflictException('Este pedido pertenece a otra conversación de WhatsApp. Actualiza el chat antes de editarlo.');
       }
-      const sessionExists = await tx.whatsAppSession.findUnique({
-        where: { id: data.chatSessionId },
+      const sessionExists = await tx.whatsAppSession.findFirst({
+        where: { id: data.chatSessionId, siteId },
         select: { id: true },
       });
-      if (!sessionExists) throw new BadRequestException('La conversación de WhatsApp ya no existe.');
+      if (!sessionExists) {
+        throw new BadRequestException(
+          'La conversación de WhatsApp no pertenece a esta sede o ya no existe.',
+        );
+      }
     }
 
     const canManageOrders = user?.role && ['ADMIN', 'SUPERADMIN', 'CASHIER', 'DELIVERY_MANAGER', 'DISPATCHER'].includes(user.role);
@@ -1216,13 +1348,15 @@ export class OrdersService implements OnModuleInit {
     // Auto-recuperación de teléfono real si llega 3000000000 o vacío en pedidos que no son de mostrador
     if (data.orderType !== 'LOCAL' && (!data.customerPhone || data.customerPhone === '3000000000' || data.customerPhone === '0000000000')) {
       if (data.customerId) {
-        const cust = await tx.customer.findUnique({ where: { id: data.customerId } });
+        const cust = await this.assertCustomerBelongsToSite(tx, data.customerId, siteId);
         if (cust?.phone && cust.phone !== '3000000000' && cust.phone !== '0000000000') {
           data.customerPhone = cust.phone;
         }
       }
       if ((!data.customerPhone || data.customerPhone === '3000000000') && data.chatSessionId) {
-        const session = await tx.whatsAppSession.findUnique({ where: { id: data.chatSessionId } });
+        const session = await tx.whatsAppSession.findFirst({
+          where: { id: data.chatSessionId, siteId },
+        });
         const exactSessionPhone = session?.customerPhone || session?.phone;
         if (exactSessionPhone && !this.isDummyPhoneNumber(exactSessionPhone)) {
           const sc = exactSessionPhone.replace(/\D/g, '');
@@ -1231,14 +1365,14 @@ export class OrdersService implements OnModuleInit {
       }
     }
 
-    const resolvedZoneId = await this.findOrCreateZone(data.zoneId, data.zoneName, data.deliveryFee);
+    const resolvedZoneId = await this.findOrCreateZone(data.zoneId, data.zoneName, data.deliveryFee, siteId, tx);
 
     const isCourtesy = data.paymentMethod === 'CORTESIA';
     const normalizedOrderType = data.orderType || existing.orderType || 'DELIVERY';
     let subtotal = 0;
     const orderItems: any[] = [];
     const menuItemIds = data.items.map(i => i.menuItemId);
-    const menuItems = await tx.menuItem.findMany({ where: { id: { in: menuItemIds } } });
+    const menuItems = await tx.menuItem.findMany({ where: { id: { in: menuItemIds }, siteId } });
     const menuItemMap = new Map(menuItems.map(m => [m.id, m]));
 
     for (const item of data.items) {
@@ -1267,7 +1401,7 @@ export class OrdersService implements OnModuleInit {
       if (typeof data.deliveryFee === 'number') {
         deliveryFee = data.deliveryFee;
       } else if (resolvedZoneId) {
-        const zone = await tx.deliveryZone.findUnique({ where: { id: resolvedZoneId } });
+        const zone = await tx.deliveryZone.findFirst({ where: { id: resolvedZoneId, siteId } });
         if (zone) deliveryFee = zone.rate;
         else throw new BadRequestException('La zona de domicilio seleccionada ya no existe.');
       } else {
@@ -1290,13 +1424,14 @@ export class OrdersService implements OnModuleInit {
       const p10 = (cleanP.length === 12 && cleanP.startsWith('57')) ? cleanP.slice(2) : cleanP;
       if (p10.length === 10 && p10.startsWith('3')) {
         try {
-          let cust = await tx.customer.findUnique({ where: { phone: p10 } });
+          let cust = await tx.customer.findFirst({ where: { siteId, phone: p10 } });
           if (!cust && data.customerName && data.customerName !== 'Cliente Mostrador' && data.customerName !== 'Cliente Recoger') {
             cust = await tx.customer.create({
               data: {
                 name: data.customerName.trim(),
                 phone: p10,
                 address: data.customerAddress || null,
+                siteId,
               }
             });
           } else if (cust && data.customerName && data.customerName !== 'Cliente Mostrador' && data.customerName !== 'Cliente Recoger' && (!cust.name || cust.name.startsWith('Cliente '))) {
@@ -1375,7 +1510,7 @@ export class OrdersService implements OnModuleInit {
   }
 
   async notifyUpdated(id: string, updated: any, existing: any, data: any, user?: any) {
-    this.socketGateway.emitOrderStatusChange(id, updated.status, updated);
+    this.socketGateway.emitOrderStatusChange(id, updated.status, updated, updated.siteId || user?.siteId);
     await this.deliveryDriverGateway?.emitForDrivers(
       [existing?.deliveryDriverId, updated?.deliveryDriverId],
       { reason: 'order_updated', orderId: id },
@@ -1441,7 +1576,7 @@ export class OrdersService implements OnModuleInit {
     let deliveryAutoPrint = true;
     if (this.tablesService) {
       try {
-        const kitchenSettings = await this.tablesService.getKitchenSettings();
+        const kitchenSettings = await this.tablesService.getKitchenSettings(undefined, updated.siteId || DEFAULT_SITE_ID);
         deliveryAutoPrint = kitchenSettings?.deliveryAutoPrint !== false;
       } catch (kitchenErr) {
         this.logger.warn(`No se pudo leer la configuración de cocina para el pedido #${updated.orderNumber}:`, kitchenErr);
@@ -1450,13 +1585,13 @@ export class OrdersService implements OnModuleInit {
 
     try {
       if (itemsOrNotesChanged) {
-        const printerSettings = await this.printService.getPrinterSettings();
+        const printerSettings = await this.printService.getPrinterSettings(updated.siteId || DEFAULT_SITE_ID);
         const shouldPrint = this.isDeliveryKitchenOrder(updated)
           ? deliveryAutoPrint
           : printerSettings?.autoPrint === true;
         if (shouldPrint) {
-          const fullOrder = await this.prisma.order.findUnique({
-            where: { id: updated.id },
+          const fullOrder = await this.prisma.order.findFirst({
+            where: { id: updated.id, siteId: updated.siteId || DEFAULT_SITE_ID },
             include: {
               items: { include: { menuItem: { include: { category: true } } } },
               zone: true,
@@ -1488,12 +1623,13 @@ export class OrdersService implements OnModuleInit {
                 const payload = buffer.toString('base64');
                 await this.prisma.printJob.create({
                   data: {
+                    siteId: updated.siteId || DEFAULT_SITE_ID,
                     impresoraIp: p.id || p.name,
                     payload,
                     tipo: p.id || p.name,
                   },
                 });
-                this.printQueueSignal.notifyJobCreated();
+                this.printQueueSignal.notifyJobCreated(updated.siteId || DEFAULT_SITE_ID);
               }
             }
           }
@@ -1508,11 +1644,12 @@ export class OrdersService implements OnModuleInit {
     return updated;
   }
 
-  async updateStatus(id: string, status: string, user?: { id: string; role: string }, deliveryDriverId?: string, notifyCustomer?: boolean) {
+  async updateStatus(id: string, status: string, user?: { id: string; role: string; siteId?: string }, deliveryDriverId?: string, notifyCustomer?: boolean) {
     const validStatuses = ['PENDING', 'READY', 'IN_ROUTE', 'DELIVERED', 'CANCELLED'];
     if (!validStatuses.includes(status)) throw new BadRequestException('Estado inválido');
 
-    const order = await this.findOne(id);
+    const siteId = user?.siteId || DEFAULT_SITE_ID;
+    const order = await this.findOne(id, siteId);
 
     // Block driver changes on completed or cancelled orders
     if (['DELIVERED', 'CANCELLED'].includes(order.status) && deliveryDriverId !== undefined && deliveryDriverId !== order.deliveryDriverId) {
@@ -1531,6 +1668,10 @@ export class OrdersService implements OnModuleInit {
     if (isPickupOrLocal) {
       dataUpdate.deliveryDriverId = null;
     } else if (deliveryDriverId !== undefined) {
+      if (deliveryDriverId) {
+        const driver = await this.prisma.deliveryDriver.findFirst({ where: { id: deliveryDriverId, siteId, active: true }, select: { id: true } });
+        if (!driver) throw new BadRequestException('El domiciliario seleccionado no pertenece a esta sede.');
+      }
       dataUpdate.deliveryDriverId = deliveryDriverId || null;
     }
 
@@ -1615,7 +1756,7 @@ export class OrdersService implements OnModuleInit {
       }
     }
 
-    this.socketGateway.emitOrderStatusChange(id, status, updated);
+    this.socketGateway.emitOrderStatusChange(id, status, updated, updated.siteId || user?.siteId);
     await this.deliveryDriverGateway?.emitForDrivers(
       [order.deliveryDriverId, updated.deliveryDriverId],
       {
@@ -1625,7 +1766,7 @@ export class OrdersService implements OnModuleInit {
         orderId: id,
       },
     );
-    this.socketGateway.emitWhatsApp('whatsappSessionUpdated', { orderUpdated: true, sessionId: updated.chatSessionId || undefined, phone: updated.customerPhone, orderNumber: updated.orderNumber, status: updated.status });
+    this.socketGateway.emitWhatsApp('whatsappSessionUpdated', { siteId, orderUpdated: true, sessionId: updated.chatSessionId || undefined, phone: updated.customerPhone, orderNumber: updated.orderNumber, status: updated.status });
 
     // Cola de repartidores: conteo de carreras (rotación a los 10 pedidos) y reincorporación al entregar
     const isNewDispatchOrAssignment = updated.orderType === 'DELIVERY' && (
@@ -1655,7 +1796,7 @@ export class OrdersService implements OnModuleInit {
           let driver: any = updated.deliveryDriver || updated.assignee;
           if (!driver && deliveryDriverId) {
             try {
-              driver = await this.prisma.deliveryDriver.findUnique({ where: { id: deliveryDriverId } });
+              driver = await this.prisma.deliveryDriver.findFirst({ where: { id: deliveryDriverId, siteId } });
             } catch {}
           }
           const driverInfo = driver?.name ? `con tu domiciliario ${driver.name}` : 'con el domiciliario';
@@ -1670,12 +1811,12 @@ export class OrdersService implements OnModuleInit {
       // operación interna y no depende de enviar un mensaje al cliente.
       if (status === 'DELIVERED') {
         if (updated.chatSessionId) {
-          await this.whatsappService.unassignSessionById(updated.chatSessionId);
+          await this.whatsappService.unassignSessionById(updated.chatSessionId, siteId);
         } else if (updated.customerPhone) {
           // Compatibilidad con pedidos antiguos sin vínculo explícito. Los
           // pedidos nuevos siempre llevan chatSessionId y no usan teléfono
           // para liberar otra conversación por accidente.
-          await this.whatsappService.unassignSessionByPhone(updated.customerPhone);
+          await this.whatsappService.unassignSessionByPhone(updated.customerPhone, siteId);
         }
       }
     } catch (waErr) {
@@ -1685,7 +1826,8 @@ export class OrdersService implements OnModuleInit {
     return updated;
   }
 
-  async batchAssignDriver(orderIds: string[], deliveryDriverId: string, user?: { id: string; role: string }, notifyCustomer = true) {
+  async batchAssignDriver(orderIds: string[], deliveryDriverId: string, user?: { id: string; role: string; siteId?: string }, notifyCustomer = true) {
+    const siteId = user?.siteId || DEFAULT_SITE_ID;
     if (!orderIds || !Array.isArray(orderIds) || orderIds.length === 0) {
       throw new BadRequestException('Debes proporcionar al menos un ID de pedido');
     }
@@ -1693,15 +1835,28 @@ export class OrdersService implements OnModuleInit {
       throw new BadRequestException('El ID del repartidor es obligatorio');
     }
 
-    const driver = await this.prisma.deliveryDriver.findUnique({ where: { id: deliveryDriverId } });
+    const driver = await this.prisma.deliveryDriver.findFirst({ where: { id: deliveryDriverId, siteId, active: true } });
     if (!driver) {
       throw new NotFoundException('Repartidor no encontrado');
     }
 
+    const uniqueIds = [...new Set(orderIds.filter(Boolean))];
+    if (uniqueIds.length !== orderIds.length || uniqueIds.length > 100) {
+      throw new BadRequestException('La selección de pedidos es inválida o contiene repetidos.');
+    }
+    const scopedOrders = await this.prisma.order.findMany({
+      where: { siteId, id: { in: uniqueIds } },
+      select: { id: true, orderNumber: true, status: true, orderType: true, tableId: true },
+    });
+    if (scopedOrders.length !== uniqueIds.length) {
+      throw new NotFoundException('Uno de los pedidos no existe en esta sede.');
+    }
+    const scopedOrderById = new Map(scopedOrders.map(order => [order.id, order]));
+
     const results = [];
     for (const orderId of orderIds) {
       try {
-        const order = await this.prisma.order.findUnique({ where: { id: orderId } });
+        const order = scopedOrderById.get(orderId)!;
         if (!order || ['DELIVERED', 'CANCELLED'].includes(order.status)) continue;
         if (order.orderType !== 'DELIVERY' || order.tableId) {
           this.logger.warn(`Se omitió #${order.orderNumber} en despacho masivo porque no es un domicilio.`);
@@ -1722,14 +1877,15 @@ export class OrdersService implements OnModuleInit {
     };
   }
 
-  async batchMarkPickupReady(orderIds: string[], user?: { id: string; role: string }, notifyCustomer = false) {
+  async batchMarkPickupReady(orderIds: string[], user?: { id: string; role: string; siteId?: string }, notifyCustomer = false) {
+    const siteId = user?.siteId || DEFAULT_SITE_ID;
     const uniqueIds = [...new Set((orderIds || []).filter(Boolean))];
     if (uniqueIds.length === 0 || uniqueIds.length > 100) {
       throw new BadRequestException('Selecciona entre 1 y 100 pedidos para recoger.');
     }
 
     const orders = await this.prisma.order.findMany({
-      where: { id: { in: uniqueIds } },
+      where: { siteId, id: { in: uniqueIds } },
       select: { id: true, orderNumber: true, orderType: true, status: true },
     });
     if (orders.length !== uniqueIds.length) {
@@ -1757,8 +1913,9 @@ export class OrdersService implements OnModuleInit {
     ordersPayload: Array<{ id: string; method?: string; cashAmount?: number; transferAmount?: number; reference?: string; transferReviewed?: boolean }>,
     globalMethod?: string,
     globalReference?: string,
-    user?: { id: string; role: string }
+    user?: { id: string; role: string; siteId?: string }
   ) {
+    const siteId = user?.siteId || DEFAULT_SITE_ID;
     const userRole = user?.role;
     if (userRole && !['SUPERADMIN', 'ADMIN', 'CASHIER'].includes(userRole) && (['DELIVERY_MANAGER', 'DISPATCHER'].includes(userRole) || /dispatch|domicil/i.test(userRole))) {
       throw new ForbiddenException('Los despachadores de domicilios no tienen permiso para cobrar pedidos');
@@ -1774,7 +1931,7 @@ export class OrdersService implements OnModuleInit {
     }
 
     const activeClosing = await this.prisma.cashClosing.findFirst({
-      where: { isOpen: true, cashRegister: { purpose: 'DELIVERY', active: true } },
+      where: { siteId, isOpen: true, cashRegister: { siteId, purpose: 'DELIVERY', active: true } },
       orderBy: { shiftStart: 'desc' },
     });
     if (!activeClosing) {
@@ -1782,7 +1939,7 @@ export class OrdersService implements OnModuleInit {
     }
 
     const orders = await this.prisma.order.findMany({
-      where: { id: { in: Array.from(uniqueIds) } },
+      where: { siteId, id: { in: Array.from(uniqueIds) } },
       select: {
         id: true,
         orderNumber: true,
@@ -1909,6 +2066,7 @@ export class OrdersService implements OnModuleInit {
           const expectedCash = entries.reduce((sum, entry) => sum + entry.cash, 0);
           const settlement = await tx.driverSettlement.create({
             data: {
+              siteId,
               driverId,
               cashClosingId: activeClosing.id,
               receivedById: user.id,
@@ -1920,6 +2078,7 @@ export class OrdersService implements OnModuleInit {
           });
           const linked = await tx.order.updateMany({
             where: {
+              siteId,
               id: { in: entries.map(entry => entry.id) },
               deliveryDriverId: driverId,
               driverSettlementId: null,
@@ -1948,12 +2107,13 @@ export class OrdersService implements OnModuleInit {
   async cancelOrder(id: string, reason: string, userParam: any) {
     const userId = typeof userParam === 'string' ? userParam : userParam?.id;
     const userRole = typeof userParam === 'object' ? userParam?.role : null;
+    const siteId = typeof userParam === 'object' ? (userParam?.siteId || DEFAULT_SITE_ID) : DEFAULT_SITE_ID;
 
     if (userRole === 'DELIVERY_MANAGER') {
       throw new ForbiddenException('Los gestores de domicilios no tienen permiso para cancelar pedidos');
     }
 
-    const order = await this.prisma.order.findUnique({ where: { id }, include: { items: true } });
+    const order = await this.prisma.order.findFirst({ where: { id, siteId }, include: { items: true } });
     if (!order) throw new NotFoundException('Pedido no encontrado');
     if (order.status === 'CANCELLED') throw new BadRequestException('Pedido ya cancelado');
     if (order.status === 'DELIVERED') throw new BadRequestException('No se puede cancelar un pedido entregado');
@@ -1976,9 +2136,9 @@ export class OrdersService implements OnModuleInit {
 
       if (order.tableId) {
         try {
-          const table = await this.tablesService?.findTable(order.tableId);
+          const table = await this.tablesService?.findTable(order.tableId, undefined, siteId);
           if (table) {
-            this.socketGateway.emitTableUpdated(table);
+            this.socketGateway.emitTableUpdated(table, siteId);
           }
         } catch (err) {
           this.logger.warn(`No se pudo sincronizar mesa ${order.tableId}:`, err);
@@ -1989,7 +2149,7 @@ export class OrdersService implements OnModuleInit {
         order: updated,
         reason: reason || 'Cancelación solicitada por mesera',
         requestedBy: userParam,
-      });
+      }, siteId);
 
       return {
         ...updated,
@@ -2023,28 +2183,28 @@ export class OrdersService implements OnModuleInit {
       data: { status: 'REJECTED' },
     });
     await this.prisma.kitchenTicket.updateMany({
-      where: { orderId: id },
+      where: { orderId: id, siteId },
       data: { status: 'CANCELLED', changeSummary: `Cancelado: ${reason || 'Por administración'}` },
     });
     const cancelledTickets = await this.prisma.kitchenTicket.findMany({
-      where: { orderId: id },
+      where: { orderId: id, siteId },
       include: { station: { include: { users: { select: { id: true, name: true, role: true } } } }, assignedTo: { select: { id: true, name: true } }, items: true, order: { include: { waiter: true, diningTable: true } } },
     });
     for (const ticket of cancelledTickets) {
-      this.socketGateway.emitKitchenTicketUpdated(ticket);
+      this.socketGateway.emitKitchenTicketUpdated(ticket, siteId);
     }
     if (order.tableId) {
         try {
-          const table = await this.tablesService?.findTable(order.tableId);
+          const table = await this.tablesService?.findTable(order.tableId, undefined, siteId);
           if (table) {
-            this.socketGateway.emitTableUpdated(table);
+            this.socketGateway.emitTableUpdated(table, siteId);
           }
         } catch (err) {
           this.logger.warn(`No se pudo sincronizar mesa ${order.tableId}:`, err);
         }
       }
 
-    this.socketGateway.emitOrderStatusChange(id, 'CANCELLED', updated);
+    this.socketGateway.emitOrderStatusChange(id, 'CANCELLED', updated, siteId);
     await this.deliveryDriverGateway?.emitForDriver(order.deliveryDriverId, {
       reason: 'order_cancelled',
       orderId: id,
@@ -2061,9 +2221,9 @@ export class OrdersService implements OnModuleInit {
     return updated;
   }
 
-  async listPendingCancellations() {
+  async listPendingCancellations(siteId = DEFAULT_SITE_ID) {
     return this.prisma.order.findMany({
-      where: { status: 'CANCELLATION_REQUESTED' },
+      where: { siteId, status: 'CANCELLATION_REQUESTED' },
       include: {
         waiter: { select: { id: true, name: true } },
         diningTable: { include: { openedBy: { select: { id: true, name: true } } } },
@@ -2075,7 +2235,8 @@ export class OrdersService implements OnModuleInit {
 
   async approveCancellation(id: string, adminUser: any) {
     const adminId = typeof adminUser === 'string' ? adminUser : adminUser?.id;
-    const order = await this.prisma.order.findUnique({ where: { id }, include: { items: true } });
+    const siteId = typeof adminUser === 'object' ? (adminUser?.siteId || DEFAULT_SITE_ID) : DEFAULT_SITE_ID;
+    const order = await this.prisma.order.findFirst({ where: { id, siteId }, include: { items: true } });
     if (!order) throw new NotFoundException('Pedido no encontrado');
     if (order.status !== 'CANCELLATION_REQUESTED') {
       throw new BadRequestException('El pedido no tiene solicitud de cancelación pendiente');
@@ -2106,33 +2267,33 @@ export class OrdersService implements OnModuleInit {
     });
 
     await this.prisma.kitchenTicket.updateMany({
-      where: { orderId: id },
+      where: { orderId: id, siteId },
       data: { status: 'CANCELLED', changeSummary: `Cancelación aprobada: ${order.cancellationReason || 'Por administración'}` },
     });
     const resolvedTickets = await this.prisma.kitchenTicket.findMany({
-      where: { orderId: id },
+      where: { orderId: id, siteId },
       include: { station: { include: { users: { select: { id: true, name: true, role: true } } } }, assignedTo: { select: { id: true, name: true } }, items: true, order: { include: { waiter: true, diningTable: true } } },
     });
     for (const ticket of resolvedTickets) {
-      this.socketGateway.emitKitchenTicketUpdated(ticket);
+      this.socketGateway.emitKitchenTicketUpdated(ticket, siteId);
     }
     if (order.tableId) {
         try {
-          const table = await this.tablesService?.findTable(order.tableId);
+          const table = await this.tablesService?.findTable(order.tableId, undefined, siteId);
           if (table) {
-            this.socketGateway.emitTableUpdated(table);
+            this.socketGateway.emitTableUpdated(table, siteId);
           }
         } catch (err) {
           this.logger.warn(`No se pudo sincronizar mesa ${order.tableId}:`, err);
         }
       }
 
-    this.socketGateway.emitOrderStatusChange(id, 'CANCELLED', updated);
+    this.socketGateway.emitOrderStatusChange(id, 'CANCELLED', updated, siteId);
     await this.deliveryDriverGateway?.emitForDriver(order.deliveryDriverId, {
       reason: 'order_cancelled',
       orderId: id,
     });
-    this.socketGateway.emitOrderCancellationResolved({ orderId: id, status: 'CANCELLED', approved: true });
+    this.socketGateway.emitOrderCancellationResolved({ siteId, orderId: id, status: 'CANCELLED', approved: true });
 
     if (!this.isDeliveryKitchenOrder(order)) {
       try {
@@ -2146,14 +2307,15 @@ export class OrdersService implements OnModuleInit {
   }
 
   async rejectCancellation(id: string, adminUser: any, rejectReason?: string) {
-    const order = await this.prisma.order.findUnique({ where: { id }, include: { items: true } });
+    const siteId = typeof adminUser === 'object' ? (adminUser?.siteId || DEFAULT_SITE_ID) : DEFAULT_SITE_ID;
+    const order = await this.prisma.order.findFirst({ where: { id, siteId }, include: { items: true } });
     if (!order) throw new NotFoundException('Pedido no encontrado');
     if (order.status !== 'CANCELLATION_REQUESTED') {
       throw new BadRequestException('El pedido no tiene solicitud de cancelación pendiente');
     }
 
     const hasTickets = await this.prisma.kitchenTicket.count({
-      where: { orderId: id, status: { not: 'CANCELLED' } },
+      where: { orderId: id, siteId, status: { not: 'CANCELLED' } },
     });
     const revertStatus = hasTickets > 0 ? 'PREPARING' : 'PENDING';
 
@@ -2174,21 +2336,22 @@ export class OrdersService implements OnModuleInit {
 
     if (order.tableId) {
         try {
-          const table = await this.tablesService?.findTable(order.tableId);
+          const table = await this.tablesService?.findTable(order.tableId, undefined, siteId);
           if (table) {
-            this.socketGateway.emitTableUpdated(table);
+            this.socketGateway.emitTableUpdated(table, siteId);
           }
         } catch (err) {
           this.logger.warn(`No se pudo sincronizar mesa ${order.tableId}:`, err);
         }
       }
 
-    this.socketGateway.emitOrderStatusChange(id, revertStatus, updated);
+    this.socketGateway.emitOrderStatusChange(id, revertStatus, updated, siteId);
     await this.deliveryDriverGateway?.emitForDriver(order.deliveryDriverId, {
       reason: 'order_status_changed',
       orderId: id,
     });
     this.socketGateway.emitOrderCancellationResolved({
+      siteId,
       orderId: id,
       status: revertStatus,
       approved: false,
@@ -2198,9 +2361,19 @@ export class OrdersService implements OnModuleInit {
     return updated;
   }
 
-  async assignOperator(orderId: string, operatorId: string | null, operatorName: string | null) {
-    const order = await this.prisma.order.findUnique({ where: { id: orderId } });
+  async assignOperator(orderId: string, operatorId: string | null, operatorName: string | null, siteId = DEFAULT_SITE_ID) {
+    const order = await this.prisma.order.findFirst({ where: { id: orderId, siteId } });
     if (!order) throw new NotFoundException('Pedido no encontrado');
+
+    let resolvedOperatorName = operatorName;
+    if (operatorId) {
+      const membership = await this.prisma.userSiteMembership.findFirst({
+        where: { userId: operatorId, siteId, active: true, user: { active: true } },
+        include: { user: { select: { name: true } } },
+      });
+      if (!membership) throw new BadRequestException('El operador no pertenece a esta sede.');
+      resolvedOperatorName = membership.user.name;
+    }
 
     const updated = await this.prisma.order.update({
       where: { id: orderId },
@@ -2213,13 +2386,13 @@ export class OrdersService implements OnModuleInit {
       },
     });
 
-    this.socketGateway.emitOrderAssigned(orderId, operatorId, operatorName, updated);
+    this.socketGateway.emitOrderAssigned(orderId, operatorId, resolvedOperatorName, updated, siteId);
     return updated;
   }
 
-  async rateOrder(id: string, rating: number) {
+  async rateOrder(id: string, rating: number, siteId = DEFAULT_SITE_ID) {
     if (rating < 1 || rating > 5) throw new BadRequestException('Rating debe ser entre 1 y 5');
-    const order = await this.prisma.order.findUnique({ where: { id } });
+    const order = await this.prisma.order.findFirst({ where: { id, siteId } });
     if (!order) throw new NotFoundException('Pedido no encontrado');
     return this.prisma.order.update({ where: { id }, data: { rated: true, rating } });
   }
@@ -2229,18 +2402,19 @@ export class OrdersService implements OnModuleInit {
     method: string, 
     paymentStatus: string, 
     reference?: string, 
-    user?: { id: string; role: string }, 
+    user?: { id: string; role: string; siteId?: string },
     customerId?: string, 
     courtesyItemIds?: string[],
     cashAmount?: number,
     transferAmount?: number
   ) {
+    const siteId = user?.siteId || DEFAULT_SITE_ID;
     const userRole = user?.role;
     if (userRole && !['SUPERADMIN', 'ADMIN', 'CASHIER'].includes(userRole) && (['DELIVERY_MANAGER', 'DISPATCHER'].includes(userRole) || /dispatch|domicil/i.test(userRole))) {
       throw new ForbiddenException('Los despachadores de domicilios no tienen permiso para modificar el método de pago');
     }
 
-    const order = await this.findOne(id);
+    const order = await this.findOne(id, siteId);
 
     if (paymentStatus === 'CONFIRMED') {
       if (order.orderType === 'DELIVERY' && !['IN_ROUTE', 'DELIVERED'].includes(order.status)) {
@@ -2278,21 +2452,28 @@ export class OrdersService implements OnModuleInit {
     }
 
     let targetCustomerId = customerId || order.customerId;
+    if (targetCustomerId) {
+      await this.assertCustomerBelongsToSite(this.prisma, targetCustomerId, siteId);
+    }
     if (method === 'CREDIT' && !targetCustomerId && order.customerPhone) {
       const cleanPhone = order.customerPhone.replace(/\D/g, '');
       if (cleanPhone) {
-        let existingCust = await this.prisma.customer.findUnique({ where: { phone: cleanPhone } });
+        let existingCust = await this.prisma.customer.findFirst({ where: { siteId, phone: cleanPhone } });
         if (!existingCust) {
           existingCust = await this.prisma.customer.create({
             data: {
               name: order.customerName || 'Cliente Crédito',
               phone: cleanPhone,
               address: order.customerAddress || null,
+              siteId,
             }
           });
         }
         targetCustomerId = existingCust.id;
       }
+    }
+    if (targetCustomerId) {
+      await this.assertCustomerBelongsToSite(this.prisma, targetCustomerId, siteId);
     }
 
     let cashRegisterId: string | undefined = undefined;
@@ -2304,8 +2485,8 @@ export class OrdersService implements OnModuleInit {
       confirmedBy = user.id;
       const activeClosing = await this.prisma.cashClosing.findFirst({
         where: isDeliveryOrder
-          ? { isOpen: true, cashRegister: { purpose: 'DELIVERY', active: true } }
-          : { userId: user.id, isOpen: true },
+          ? { siteId, isOpen: true, cashRegister: { siteId, purpose: 'DELIVERY', active: true } }
+          : { siteId, userId: user.id, isOpen: true },
         ...(isDeliveryOrder ? { orderBy: { shiftStart: 'desc' } } : {}),
       });
       if (isDeliveryOrder && paymentStatus === 'CONFIRMED' && !activeClosing) {
@@ -2317,8 +2498,8 @@ export class OrdersService implements OnModuleInit {
       }
     }
 
-    const currentTotal = (courtesyItemIds && courtesyItemIds.length > 0) || method === 'CORTESIA' 
-      ? (await this.prisma.order.findUnique({ where: { id } }))?.total || 0 
+    const currentTotal = (courtesyItemIds && courtesyItemIds.length > 0) || method === 'CORTESIA'
+      ? (await this.prisma.order.findFirst({ where: { id, siteId } }))?.total || 0
       : order.total;
 
     const paymentBreakdown = this.resolvePaymentBreakdown(method, currentTotal, cashAmount, transferAmount);
@@ -2387,8 +2568,8 @@ export class OrdersService implements OnModuleInit {
       if (order.status !== 'DELIVERED') {
         return this.updateStatus(id, 'DELIVERED', user, undefined, false);
       }
-      this.socketGateway.emitOrderStatusChange(id, 'DELIVERED', updated);
-      this.socketGateway.server.emit('paymentUpdated', { orderId: id, status: 'CONFIRMED' });
+      this.socketGateway.emitOrderStatusChange(id, 'DELIVERED', updated, siteId);
+      this.socketGateway.emitToSite(siteId, 'paymentUpdated', { siteId, orderId: id, status: 'CONFIRMED' });
       await this.deliveryDriverGateway?.emitForDriver(updated.deliveryDriverId, {
         reason: 'payment_confirmed',
         orderId: id,
@@ -2396,8 +2577,8 @@ export class OrdersService implements OnModuleInit {
       return updated;
     }
 
-    this.socketGateway.emitOrderStatusChange(id, updated.status, updated);
-    this.socketGateway.server.emit('paymentUpdated', { orderId: id, status: paymentStatus });
+    this.socketGateway.emitOrderStatusChange(id, updated.status, updated, siteId);
+    this.socketGateway.emitToSite(siteId, 'paymentUpdated', { siteId, orderId: id, status: paymentStatus });
     await this.deliveryDriverGateway?.emitForDriver(updated.deliveryDriverId, {
       reason: 'payment_changed',
       orderId: id,
@@ -2405,7 +2586,13 @@ export class OrdersService implements OnModuleInit {
     return updated;
   }
 
-  async getActiveOrders(search?: string, userRole?: string, requestedOrderType?: string, compact = false) {
+  async getActiveOrders(
+    search?: string,
+    userRole?: string,
+    requestedOrderType?: string,
+    compact = false,
+    siteId = DEFAULT_SITE_ID,
+  ) {
     const cleanSearch = (search || '').trim();
     const isDeliveryStaff = Boolean(
       userRole &&
@@ -2420,6 +2607,7 @@ export class OrdersService implements OnModuleInit {
     const orderTypes = requestedTypes.length > 0 ? Array.from(new Set(requestedTypes)) : ['DELIVERY', 'PICKUP'];
 
     const where: any = {
+      siteId,
       tableId: null,
       orderType: isDeliveryStaff ? 'DELIVERY' : (orderTypes.length === 1 ? orderTypes[0] : { in: orderTypes }),
       AND: [
@@ -2527,26 +2715,27 @@ export class OrdersService implements OnModuleInit {
     return this.prisma.order.findMany(activeOrderQuery);
   }
 
-  async getTodayStats() {
+  async getTodayStats(siteId = DEFAULT_SITE_ID) {
     const activeClosing = await this.prisma.cashClosing.findFirst({
-      where: { isOpen: true },
+      where: { siteId, isOpen: true },
       orderBy: { shiftStart: 'desc' },
     });
 
-    let whereClause: any = {};
+    let whereClause: any = { siteId };
 
     if (activeClosing && activeClosing.shiftStart) {
-      whereClause = { createdAt: { gte: activeClosing.shiftStart } };
+      whereClause = { siteId, createdAt: { gte: activeClosing.shiftStart } };
     } else {
       const lastClosing = await this.prisma.cashClosing.findFirst({
+        where: { siteId },
         orderBy: { shiftEnd: 'desc' },
       });
       if (lastClosing && lastClosing.shiftEnd) {
-        whereClause = { createdAt: { gte: lastClosing.shiftEnd } };
+        whereClause = { siteId, createdAt: { gte: lastClosing.shiftEnd } };
       } else {
         const today = new Date();
         today.setHours(0, 0, 0, 0);
-        whereClause = { createdAt: { gte: today } };
+        whereClause = { siteId, createdAt: { gte: today } };
       }
     }
 
@@ -2582,18 +2771,18 @@ export class OrdersService implements OnModuleInit {
     };
   }
 
-  async getDashboardStats(startDate?: string, endDate?: string) {
+  async getDashboardStats(startDate?: string, endDate?: string, siteId = DEFAULT_SITE_ID) {
     const { start, end, from, until } = dashboardRange(startDate, endDate);
     const createdAt = { gte: from, lt: until };
     // Aggregate in PostgreSQL: never load the entire order history into memory.
     const [groups, sales, openTables, kitchenPending, pendingPayments, activeDeliveries, openRegisters] = await Promise.all([
-      this.prisma.order.groupBy({ by: ['status'], where: { createdAt }, _count: { _all: true } }),
-      this.prisma.order.aggregate({ where: { createdAt, status: 'DELIVERED', paymentStatus: 'CONFIRMED' }, _sum: { total: true } }),
-      this.prisma.diningTable.count({ where: { status: 'OPEN', orders: { some: {} } } }),
-      this.prisma.kitchenTicket.count({ where: { status: { in: ['NEW', 'PREPARING'] } } }),
-      this.prisma.payment.count({ where: { status: { in: ['PENDING', 'PENDING_REVIEW'] }, order: { orderType: 'LOCAL', status: { not: 'CANCELLED' } } } }),
-      this.prisma.order.count({ where: { orderType: 'DELIVERY', status: { notIn: ['DELIVERED', 'CANCELLED'] } } }),
-      this.prisma.cashClosing.count({ where: { isOpen: true } }),
+      this.prisma.order.groupBy({ by: ['status'], where: { siteId, createdAt }, _count: { _all: true } }),
+      this.prisma.order.aggregate({ where: { siteId, createdAt, status: 'DELIVERED', paymentStatus: 'CONFIRMED' }, _sum: { total: true } }),
+      this.prisma.diningTable.count({ where: { siteId, status: 'OPEN', orders: { some: { siteId } } } }),
+      this.prisma.kitchenTicket.count({ where: { siteId, status: { in: ['NEW', 'PREPARING'] } } }),
+      this.prisma.payment.count({ where: { status: { in: ['PENDING', 'PENDING_REVIEW'] }, order: { siteId, orderType: 'LOCAL', status: { not: 'CANCELLED' } } } }),
+      this.prisma.order.count({ where: { siteId, orderType: 'DELIVERY', status: { notIn: ['DELIVERED', 'CANCELLED'] } } }),
+      this.prisma.cashClosing.count({ where: { siteId, isOpen: true } }),
     ]);
     const count = (status: string) => groups.find(group => group.status === status)?._count._all || 0;
     const orders = groups.reduce((sum, group) => sum + group._count._all, 0);
@@ -2604,7 +2793,7 @@ export class OrdersService implements OnModuleInit {
     };
   }
 
-  async getCustomerHistory(phone: string) {
+  async getCustomerHistory(phone: string, siteId = DEFAULT_SITE_ID) {
     const raw = (phone || '').trim();
     const cleanDigits = raw.replace(/\D/g, '');
     const phone10 = cleanDigits.slice(-10);
@@ -2619,6 +2808,7 @@ export class OrdersService implements OnModuleInit {
 
     return this.prisma.order.findMany({
       where: {
+        siteId,
         orderType: { in: ['DELIVERY', 'PICKUP'] },
         OR: orConditions,
       },
@@ -2628,15 +2818,23 @@ export class OrdersService implements OnModuleInit {
     });
   }
 
-  private async findOrCreateZone(zoneId?: string, zoneName?: string, deliveryFee?: number): Promise<string | undefined> {
+  private async findOrCreateZone(
+    zoneId?: string,
+    zoneName?: string,
+    deliveryFee?: number,
+    siteId = DEFAULT_SITE_ID,
+    db: any = this.prisma,
+  ): Promise<string | undefined> {
     if (zoneId) {
-      const zone = await this.prisma.deliveryZone.findUnique({ where: { id: zoneId } });
+      const zone = await db.deliveryZone.findFirst({ where: { id: zoneId, siteId } });
       if (zone) return zone.id;
+      throw new BadRequestException('La zona seleccionada no pertenece a esta sede.');
     }
     if (zoneName && zoneName.trim()) {
       const trimmedName = zoneName.trim();
-      const zone = await this.prisma.deliveryZone.findFirst({
+      const zone = await db.deliveryZone.findFirst({
         where: {
+          siteId,
           name: {
             equals: trimmedName,
             mode: 'insensitive',

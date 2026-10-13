@@ -14,6 +14,9 @@ const MAX_MEDIA_ITEMS = 80
 const MAX_MEDIA_BYTES = 48 * 1024 * 1024
 const NEGATIVE_MEDIA_TTL_MS = 20 * 60 * 1000
 const MAX_NEGATIVE_ITEMS = 120
+// Prevent a media response started in one site/session from being retained
+// after the user changes site while the download is in flight.
+let cacheGeneration = 0
 
 const totalBytes = () => [...mediaCache.values()].reduce((sum, entry) => sum + entry.bytes, 0)
 
@@ -64,8 +67,12 @@ export async function acquireWhatsappMediaUrl(mediaId: string) {
 
   let pending = pendingMedia.get(mediaId)
   if (!pending) {
+    const requestGeneration = cacheGeneration
     pending = api.getBlob(`/whatsapp/media/${encodeURIComponent(mediaId)}`)
       .then(blob => {
+        if (requestGeneration !== cacheGeneration) {
+          throw new Error('El contexto de la sede cambió mientras se cargaba el archivo multimedia.')
+        }
         if (!blob || blob.size === 0) {
           negativeMediaCache.set(mediaId, Date.now() + NEGATIVE_MEDIA_TTL_MS)
           pruneNegativeCache()
@@ -82,15 +89,22 @@ export async function acquireWhatsappMediaUrl(mediaId: string) {
         return entry
       })
       .catch(err => {
+        if (requestGeneration !== cacheGeneration) throw err
         negativeMediaCache.set(mediaId, Date.now() + NEGATIVE_MEDIA_TTL_MS)
         pruneNegativeCache()
         throw err
       })
-      .finally(() => pendingMedia.delete(mediaId))
+      .finally(() => {
+        if (pendingMedia.get(mediaId) === pending) pendingMedia.delete(mediaId)
+      })
     pendingMedia.set(mediaId, pending)
   }
 
+  const requestGeneration = cacheGeneration
   const entry = await pending
+  if (requestGeneration !== cacheGeneration) {
+    throw new Error('El contexto de la sede cambió mientras se cargaba el archivo multimedia.')
+  }
   entry.refs += 1
   entry.lastUsed = Date.now()
   pruneMediaCache()
@@ -106,6 +120,7 @@ export function releaseWhatsappMediaUrl(mediaId: string) {
 }
 
 export function clearMediaCache(): void {
+  cacheGeneration += 1
   for (const entry of mediaCache.values()) {
     try {
       URL.revokeObjectURL(entry.url)

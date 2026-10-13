@@ -37,6 +37,7 @@ const SuperAdminOverviewPage = lazy(() => import('./pages/superadmin/SuperAdminO
 const SuperAdminConfigPage = lazy(() => import('./pages/superadmin/SuperAdminConfigPage'))
 const AuditLogsPage = lazy(() => import('./pages/superadmin/AuditLogsPage'))
 const MaintenancePage = lazy(() => import('./pages/superadmin/MaintenancePage'))
+const SitesPage = lazy(() => import('./pages/superadmin/SitesPage'))
 
 const PublicMenuPage = lazy(() => import('./pages/PublicMenuPage'))
 
@@ -44,23 +45,41 @@ function ProtectedRoute({
   children, 
   allowedRoles,
   requiredPermission,
+  allowPreparation = false,
+  globalSiteManagerOnly = false,
 }: { 
   children: React.ReactNode; 
   allowedRoles?: string[];
   requiredPermission?: string;
+  allowPreparation?: boolean;
+  globalSiteManagerOnly?: boolean;
 }) {
   const { isAuthenticated, loading, hasRole, hasPermission, user } = useAuth()
   if (loading) return <div className="flex items-center justify-center min-h-screen bg-[#0D0D0D] text-white">Cargando...</div>
   if (!isAuthenticated) return <Navigate to="/login" replace />
 
+  if (user?.activeSite?.preparationMode && !allowPreparation) {
+    return <Navigate to="/superadmin/sites" replace />
+  }
+
   // Rutas generales no restringidas (ej. AppLayout principal)
   if (!allowedRoles && !requiredPermission) return <>{children}</>
+
+  // La administración de sedes es global: la puede abrir el SuperAdmin o el
+  // ADMIN histórico promovido a administrador general, pero no un ADMIN
+  // creado para una sola sede.
+  if (globalSiteManagerOnly) {
+    if (user?.globalRole !== 'SUPERADMIN' && user?.globalRole !== 'ADMIN_GENERAL') {
+      return <Navigate to={getFirstAllowedPath(user, user?.activeSite?.id) || '/profile'} replace />
+    }
+    return <>{children}</>
+  }
 
   // El portal operativo solo funciona con la identidad de un domiciliario.
   // Si el administrador conservó el enlace, llévalo a su historial de repartidores.
   if (allowedRoles?.length === 1 && allowedRoles[0] === 'DELIVERY_DRIVER') {
     if (user?.role !== 'DELIVERY_DRIVER') {
-      return <Navigate to={user?.role === 'SUPERADMIN' ? '/drivers' : (getFirstAllowedPath(user) || '/profile')} replace />
+      return <Navigate to={user?.role === 'SUPERADMIN' ? '/drivers' : (getFirstAllowedPath(user, user?.activeSite?.id) || '/profile')} replace />
     }
     return <>{children}</>
   }
@@ -82,19 +101,20 @@ function ProtectedRoute({
     return <>{children}</>
   }
 
-  return <Navigate to={getFirstAllowedPath(user) || '/profile'} replace />
+  return <Navigate to={getFirstAllowedPath(user, user?.activeSite?.id) || '/profile'} replace />
 }
 
 function HomeRedirect() {
   const { user } = useAuth()
-  return <Navigate to={getFirstAllowedPath(user) || '/profile'} replace />
+  if (user?.activeSite?.preparationMode) return <Navigate to="/superadmin/sites" replace />
+  return <Navigate to={getFirstAllowedPath(user, user?.activeSite?.id) || '/profile'} replace />
 }
 
 function App() {
   const { isAuthenticated, user } = useAuth()
 
   useEffect(() => {
-    if (!isAuthenticated) return
+    if (!isAuthenticated || user?.activeSite?.preparationMode) return
 
     // Descarga en segundo plano los módulos operativos más usados. Así el primer
     // cambio de pestaña reutiliza el chunk local y no muestra una vista vacía.
@@ -124,10 +144,12 @@ function App() {
       <Route path="/forgot-password" element={<ForgotPasswordPage />} />
       <Route path="/reset-password" element={<ResetPasswordPage />} />
       <Route path="/menu" element={<PublicMenuPage />} />
+      <Route path="/menu/:siteCode" element={<PublicMenuPage />} />
       <Route path="/menudigital" element={<PublicMenuPage />} />
+      <Route path="/menudigital/:siteCode" element={<PublicMenuPage />} />
 
       <Route path="/" element={
-        <ProtectedRoute><AppLayout /></ProtectedRoute>
+        <ProtectedRoute allowPreparation><AppLayout key={user?.activeSite?.id || 'principal'} /></ProtectedRoute>
       }>
         <Route index element={<HomeRedirect />} />
         <Route path="dashboard" element={
@@ -167,7 +189,7 @@ function App() {
           <ProtectedRoute requiredPermission="orders.view" allowedRoles={['SUPERADMIN', 'ADMIN', 'CASHIER', 'DELIVERY_MANAGER', 'DISPATCHER']}><OrderDetailPage /></ProtectedRoute>
         } />
         <Route path="products" element={
-          <ProtectedRoute requiredPermission="products.view" allowedRoles={['SUPERADMIN', 'ADMIN']}><ProductsPage /></ProtectedRoute>
+          <ProtectedRoute allowPreparation requiredPermission="products.view" allowedRoles={['SUPERADMIN', 'ADMIN']}><ProductsPage /></ProtectedRoute>
         } />
         <Route path="customers" element={
           <ProtectedRoute requiredPermission="customers.view" allowedRoles={['SUPERADMIN', 'ADMIN', 'CASHIER', 'DELIVERY_MANAGER']}><CustomersPage /></ProtectedRoute>
@@ -182,22 +204,22 @@ function App() {
           <ProtectedRoute requiredPermission="cash.view" allowedRoles={['SUPERADMIN', 'ADMIN', 'CASHIER']}><PaymentsPage /></ProtectedRoute>
         } />
         <Route path="users" element={
-          <ProtectedRoute requiredPermission="users.view" allowedRoles={['SUPERADMIN', 'ADMIN']}><UsersPage /></ProtectedRoute>
+          <ProtectedRoute allowPreparation requiredPermission="users.view" allowedRoles={['SUPERADMIN', 'ADMIN']}><UsersPage /></ProtectedRoute>
         } />
         <Route path="zones" element={
-          <ProtectedRoute requiredPermission="zones.view" allowedRoles={['SUPERADMIN', 'ADMIN', 'CASHIER', 'DELIVERY_MANAGER']}><ZonesPage /></ProtectedRoute>
+          <ProtectedRoute allowPreparation requiredPermission="zones.view" allowedRoles={['SUPERADMIN', 'ADMIN', 'CASHIER', 'DELIVERY_MANAGER']}><ZonesPage /></ProtectedRoute>
         } />
         <Route path="cash-registers" element={
-          <ProtectedRoute requiredPermission="cash.view" allowedRoles={['SUPERADMIN', 'ADMIN', 'CASHIER']}><CashRegistersPage /></ProtectedRoute>
+          <ProtectedRoute allowPreparation requiredPermission="cash.view" allowedRoles={['SUPERADMIN', 'ADMIN', 'CASHIER']}><CashRegistersPage /></ProtectedRoute>
         } />
         <Route path="cash-control" element={
           <ProtectedRoute requiredPermission="cash.control" allowedRoles={['SUPERADMIN', 'ADMIN']}><CashControlPage /></ProtectedRoute>
         } />
         <Route path="settings/kitchen-stations" element={
-          <ProtectedRoute requiredPermission="kitchen_stations.manage" allowedRoles={['SUPERADMIN', 'ADMIN']}><KitchenStationsPage /></ProtectedRoute>
+          <ProtectedRoute allowPreparation requiredPermission="kitchen_stations.manage" allowedRoles={['SUPERADMIN', 'ADMIN']}><KitchenStationsPage /></ProtectedRoute>
         } />
         <Route path="settings/modules" element={
-          <ProtectedRoute requiredPermission="settings.modules" allowedRoles={['SUPERADMIN', 'ADMIN']}><ModuleSettingsPage /></ProtectedRoute>
+          <ProtectedRoute allowPreparation requiredPermission="settings.modules" allowedRoles={['SUPERADMIN', 'ADMIN']}><ModuleSettingsPage /></ProtectedRoute>
         } />
         <Route path="chat" element={
           <ProtectedRoute requiredPermission="whatsapp.view" allowedRoles={['SUPERADMIN', 'ADMIN', 'DELIVERY_MANAGER', 'CASHIER']}><ChatPage /></ProtectedRoute>
@@ -209,13 +231,16 @@ function App() {
           <ProtectedRoute allowedRoles={['SUPERADMIN']}><SuperAdminOverviewPage /></ProtectedRoute>
         } />
         <Route path="superadmin/config" element={
-          <ProtectedRoute allowedRoles={['SUPERADMIN']}><SuperAdminConfigPage /></ProtectedRoute>
+          <ProtectedRoute allowPreparation allowedRoles={['SUPERADMIN']}><SuperAdminConfigPage /></ProtectedRoute>
         } />
         <Route path="superadmin/audit-logs" element={
           <ProtectedRoute allowedRoles={['SUPERADMIN']}><AuditLogsPage /></ProtectedRoute>
         } />
         <Route path="superadmin/maintenance" element={
           <ProtectedRoute allowedRoles={['SUPERADMIN']}><MaintenancePage /></ProtectedRoute>
+        } />
+        <Route path="superadmin/sites" element={
+          <ProtectedRoute allowPreparation globalSiteManagerOnly allowedRoles={['SUPERADMIN', 'ADMIN']}><SitesPage /></ProtectedRoute>
         } />
       </Route>
       <Route path="*" element={<Navigate to="/dashboard" replace />} />

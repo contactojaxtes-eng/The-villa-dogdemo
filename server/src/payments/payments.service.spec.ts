@@ -1,16 +1,17 @@
 import { PaymentsService } from './payments.service';
+import { DEFAULT_SITE_ID } from '../common/multisite.constants';
 
 describe('PaymentsService delivery cash isolation', () => {
   const makeService = (overrides: Record<string, any> = {}) => {
     const prisma: any = {
       user: { findUnique: jest.fn().mockResolvedValue({ id: 'cashier-1', role: 'CASHIER' }) },
       payment: {
-        findUnique: jest.fn().mockResolvedValue({ id: 'payment-1', orderId: 'order-1' }),
+        findFirst: jest.fn().mockResolvedValue({ id: 'payment-1', orderId: 'order-1' }),
         update: jest.fn().mockResolvedValue({ id: 'payment-1', status: 'CONFIRMED' }),
         findMany: jest.fn().mockResolvedValue([]),
       },
       order: {
-        findUnique: jest.fn().mockResolvedValue({ cashClosingId: null, cashRegisterId: null, orderType: 'DELIVERY' }),
+        findFirst: jest.fn().mockResolvedValue({ cashClosingId: null, cashRegisterId: null, orderType: 'DELIVERY' }),
         update: jest.fn().mockResolvedValue({ id: 'order-1', customerPhone: null }),
         findMany: jest.fn().mockResolvedValue([]),
         count: jest.fn().mockResolvedValue(0),
@@ -19,12 +20,12 @@ describe('PaymentsService delivery cash isolation', () => {
         findFirst: jest.fn().mockResolvedValue({ id: 'delivery-closing', cashRegisterId: 'delivery-register' }),
         findUnique: jest.fn(),
       },
-      cashRegister: { findUnique: jest.fn() },
+      cashRegister: { findFirst: jest.fn() },
       expense: { findMany: jest.fn().mockResolvedValue([]) },
       customerPayment: { findMany: jest.fn().mockResolvedValue([]) },
       ...overrides,
     };
-    const socket: any = { server: { emit: jest.fn() } };
+    const socket: any = { emitToSite: jest.fn() };
     const whatsapp: any = { unassignSessionByPhone: jest.fn().mockResolvedValue(undefined) };
     return { prisma, socket, service: new PaymentsService(prisma, socket, whatsapp) };
   };
@@ -36,8 +37,9 @@ describe('PaymentsService delivery cash isolation', () => {
 
     expect(prisma.cashClosing.findFirst).toHaveBeenCalledWith({
       where: {
+        siteId: DEFAULT_SITE_ID,
         isOpen: true,
-        cashRegister: { purpose: 'DELIVERY', active: true },
+        cashRegister: { siteId: DEFAULT_SITE_ID, purpose: 'DELIVERY', active: true },
       },
       orderBy: { shiftStart: 'desc' },
     });
@@ -49,7 +51,7 @@ describe('PaymentsService delivery cash isolation', () => {
         cashClosingId: 'delivery-closing',
       },
     });
-    expect(socket.server.emit).toHaveBeenCalledWith('cashRegistersChanged');
+    expect(socket.emitToSite).toHaveBeenCalledWith(DEFAULT_SITE_ID, 'cashRegistersChanged');
   });
 
   it('does not allow a delivery payment to be confirmed without an open delivery cash register', async () => {
@@ -64,7 +66,7 @@ describe('PaymentsService delivery cash isolation', () => {
   it('keeps a credit settlement for delivery in Caja Domicilios', async () => {
     const { prisma, service } = makeService({
       order: {
-        findUnique: jest.fn().mockResolvedValue({
+        findFirst: jest.fn().mockResolvedValue({
           id: 'order-1',
           orderType: 'DELIVERY',
           paymentMethod: 'CREDIT',
@@ -100,8 +102,7 @@ describe('PaymentsService delivery cash isolation', () => {
     const shiftStart = new Date('2026-09-08T15:00:00.000Z');
     const { prisma, service } = makeService({
       cashClosing: {
-        findFirst: jest.fn(),
-        findUnique: jest.fn().mockResolvedValue({
+        findFirst: jest.fn().mockResolvedValue({
           id: 'delivery-closing',
           isOpen: false,
           shiftStart,
@@ -124,7 +125,7 @@ describe('PaymentsService delivery cash isolation', () => {
         }),
       },
       order: {
-        findUnique: jest.fn(),
+        findFirst: jest.fn(),
         update: jest.fn(),
         updateMany: jest.fn(),
         findMany: jest.fn().mockResolvedValue([]),
@@ -137,6 +138,7 @@ describe('PaymentsService delivery cash isolation', () => {
     expect(prisma.order.updateMany).not.toHaveBeenCalled();
     expect(prisma.order.findMany).toHaveBeenCalledWith(expect.objectContaining({
       where: expect.objectContaining({
+        siteId: DEFAULT_SITE_ID,
         cashClosingId: 'delivery-closing',
         cashRegisterId: 'delivery-register',
         orderType: { in: ['DELIVERY', 'PICKUP'] },

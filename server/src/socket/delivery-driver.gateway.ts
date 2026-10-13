@@ -9,6 +9,7 @@ import { JwtService } from '@nestjs/jwt';
 import { Server, Socket } from 'socket.io';
 import { PrismaService } from '../prisma/prisma.service';
 import { isAllowedOrigin } from '../common/environment';
+import { DEFAULT_SITE_ID } from '../common/multisite.constants';
 
 export type DriverPortalUpdate = {
   reason: string;
@@ -65,22 +66,34 @@ export class DeliveryDriverGateway implements OnGatewayInit, OnGatewayConnection
           return next(new Error('UNAUTHORIZED'));
         }
 
+        const siteId = payload.siteId || DEFAULT_SITE_ID;
         const user = await this.prisma.user.findUnique({
           where: { id: payload.sub },
-          select: { id: true, role: true, active: true },
+          select: {
+            id: true,
+            role: true,
+            active: true,
+            siteMemberships: {
+              where: { siteId, active: true, site: { active: true } },
+              select: { role: true },
+              take: 1,
+            },
+          },
         });
-        if (!user?.active || user.role !== 'DELIVERY_DRIVER') {
+        const membership = user?.siteMemberships?.[0];
+        if (!user?.active || membership?.role !== 'DELIVERY_DRIVER') {
           return next(new Error('UNAUTHORIZED'));
         }
 
-        const driver = await this.prisma.deliveryDriver.findUnique({
-          where: { userId: user.id },
+        const driver = await this.prisma.deliveryDriver.findFirst({
+          where: { userId: user.id, siteId },
           select: { id: true, active: true },
         });
         if (!driver?.active) return next(new Error('DRIVER_NOT_AVAILABLE'));
 
         client.data.userId = user.id;
         client.data.driverId = driver.id;
+        client.data.siteId = siteId;
         client.data.expiresAt = payload.exp * 1000;
         next();
       } catch (error) {
@@ -99,8 +112,9 @@ export class DeliveryDriverGateway implements OnGatewayInit, OnGatewayConnection
 
     // No existe ningún evento general en este namespace. Una cuenta solo entra
     // en sus propias salas, que además no se aceptan desde mensajes del cliente.
-    client.join(`driver-user:${userId}`);
-    client.join(`driver-profile:${driverId}`);
+    const siteId = client.data.siteId || DEFAULT_SITE_ID;
+    client.join(this.driverUserRoom(siteId, userId));
+    client.join(this.driverProfileRoom(siteId, driverId));
     client.data.expiryTimer = setTimeout(
       () => client.disconnect(true),
       Math.max(0, Math.min(client.data.expiresAt - Date.now(), 2_147_483_647)),
@@ -111,9 +125,21 @@ export class DeliveryDriverGateway implements OnGatewayInit, OnGatewayConnection
     clearTimeout(client.data.expiryTimer);
   }
 
-  emitToUser(userId: string | null | undefined, payload: DriverPortalUpdate): boolean {
+  private driverUserRoom(siteId: string, userId: string) {
+    return `site:${siteId}:driver-user:${userId}`;
+  }
+
+  private driverProfileRoom(siteId: string, driverId: string) {
+    return `site:${siteId}:driver-profile:${driverId}`;
+  }
+
+  emitToUser(
+    userId: string | null | undefined,
+    payload: DriverPortalUpdate,
+    siteId = DEFAULT_SITE_ID,
+  ): boolean {
     if (!userId || !this.server) return false;
-    this.server.to(`driver-user:${userId}`).emit('driverPortalUpdated', {
+    this.server.to(this.driverUserRoom(siteId || DEFAULT_SITE_ID, userId)).emit('driverPortalUpdated', {
       reason: String(payload.reason || 'changed'),
       ...(payload.orderId ? { orderId: String(payload.orderId) } : {}),
       at: payload.at || new Date().toISOString(),
@@ -121,30 +147,38 @@ export class DeliveryDriverGateway implements OnGatewayInit, OnGatewayConnection
     return true;
   }
 
-  async emitForDriver(driverId: string | null | undefined, payload: DriverPortalUpdate): Promise<boolean> {
+  async emitForDriver(
+    driverId: string | null | undefined,
+    payload: DriverPortalUpdate,
+    siteId?: string,
+  ): Promise<boolean> {
     if (!driverId) return false;
     try {
-      const driver = await this.prisma.deliveryDriver.findUnique({
-        where: { id: driverId },
-        select: { userId: true },
+      const driver = await this.prisma.deliveryDriver.findFirst({
+        where: { id: driverId, ...(siteId ? { siteId } : {}) },
+        select: { userId: true, siteId: true },
       });
-      return this.emitToUser(driver?.userId, payload);
+      return this.emitToUser(driver?.userId, payload, driver?.siteId || siteId || DEFAULT_SITE_ID);
     } catch {
       return false;
     }
   }
 
-  async emitForDrivers(driverIds: Array<string | null | undefined>, payload: DriverPortalUpdate): Promise<number> {
+  async emitForDrivers(
+    driverIds: Array<string | null | undefined>,
+    payload: DriverPortalUpdate,
+    siteId?: string,
+  ): Promise<number> {
     const ids = [...new Set(driverIds.filter((id): id is string => Boolean(id)))];
     if (!ids.length) return 0;
     try {
       const drivers = await this.prisma.deliveryDriver.findMany({
-        where: { id: { in: ids } },
-        select: { userId: true },
+        where: { id: { in: ids }, ...(siteId ? { siteId } : {}) },
+        select: { userId: true, siteId: true },
       });
       let emitted = 0;
       for (const driver of drivers) {
-        if (this.emitToUser(driver.userId, payload)) emitted += 1;
+        if (this.emitToUser(driver.userId, payload, driver.siteId)) emitted += 1;
       }
       return emitted;
     } catch {
@@ -152,15 +186,15 @@ export class DeliveryDriverGateway implements OnGatewayInit, OnGatewayConnection
     }
   }
 
-  async emitForAllDrivers(payload: DriverPortalUpdate): Promise<number> {
+  async emitForAllDrivers(payload: DriverPortalUpdate, siteId = DEFAULT_SITE_ID): Promise<number> {
     try {
       const drivers = await this.prisma.deliveryDriver.findMany({
-        where: { active: true, userId: { not: null } },
+        where: { siteId, active: true, userId: { not: null } },
         select: { userId: true },
       });
       let emitted = 0;
       for (const driver of drivers) {
-        if (this.emitToUser(driver.userId, payload)) emitted += 1;
+        if (this.emitToUser(driver.userId, payload, siteId)) emitted += 1;
       }
       return emitted;
     } catch {
@@ -168,24 +202,33 @@ export class DeliveryDriverGateway implements OnGatewayInit, OnGatewayConnection
     }
   }
 
-  async emitForOrder(orderOrId: any, payload: DriverPortalUpdate): Promise<boolean> {
+  async emitForOrder(
+    orderOrId: any,
+    payload: DriverPortalUpdate,
+    siteId?: string,
+  ): Promise<boolean> {
     if (!orderOrId) return false;
     if (typeof orderOrId === 'string') {
       try {
-        const order = await this.prisma.order.findUnique({
-          where: { id: orderOrId },
-          select: { deliveryDriver: { select: { userId: true } } },
+        const order = await this.prisma.order.findFirst({
+          where: { id: orderOrId, ...(siteId ? { siteId } : {}) },
+          select: { siteId: true, deliveryDriver: { select: { userId: true } } },
         });
-        return this.emitToUser(order?.deliveryDriver?.userId, payload);
+        return this.emitToUser(
+          order?.deliveryDriver?.userId,
+          payload,
+          order?.siteId || siteId || DEFAULT_SITE_ID,
+        );
       } catch {
         return false;
       }
     }
 
     const directUserId = orderOrId.deliveryDriver?.userId;
-    if (directUserId) return this.emitToUser(directUserId, payload);
+    const resolvedSiteId = siteId || orderOrId.siteId || orderOrId.deliveryDriver?.siteId;
+    if (directUserId) return this.emitToUser(directUserId, payload, resolvedSiteId || DEFAULT_SITE_ID);
     const driverId = orderOrId.deliveryDriverId || orderOrId.deliveryDriver?.id;
-    return this.emitForDriver(driverId, payload);
+    return this.emitForDriver(driverId, payload, resolvedSiteId);
   }
 
   async emitChatMessageForOrder(orderId: string, message: DriverOrderChatUpdate['message']): Promise<boolean> {
@@ -206,11 +249,13 @@ export class DeliveryDriverGateway implements OnGatewayInit, OnGatewayConnection
             },
           ],
         },
-        select: { deliveryDriver: { select: { userId: true, active: true } } },
+        select: { siteId: true, deliveryDriver: { select: { userId: true, active: true } } },
       });
       const userId = order?.deliveryDriver?.active ? order.deliveryDriver.userId : null;
       if (!userId) return false;
-      this.server.to(`driver-user:${userId}`).emit('driverOrderChatMessage', { orderId, message });
+      this.server
+        .to(this.driverUserRoom(order.siteId || DEFAULT_SITE_ID, userId))
+        .emit('driverOrderChatMessage', { orderId, message });
       return true;
     } catch {
       return false;

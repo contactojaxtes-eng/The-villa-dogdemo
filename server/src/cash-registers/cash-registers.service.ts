@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { SocketGateway } from '../socket/socket.gateway';
+import { DEFAULT_SITE_ID } from '../common/multisite.constants';
 
 @Injectable()
 export class CashRegistersService {
@@ -9,13 +10,13 @@ export class CashRegistersService {
     private socketGateway: SocketGateway,
   ) {}
 
-  async findAll() {
+  async findAll(siteId = DEFAULT_SITE_ID) {
     return this.prisma.cashRegister.findMany({
-      where: { active: true },
+      where: { siteId, active: true },
       include: {
         manager: { select: { id: true, name: true, email: true } },
         closings: {
-          where: { isOpen: true },
+          where: { siteId, isOpen: true },
           include: { user: { select: { id: true, name: true } } },
         },
       },
@@ -31,25 +32,38 @@ export class CashRegistersService {
     return value;
   }
 
-  async create(data: { name: string; description?: string; managerId?: string; purpose?: string }) {
+  private async assertManagerBelongsToSite(managerId: string | undefined | null, siteId: string) {
+    if (!managerId) return;
+    const membership = await this.prisma.userSiteMembership.findFirst({
+      where: { userId: managerId, siteId, active: true },
+      select: { userId: true },
+    });
+    if (!membership) throw new BadRequestException('El responsable no pertenece a esta sede.');
+  }
+
+  async create(data: { name: string; description?: string; managerId?: string; purpose?: string }, siteId = DEFAULT_SITE_ID) {
     const purpose = this.normalizePurpose(data.purpose);
+    await this.assertManagerBelongsToSite(data.managerId, siteId);
     if (purpose === 'DELIVERY') {
       const existing = await this.prisma.cashRegister.findFirst({
-        where: { purpose: 'DELIVERY', active: true },
+        where: { siteId, purpose: 'DELIVERY', active: true },
         select: { id: true },
       });
       if (existing) throw new BadRequestException('Ya existe una Caja de Domicilios activa.');
     }
     const res = await this.prisma.cashRegister.create({
-      data: { ...data, purpose },
+      data: { ...data, purpose, siteId },
       include: { manager: { select: { id: true, name: true } } },
     });
-    this.socketGateway.server.emit('cashRegistersChanged');
+    this.socketGateway.emitToSite(siteId, 'cashRegistersChanged');
     return res;
   }
 
-  async update(id: string, data: Partial<{ name: string; description: string; managerId: string | null; active: boolean; purpose: string }>) {
-    const current = await this.findOne(id);
+  async update(id: string, data: Partial<{ name: string; description: string; managerId: string | null; active: boolean; purpose: string }>, siteId = DEFAULT_SITE_ID) {
+    const current = await this.findOne(id, siteId);
+    if (Object.prototype.hasOwnProperty.call(data, 'managerId')) {
+      await this.assertManagerBelongsToSite(data.managerId, siteId);
+    }
     if (current.purpose === 'DELIVERY' && data.active === false) {
       throw new BadRequestException('La Caja Domicilios es necesaria para tomar pedidos y no se puede desactivar.');
     }
@@ -60,8 +74,8 @@ export class CashRegistersService {
       }
       if (data.purpose !== current.purpose) {
         const [closingCount, orderCount] = await Promise.all([
-          this.prisma.cashClosing.count({ where: { cashRegisterId: id } }),
-          this.prisma.order.count({ where: { cashRegisterId: id } }),
+          this.prisma.cashClosing.count({ where: { siteId, cashRegisterId: id } }),
+          this.prisma.order.count({ where: { siteId, cashRegisterId: id } }),
         ]);
         if (closingCount > 0 || orderCount > 0) {
           throw new BadRequestException('No se puede cambiar el canal de una caja con movimientos. Crea una caja nueva para conservar el historial.');
@@ -69,7 +83,7 @@ export class CashRegistersService {
       }
       if (data.purpose === 'DELIVERY') {
         const existing = await this.prisma.cashRegister.findFirst({
-          where: { purpose: 'DELIVERY', active: true, id: { not: id } },
+          where: { siteId, purpose: 'DELIVERY', active: true, id: { not: id } },
           select: { id: true },
         });
         if (existing) throw new BadRequestException('Ya existe una Caja de Domicilios activa.');
@@ -80,20 +94,20 @@ export class CashRegistersService {
       data,
       include: { manager: { select: { id: true, name: true } } },
     });
-    this.socketGateway.server.emit('cashRegistersChanged');
+    this.socketGateway.emitToSite(siteId, 'cashRegistersChanged');
     return res;
   }
 
-  async findOne(id: string) {
-    const register = await this.prisma.cashRegister.findUnique({
-      where: { id },
+  async findOne(id: string, siteId = DEFAULT_SITE_ID) {
+    const register = await this.prisma.cashRegister.findFirst({
+      where: { id, siteId },
       include: { manager: { select: { id: true, name: true } } },
     });
     if (!register) throw new NotFoundException('Caja no encontrada');
     return register;
   }
 
-  async getSummary(registerId: string, date?: string) {
+  async getSummary(registerId: string, date?: string, siteId = DEFAULT_SITE_ID) {
     const isNullReg = registerId === 'null' || registerId === 'manual';
     const today = new Date();
     today.setHours(0, 0, 0, 0);
@@ -102,6 +116,7 @@ export class CashRegistersService {
       // Ventas Fuera de Caja: contabilizar pedidos que no tienen caja asignada
       const orphanOrders = await this.prisma.order.findMany({
         where: {
+          siteId,
           cashRegisterId: null,
           orderType: 'LOCAL',
           status: { not: 'CANCELLED' },
@@ -148,8 +163,8 @@ export class CashRegistersService {
       };
     }
 
-    const register = await this.prisma.cashRegister.findUnique({
-      where: { id: registerId },
+    const register = await this.prisma.cashRegister.findFirst({
+      where: { id: registerId, siteId },
       select: { id: true, purpose: true },
     });
     if (!register) throw new NotFoundException('Caja no encontrada');
@@ -157,7 +172,7 @@ export class CashRegistersService {
 
     // Para una caja registrada específica:
     let openClosing = await this.prisma.cashClosing.findFirst({
-      where: { cashRegisterId: registerId, isOpen: true },
+      where: { siteId, cashRegisterId: registerId, isOpen: true },
       include: { user: { select: { id: true, name: true } } },
       orderBy: { shiftStart: 'desc' },
     });
@@ -194,6 +209,7 @@ export class CashRegistersService {
       // es deliberadamente de solo lectura para no absorber ventas de otro turno.
       const shiftOrders = await this.prisma.order.findMany({
         where: {
+          siteId,
           cashClosingId: openClosing.id,
           cashRegisterId: registerId,
           orderType: { in: ['DELIVERY', 'PICKUP'] },
@@ -203,7 +219,7 @@ export class CashRegistersService {
       });
 
       const totalExpenses = (await this.prisma.expense.findMany({
-        where: { userId: openClosing.userId, createdAt: { gte: openClosing.shiftStart } },
+        where: { siteId, userId: openClosing.userId, createdAt: { gte: openClosing.shiftStart } },
       })).reduce((sum, expense) => sum + (expense.amount || 0), 0);
       const paymentMethod = (order: (typeof shiftOrders)[number]) => String(order.payment?.method || order.paymentMethod || '').toUpperCase().trim();
       const isCollected = (order: (typeof shiftOrders)[number]) => order.paymentStatus === 'CONFIRMED' || order.payment?.status === 'CONFIRMED';
@@ -268,13 +284,14 @@ export class CashRegistersService {
     // El resumen no modifica pedidos ni mesas. Así una consulta nunca puede
     // apropiarse de movimientos de otra caja abierta.
     const otherDiningRegisters = await this.prisma.cashRegister.findMany({
-      where: { id: { not: registerId }, purpose: { not: 'DELIVERY' }, active: true },
+      where: { siteId, id: { not: registerId }, purpose: { not: 'DELIVERY' }, active: true },
       select: { id: true },
     });
     const otherDiningIds = otherDiningRegisters.map(r => r.id);
 
     const orders = await this.prisma.order.findMany({
       where: {
+        siteId,
         status: { not: 'CANCELLED' },
         orderType: 'LOCAL',
         OR: [
@@ -326,6 +343,7 @@ export class CashRegistersService {
     try {
       const expenses = await this.prisma.expense.findMany({
         where: {
+          siteId,
           createdAt: { gte: openClosing.shiftStart },
         },
       });
@@ -372,13 +390,13 @@ export class CashRegistersService {
     };
   }
 
-  async remove(id: string) {
-    const register = await this.findOne(id);
+  async remove(id: string, siteId = DEFAULT_SITE_ID) {
+    const register = await this.findOne(id, siteId);
     if (register.purpose === 'DELIVERY') {
       throw new BadRequestException('La Caja Domicilios es necesaria para tomar pedidos y no se puede desactivar.');
     }
     const openClosing = await this.prisma.cashClosing.findFirst({
-      where: { cashRegisterId: id, isOpen: true },
+      where: { siteId, cashRegisterId: id, isOpen: true },
       select: { id: true },
     });
     if (openClosing) {
@@ -391,7 +409,7 @@ export class CashRegistersService {
       where: { id },
       data: { active: false },
     });
-    this.socketGateway.server.emit('cashRegistersChanged');
+    this.socketGateway.emitToSite(siteId, 'cashRegistersChanged');
     return res;
   }
 }

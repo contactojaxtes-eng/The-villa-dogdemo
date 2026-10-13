@@ -8,6 +8,12 @@ import { buildMessagingMenuText } from '../menu/menu-text';
 import { receiptSummary } from '../tables/receipt';
 import { toDriverOrderChatMessage } from './order-chat-message';
 import { sanitizeOrderNote } from './order-notes';
+import { WhatsAppSiteResolverService } from './whatsapp-site-resolver.service';
+import {
+  DEFAULT_SITE_ID,
+  WHATSAPP_META_PREFLIGHT_VERIFIED_AT_KEY,
+} from '../common/multisite.constants';
+import { sendPrivateFileResponse } from '../common/private-file-response';
 
 export type GeminiOperation = 'ORDER_READER' | 'AUDIO_TRANSCRIPTION' | 'CHATBOT' | 'CONNECTION_TEST' | 'LEARNING' | 'RULE_POLISH';
 
@@ -71,10 +77,11 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
   private readonly geminiDailyMetrics = new Map<string, GeminiDayTotals>();
   private readonly geminiMetricsDirty = new Set<string>();
   private readonly geminiMetricsInstanceId = randomUUID();
+  private geminiMetricsLastPruneDay = '';
   private geminiMetricsFlushTimer?: ReturnType<typeof setInterval>;
   private autoTrainingTimer?: ReturnType<typeof setTimeout>;
   private autoTrainingStopped = false;
-  private autoTrainingRunInProgress = false;
+  private readonly autoTrainingSitesInProgress = new Set<string>();
   private readonly chatbotDebounceTimers = new Map<string, NodeJS.Timeout>();
   private readonly processingChatbotSessions = new Set<string>();
   private readonly chatbotSessionQueues = new Map<string, Promise<void>>();
@@ -91,7 +98,93 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
     private config: ConfigService,
     private socketGateway: SocketGateway,
     @Optional() private deliveryDriverGateway?: DeliveryDriverGateway,
+    @Optional() private siteResolver?: WhatsAppSiteResolverService,
   ) {}
+
+  private settingCacheKey(siteId: string, key: string): string {
+    return `${siteId}:${key}`;
+  }
+
+  /**
+   * Lee configuración operativa aislada por sede. La sede principal conserva
+   * AppSetting como respaldo histórico; ninguna sede nueva puede heredarlo.
+   * Una fila con valor vacío es intencional y también reemplaza el legado.
+   */
+  private async readSiteSettings(
+    siteId: string,
+    keys: string[],
+  ): Promise<Map<string, string>> {
+    const values = new Map<string, string>();
+    const siteSetting = (this.prisma as any).siteSetting;
+    if (siteSetting?.findMany) {
+      const rows = await siteSetting.findMany({
+        where: { siteId, key: { in: keys } },
+        select: { key: true, value: true },
+      });
+      for (const row of rows || []) values.set(row.key, row.value);
+    }
+
+    if (siteId !== DEFAULT_SITE_ID) return values;
+
+    const missingKeys = keys.filter(key => !values.has(key));
+    if (missingKeys.length > 0) {
+      const legacyRows = await this.prisma.appSetting.findMany({
+        where: { key: { in: missingKeys } },
+      });
+      for (const row of legacyRows || []) values.set(row.key, row.value);
+    }
+    return values;
+  }
+
+  private async writeSiteSetting(siteId: string, key: string, value: string): Promise<void> {
+    const siteSetting = (this.prisma as any).siteSetting;
+    if (siteSetting?.upsert) {
+      await siteSetting.upsert({
+        where: { siteId_key: { siteId, key } },
+        create: { siteId, key, value },
+        update: { value },
+      });
+    } else if (siteId === DEFAULT_SITE_ID) {
+      // Compatibilidad para pruebas antiguas que todavía no incluyen el mock
+      // de SiteSetting. Prisma en ejecución siempre usa la rama anterior.
+      await this.prisma.appSetting.upsert({
+        where: { key },
+        create: { key, value },
+        update: { value },
+      });
+    } else {
+      throw new BadRequestException('La configuración por sede no está disponible');
+    }
+    this.settingCache.delete(this.settingCacheKey(siteId, key));
+  }
+
+  private async deleteSiteSettings(siteId: string, keys: string[]): Promise<void> {
+    const siteSetting = (this.prisma as any).siteSetting;
+    if (siteSetting?.deleteMany) {
+      await siteSetting.deleteMany({ where: { siteId, key: { in: keys } } });
+    } else if (siteId === DEFAULT_SITE_ID) {
+      await this.prisma.appSetting.deleteMany({ where: { key: { in: keys } } });
+    }
+    for (const key of keys) {
+      this.settingCache.delete(this.settingCacheKey(siteId, key));
+    }
+  }
+
+  private async resolveOutboundMetaConfig(siteId = DEFAULT_SITE_ID) {
+    if (this.siteResolver) {
+      const config = await this.siteResolver.getSiteMetaConfig(siteId);
+      if (!config?.phoneNumberId || !config.accessToken) return null;
+      return { phoneId: config.phoneNumberId, token: config.accessToken };
+    }
+
+    // Compatibilidad para pruebas unitarias y para el número histórico. Una
+    // sede distinta nunca puede caer silenciosamente en las credenciales
+    // globales de la principal.
+    if (siteId !== DEFAULT_SITE_ID) return null;
+    const phoneId = await this.getSetting('whatsapp_phone_id');
+    const token = await this.getSetting('whatsapp_token');
+    return phoneId && token ? { phoneId, token } : null;
+  }
 
   async onModuleInit() {
     this.autoTrainingStopped = false;
@@ -118,6 +211,7 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
   private async resolveMessageOrderId(
     sessionId: string,
     options: { explicitOrderId?: string | null; replyToWaMessageId?: string | null } = {},
+    siteId = DEFAULT_SITE_ID,
   ): Promise<string | null> {
     if (!sessionId) return null;
 
@@ -126,6 +220,7 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
         where: {
           id: options.explicitOrderId,
           chatSessionId: sessionId,
+          siteId,
           orderType: { in: ['DELIVERY', 'PICKUP'] },
         },
         select: { id: true },
@@ -136,9 +231,16 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
     if (options.replyToWaMessageId) {
       const replied = await this.prisma.whatsAppMessage.findFirst({
         where: { waMessageId: options.replyToWaMessageId, sessionId },
-        select: { orderId: true },
+        select: {
+          orderId: true,
+          order: { select: { id: true, siteId: true, chatSessionId: true } },
+        },
       });
-      if (replied?.orderId) return replied.orderId;
+      if (
+        replied?.orderId
+        && replied.order?.siteId === siteId
+        && replied.order.chatSessionId === sessionId
+      ) return replied.orderId;
     }
 
     // Si el cliente escribe sin citar un mensaje anterior (ej. envía un comprobante,
@@ -149,6 +251,7 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
     const activeOrders = await this.prisma.order.findMany({
       where: {
         chatSessionId: sessionId,
+        siteId,
         orderType: { in: ['DELIVERY', 'PICKUP'] },
         status: { in: ['PENDING', 'CONFIRMED', 'PREPARING', 'IN_ROUTE'] },
       },
@@ -176,11 +279,15 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
    * la ventana temporal entre pedidos contiguos de la misma sesión.
    * Vincula tanto mensajes de creación como aclaraciones posteriores.
    */
-  async ensureLegacyOrderMessageLinks(orderId: string): Promise<void> {
-    const order = await this.prisma.order.findUnique({
-      where: { id: orderId },
+  async ensureLegacyOrderMessageLinks(
+    orderId: string,
+    siteId = DEFAULT_SITE_ID,
+  ): Promise<void> {
+    const order = await this.prisma.order.findFirst({
+      where: { id: orderId, siteId },
       select: {
         id: true,
+        siteId: true,
         chatSessionId: true,
         createdAt: true,
         status: true,
@@ -188,12 +295,12 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
       },
     });
     if (!order?.chatSessionId || !order?.createdAt) return;
-
     // Buscar el pedido anterior y posterior en la misma sesión para delimitar la ventana
     const [prevOrder, nextOrder] = await Promise.all([
       this.prisma.order.findFirst({
         where: {
           chatSessionId: order.chatSessionId,
+          siteId,
           orderType: { in: ['DELIVERY', 'PICKUP'] },
           createdAt: { lt: order.createdAt },
         },
@@ -203,6 +310,7 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
       this.prisma.order.findFirst({
         where: {
           chatSessionId: order.chatSessionId,
+          siteId,
           orderType: { in: ['DELIVERY', 'PICKUP'] },
           createdAt: { gt: order.createdAt },
         },
@@ -224,6 +332,7 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
     await this.prisma.whatsAppMessage.updateMany({
       where: {
         sessionId: order.chatSessionId,
+        session: { siteId },
         orderId: null,
         createdAt: { gte: start, lte: end },
       },
@@ -451,12 +560,14 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
     return Number.isFinite(parsed) ? parsed : null;
   }
 
-  async getSettings() {
-    const keys = [
+  async getSettings(siteId = DEFAULT_SITE_ID) {
+    const credentialKeys = [
       'whatsapp_phone_id',
       'whatsapp_token',
       'whatsapp_verify_token',
       'whatsapp_business_phone',
+    ];
+    const operationalKeys = [
       'chatbot_enabled',
       'order_reader_enabled',
       'chatbot_menu_share_message',
@@ -475,44 +586,64 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
       'out_of_service_message',
       'restaurant_hours',
     ];
-    const settings = await this.prisma.appSetting.findMany({ where: { key: { in: keys } } });
+    const rawSettings = await this.readSiteSettings(
+      siteId,
+      siteId === DEFAULT_SITE_ID
+        ? [...credentialKeys, ...operationalKeys]
+        : operationalKeys,
+    );
+    const metaConfig = this.siteResolver
+      ? await this.siteResolver.getSiteMetaConfig(siteId).catch(() => null)
+      : null;
     const map: Record<string, string> = {};
-    for (const s of settings) {
-      if (s.key === 'gemini_api_key') {
-        const realKeys = (s.value || '').split(',').map(k => k.trim()).filter(Boolean);
-        map[s.key] = realKeys.map(k => {
+    for (const [key, rawValue] of rawSettings.entries()) {
+      if (key === 'gemini_api_key') {
+        const realKeys = (rawValue || '').split(',').map(k => k.trim()).filter(Boolean);
+        map[key] = realKeys.map(k => {
           const last4 = k.length > 4 ? k.slice(-4) : '••••';
           return `••••••••••••••••••••••••••••••••••••••••${last4}`;
         }).join(', ');
       } else {
-        map[s.key] = (s.key.includes('token') || s.key.includes('key')) ? '••••••••' : s.value;
+        map[key] = (key.includes('token') || key.includes('key')) ? '••••••••' : rawValue;
       }
     }
     let menuText = map.chatbot_menu_text || '';
     if (!menuText) {
       try {
-        menuText = await this.buildMessagingMenuText();
+        menuText = await this.buildMessagingMenuText(siteId);
       } catch (error) {
         this.logger.warn('No se pudo generar la carta de WhatsApp al leer la configuración', error);
         menuText = '📋 *MENÚ Y PRECIOS VILLA DOG*';
       }
     }
     const [geminiRequestsToday, geminiUsageDaily] = await Promise.all([
-      this.getGeminiUsageToday(),
-      this.getGeminiUsageDaily(),
+      this.getGeminiUsageToday(siteId),
+      this.getGeminiUsageDaily(30, siteId),
     ]);
-    const geminiKeyCount = (settings.find(s => s.key === 'gemini_api_key')?.value || '')
+    const geminiKeyCount = (rawSettings.get('gemini_api_key') || '')
       .split(',')
       .map(key => key.trim())
       .filter(Boolean)
       .length;
+    const phoneId = metaConfig?.phoneNumberId || map.whatsapp_phone_id || '';
+    const businessPhone = metaConfig?.displayPhoneNumber || map.whatsapp_business_phone || '';
+    const verifyTokenConfigured = metaConfig
+      ? Boolean(metaConfig.verifyToken)
+      : rawSettings.has('whatsapp_verify_token');
+    const configured = metaConfig
+      ? Boolean(metaConfig.phoneNumberId && metaConfig.accessToken)
+      : Boolean(map.whatsapp_phone_id && rawSettings.has('whatsapp_token'));
+    const resolvedMenuUrl = await this.resolveDigitalMenuUrlForSite(
+      map.digital_menu_url,
+      siteId,
+    );
     return {
-      phoneId: map.whatsapp_phone_id || '',
-      businessPhone: map.whatsapp_business_phone || '',
-      verifyTokenConfigured: !!settings.find(s => s.key === 'whatsapp_verify_token'),
+      phoneId,
+      businessPhone,
+      verifyTokenConfigured,
       chatbotEnabled: map.chatbot_enabled === 'true', // Estricto: solo true si explícitamente se guardó como 'true'
       orderReaderEnabled: map.order_reader_enabled === 'true',
-      configured: !!(map.whatsapp_phone_id && settings.find(s => s.key === 'whatsapp_token')),
+      configured,
       menuShareMessage: map.chatbot_menu_share_message || 'Mira nuestra carta actualizada y arma tu pedido aquí:',
       menuText,
       paymentQrName: map.chatbot_payment_qr_name || null,
@@ -528,7 +659,7 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
       geminiUsageDaily,
       // Mientras no exista un dominio público explícito, no mostramos ni
       // compartimos la URL interna de Railway como parte de la carta.
-      digitalMenuUrl: this.getShareableDigitalMenuUrl(map.digital_menu_url) || '',
+      digitalMenuUrl: this.getShareableDigitalMenuUrl(resolvedMenuUrl) || '',
       businessHoursEnabled: map.business_hours_enabled === 'true',
       outOfServiceEnabled: map.out_of_service_enabled === 'true',
       outOfServiceMessage: map.out_of_service_message || '',
@@ -574,18 +705,66 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
 
   private getShareableDigitalMenuUrl(configured?: string | null): string | null {
     const stored = String(configured || '').trim().replace(/\/+$/, '');
-    const publicUrl = this.getConfiguredPublicMenuUrl();
-    if (publicUrl) return publicUrl;
     if (!stored || this.getLegacyDigitalMenuUrls().includes(stored) || /^https?:\/\/[^/]+\.up\.railway\.app\/menu$/i.test(stored)) return null;
     return stored;
   }
 
-  private async getMessagingMenuCategories() {
+  /**
+   * Resolves the public menu without ever falling back from a secondary site
+   * to the principal site's generic `/menu` route. The public frontend already
+   * exposes `/menu/:siteCode`; when a shared base URL is used we append the
+   * stable site code so links sent by WhatsApp stay tenant isolated.
+   */
+  private async resolveDigitalMenuUrlForSite(
+    configured: string | null | undefined,
+    siteId = DEFAULT_SITE_ID,
+  ): Promise<string | null> {
+    if (siteId === DEFAULT_SITE_ID) return this.resolveDigitalMenuUrl(configured);
+
+    const stored = String(configured || '').trim().replace(/\/+$/, '');
+    const publicUrl = this.getConfiguredPublicMenuUrl();
+    const legacyUrls = this.getLegacyDigitalMenuUrls();
+    // A value copied from the principal's old fallback is not site-specific;
+    // replace it with the configured shared public base before adding the code.
+    let base = stored && !legacyUrls.includes(stored) ? stored : publicUrl;
+    // No hay una URL pública segura para derivar. No usamos CLIENT_URL ni
+    // Railway como respaldo para una sede secundaria: hacerlo produciría un
+    // enlace que parece válido pero podría abrir la carta de la sede principal.
+    if (!base) return null;
+
+    const siteModel = (this.prisma as any).site;
+    const site = siteModel?.findUnique
+      ? await siteModel.findUnique({
+          where: { id: siteId },
+          select: { code: true },
+        }).catch(() => null)
+      : null;
+    const siteCode = String(site?.code || siteId)
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9_-]+/g, '-')
+      .replace(/^-+|-+$/g, '');
+    if (!siteCode) return null;
+
+    // Respect an explicitly site-scoped URL that already contains the code.
+    const codePattern = new RegExp(`/${siteCode}(?:[/?#]|$)`, 'i');
+    if (codePattern.test(base)) return base;
+
+    try {
+      const parsed = new URL(base);
+      parsed.pathname = `${parsed.pathname.replace(/\/+$/, '')}/${siteCode}`;
+      return parsed.toString().replace(/\/$/, '');
+    } catch {
+      return `${base.replace(/\/+$/, '')}/${siteCode}`;
+    }
+  }
+
+  private async getMessagingMenuCategories(siteId = DEFAULT_SITE_ID) {
     const categories = await this.prisma.menuCategory.findMany({
-      where: { active: true },
+      where: { siteId, active: true },
       include: {
         items: {
-          where: { active: true, availableForDelivery: { not: false } },
+          where: { siteId, active: true, availableForDelivery: { not: false } },
           orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
         },
       },
@@ -597,8 +776,8 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
     return categories.filter(category => category.items.length > 0 && !/^adiciones?$/i.test(category.name.trim()));
   }
 
-  private async buildMessagingMenuText(): Promise<string> {
-    const categories = await this.getMessagingMenuCategories();
+  private async buildMessagingMenuText(siteId = DEFAULT_SITE_ID): Promise<string> {
+    const categories = await this.getMessagingMenuCategories(siteId);
     return buildMessagingMenuText(categories);
   }
 
@@ -674,10 +853,14 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
     return session?.phone || fallbackPhone || '';
   }
 
-  async resolveActiveRecipient(session?: any, fallbackPhone?: string): Promise<{ recipientPhone: string; lastInWaId?: string; isId: boolean }> {
+  async resolveActiveRecipient(
+    session?: any,
+    fallbackPhone?: string,
+    siteId = DEFAULT_SITE_ID,
+  ): Promise<{ recipientPhone: string; lastInWaId?: string; isId: boolean }> {
     let targetSession = session;
     if (!targetSession && fallbackPhone) {
-      targetSession = await this.resolveSessionForDispatch(fallbackPhone);
+      targetSession = await this.resolveSessionForDispatch(fallbackPhone, siteId);
     }
 
     let lastIn: any = null;
@@ -791,7 +974,7 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
     return null;
   }
 
-  async resolveSessionForDispatch(target: string): Promise<any> {
+  async resolveSessionForDispatch(target: string, siteId = DEFAULT_SITE_ID): Promise<any> {
     if (!target || this.isDummyPhoneNumber(target)) return null;
     const raw = target.trim();
     const cleanDigits = raw.replace(/\D/g, '');
@@ -811,13 +994,18 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
     }
 
     return this.prisma.whatsAppSession.findFirst({
-      where: { OR: orConditions },
+      where: { siteId, OR: orConditions },
       include: { assignedTo: { select: { id: true, name: true } } },
       orderBy: { lastMessageAt: 'desc' }
     });
   }
 
-  async findOrCreateSession(rawPhone: string, defaultName?: string, callablePhone?: string) {
+  async findOrCreateSession(
+    rawPhone: string,
+    defaultName?: string,
+    callablePhone?: string,
+    siteId = DEFAULT_SITE_ID,
+  ) {
     const raw = (rawPhone || '').trim();
     const cleanDigits = raw.replace(/\D/g, '');
     const isStandardPhone = cleanDigits.length >= 7 && cleanDigits.length <= 13;
@@ -833,7 +1021,7 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
     }
 
     let session = await this.prisma.whatsAppSession.findFirst({
-      where: { OR: orConditions },
+      where: { siteId, OR: orConditions },
       include: { assignedTo: { select: { id: true, name: true } } },
       orderBy: { lastMessageAt: 'desc' }
     });
@@ -844,6 +1032,7 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
       const fallbackName = defaultName || (isStandardPhone && phone10.length === 10 ? `+57 ${phone10.slice(0, 3)} ${phone10.slice(3, 6)} ${phone10.slice(6)}` : raw);
       session = await this.prisma.whatsAppSession.create({
         data: {
+          siteId,
           phone: primaryKey,
           customerPhone: resolvedCallable || primaryKey,
           customerName: fallbackName
@@ -861,47 +1050,33 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
     return session;
   }
 
-  private async purgeLegacyMenuFile() {
-    await this.prisma.appSetting.deleteMany({
-      where: { key: { in: ['chatbot_menu_file_base64', 'chatbot_menu_file_name', 'chatbot_menu_file_mimetype', 'chatbot_menu_file_caption', 'chatbot_menu_meta_media_id'] } },
-    });
+  private async purgeLegacyMenuFile(siteId = DEFAULT_SITE_ID) {
+    const keys = ['chatbot_menu_file_base64', 'chatbot_menu_file_name', 'chatbot_menu_file_mimetype', 'chatbot_menu_file_caption', 'chatbot_menu_meta_media_id'];
+    await this.deleteSiteSettings(siteId, keys);
+    if (siteId === DEFAULT_SITE_ID && (this.prisma as any).siteSetting?.deleteMany) {
+      await this.prisma.appSetting.deleteMany({ where: { key: { in: keys } } });
+    }
   }
 
-  async savePaymentQrFile(base64: string, fileName: string, mimeType: string) {
-    await this.prisma.appSetting.upsert({
-      where: { key: 'chatbot_payment_qr_base64' },
-      create: { key: 'chatbot_payment_qr_base64', value: base64 },
-      update: { value: base64 },
-    });
-    await this.prisma.appSetting.upsert({
-      where: { key: 'chatbot_payment_qr_name' },
-      create: { key: 'chatbot_payment_qr_name', value: fileName },
-      update: { value: fileName },
-    });
-    await this.prisma.appSetting.upsert({
-      where: { key: 'chatbot_payment_qr_mimetype' },
-      create: { key: 'chatbot_payment_qr_mimetype', value: mimeType },
-      update: { value: mimeType },
-    });
-    await this.prisma.appSetting.upsert({
-      where: { key: 'chatbot_payment_qr_mode' },
-      create: { key: 'chatbot_payment_qr_mode', value: 'IMAGE' },
-      update: { value: 'IMAGE' },
-    });
+  async savePaymentQrFile(base64: string, fileName: string, mimeType: string, siteId = DEFAULT_SITE_ID) {
+    await Promise.all([
+      this.writeSiteSetting(siteId, 'chatbot_payment_qr_base64', base64),
+      this.writeSiteSetting(siteId, 'chatbot_payment_qr_name', fileName),
+      this.writeSiteSetting(siteId, 'chatbot_payment_qr_mimetype', mimeType),
+      this.writeSiteSetting(siteId, 'chatbot_payment_qr_mode', 'IMAGE'),
+    ]);
     // Un identificador de Meta pertenece a los bytes anteriores. Se elimina antes
     // de precargar la nueva imagen para impedir que se envíe un QR obsoleto.
-    await this.prisma.appSetting.deleteMany({
-      where: { key: 'chatbot_payment_qr_meta_media_id' },
-    });
-    this.settingCache.delete('chatbot_payment_qr_mode');
-    this.socketGateway.emitWhatsApp('whatsappSettingsUpdated', await this.getSettings());
+    await this.deleteSiteSettings(siteId, ['chatbot_payment_qr_meta_media_id']);
+    const currentSettings = await this.getSettings(siteId);
+    this.socketGateway.emitWhatsApp('whatsappSettingsUpdated', { ...currentSettings, siteId }, siteId);
 
     // Pre-cachear QR en Meta Media API de inmediato
     (async () => {
       try {
-        const phoneId = await this.getSetting('whatsapp_phone_id');
-        const token = await this.getSetting('whatsapp_token');
-        if (!phoneId || !token) return;
+        const metaConfig = await this.resolveOutboundMetaConfig(siteId);
+        if (!metaConfig) return;
+        const { phoneId, token } = metaConfig;
 
         const buffer = Buffer.from(base64, 'base64');
         const formData = new FormData();
@@ -919,11 +1094,7 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
         if (uploadRes.ok) {
           const uploadData = await uploadRes.json();
           if (uploadData.id) {
-            await this.prisma.appSetting.upsert({
-              where: { key: 'chatbot_payment_qr_meta_media_id' },
-              create: { key: 'chatbot_payment_qr_meta_media_id', value: uploadData.id },
-              update: { value: uploadData.id },
-            });
+            await this.writeSiteSetting(siteId, 'chatbot_payment_qr_meta_media_id', uploadData.id);
             this.logger.log(`QR de pago pre-cacheado con éxito en Meta Media ID: ${uploadData.id}`);
           }
         }
@@ -933,49 +1104,56 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
     })();
   }
 
-  async deletePaymentQrFile() {
-    await this.prisma.appSetting.deleteMany({
-      where: { key: { in: ['chatbot_payment_qr_base64', 'chatbot_payment_qr_name', 'chatbot_payment_qr_mimetype', 'chatbot_payment_qr_meta_media_id'] } },
-    });
-    await this.prisma.appSetting.upsert({
-      where: { key: 'chatbot_payment_qr_mode' },
-      create: { key: 'chatbot_payment_qr_mode', value: 'ACCOUNT' },
-      update: { value: 'ACCOUNT' },
-    });
-    this.settingCache.delete('chatbot_payment_qr_mode');
-    this.socketGateway.emitWhatsApp('whatsappSettingsUpdated', await this.getSettings());
+  async deletePaymentQrFile(siteId = DEFAULT_SITE_ID) {
+    await this.deleteSiteSettings(siteId, [
+      'chatbot_payment_qr_base64',
+      'chatbot_payment_qr_name',
+      'chatbot_payment_qr_mimetype',
+      'chatbot_payment_qr_meta_media_id',
+    ]);
+    await this.writeSiteSetting(siteId, 'chatbot_payment_qr_mode', 'ACCOUNT');
+    const currentSettings = await this.getSettings(siteId);
+    this.socketGateway.emitWhatsApp('whatsappSettingsUpdated', { ...currentSettings, siteId }, siteId);
   }
 
-  async sendPaymentQr(phone: string, orderId?: string, sessionId?: string) {
+  async sendPaymentQr(
+    phone: string,
+    orderId?: string,
+    sessionId?: string,
+    requestedSiteId = DEFAULT_SITE_ID,
+  ) {
     const targetSession = sessionId
       ? await this.prisma.whatsAppSession.findUnique({ where: { id: sessionId } })
-      : await this.resolveSessionForDispatch(phone);
-    const { recipientPhone, lastInWaId, isId } = await this.resolveActiveRecipient(targetSession, phone);
+      : await this.resolveSessionForDispatch(phone, requestedSiteId);
+    if (sessionId && (!targetSession || (targetSession.siteId || DEFAULT_SITE_ID) !== requestedSiteId)) {
+      return { sent: false, reason: 'session_not_found_in_site' };
+    }
+    const siteId = targetSession?.siteId || requestedSiteId;
+    const qrKeys = [
+      'chatbot_payment_qr_mode',
+      'chatbot_payment_account_text',
+      'chatbot_payment_qr_base64',
+      'chatbot_payment_qr_name',
+      'chatbot_payment_qr_mimetype',
+      'chatbot_payment_qr_meta_media_id',
+      'chatbot_payment_qr_caption',
+    ];
+    const qrRows = await this.readSiteSettings(siteId, qrKeys);
+    if (siteId !== DEFAULT_SITE_ID && qrRows.size === 0) {
+      return { sent: false, reason: 'site_payment_settings_required' };
+    }
+    const qrSettings = Object.fromEntries(qrRows.entries()) as Record<string, string>;
+    const { recipientPhone, lastInWaId, isId } = await this.resolveActiveRecipient(targetSession, phone, siteId);
     const cleanPhone = this.formatRecipient(recipientPhone);
     const now = Date.now();
-    const lastSent = this.paymentQrSendingLocks.get(cleanPhone) || 0;
+    const lockKey = `${siteId}:${cleanPhone}`;
+    const lastSent = this.paymentQrSendingLocks.get(lockKey) || 0;
     if (now - lastSent < 4000) {
       this.logger.warn(`Deduplicando envío de QR para ${cleanPhone} (llamada repetida en < 4s)`);
       return { sent: true, deduplicated: true };
     }
-    this.paymentQrSendingLocks.set(cleanPhone, now);
+    this.paymentQrSendingLocks.set(lockKey, now);
 
-    const qrRows = await this.prisma.appSetting.findMany({
-      where: {
-        key: {
-          in: [
-            'chatbot_payment_qr_mode',
-            'chatbot_payment_account_text',
-            'chatbot_payment_qr_base64',
-            'chatbot_payment_qr_name',
-            'chatbot_payment_qr_mimetype',
-            'chatbot_payment_qr_meta_media_id',
-            'chatbot_payment_qr_caption',
-          ],
-        },
-      },
-    });
-    const qrSettings = Object.fromEntries(qrRows.map(row => [row.key, row.value])) as Record<string, string>;
     const mode = String(qrSettings.chatbot_payment_qr_mode || (qrSettings.chatbot_payment_qr_base64 ? 'IMAGE' : 'ACCOUNT')).toUpperCase();
     const accountText = String(qrSettings.chatbot_payment_account_text || '').trim();
 
@@ -983,12 +1161,12 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
       if (!accountText) {
         throw new BadRequestException('Configura primero los datos de la cuenta en Configuración > WhatsApp y envíos.');
       }
-      return this.sendMessage(cleanPhone, accountText, undefined, undefined, sessionId, orderId);
+      return this.sendMessage(cleanPhone, accountText, undefined, undefined, sessionId, orderId, siteId);
     }
 
     const fileValue = qrSettings.chatbot_payment_qr_base64;
     if (!fileValue) {
-      if (accountText) return this.sendMessage(cleanPhone, accountText, undefined, undefined, sessionId, orderId);
+      if (accountText) return this.sendMessage(cleanPhone, accountText, undefined, undefined, sessionId, orderId, siteId);
       throw new BadRequestException('Configura primero una imagen QR o los datos de la cuenta.');
     }
 
@@ -996,8 +1174,9 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
     const fileName = qrSettings.chatbot_payment_qr_name || 'QR_Pago_THE_VILLA_DOG.png';
     const mimeType = qrSettings.chatbot_payment_qr_mimetype || 'image/png';
     const cachedMediaId = qrSettings.chatbot_payment_qr_meta_media_id;
-    const phoneId = await this.getSetting('whatsapp_phone_id');
-    const token = await this.getSetting('whatsapp_token');
+    const metaConfig = await this.resolveOutboundMetaConfig(siteId);
+    const phoneId = metaConfig?.phoneId;
+    const token = metaConfig?.token;
 
     // 1. Envío instantáneo 0.05s usando ID cacheado
     if (cachedMediaId && phoneId && token) {
@@ -1029,17 +1208,17 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
 
         if (!ok && (sendData?.error?.code === 131047 || sendData?.error?.code === 131026 || sendData?.error?.code === 470)) {
           this.logger.warn(`Ventana de 24h cerrada para ${cleanPhone} en QR. Enviando plantilla de reactivación...`);
-          const tmplResult = await this.sendTemplate(cleanPhone, 'actualizacion_sistema_niche', 'es_CO', []);
+          const tmplResult = await this.sendTemplate(cleanPhone, 'actualizacion_sistema_niche', 'es_CO', [], siteId);
           if (tmplResult.sent) return { sent: true, data: tmplResult.data };
         }
 
         if (ok) {
-          const session = targetSession || await this.findOrCreateSession(cleanPhone);
+          const session = targetSession || await this.findOrCreateSession(cleanPhone, undefined, undefined, siteId);
           await this.prisma.whatsAppSession.update({ where: { id: session.id }, data: { lastMessageAt: new Date() } });
 
           const msgContent = caption ? `${mediaId}|${caption}` : mediaId;
 
-          const linkedOrderId = await this.resolveMessageOrderId(session.id, { explicitOrderId: orderId });
+           const linkedOrderId = await this.resolveMessageOrderId(session.id, { explicitOrderId: orderId }, siteId);
           const newMsg = await this.prisma.whatsAppMessage.create({
             data: {
               waMessageId: sendData.messages?.[0]?.id || `out-${Date.now()}`,
@@ -1053,6 +1232,7 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
           });
 
           this.socketGateway.emitWhatsApp('whatsappMessage', {
+            siteId,
             id: newMsg.id,
             waMessageId: newMsg.waMessageId,
             sessionId: session.id,
@@ -1064,7 +1244,7 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
             status: newMsg.status || 'sent',
             assignedTo: session.assignedToId,
             createdAt: newMsg.createdAt,
-          });
+          }, siteId);
 
           await this.emitDriverOrderChatMessage(newMsg);
           return { sent: true, data: sendData };
@@ -1076,33 +1256,41 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
 
     // 2. Si no estaba cacheado, subirlo y guardar ID
     const buffer = Buffer.from(fileValue, 'base64');
-    return this.sendMediaMessage(cleanPhone, buffer, fileName, mimeType, 'image', caption, sessionId, orderId);
+    return this.sendMediaMessage(cleanPhone, buffer, fileName, mimeType, 'image', caption, sessionId, orderId, siteId);
   }
 
   private menuSendingLocks = new Map<string, number>();
   private paymentQrSendingLocks = new Map<string, number>();
 
-  async sendMenuCarta(phone: string) {
-    const targetSession = await this.resolveSessionForDispatch(phone);
-    const { recipientPhone } = await this.resolveActiveRecipient(targetSession, phone);
+  async sendMenuCarta(phone: string, requestedSiteId = DEFAULT_SITE_ID) {
+    const targetSession = await this.resolveSessionForDispatch(phone, requestedSiteId);
+    const siteId = targetSession?.siteId || requestedSiteId;
+    const { recipientPhone } = await this.resolveActiveRecipient(targetSession, phone, siteId);
     const cleanPhone = this.formatRecipient(recipientPhone);
     const now = Date.now();
-    const lastSent = this.menuSendingLocks.get(cleanPhone) || 0;
+    const lockKey = `${siteId}:${cleanPhone}`;
+    const lastSent = this.menuSendingLocks.get(lockKey) || 0;
     if (now - lastSent < 4000) {
       this.logger.warn(`Deduplicando envío de carta para ${cleanPhone} (llamada repetida en < 4s)`);
       return { sent: true, deduplicated: true };
     }
-    this.menuSendingLocks.set(cleanPhone, now);
+    this.menuSendingLocks.set(lockKey, now);
 
-    const rows = await this.prisma.appSetting.findMany({
-      where: { key: { in: ['digital_menu_url', 'chatbot_menu_share_message', 'chatbot_menu_text'] } },
-    });
-    const values = Object.fromEntries(rows.map(row => [row.key, row.value])) as Record<string, string>;
-    const link = this.getShareableDigitalMenuUrl(values.digital_menu_url);
+    const rows = await this.readSiteSettings(siteId, [
+      'digital_menu_url',
+      'chatbot_menu_share_message',
+      'chatbot_menu_text',
+    ]);
+    const values = Object.fromEntries(rows.entries()) as Record<string, string>;
+    const resolvedMenuUrl = await this.resolveDigitalMenuUrlForSite(
+      values.digital_menu_url,
+      siteId,
+    );
+    const link = this.getShareableDigitalMenuUrl(resolvedMenuUrl);
     const customMessage = String(values.chatbot_menu_share_message || '').trim();
     let menuText = String(values.chatbot_menu_text || '').trim();
     if (!menuText) {
-      menuText = await this.buildMessagingMenuText();
+      menuText = await this.buildMessagingMenuText(siteId);
     }
     const intro = customMessage || 'Aquí tienes nuestra carta actualizada:';
     const introWithoutPlaceholder = intro.replaceAll('{url}', '').replace(/\n{3,}/g, '\n\n').trim();
@@ -1113,23 +1301,30 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
 
     // La carta es siempre el catálogo vivo. Los PDF e imágenes antiguos dejan de
     // tener prioridad, por lo que un cambio de producto o precio no queda obsoleto.
-    return this.sendMessage(cleanPhone, message);
+    return this.sendMessage(cleanPhone, message, undefined, undefined, targetSession?.id, undefined, siteId);
   }
 
   // Reenvío Directo en el Servidor (0.05s, sin descargar ni re-subir bytes)
-  async forwardMessage(targetPhone: string, content: string, messageType?: string) {
-    const cleanPhone = this.formatRecipient(targetPhone);
+  async forwardMessage(
+    targetPhone: string,
+    content: string,
+    messageType?: string,
+    requestedSiteId = DEFAULT_SITE_ID,
+  ) {
+    const targetSession = await this.resolveSessionForDispatch(targetPhone, requestedSiteId);
+    const siteId = targetSession?.siteId || requestedSiteId;
+    const cleanPhone = this.formatRecipient(this.getBestRecipientPhone(targetSession, targetPhone));
 
     if (['image', 'audio', 'document', 'video'].includes(messageType || '')) {
       const rawMediaId = content.split('|')[0];
       const cleanMediaId = rawMediaId.includes('/') ? rawMediaId.split('/').pop() : rawMediaId;
       const caption = content.includes('|') ? content.split('|').slice(1).join('|') : '';
-      const phoneId = await this.getSetting('whatsapp_phone_id');
-      const token = await this.getSetting('whatsapp_token');
+      const metaConfig = await this.resolveOutboundMetaConfig(siteId);
 
-      if (!phoneId || !token || !cleanMediaId) {
-        return this.sendMessage(cleanPhone, content);
+      if (!metaConfig || !cleanMediaId) {
+        return this.sendMessage(cleanPhone, content, undefined, undefined, targetSession?.id, undefined, siteId);
       }
+      const { phoneId, token } = metaConfig;
 
       const recipientObj = this.buildMetaRecipient(cleanPhone);
       const sendBody: any = {
@@ -1142,7 +1337,7 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
       if (cleanPhone.length >= 14 || /^\d{14,18}$/.test(cleanPhone)) {
         const lastIn = await this.prisma.whatsAppMessage.findFirst({
           where: {
-            session: { phone: cleanPhone },
+            session: { siteId, phone: cleanPhone },
             direction: 'IN',
             waMessageId: { startsWith: 'wamid.' }
           },
@@ -1155,6 +1350,7 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
 
       if (messageType === 'image') sendBody.image = { id: cleanMediaId, ...(caption ? { caption } : {}) };
       else if (messageType === 'audio') sendBody.audio = { id: cleanMediaId };
+      else if (messageType === 'video') sendBody.video = { id: cleanMediaId, ...(caption ? { caption } : {}) };
       else sendBody.document = { id: cleanMediaId, filename: 'archivo_reenviado', ...(caption ? { caption } : {}) };
 
       const sendRes = await fetch(`https://graph.facebook.com/v26.0/${phoneId}/messages`, {
@@ -1170,12 +1366,12 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
       const sendData = await sendRes.json();
 
       if (sendOk) {
-        const session = await this.findOrCreateSession(cleanPhone);
+        const session = targetSession || await this.findOrCreateSession(cleanPhone, undefined, undefined, siteId);
         await this.prisma.whatsAppSession.update({ where: { id: session.id }, data: { lastMessageAt: new Date() } });
 
         const msgContent = caption ? `${cleanMediaId}|${caption}` : cleanMediaId;
 
-        const linkedOrderId = await this.resolveMessageOrderId(session.id);
+         const linkedOrderId = await this.resolveMessageOrderId(session.id, {}, siteId);
         const newMsg = await this.prisma.whatsAppMessage.create({
           data: {
             waMessageId: sendData.messages?.[0]?.id || `out-${Date.now()}`,
@@ -1189,6 +1385,7 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
         });
 
         this.socketGateway.emitWhatsApp('whatsappMessage', {
+          siteId,
           id: newMsg.id,
           waMessageId: newMsg.waMessageId,
           sessionId: session.id,
@@ -1200,7 +1397,7 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
           status: newMsg.status || 'sent',
           assignedTo: session.assignedToId,
           createdAt: newMsg.createdAt,
-        });
+        }, siteId);
         await this.emitDriverOrderChatMessage(newMsg);
 
         return { sent: true, data: sendData };
@@ -1208,7 +1405,7 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
       return { sent: false, data: sendData };
     } else {
       // Reenvío de texto o enlace en 0.05s
-      return this.sendMessage(cleanPhone, content);
+      return this.sendMessage(cleanPhone, content, undefined, undefined, targetSession?.id, undefined, siteId);
     }
   }
 
@@ -1232,18 +1429,23 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
     outOfServiceEnabled?: boolean;
     outOfServiceMessage?: string;
     restaurantHours?: string;
-  }) {
+  }, siteId = DEFAULT_SITE_ID) {
     const updates: { key: string; value: string }[] = [];
-    if (data.phoneId !== undefined) updates.push({ key: 'whatsapp_phone_id', value: data.phoneId.trim() });
-    if (data.token && !data.token.includes('••')) {
-      const cleanToken = data.token.trim().replace(/^["']|["']$/g, '').split(/\s+/)[0];
-      updates.push({ key: 'whatsapp_token', value: cleanToken });
+    const credentialUpdates: { key: string; value: string }[] = [];
+    // Las credenciales legadas solo pertenecen a la sede principal. Las demás
+    // sedes se aprovisionan mediante WhatsAppAccount y variables de entorno.
+    if (siteId === DEFAULT_SITE_ID) {
+      if (data.phoneId !== undefined) credentialUpdates.push({ key: 'whatsapp_phone_id', value: data.phoneId.trim() });
+      if (data.token && !data.token.includes('••')) {
+        const cleanToken = data.token.trim().replace(/^["']|["']$/g, '').split(/\s+/)[0];
+        credentialUpdates.push({ key: 'whatsapp_token', value: cleanToken });
+      }
+      if (data.verifyToken !== undefined && !data.verifyToken.includes('••')) {
+        const cleanVerify = data.verifyToken.trim().replace(/^["']|["']$/g, '').split(/\s+/)[0];
+        credentialUpdates.push({ key: 'whatsapp_verify_token', value: cleanVerify });
+      }
+      if (data.businessPhone !== undefined) credentialUpdates.push({ key: 'whatsapp_business_phone', value: data.businessPhone });
     }
-    if (data.verifyToken !== undefined && !data.verifyToken.includes('••')) {
-      const cleanVerify = data.verifyToken.trim().replace(/^["']|["']$/g, '').split(/\s+/)[0];
-      updates.push({ key: 'whatsapp_verify_token', value: cleanVerify });
-    }
-    if (data.businessPhone !== undefined) updates.push({ key: 'whatsapp_business_phone', value: data.businessPhone });
     if (data.chatbotEnabled !== undefined) updates.push({ key: 'chatbot_enabled', value: String(data.chatbotEnabled) });
     if (data.orderReaderEnabled !== undefined) updates.push({ key: 'order_reader_enabled', value: String(data.orderReaderEnabled) });
     
@@ -1252,8 +1454,8 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
       if (!incomingRaw) {
         updates.push({ key: 'gemini_api_key', value: '' });
       } else {
-        const existingSetting = await this.prisma.appSetting.findUnique({ where: { key: 'gemini_api_key' } });
-        const existingKeys = (existingSetting?.value || '').split(',').map(k => k.trim()).filter(Boolean);
+        const existingValue = await this.getSetting('gemini_api_key', siteId);
+        const existingKeys = (existingValue || '').split(',').map(k => k.trim()).filter(Boolean);
         const incomingTokens = incomingRaw.split(',').map(k => k.trim()).filter(Boolean);
         
         const mergedKeys = this.resolveGeminiKeys(incomingTokens, existingKeys);
@@ -1333,61 +1535,85 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
       updates.push({ key: 'chatbot_payment_qr_caption', value: paymentQrCaption });
     }
 
-    for (const u of updates) {
+    for (const u of credentialUpdates) {
       await this.prisma.appSetting.upsert({
         where: { key: u.key },
         create: u,
         update: { value: u.value },
       });
-      this.settingCache.delete(u.key);
+      this.settingCache.delete(this.settingCacheKey(DEFAULT_SITE_ID, u.key));
+    }
+    for (const u of updates) {
+      await this.writeSiteSetting(siteId, u.key, u.value);
     }
     if (data.digital_menu_url !== undefined || data.menuShareMessage !== undefined) {
-      await this.purgeLegacyMenuFile();
+      await this.purgeLegacyMenuFile(siteId);
     }
-    const currentSettings = await this.getSettings();
+    const currentSettings = await this.getSettings(siteId);
     if (this.socketGateway) {
-      this.socketGateway.emitWhatsApp('whatsappSettingsUpdated', currentSettings);
+      this.socketGateway.emitWhatsApp('whatsappSettingsUpdated', { ...currentSettings, siteId }, siteId);
     }
     return currentSettings;
   }
 
-  async regenerateMessagingMenuText(): Promise<string> {
-    const menuText = await this.buildMessagingMenuText();
-    await this.prisma.appSetting.upsert({
-      where: { key: 'chatbot_menu_text' },
-      create: { key: 'chatbot_menu_text', value: menuText },
-      update: { value: menuText },
-    });
-    await this.prisma.appSetting.upsert({
-      where: { key: 'chatbot_menu_text_custom' },
-      create: { key: 'chatbot_menu_text_custom', value: 'false' },
-      update: { value: 'false' },
-    });
-    this.settingCache.delete('chatbot_menu_text');
-    this.settingCache.delete('chatbot_menu_text_custom');
+  async regenerateMessagingMenuText(siteId = DEFAULT_SITE_ID): Promise<string> {
+    const menuText = await this.buildMessagingMenuText(siteId);
+    await this.writeSiteSetting(siteId, 'chatbot_menu_text', menuText);
+    await this.writeSiteSetting(siteId, 'chatbot_menu_text_custom', 'false');
     if (this.socketGateway) {
-      this.socketGateway.emitWhatsApp('whatsappSettingsUpdated', { menuText });
+      this.socketGateway.emitWhatsApp('whatsappSettingsUpdated', { siteId, menuText }, siteId);
     }
     return menuText;
   }
 
   async verifyWebhook(mode: string, token: string, challenge: string) {
+    if (mode === 'subscribe' && this.siteResolver) {
+      const accepted = await this.siteResolver.acceptsVerificationToken(token);
+      if (accepted) return challenge;
+      return null;
+    }
     const dbToken = await this.getSetting('whatsapp_verify_token');
     const verifyToken = dbToken || this.config.get('WHATSAPP_VERIFY_TOKEN') || 'the_villa_dog_verify_token';
     if (mode === 'subscribe' && token === verifyToken) return challenge;
     return null;
   }
 
-  async streamMedia(mediaId: string, res: any) {
+  async streamMedia(mediaId: string, res: any, siteId = DEFAULT_SITE_ID, ifNoneMatch?: string) {
     try {
-      const media = await this.getMediaBuffer(mediaId);
+      const cleanMediaId = String(mediaId || '').trim();
+      if (!cleanMediaId || cleanMediaId.length > 256) {
+        return res.status(404).send('Archivo multimedia no disponible');
+      }
+      const apiPath = `/api/whatsapp/media/${cleanMediaId}`;
+      const legacyPath = `/whatsapp/media/${cleanMediaId}`;
+      const reference = await this.prisma.whatsAppMessage.findFirst({
+        where: {
+          session: { siteId },
+          messageType: { in: ['image', 'audio', 'video', 'document', 'sticker'] },
+          OR: [
+            { content: cleanMediaId },
+            { content: { startsWith: `${cleanMediaId}|` } },
+            { content: apiPath },
+            { content: { startsWith: `${apiPath}|` } },
+            { content: legacyPath },
+            { content: { startsWith: `${legacyPath}|` } },
+          ],
+        },
+        select: { id: true },
+      });
+      if (!reference) {
+        return res.status(404).send('Archivo multimedia no disponible');
+      }
+      const media = await this.getMediaBuffer(cleanMediaId, siteId);
       if (!media) return res.status(404).send('Archivo multimedia no disponible');
 
-      res.setHeader('Content-Type', media.contentType);
-      res.setHeader('Content-Length', String(media.buffer.length));
-      res.setHeader('Cache-Control', 'private, max-age=86400, immutable');
-      res.setHeader('ETag', `"wa-${mediaId}"`);
-      return res.send(media.buffer);
+      return sendPrivateFileResponse(res, {
+        buffer: media.buffer,
+        contentType: media.contentType,
+        resourceKey: `whatsapp-media:${cleanMediaId}`,
+        ifNoneMatch,
+        cacheControl: 'private, max-age=86400, immutable',
+      });
     } catch (err: any) {
       this.logger.error(`Error obteniendo media de WhatsApp (${mediaId}):`, err?.message || err);
       return res.status(500).send('Error obteniendo archivo multimedia de Meta');
@@ -1409,39 +1635,56 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
     for (const entry of body.entry || []) {
       for (const change of entry.changes || []) {
         if (change.field !== 'messages') continue;
-        const value = change.value;
-        const messages = value.messages || [];
-        const statuses = value.statuses || [];
-        const contactsList = value.contacts || [];
-
-        // Procesar distintos clientes en paralelo, conservando el orden de los
-        // mensajes de un mismo número para evitar carreras al crear la sesión.
-        const messagesBySender = new Map<string, any[]>();
-        for (const msg of messages) {
-          const sender = msg.from || msg.from_user_id || msg.sender || msg.wa_id || msg.id || 'unknown';
-          const group = messagesBySender.get(sender) || [];
-          group.push(msg);
-          messagesBySender.set(sender, group);
-        }
-
-        await Promise.all([...messagesBySender.values()].map(async group => {
-          for (const msg of group) {
-            const rawFrom = msg.from || msg.from_user_id || msg.sender || msg.wa_id || '';
-            const cleanFrom = (rawFrom || '').replace(/\D/g, '');
-            const matchedContact = contactsList.find((c: any) => {
-              const cWaId = (c.wa_id || c.user_id || '').replace(/\D/g, '');
-              return cWaId === cleanFrom || (cleanFrom.length === 12 && cWaId === cleanFrom.slice(2)) || (cWaId.length === 12 && cWaId.slice(2) === cleanFrom);
-            }) || contactsList[0];
-            await this.processIncomingMessage(msg, matchedContact);
+        try {
+          let siteId = DEFAULT_SITE_ID;
+          if (this.siteResolver) {
+            const siteContext = await this.siteResolver.resolveIncomingWebhookChangeContext(change);
+            if (!siteContext) continue;
+            siteId = siteContext.siteId;
           }
-        }));
 
-        await Promise.all(statuses.map((statusObj: any) => this.processMessageStatusUpdate(statusObj)));
+          const value = change.value || {};
+          const messages = Array.isArray(value.messages) ? value.messages : [];
+          const statuses = Array.isArray(value.statuses) ? value.statuses : [];
+          const contactsList = Array.isArray(value.contacts) ? value.contacts : [];
+
+          // Procesar distintos clientes en paralelo, conservando el orden de los
+          // mensajes de un mismo número para evitar carreras al crear la sesión.
+          const messagesBySender = new Map<string, any[]>();
+          for (const msg of messages) {
+            const sender = msg.from || msg.from_user_id || msg.sender || msg.wa_id || msg.id || 'unknown';
+            const group = messagesBySender.get(sender) || [];
+            group.push(msg);
+            messagesBySender.set(sender, group);
+          }
+
+          await Promise.all([...messagesBySender.values()].map(async group => {
+            for (const msg of group) {
+              const rawFrom = msg.from || msg.from_user_id || msg.sender || msg.wa_id || '';
+              const cleanFrom = (rawFrom || '').replace(/\D/g, '');
+              const matchedContact = contactsList.find((c: any) => {
+                const cWaId = (c.wa_id || c.user_id || '').replace(/\D/g, '');
+                return cWaId === cleanFrom || (cleanFrom.length === 12 && cWaId === cleanFrom.slice(2)) || (cWaId.length === 12 && cWaId.slice(2) === cleanFrom);
+              }) || contactsList[0];
+              await this.processIncomingMessage(msg, matchedContact, siteId);
+            }
+          }));
+
+          await Promise.all(statuses.map((statusObj: any) => this.processMessageStatusUpdate(statusObj, siteId)));
+        } catch (err: any) {
+          const phoneNumberId = String(change?.value?.metadata?.phone_number_id || '')
+            .replace(/\D/g, '')
+            .slice(0, 32);
+          this.logger.error(
+            `Error procesando change de webhook${phoneNumberId ? ` para phone_number_id ${phoneNumberId}` : ''}:`,
+            err?.message || err,
+          );
+        }
       }
     }
   }
 
-  private async processMessageStatusUpdate(statusObj: any) {
+  private async processMessageStatusUpdate(statusObj: any, siteId = DEFAULT_SITE_ID) {
     const waMessageId = statusObj.id;
     const status = statusObj.status; // 'sent', 'delivered', 'read', 'failed'
     const errorsList = statusObj.errors || [];
@@ -1450,7 +1693,10 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
 
     try {
       const msg = await this.prisma.whatsAppMessage.findFirst({
-        where: { OR: [{ waMessageId }, { id: waMessageId }] },
+        where: {
+          session: { siteId },
+          OR: [{ waMessageId }, { id: waMessageId }],
+        },
         include: { session: true }
       });
 
@@ -1479,15 +1725,17 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
 
           if (this.socketGateway) {
             this.socketGateway.emitWhatsApp('whatsappMessageStatus', {
+              siteId,
               messageId: msg.id,
               waMessageId: msg.waMessageId || waMessageId,
               sessionId: msg.sessionId,
               status,
               errors: errorsList
-            });
+            }, siteId);
             this.socketGateway.emitWhatsApp('whatsappSessionUpdated', {
+              siteId,
               sessionId: msg.sessionId,
-            });
+            }, siteId);
           }
         }
       }
@@ -1496,7 +1744,7 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  private async processIncomingMessage(msg: any, contact?: any) {
+  private async processIncomingMessage(msg: any, contact?: any, siteId = DEFAULT_SITE_ID) {
     let rawPhone = msg.from || msg.from_user_id || msg.sender || msg.wa_id || contact?.wa_id || contact?.user_id || '';
     if (!rawPhone || rawPhone === 'cliente_wa') {
       const waId = msg.id || '';
@@ -1546,7 +1794,10 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
       if (targetWaMessageId) {
         try {
           const targetMsg = await this.prisma.whatsAppMessage.findFirst({
-            where: { OR: [{ waMessageId: targetWaMessageId }, { id: targetWaMessageId }] }
+            where: {
+              session: { siteId },
+              OR: [{ waMessageId: targetWaMessageId }, { id: targetWaMessageId }],
+            }
           });
           if (targetMsg) {
             await this.prisma.whatsAppMessage.update({
@@ -1555,11 +1806,12 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
             });
             if (this.socketGateway) {
               this.socketGateway.emitWhatsApp('whatsappMessageReaction', {
+                siteId,
                 messageId: targetMsg.id,
                 waMessageId: targetWaMessageId,
                 sessionId: targetMsg.sessionId,
                 reaction: emoji || null
-              });
+              }, siteId);
             }
           }
         } catch (e) {
@@ -1689,7 +1941,7 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
     }
 
     let session: any = await this.prisma.whatsAppSession.findFirst({
-      where: { OR: orConditions },
+      where: { siteId, OR: orConditions },
       include: { assignedTo: { select: { id: true, name: true } } },
       orderBy: { lastMessageAt: 'desc' }
     });
@@ -1708,6 +1960,7 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
     if (!session) {
       session = await this.prisma.whatsAppSession.create({
         data: { 
+          siteId,
           phone: primaryPhoneKey, 
           customerPhone: callablePhone,
           customerName: finalCustomerName, 
@@ -1763,6 +2016,7 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
       try {
         const quotedMsg = await this.prisma.whatsAppMessage.findFirst({
           where: {
+            sessionId: session.id,
             OR: [
               { waMessageId: quotedWaId },
               { id: quotedWaId },
@@ -1794,7 +2048,7 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
 
     const linkedOrderId = await this.resolveMessageOrderId(session.id, {
       replyToWaMessageId: msg.context?.id || null,
-    });
+    }, siteId);
     const newMsg = await this.prisma.whatsAppMessage.create({
       data: {
         waMessageId: msg.id,
@@ -1809,6 +2063,7 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
     });
 
     this.socketGateway.emitWhatsApp('whatsappMessage', {
+      siteId,
       id: newMsg.id,
       waMessageId: newMsg.waMessageId,
       sessionId: session.id,
@@ -1824,9 +2079,10 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
       createdAt: newMsg.createdAt,
       replyToContent,
       replyToDirection,
-    });
+    }, siteId);
 
     this.socketGateway.emitWhatsApp('whatsappSessionUpdated', {
+      siteId,
       sessionId: session.id,
       phone: session.phone,
       customerName: session.customerName,
@@ -1834,7 +2090,7 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
       lastMessageAt: session.lastMessageAt,
       assignedToId: session.assignedToId,
       assignedTo: session.assignedTo,
-    });
+    }, siteId);
     await this.emitDriverOrderChatMessage(newMsg);
 
     // La entrada se muestra primero y la IA corre fuera de la ruta del webhook.
@@ -1885,50 +2141,56 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
     return new Date(`${bogotaDateStr}T00:00:00.000-05:00`);
   }
 
-  private async releasePreviousDayAssignments() {
+  private async releasePreviousDayAssignments(siteId = DEFAULT_SITE_ID) {
     // Algunos entornos de prueba solo exponen las consultas de lectura.
     // Prisma real siempre implementa updateMany.
     if (typeof this.prisma.whatsAppSession.updateMany !== 'function') return;
     const result = await this.prisma.whatsAppSession.updateMany({
       where: {
+        siteId,
         active: true,
         assignedToId: { not: null },
         lastMessageAt: { lt: this.getBogotaDayStart() },
       },
-      data: { assignedToId: null, waitingForAdvisor: false },
+      data: { assignedToId: null },
     });
 
     if (result.count > 0) {
-      this.socketGateway.emitWhatsApp('whatsappSessionUpdated', { previousDayAssignmentsReleased: result.count });
+      this.socketGateway.emitWhatsApp(
+        'whatsappSessionUpdated',
+        { siteId, previousDayAssignmentsReleased: result.count },
+        siteId,
+      );
     }
   }
 
-  async getSessionsStats(userId?: string) {
-    await this.releasePreviousDayAssignments();
+  async getSessionsStats(userId?: string, siteId = DEFAULT_SITE_ID) {
+    await this.releasePreviousDayAssignments(siteId);
     const todayStart = this.getBogotaDayStart();
     const recentLimit = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
 
     const [total, today, unreadSessions, waiting, unassigned, mine, recentIncoming, recentOutgoing] = await Promise.all([
-      this.prisma.whatsAppSession.count({ where: { active: true } }),
+      this.prisma.whatsAppSession.count({ where: { siteId, active: true } }),
       this.prisma.whatsAppSession.count({
-        where: { active: true, lastMessageAt: { gte: todayStart } }
+        where: { siteId, active: true, lastMessageAt: { gte: todayStart } }
       }),
       this.prisma.whatsAppMessage.groupBy({
         by: ['sessionId'],
-        where: { createdAt: { gte: recentLimit }, direction: 'IN', status: { not: 'read' } },
+        where: { session: { siteId }, createdAt: { gte: recentLimit }, direction: 'IN', status: { not: 'read' } },
         _count: { id: true }
       }),
       this.prisma.whatsAppSession.count({
-        where: { active: true, waitingForAdvisor: true }
+        where: { siteId, active: true, waitingForAdvisor: true }
       }),
       this.prisma.whatsAppSession.count({
-        where: { active: true, assignedToId: null }
+        where: { siteId, active: true, assignedToId: null }
       }),
       userId ? this.prisma.whatsAppSession.count({
-        where: { active: true, assignedToId: userId }
+        where: { siteId, active: true, assignedToId: userId }
       }) : 0,
       this.prisma.whatsAppMessage.findMany({
         where: {
+          session: { siteId },
           direction: 'IN',
           createdAt: { gte: recentLimit }
         },
@@ -1938,6 +2200,7 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
       }),
       this.prisma.whatsAppMessage.findMany({
         where: {
+          session: { siteId },
           direction: 'OUT',
           createdAt: { gte: recentLimit }
         },
@@ -1959,7 +2222,7 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
 
     if (waiting > 0) {
       const waitingSessions = await this.prisma.whatsAppSession.findMany({
-        where: { active: true, waitingForAdvisor: true },
+        where: { siteId, active: true, waitingForAdvisor: true },
         select: { id: true }
       });
       for (const w of waitingSessions) {
@@ -1987,15 +2250,16 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
     userId?: string,
     cursor?: string,
     cursorMode?: boolean,
+    siteId = DEFAULT_SITE_ID,
   ) {
-    await this.releasePreviousDayAssignments();
+    await this.releasePreviousDayAssignments(siteId);
     const cleanSearch = search?.trim() ? search.trim().toLowerCase() : '';
     const safePage = Math.max(1, page || 1);
     const requestedLimit = Number.isFinite(limit) ? Math.trunc(limit as number) : (cleanSearch ? 100 : 60);
     const takeAmount = fetchAll ? undefined : Math.min(100, Math.max(1, requestedLimit));
     const skipAmount = (!fetchAll && !cursorMode && takeAmount && safePage > 1) ? (safePage - 1) * takeAmount : undefined;
 
-    const andClauses: any[] = [{ active: true }];
+    const andClauses: any[] = [{ siteId, active: true }];
     let matchingOrders: any[] = [];
     // When a global search finds a historical message, keep the matching
     // message so the WhatsApp-style result can show the exact context.
@@ -2020,7 +2284,7 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
         const bogotaDateStr = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Bogota' });
         const startOfToday = new Date(`${bogotaDateStr}T00:00:00.000-05:00`);
         const openShift = await this.prisma.cashClosing.findFirst({
-          where: { isOpen: true },
+          where: { siteId, isOpen: true },
           orderBy: { shiftStart: 'desc' },
         });
         const searchSince = (openShift?.shiftStart && (Date.now() - openShift.shiftStart.getTime()) < 24 * 60 * 60 * 1000 && openShift.shiftStart < startOfToday)
@@ -2030,6 +2294,7 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
         // Primero buscar en los pedidos del turno/día actual
         matchingOrders = await this.prisma.order.findMany({
           where: {
+            siteId,
             orderNumber: orderSearchNum,
             orderType: { in: ['DELIVERY', 'PICKUP'] },
             createdAt: { gte: searchSince },
@@ -2044,6 +2309,7 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
           const recentDays = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
           matchingOrders = await this.prisma.order.findMany({
             where: {
+              siteId,
               orderNumber: orderSearchNum,
               orderType: { in: ['DELIVERY', 'PICKUP'] },
               createdAt: { gte: recentDays },
@@ -2066,7 +2332,7 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
       let messageSessionIds: string[] = [];
       if (cleanSearch.length >= 2 && !isExplicitOrderSearch) {
         const msgMatches = await this.prisma.whatsAppMessage.findMany({
-          where: { content: { contains: cleanSearch, mode: 'insensitive' } },
+          where: { session: { siteId }, content: { contains: cleanSearch, mode: 'insensitive' } },
           select: { id: true, sessionId: true, content: true, direction: true, messageType: true, createdAt: true },
           take: 100,
           distinct: ['sessionId'],
@@ -2177,6 +2443,7 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
           const [matchingCustomers, matchingOrders] = await Promise.all([
             this.prisma.customer.findMany({
               where: {
+                siteId,
                 OR: [
                   { phone: { contains: s10 } },
                   { phone: { contains: searchDigits } },
@@ -2188,6 +2455,7 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
             }),
             this.prisma.order.findMany({
               where: {
+                siteId,
                 OR: [
                   { customerPhone: { contains: s10 } },
                   { customerPhone: { contains: searchDigits } },
@@ -2298,6 +2566,7 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
         const unreadSessions = await this.prisma.whatsAppMessage.groupBy({
           by: ['sessionId'],
           where: {
+            session: { siteId },
             createdAt: { gte: recentLimit },
             direction: 'IN',
             status: { not: 'read' },
@@ -2314,13 +2583,13 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
         const recentLimit = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
         const [recentIncoming, recentOutgoing] = await Promise.all([
           this.prisma.whatsAppMessage.findMany({
-            where: { direction: 'IN', createdAt: { gte: recentLimit } },
+            where: { session: { siteId }, direction: 'IN', createdAt: { gte: recentLimit } },
             orderBy: { createdAt: 'desc' },
             distinct: ['sessionId'],
             select: { sessionId: true, createdAt: true }
           }),
           this.prisma.whatsAppMessage.findMany({
-            where: { direction: 'OUT', createdAt: { gte: recentLimit } },
+            where: { session: { siteId }, direction: 'OUT', createdAt: { gte: recentLimit } },
             orderBy: { createdAt: 'desc' },
             distinct: ['sessionId'],
             select: { sessionId: true, createdAt: true }
@@ -2423,7 +2692,7 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
 
     // Attach active shift orders to sessions (reset on cash register close)
     const openCashShift = await this.prisma.cashClosing.findFirst({
-      where: { isOpen: true },
+      where: { siteId, isOpen: true },
       orderBy: { shiftStart: 'desc' },
     });
 
@@ -2436,6 +2705,7 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
 
       activeShiftOrders = await this.prisma.order.findMany({
         where: {
+          siteId,
           OR: [
             { chatSessionId: { in: sessionIds } },
             ...(senderPhones.length > 0 ? [{ chatSessionId: null, customerPhone: { in: senderPhones } }] : []),
@@ -2538,16 +2808,23 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
     return cursorMode ? { items: deduplicatedSessions, nextCursor } : deduplicatedSessions;
   }
 
-  async getSession(id: string) {
-    return this.prisma.whatsAppSession.findUnique({
+  async getSession(id: string, siteId = DEFAULT_SITE_ID) {
+    const session = await this.prisma.whatsAppSession.findUnique({
       where: { id },
       include: { assignedTo: { select: { id: true, name: true } } }
     });
+    return session && (session.siteId || DEFAULT_SITE_ID) === siteId ? session : null;
   }
 
-  async updateSession(id: string, data: { customerName?: string; customerPhone?: string }) {
+  async updateSession(
+    id: string,
+    data: { customerName?: string; customerPhone?: string },
+    siteId = DEFAULT_SITE_ID,
+  ) {
     const session = await this.prisma.whatsAppSession.findUnique({ where: { id } });
-    if (!session) throw new NotFoundException('Sesión no encontrada');
+    if (!session || (session.siteId || DEFAULT_SITE_ID) !== siteId) {
+      throw new NotFoundException('Sesión no encontrada');
+    }
 
     let cleanPhone = data.customerPhone?.trim() || null;
     if (cleanPhone) {
@@ -2570,6 +2847,7 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
 
     if (this.socketGateway) {
       this.socketGateway.emitWhatsApp('whatsappSessionUpdated', {
+        siteId,
         sessionId: updated.id,
         phone: updated.phone,
         customerName: updated.customerName,
@@ -2577,15 +2855,22 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
         lastMessageAt: updated.lastMessageAt,
         assignedToId: updated.assignedToId,
         assignedTo: updated.assignedTo,
-      });
+      }, siteId);
     }
 
     return updated;
   }
 
-  async getSessionMessages(sessionId: string, before?: string, requestedLimit?: number, beforeId?: string, orderId?: string) {
+  async getSessionMessages(
+    sessionId: string,
+    before?: string,
+    requestedLimit?: number,
+    beforeId?: string,
+    orderId?: string,
+    siteId = DEFAULT_SITE_ID,
+  ) {
     const session = await this.prisma.whatsAppSession.findUnique({ where: { id: sessionId } });
-    if (!session) return [];
+    if (!session || (session.siteId || DEFAULT_SITE_ID) !== siteId) return [];
 
     const limit = Number.isFinite(requestedLimit)
       ? Math.min(200, Math.max(20, Math.trunc(requestedLimit!)))
@@ -2627,8 +2912,11 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
     return messages.reverse();
   }
 
-  async deleteSession(id: string) {
+  async deleteSession(id: string, siteId = DEFAULT_SITE_ID) {
     const session = await this.prisma.whatsAppSession.findUnique({ where: { id } });
+    if (session && (session.siteId || DEFAULT_SITE_ID) !== siteId) {
+      throw new NotFoundException('Sesión no encontrada');
+    }
     if (session) {
       await this.prisma.whatsAppMessage.deleteMany({ where: { sessionId: id } });
       try {
@@ -2645,25 +2933,28 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
         });
       }
       if (this.socketGateway) {
-        this.socketGateway.emitWhatsApp('chatSessionDeleted', { sessionId: id });
+        this.socketGateway.emitWhatsApp('chatSessionDeleted', { siteId, sessionId: id }, siteId);
       }
     }
     return { ok: true, message: 'Chat e historial eliminados completamente' };
   }
 
-  async deleteMessage(id: string, mode: string = 'for_me') {
+  async deleteMessage(id: string, mode: string = 'for_me', siteId = DEFAULT_SITE_ID) {
     const msg = await this.prisma.whatsAppMessage.findUnique({
       where: { id },
       include: { session: true },
     });
     if (!msg) return { ok: true };
+    if ((msg.session?.siteId || DEFAULT_SITE_ID) !== siteId) {
+      throw new NotFoundException('Mensaje no encontrado');
+    }
 
     if (mode === 'for_everyone') {
       if (msg.waMessageId && !msg.waMessageId.startsWith('out-')) {
         try {
-          const token = await this.getSetting('whatsapp_token');
-          const phoneId = await this.getSetting('whatsapp_phone_id');
-          if (token && phoneId) {
+          const metaConfig = await this.resolveOutboundMetaConfig(siteId);
+          if (metaConfig) {
+            const { token, phoneId } = metaConfig;
             const metaRes = await fetch(`https://graph.facebook.com/v18.0/${phoneId}/messages`, {
               method: 'POST',
               headers: {
@@ -2694,33 +2985,37 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
 
       if (this.socketGateway) {
         this.socketGateway.emitWhatsApp('chatMessageEdited', {
+          siteId,
           messageId: id,
           sessionId: msg.sessionId,
           content: '🚫 Este mensaje fue eliminado',
           status: 'deleted',
           isDeletedForEveryone: true,
-        });
+        }, siteId);
       }
       return { ok: true, mode: 'for_everyone', message: updated };
     } else {
       await this.prisma.whatsAppMessage.delete({ where: { id } });
       if (this.socketGateway) {
         this.socketGateway.emitWhatsApp('chatMessageDeleted', {
+          siteId,
           messageId: id,
           sessionId: msg.sessionId,
           mode: 'for_me',
-        });
+        }, siteId);
       }
       return { ok: true, mode: 'for_me' };
     }
   }
 
-  async editMessage(id: string, content: string) {
+  async editMessage(id: string, content: string, siteId = DEFAULT_SITE_ID) {
     const msg = await this.prisma.whatsAppMessage.findUnique({
       where: { id },
       include: { session: true },
     });
-    if (!msg) throw new NotFoundException('Mensaje no encontrado');
+    if (!msg || (msg.session?.siteId || DEFAULT_SITE_ID) !== siteId) {
+      throw new NotFoundException('Mensaje no encontrado');
+    }
 
     // Límite estricto de 15 minutos (exactamente como en WhatsApp)
     const messageAgeMs = Date.now() - new Date(msg.createdAt).getTime();
@@ -2742,11 +3037,12 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
 
     if (this.socketGateway) {
       this.socketGateway.emitWhatsApp('chatMessageEdited', {
+        siteId,
         messageId: id,
         sessionId: msg.sessionId,
         content: trimmedContent,
         isEdited: true,
-      });
+      }, siteId);
     }
 
     // 2. Si es un mensaje saliente y la sesión tiene teléfono,
@@ -2755,11 +3051,11 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
     let sentToCustomer = false;
     if (msg.direction === 'OUT' && msg.session?.phone) {
       try {
-        const phoneId = await this.getSetting('whatsapp_phone_id');
-        const token = await this.getSetting('whatsapp_token');
-        if (phoneId && token) {
-          const targetSession = await this.resolveSessionForDispatch(msg.session.phone);
-          const { recipientPhone, lastInWaId, isId } = await this.resolveActiveRecipient(targetSession, msg.session.phone);
+        const metaConfig = await this.resolveOutboundMetaConfig(siteId);
+        if (metaConfig) {
+          const { phoneId, token } = metaConfig;
+          const targetSession = await this.resolveSessionForDispatch(msg.session.phone, siteId);
+          const { recipientPhone, lastInWaId, isId } = await this.resolveActiveRecipient(targetSession, msg.session.phone, siteId);
           const formattedPhone = this.formatRecipient(recipientPhone);
           const recipientObj = this.buildMetaRecipient(formattedPhone);
           const correctionText = `✏️ *Corrección:* ${trimmedContent}`;
@@ -2797,9 +3093,11 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
     return { ...updated, sentToCustomer };
   }
 
-  async markSessionMessagesAsRead(sessionId: string, force = false) {
+  async markSessionMessagesAsRead(sessionId: string, force = false, requestedSiteId?: string) {
     const session = await this.prisma.whatsAppSession.findUnique({ where: { id: sessionId } });
     if (!session) return;
+    if (requestedSiteId && (session.siteId || DEFAULT_SITE_ID) !== requestedSiteId) return;
+    const siteId = session.siteId || requestedSiteId || DEFAULT_SITE_ID;
 
     // REGLA SOLICITADA POR EL USUARIO:
     // Un chat no se puede marcar como leído hasta que la última respuesta sea de un asesor o administrador.
@@ -2845,6 +3143,7 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
     const unreadSessions = await this.prisma.whatsAppMessage.groupBy({
       by: ['sessionId'],
       where: {
+        session: { siteId },
         createdAt: { gte: recentLimit },
         direction: 'IN',
         status: { not: 'read' },
@@ -2854,18 +3153,19 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
 
     // 2. Emitir actualización a los clientes por WebSockets
     this.socketGateway.emitWhatsApp('whatsappSessionUpdated', {
+      siteId,
       id: sessionId,
       sessionId,
       unreadCount: 0,
       totalUnread: unreadSessions.length,
-    });
+    }, siteId);
 
     // 3. Notificar a Meta WhatsApp Graph API en segundo plano (Fire-and-forget asíncrono sin bloquear la interfaz)
     (async () => {
       try {
-        const phoneId = await this.getSetting('whatsapp_phone_id');
-        const token = await this.getSetting('whatsapp_token');
-        if (!phoneId || !token) return;
+        const metaConfig = await this.resolveOutboundMetaConfig(siteId);
+        if (!metaConfig) return;
+        const { phoneId, token } = metaConfig;
 
         for (const msg of unreadMessages) {
           try {
@@ -2902,27 +3202,29 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  async getMediaUrl(mediaId: string): Promise<string | null> {
+  async getMediaUrl(mediaId: string, siteId = DEFAULT_SITE_ID): Promise<string | null> {
     const now = Date.now();
-    const negExpiry = this.mediaNegativeCache.get(mediaId);
+    const cacheKey = `${siteId}:${mediaId}`;
+    const negExpiry = this.mediaNegativeCache.get(cacheKey);
     if (negExpiry && negExpiry > now) {
       return null;
     }
-    const token = await this.getSetting('whatsapp_token');
-    if (!token) return null;
+    const metaConfig = await this.resolveOutboundMetaConfig(siteId);
+    if (!metaConfig) return null;
+    const { token } = metaConfig;
     try {
       const res = await fetch(`https://graph.facebook.com/v26.0/${mediaId}`, {
         headers: { Authorization: `Bearer ${token}` }
       });
       if (!res.ok) {
         if (res.status === 404 || res.status === 410 || res.status === 400) {
-          this.mediaNegativeCache.set(mediaId, Date.now() + this.mediaNegativeTtlMs);
+          this.mediaNegativeCache.set(cacheKey, Date.now() + this.mediaNegativeTtlMs);
           this.pruneMediaNegativeCache();
         }
         return null;
       }
       const data = await res.json();
-      this.mediaNegativeCache.delete(mediaId);
+      this.mediaNegativeCache.delete(cacheKey);
       return data.url || null;
     } catch (err) {
       this.logger.error('Error obteniendo URL de media', err);
@@ -2930,25 +3232,27 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  async getMediaBuffer(mediaId: string): Promise<{ buffer: Buffer; contentType: string } | null> {
+  async getMediaBuffer(mediaId: string, siteId = DEFAULT_SITE_ID): Promise<{ buffer: Buffer; contentType: string } | null> {
     const now = Date.now();
-    const cached = this.mediaCache.get(mediaId);
+    const cacheKey = `${siteId}:${mediaId}`;
+    const cached = this.mediaCache.get(cacheKey);
     if (cached && cached.expiresAt > now) {
       cached.lastUsed = now;
       return { buffer: cached.buffer, contentType: cached.contentType };
     }
     if (cached) {
-      this.mediaCache.delete(mediaId);
+      this.mediaCache.delete(cacheKey);
       this.mediaCacheBytes -= cached.bytes;
     }
 
-    const pending = this.mediaRequests.get(mediaId);
+    const pending = this.mediaRequests.get(cacheKey);
     if (pending) return pending;
 
     const request = (async () => {
-      const token = await this.getSetting('whatsapp_token');
-      if (!token) return null;
-      const url = await this.getMediaUrl(mediaId);
+      const metaConfig = await this.resolveOutboundMetaConfig(siteId);
+      if (!metaConfig) return null;
+      const { token } = metaConfig;
+      const url = await this.getMediaUrl(mediaId, siteId);
       if (!url) return null;
 
       try {
@@ -2966,7 +3270,7 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
           lastUsed: Date.now(),
           expiresAt: Date.now() + this.mediaCacheTtlMs,
         };
-        this.mediaCache.set(mediaId, entry);
+        this.mediaCache.set(cacheKey, entry);
         this.mediaCacheBytes += entry.bytes;
         this.pruneMediaCache();
         return { buffer, contentType };
@@ -2974,9 +3278,9 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
         this.logger.error('Error descargando buffer de media', err);
         return null;
       }
-    })().finally(() => this.mediaRequests.delete(mediaId));
+    })().finally(() => this.mediaRequests.delete(cacheKey));
 
-    this.mediaRequests.set(mediaId, request);
+    this.mediaRequests.set(cacheKey, request);
     return request;
   }
 
@@ -3001,20 +3305,24 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
   async assignSession(
     sessionId: string,
     userId: string | null,
-    actor?: { id: string; name?: string; role: string },
+    actor?: { id: string; name?: string; role: string; siteId?: string },
+    requestedSiteId = DEFAULT_SITE_ID,
   ) {
     if (!sessionId || sessionId === 'undefined' || sessionId === 'null') {
       throw new BadRequestException('ID de sesión inválido');
     }
+    const siteId = actor?.siteId || requestedSiteId;
     let session = await this.prisma.whatsAppSession.findUnique({
       where: { id: sessionId },
     });
+    if (session && (session.siteId || DEFAULT_SITE_ID) !== siteId) session = null;
     if (!session) {
       const raw = sessionId.trim();
       const cleanDigits = raw.replace(/\D/g, '');
       const phone10 = cleanDigits.length === 12 && cleanDigits.startsWith('57') ? cleanDigits.slice(2) : cleanDigits;
       session = await this.prisma.whatsAppSession.findFirst({
         where: {
+          siteId,
           OR: [
             { phone: raw },
             ...(cleanDigits ? [{ phone: cleanDigits }] : []),
@@ -3040,6 +3348,15 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
         select: { id: true, active: true },
       });
       if (!target?.active) throw new BadRequestException('La asesora seleccionada no está activa');
+      if (typeof (this.prisma as any).userSiteMembership?.findUnique === 'function') {
+        const membership = await this.prisma.userSiteMembership.findUnique({
+          where: { userId_siteId: { userId, siteId } },
+          select: { active: true },
+        });
+        if (!membership?.active) {
+          throw new BadRequestException('La asesora seleccionada no pertenece a esta sede');
+        }
+      }
 
       // Las asesoras y el personal de domicilios solo pueden tomar un chat
       // libre o uno que ya les pertenece. Solo ADMIN/SUPERADMIN puede reasignar
@@ -3054,6 +3371,7 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
         const claimed = await this.prisma.whatsAppSession.updateMany({
           where: {
             id: sessionId,
+            siteId,
             OR: [{ assignedToId: null }, { assignedToId: userId }],
           },
           data: { assignedToId: userId, waitingForAdvisor: false },
@@ -3074,6 +3392,7 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
       const released = await this.prisma.whatsAppSession.updateMany({
         where: {
           id: sessionId,
+          siteId,
           OR: [{ assignedToId: actor.id }, { assignedToId: null }],
         },
         data: { assignedToId: null },
@@ -3095,28 +3414,30 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
     });
 
     this.socketGateway.emitWhatsApp('chatSessionAssigned', {
+      siteId,
       id: sessionId,
       sessionId,
       phone: updated.phone,
       assignedToId: userId,
       assignedTo: updated.assignedTo,
       waitingForAdvisor: false,
-    });
+    }, siteId);
 
     this.socketGateway.emitWhatsApp('whatsappSessionUpdated', {
+      siteId,
       id: sessionId,
       sessionId,
       phone: updated.phone,
       assignedToId: userId,
       assignedTo: updated.assignedTo,
       waitingForAdvisor: false,
-    });
+    }, siteId);
 
     return updated;
   }
 
-  async unassignAllSessions(userId?: string) {
-    const where: any = { active: true, assignedToId: { not: null } };
+  async unassignAllSessions(userId?: string, siteId = DEFAULT_SITE_ID) {
+    const where: any = { siteId, active: true, assignedToId: { not: null } };
     if (userId) {
       where.assignedToId = userId;
     }
@@ -3125,27 +3446,27 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
       data: { assignedToId: null }
     });
 
-    this.socketGateway.emitWhatsApp('whatsappSessionUpdated', { unassignedAll: true });
+    this.socketGateway.emitWhatsApp('whatsappSessionUpdated', { siteId, unassignedAll: true }, siteId);
     return { count: result.count };
   }
 
-  async unassignSessionByPhone(phone: string) {
+  async unassignSessionByPhone(phone: string, siteId = DEFAULT_SITE_ID) {
     if (!phone) return;
     try {
       const cleanDigits = phone.replace(/\D/g, '');
       const phone10 = cleanDigits.length === 12 && cleanDigits.startsWith('57') ? cleanDigits.slice(2) : cleanDigits;
       
-      const orList: any[] = [{ id: phone }, { phone: phone }];
+      const orList: any[] = [{ id: phone }, { phone }];
       if (cleanDigits) {
-        orList.push({ phone: cleanDigits }, { customerPhone: cleanDigits });
+        orList.push({ phone: cleanDigits });
       }
       if (phone10) {
         orList.push({ phone: phone10 }, { phone: `57${phone10}` }, { phone: `+57${phone10}` });
-        orList.push({ customerPhone: phone10 }, { customerPhone: `57${phone10}` }, { customerPhone: `+57${phone10}` });
       }
 
       const sessions = await this.prisma.whatsAppSession.findMany({
         where: {
+          siteId,
           OR: orList,
           assignedToId: { not: null },
         },
@@ -3153,7 +3474,7 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
       });
 
       for (const session of sessions) {
-        await this.assignSession(session.id, null);
+        await this.assignSession(session.id, null, undefined, siteId);
         this.logger.log(`[unassignSessionByPhone] Chat ${session.id} (${session.phone}) liberado automáticamente tras despacho`);
       }
     } catch (err) {
@@ -3161,21 +3482,29 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  async sendDirectToSession(sessionId: string, text: string, orderId?: string) {
+  async sendDirectToSession(
+    sessionId: string,
+    text: string,
+    orderId?: string,
+    requestedSiteId?: string,
+  ) {
     if (!sessionId || !text) return { sent: false };
     const session = await this.prisma.whatsAppSession.findUnique({
       where: { id: sessionId },
     });
-    if (!session) return { sent: false };
+    if (!session || (requestedSiteId && (session.siteId || DEFAULT_SITE_ID) !== requestedSiteId)) {
+      return { sent: false, reason: 'session_not_found_in_site' };
+    }
 
-    const phoneId = await this.getSetting('whatsapp_phone_id');
-    const token = await this.getSetting('whatsapp_token');
-    if (!phoneId || !token) {
+    const siteId = session.siteId || DEFAULT_SITE_ID;
+    const metaConfig = await this.resolveOutboundMetaConfig(siteId);
+    if (!metaConfig) {
       this.logger.warn('WhatsApp API no configurada');
       return { sent: false, reason: 'not_configured' };
     }
+    const { phoneId, token } = metaConfig;
 
-    const { recipientPhone, lastInWaId, isId } = await this.resolveActiveRecipient(session, session.phone);
+    const { recipientPhone, lastInWaId, isId } = await this.resolveActiveRecipient(session, session.phone, siteId);
     const formattedPhone = this.formatRecipient(recipientPhone);
     const recipientObj = this.buildMetaRecipient(formattedPhone);
     const metaPayload: any = {
@@ -3206,7 +3535,7 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
 
       if (!ok && (data?.error?.code === 131047 || data?.error?.code === 131026 || data?.error?.code === 470)) {
         this.logger.warn(`Ventana de 24h cerrada para ${formattedPhone}. Enviando plantilla de reactivación automática...`);
-        const tmplResult = await this.sendTemplate(formattedPhone, 'actualizacion_sistema_niche', 'es_CO', []);
+        const tmplResult = await this.sendTemplate(formattedPhone, 'actualizacion_sistema_niche', 'es_CO', [], siteId);
         if (tmplResult.sent) {
           return { sent: true, data: tmplResult.data };
         }
@@ -3218,7 +3547,7 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
           data: { lastMessageAt: new Date(), active: true },
         });
 
-        const linkedOrderId = await this.resolveMessageOrderId(session.id, { explicitOrderId: orderId });
+         const linkedOrderId = await this.resolveMessageOrderId(session.id, { explicitOrderId: orderId }, siteId);
         const newMsg = await this.prisma.whatsAppMessage.create({
           data: {
             waMessageId: data.messages?.[0]?.id || `out-${Date.now()}`,
@@ -3232,6 +3561,7 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
         });
 
         this.socketGateway.emitWhatsApp('whatsappMessage', {
+          siteId,
           id: newMsg.id,
           waMessageId: newMsg.waMessageId,
           sessionId: session.id,
@@ -3244,7 +3574,7 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
           status: 'sent',
           assignedTo: session.assignedToId,
           createdAt: newMsg.createdAt,
-        });
+        }, siteId);
 
         await this.markSessionMessagesAsRead(session.id, true);
         await this.emitDriverOrderChatMessage(newMsg);
@@ -3257,24 +3587,36 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  async sendMessage(phone: string, text: string, replyToWaMessageId?: string, replyToContent?: string, sessionId?: string, orderId?: string) {
-    const phoneId = await this.getSetting('whatsapp_phone_id');
-    const token = await this.getSetting('whatsapp_token');
-    if (!phoneId || !token) {
-      this.logger.warn('WhatsApp API no configurada');
+  async sendMessage(
+    phone: string,
+    text: string,
+    replyToWaMessageId?: string,
+    replyToContent?: string,
+    sessionId?: string,
+    orderId?: string,
+    requestedSiteId?: string,
+  ) {
+    const targetSession = sessionId
+      ? await this.prisma.whatsAppSession.findFirst({
+          where: { id: sessionId, ...(requestedSiteId ? { siteId: requestedSiteId } : {}) },
+          include: { assignedTo: { select: { id: true, name: true } } },
+        })
+      : await this.resolveSessionForDispatch(phone, requestedSiteId || DEFAULT_SITE_ID);
+    if (sessionId && !targetSession) {
+      return { sent: false, reason: 'session_not_found_in_site' };
+    }
+    const siteId = targetSession?.siteId || requestedSiteId || DEFAULT_SITE_ID;
+    const metaConfig = await this.resolveOutboundMetaConfig(siteId);
+    if (!metaConfig) {
+      this.logger.warn(`WhatsApp API no configurada para la sede ${siteId}`);
       return { sent: false, reason: 'not_configured' };
     }
+    const { phoneId, token } = metaConfig;
 
-    const targetSession = sessionId
-      ? await this.prisma.whatsAppSession.findUnique({ where: { id: sessionId }, include: { assignedTo: { select: { id: true, name: true } } } })
-      : await this.resolveSessionForDispatch(phone);
-
-    const { recipientPhone, lastInWaId, isId } = await this.resolveActiveRecipient(targetSession, phone);
-
+    const { recipientPhone, lastInWaId, isId } = await this.resolveActiveRecipient(targetSession, phone, siteId);
     if (this.isDummyPhoneNumber(recipientPhone)) {
       return { sent: false, reason: 'dummy_phone' };
     }
-
     const formattedPhone = this.formatRecipient(recipientPhone);
 
     // Build Meta API payload with optional reply context
@@ -3311,14 +3653,14 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
       // Fallback Inteligente: Si el mensaje falla por ventana de 24h cerrada (código #131047, #131026 o #470)
       if (!ok && (data?.error?.code === 131047 || data?.error?.code === 131026 || data?.error?.code === 470)) {
         this.logger.warn(`Ventana de 24h cerrada para ${formattedPhone}. Enviando plantilla de reactivación automática...`);
-        const tmplResult = await this.sendTemplate(formattedPhone, 'actualizacion_sistema_niche', 'es_CO', []);
+        const tmplResult = await this.sendTemplate(formattedPhone, 'actualizacion_sistema_niche', 'es_CO', [], siteId);
         if (tmplResult.sent) {
           return { sent: true, data: tmplResult.data };
         }
       }
 
       if (ok) {
-        const session = targetSession || await this.findOrCreateSession(formattedPhone);
+        const session = targetSession || await this.findOrCreateSession(formattedPhone, undefined, undefined, siteId);
         await this.prisma.whatsAppSession.update({
           where: { id: session.id },
           data: { lastMessageAt: new Date(), active: true },
@@ -3328,7 +3670,7 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
         let replyToDirection: string | null = null;
         if (replyToWaMessageId) {
           const repliedMsg = await this.prisma.whatsAppMessage.findFirst({
-            where: { waMessageId: replyToWaMessageId },
+            where: { waMessageId: replyToWaMessageId, sessionId: session.id },
             select: { direction: true },
           });
           replyToDirection = repliedMsg?.direction || null;
@@ -3337,7 +3679,7 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
         const linkedOrderId = await this.resolveMessageOrderId(session.id, {
           explicitOrderId: orderId,
           replyToWaMessageId,
-        });
+        }, siteId);
         const newMsg = await this.prisma.whatsAppMessage.create({
           data: {
             waMessageId: data.messages?.[0]?.id || `out-${Date.now()}`,
@@ -3354,6 +3696,7 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
 
         persistedMessage = {
           id: newMsg.id,
+          siteId,
           waMessageId: newMsg.waMessageId,
           sessionId: session.id,
           phone: session.phone,
@@ -3368,7 +3711,7 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
           replyToContent: replyToContent || null,
           replyToDirection: replyToDirection || null,
         };
-        this.socketGateway.emitWhatsApp('whatsappMessage', persistedMessage);
+        this.socketGateway.emitWhatsApp('whatsappMessage', persistedMessage, siteId);
         await this.markSessionMessagesAsRead(session.id, true);
         await this.emitDriverOrderChatMessage(newMsg);
       }
@@ -3380,15 +3723,23 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  async sendLocation(phone: string, latitude: number, longitude: number, name?: string, address?: string) {
-    const phoneId = await this.getSetting('whatsapp_phone_id');
-    const token = await this.getSetting('whatsapp_token');
-    if (!phoneId || !token) {
+  async sendLocation(
+    phone: string,
+    latitude: number,
+    longitude: number,
+    name?: string,
+    address?: string,
+    requestedSiteId = DEFAULT_SITE_ID,
+  ) {
+    const targetSession = await this.resolveSessionForDispatch(phone, requestedSiteId);
+    const siteId = targetSession?.siteId || requestedSiteId;
+    const metaConfig = await this.resolveOutboundMetaConfig(siteId);
+    if (!metaConfig) {
       this.logger.warn('WhatsApp API no configurada');
       return { sent: false, reason: 'not_configured' };
     }
+    const { phoneId, token } = metaConfig;
 
-    const targetSession = await this.resolveSessionForDispatch(phone);
     const resolvedRecipient = this.getBestRecipientPhone(targetSession, phone);
     const formattedPhone = this.formatRecipient(resolvedRecipient);
 
@@ -3418,7 +3769,7 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
       const data = await res.json();
 
       if (ok) {
-        const session = targetSession || await this.findOrCreateSession(formattedPhone);
+        const session = targetSession || await this.findOrCreateSession(formattedPhone, undefined, undefined, siteId);
         await this.prisma.whatsAppSession.update({
           where: { id: session.id },
           data: { lastMessageAt: new Date(), active: true },
@@ -3426,7 +3777,7 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
 
         const locationText = `📍 Ubicación compartida: https://maps.google.com/?q=${latitude},${longitude}${name ? ` - ${name}` : ''}`;
 
-        const linkedOrderId = await this.resolveMessageOrderId(session.id);
+        const linkedOrderId = await this.resolveMessageOrderId(session.id, {}, siteId);
         const newMsg = await this.prisma.whatsAppMessage.create({
           data: {
             waMessageId: data.messages?.[0]?.id || `out-loc-${Date.now()}`,
@@ -3440,6 +3791,7 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
         });
 
         this.socketGateway.emitWhatsApp('whatsappMessage', {
+          siteId,
           id: newMsg.id,
           waMessageId: newMsg.waMessageId,
           sessionId: session.id,
@@ -3452,7 +3804,7 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
           status: 'sent',
           assignedTo: session.assignedToId,
           createdAt: newMsg.createdAt,
-        });
+        }, siteId);
         await this.markSessionMessagesAsRead(session.id, true);
         await this.emitDriverOrderChatMessage(newMsg);
       }
@@ -3469,15 +3821,17 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
     templateName: string,
     languageCode: string = 'es_CO',
     params: string[] = [],
+    requestedSiteId = DEFAULT_SITE_ID,
   ) {
-    const phoneId = await this.getSetting('whatsapp_phone_id');
-    const token = await this.getSetting('whatsapp_token');
-    if (!phoneId || !token) {
+    const targetSession = await this.resolveSessionForDispatch(phone, requestedSiteId);
+    const siteId = targetSession?.siteId || requestedSiteId;
+    const metaConfig = await this.resolveOutboundMetaConfig(siteId);
+    if (!metaConfig) {
       this.logger.warn('WhatsApp API no configurada');
       return { sent: false, reason: 'not_configured' };
     }
+    const { phoneId, token } = metaConfig;
 
-    const targetSession = await this.resolveSessionForDispatch(phone);
     const resolvedRecipient = this.getBestRecipientPhone(targetSession, phone);
     const formattedPhone = this.formatRecipient(resolvedRecipient);
 
@@ -3554,7 +3908,7 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
       }
 
       if (ok) {
-        const session = targetSession || await this.findOrCreateSession(formattedPhone);
+        const session = targetSession || await this.findOrCreateSession(formattedPhone, undefined, undefined, siteId);
         await this.prisma.whatsAppSession.update({
           where: { id: session.id },
           data: { lastMessageAt: new Date(), active: true },
@@ -3582,7 +3936,7 @@ The Villa Dog • Montería`;
         };
 
         const templateSummary = knownTemplatesText[templateName] || `📢 Plantilla Meta: ${templateName}`;
-        const linkedOrderId = await this.resolveMessageOrderId(session.id);
+         const linkedOrderId = await this.resolveMessageOrderId(session.id, {}, siteId);
         const newMsg = await this.prisma.whatsAppMessage.create({
           data: {
             waMessageId: data.messages?.[0]?.id || `out-${Date.now()}`,
@@ -3596,6 +3950,7 @@ The Villa Dog • Montería`;
         });
 
         this.socketGateway.emitWhatsApp('whatsappMessage', {
+          siteId,
           id: newMsg.id,
           waMessageId: newMsg.waMessageId,
           sessionId: session.id,
@@ -3607,15 +3962,16 @@ The Villa Dog • Montería`;
           status: 'sent',
           assignedTo: session.assignedToId,
           createdAt: newMsg.createdAt,
-        });
+        }, siteId);
 
         this.socketGateway.emitWhatsApp('whatsappSessionUpdated', {
+          siteId,
           id: session.id,
           sessionId: session.id,
           phone: session.phone,
           lastMessageAt: session.lastMessageAt,
           lastMessageText: templateSummary,
-        });
+        }, siteId);
         await this.markSessionMessagesAsRead(session.id, true);
         await this.emitDriverOrderChatMessage(newMsg);
       }
@@ -3636,23 +3992,28 @@ The Villa Dog • Montería`;
     caption?: string,
     sessionId?: string,
     orderId?: string,
+    requestedSiteId = DEFAULT_SITE_ID,
   ) {
-    const phoneId = await this.getSetting('whatsapp_phone_id');
-    const token = await this.getSetting('whatsapp_token');
-    if (!phoneId || !token) {
+    const targetSession = sessionId
+      ? await this.prisma.whatsAppSession.findFirst({
+          where: { id: sessionId, siteId: requestedSiteId },
+          include: { assignedTo: { select: { id: true, name: true } } },
+        })
+      : await this.resolveSessionForDispatch(phone, requestedSiteId);
+    if (sessionId && !targetSession) {
+      return { sent: false, reason: 'session_not_found_in_site' };
+    }
+    const siteId = targetSession?.siteId || requestedSiteId;
+    const metaConfig = await this.resolveOutboundMetaConfig(siteId);
+    if (!metaConfig) {
       this.logger.warn('WhatsApp API no configurada');
       return { sent: false, reason: 'not_configured' };
     }
-
-    const targetSession = sessionId
-      ? await this.prisma.whatsAppSession.findUnique({ where: { id: sessionId }, include: { assignedTo: { select: { id: true, name: true } } } })
-      : await this.resolveSessionForDispatch(phone);
-    const { recipientPhone, lastInWaId, isId } = await this.resolveActiveRecipient(targetSession, phone);
-
+    const { phoneId, token } = metaConfig;
+    const { recipientPhone, lastInWaId, isId } = await this.resolveActiveRecipient(targetSession, phone, siteId);
     if (this.isDummyPhoneNumber(recipientPhone)) {
       return { sent: false, reason: 'dummy_phone' };
     }
-
     const formattedPhone = this.formatRecipient(recipientPhone);
 
     let persistedMessage: any = null;
@@ -3701,6 +4062,8 @@ The Villa Dog • Montería`;
         sendBody.image = { id: mediaId, ...(caption ? { caption } : {}) };
       } else if (type === 'audio') {
         sendBody.audio = { id: mediaId };
+      } else if (type === 'video') {
+        sendBody.video = { id: mediaId, ...(caption ? { caption } : {}) };
       } else {
         sendBody.document = { id: mediaId, filename: fileName, ...(caption ? { caption } : {}) };
       }
@@ -3718,7 +4081,7 @@ The Villa Dog • Montería`;
       const sendData = await sendRes.json();
 
       if (sendOk) {
-        const session = targetSession || await this.findOrCreateSession(formattedPhone);
+        const session = targetSession || await this.findOrCreateSession(formattedPhone, undefined, undefined, siteId);
         await this.prisma.whatsAppSession.update({
           where: { id: session.id },
           data: { lastMessageAt: new Date(), active: true },
@@ -3726,7 +4089,7 @@ The Villa Dog • Montería`;
 
         const msgContent = caption ? `${mediaId}|${caption}` : mediaId;
 
-        const linkedOrderId = await this.resolveMessageOrderId(session.id, { explicitOrderId: orderId });
+         const linkedOrderId = await this.resolveMessageOrderId(session.id, { explicitOrderId: orderId }, siteId);
         const newMsg = await this.prisma.whatsAppMessage.create({
           data: {
             waMessageId: sendData.messages?.[0]?.id || `out-${Date.now()}`,
@@ -3740,6 +4103,7 @@ The Villa Dog • Montería`;
         });
 
         persistedMessage = {
+          siteId,
           id: newMsg.id,
           waMessageId: newMsg.waMessageId,
           sessionId: session.id,
@@ -3753,7 +4117,7 @@ The Villa Dog • Montería`;
           assignedTo: session.assignedToId,
           createdAt: newMsg.createdAt,
         };
-        this.socketGateway.emitWhatsApp('whatsappMessage', persistedMessage);
+        this.socketGateway.emitWhatsApp('whatsappMessage', persistedMessage, siteId);
         await this.markSessionMessagesAsRead(session.id, true);
         await this.emitDriverOrderChatMessage(newMsg);
       }
@@ -3775,12 +4139,12 @@ The Villa Dog • Montería`;
       .trim();
   }
 
-  private async getClosedBusinessReply(): Promise<string | null> {
+  private async getClosedBusinessReply(siteId = DEFAULT_SITE_ID): Promise<string | null> {
     const [outOfServiceEnabled, businessHoursEnabled, outOfServiceMessage, restaurantHours] = await Promise.all([
-      this.getSetting('out_of_service_enabled'),
-      this.getSetting('business_hours_enabled'),
-      this.getSetting('out_of_service_message'),
-      this.getSetting('restaurant_hours'),
+      this.getSetting('out_of_service_enabled', siteId),
+      this.getSetting('business_hours_enabled', siteId),
+      this.getSetting('out_of_service_message', siteId),
+      this.getSetting('restaurant_hours', siteId),
     ]);
     const hours = restaurantHours || '12:00 - 23:00';
     if (outOfServiceEnabled === 'true') return this.formatClosedBusinessMessage(outOfServiceMessage || '', hours);
@@ -3880,6 +4244,7 @@ The Villa Dog • Montería`;
   }
 
   private async requestAdvisorHandoff(session: any, customerReply: string, reason: string): Promise<boolean> {
+    const siteId = String(session?.siteId || DEFAULT_SITE_ID);
     const { cleanText } = this.parseAdvisorTransferReply(customerReply);
     const reply = cleanText || 'Gracias. Un asesor continuará la atención contigo en este chat.';
     // Persistir la espera antes de llamar a Meta cierra la carrera entre dos
@@ -3902,6 +4267,7 @@ The Villa Dog • Montería`;
     const queuedPayload = {
       id: session.id,
       sessionId: session.id,
+      siteId,
       phone: session.phone,
       customerName: session.customerName,
       waitingForAdvisor: true,
@@ -3913,8 +4279,8 @@ The Villa Dog • Montería`;
     };
     // La alerta operativa depende solo de la base de datos. Se emite antes de
     // esperar a Meta para que una caída externa nunca oculte el chat pendiente.
-    this.socketGateway.emitWhatsApp('whatsappAgentRequest', queuedPayload);
-    this.socketGateway.emitWhatsApp('whatsappSessionUpdated', queuedPayload);
+    this.socketGateway.emitWhatsApp('whatsappAgentRequest', queuedPayload, siteId);
+    this.socketGateway.emitWhatsApp('whatsappSessionUpdated', queuedPayload, siteId);
 
     let sent: any;
     try {
@@ -3924,6 +4290,8 @@ The Villa Dog • Montería`;
         undefined,
         undefined,
         session.id,
+        undefined,
+        siteId,
       );
     } catch (error) {
       this.logger.warn(`Falló el intento de avisar la derivación a ${session.phone}; la solicitud humana permanece en la cola.`);
@@ -3953,28 +4321,31 @@ The Villa Dog • Montería`;
       noticeSent,
       noticeFailureReason: noticeSent ? null : (sent?.reason || 'unknown'),
     };
-    this.socketGateway.emitWhatsApp('whatsappSessionUpdated', payload);
+    this.socketGateway.emitWhatsApp('whatsappSessionUpdated', payload, siteId);
     this.logger.log(`Conversación ${session.phone} derivada a un asesor (${reason}).`);
     return true;
   }
 
   private async resumeChatbotForSession(session: any): Promise<any> {
+    const requestedSiteId = String(session?.siteId || DEFAULT_SITE_ID);
     const updated = await this.prisma.whatsAppSession.update({
       where: { id: session.id },
       data: { waitingForAdvisor: false },
       include: { assignedTo: { select: { id: true, name: true } } },
     });
+    const siteId = String(updated?.siteId || requestedSiteId);
     const payload = {
       id: session.id,
       sessionId: session.id,
+      siteId,
       phone: updated?.phone || session.phone,
       assignedToId: updated?.assignedToId ?? session.assignedToId ?? null,
       assignedTo: updated?.assignedTo ?? session.assignedTo ?? null,
       waitingForAdvisor: false,
       lastMessageAt: updated?.lastMessageAt || session.lastMessageAt,
     };
-    this.socketGateway.emitWhatsApp('chatSessionAssigned', payload);
-    this.socketGateway.emitWhatsApp('whatsappSessionUpdated', payload);
+    this.socketGateway.emitWhatsApp('chatSessionAssigned', payload, siteId);
+    this.socketGateway.emitWhatsApp('whatsappSessionUpdated', payload, siteId);
     return updated || { ...session, waitingForAdvisor: false };
   }
 
@@ -4084,6 +4455,7 @@ The Villa Dog • Montería`;
 
     let replyDispatched = false;
     try {
+      const siteId = String(session?.siteId || DEFAULT_SITE_ID);
       if (!(await this.isLatestChatbotTrigger(sessionId, triggerMessageId))) {
         this.logger.log(`Respuesta automática omitida: llegó un mensaje más nuevo en ${session.phone}.`);
         return;
@@ -4096,7 +4468,7 @@ The Villa Dog • Montería`;
       if (sessionId && typeof findCurrentSession === 'function') {
         const currentSession = await findCurrentSession.call(this.prisma.whatsAppSession, {
           where: { id: sessionId },
-          select: { assignedToId: true, waitingForAdvisor: true },
+          select: { assignedToId: true, waitingForAdvisor: true, siteId: true },
         });
         if (currentSession) session = { ...session, ...currentSession };
       }
@@ -4119,21 +4491,21 @@ The Villa Dog • Montería`;
 
       // El cierre programado es una respuesta operativa, independiente de la
       // IA. Por eso sigue funcionando aunque el bot conversacional esté pausado.
-      const closedReply = await this.getClosedBusinessReply();
+      const closedReply = await this.getClosedBusinessReply(siteId);
       if (closedReply) {
         if (!(await this.isLatestChatbotTrigger(sessionId, triggerMessageId))) return;
         if (!(await this.isSessionAvailableForChatbot(sessionId))) return;
         replyDispatched = true;
         if (sessionId) {
-          await this.sendMessage(session.phone, closedReply, undefined, undefined, sessionId);
+          await this.sendMessage(session.phone, closedReply, undefined, undefined, sessionId, undefined, siteId);
         } else {
-          await this.sendMessage(session.phone, closedReply);
+          await this.sendMessage(session.phone, closedReply, undefined, undefined, undefined, undefined, siteId);
         }
         return;
       }
 
       // Verificar si el chatbot está habilitado en los ajustes
-      const chatbotEnabled = await this.getSetting('chatbot_enabled');
+      const chatbotEnabled = await this.getSetting('chatbot_enabled', siteId);
       if (chatbotEnabled !== 'true') {
         this.logger.log(`Chatbot desactivado/pausado (${chatbotEnabled}), ignorando mensaje de ${session.phone}`);
         return;
@@ -4150,7 +4522,7 @@ The Villa Dog • Montería`;
         return;
       }
 
-      const rawApiKeys = await this.getSetting('gemini_api_key');
+      const rawApiKeys = await this.getSetting('gemini_api_key', siteId);
       if (!rawApiKeys) {
         this.logger.log(`API Key de Gemini no configurada. Usando chatbot de contingencia basado en reglas.`);
         replyDispatched = true;
@@ -4612,6 +4984,7 @@ Restaurante (Tú):
     triggerMessageId?: string,
   ) {
     try {
+      const siteId = String(session?.siteId || DEFAULT_SITE_ID);
       const preferredPhone = this.isCallableCustomerPhone(session?.customerPhone)
         ? String(session.customerPhone)
         : (this.isCallableCustomerPhone(session?.phone) ? String(session.phone) : '');
@@ -4639,32 +5012,35 @@ Restaurante (Tú):
           take: 40,
         }),
         this.prisma.menuItem.findMany({
-          where: { active: true, availableForDelivery: { not: false }, code: { not: null } },
+          where: { siteId, active: true, availableForDelivery: { not: false }, code: { not: null } },
           include: { category: { select: { name: true } } },
           orderBy: [{ category: { name: 'asc' } }, { price: 'asc' }],
         }),
         this.prisma.deliveryZone.findMany({
-          where: { active: true },
+          where: { siteId, active: true },
           orderBy: { name: 'asc' },
         }),
         this.customerRequestsPreviousOrder(userText) && cleanPhone
           ? this.prisma.order.findMany({
-              where: { customerPhone: { in: Array.from(new Set([cleanPhone, `57${cleanPhone}`, `+57${cleanPhone}`])) } },
+              where: {
+                siteId,
+                customerPhone: { in: Array.from(new Set([cleanPhone, `57${cleanPhone}`, `+57${cleanPhone}`])) },
+              },
               include: { items: { include: { menuItem: true } } },
               orderBy: { createdAt: 'desc' },
               take: 5,
             })
           : Promise.resolve([]),
-        this.getSetting('digital_menu_url'),
-        this.getSetting('restaurant_hours'),
-        this.getSetting('chatbot_ai_instructions'),
-        this.getSetting('chatbot_payment_qr_mode'),
-        this.getSetting('chatbot_payment_account_text'),
-        this.getSetting('chatbot_learning_active_examples_v1'),
-        this.getSetting('chatbot_learning_examples_enabled_v1'),
+        this.getSetting('digital_menu_url', siteId),
+        this.getSetting('restaurant_hours', siteId),
+        this.getSetting('chatbot_ai_instructions', siteId),
+        this.getSetting('chatbot_payment_qr_mode', siteId),
+        this.getSetting('chatbot_payment_account_text', siteId),
+        this.getSetting('chatbot_learning_active_examples_v1', siteId),
+        this.getSetting('chatbot_learning_examples_enabled_v1', siteId),
         typeof (this.prisma.order as any)?.findFirst === 'function'
           ? this.prisma.order.findFirst({
-              where: { chatSessionId: session.id },
+              where: { siteId, chatSessionId: session.id },
               orderBy: { createdAt: 'desc' },
               select: { createdAt: true },
             })
@@ -4760,7 +5136,7 @@ Restaurante (Tú):
       let data: any = null;
       let replyText = '';
       let completedContentAttempts = 0;
-      const modelsToTry = await this.getGeminiModels();
+      const modelsToTry = await this.getGeminiModels(undefined, siteId);
 
       candidateSearch:
       for (const key of this.getGeminiKeyCandidates(apiKeys)) {
@@ -4791,6 +5167,7 @@ Restaurante (Tú):
 
             if (!response.ok) {
               this.recordGeminiAttempt({
+                siteId,
                 operation: 'CHATBOT',
                 apiKey: key,
                 allKeys: apiKeys,
@@ -4807,10 +5184,11 @@ Restaurante (Tú):
             }
             const candidateData: any = await response.json();
             completedContentAttempts += 1;
-            await this.incrementGeminiUsage();
+            await this.incrementGeminiUsage(siteId);
             const candidateReply = this.getCompleteGeminiReply(candidateData);
             if (!candidateReply) {
               this.recordGeminiAttempt({
+                siteId,
                 operation: 'CHATBOT',
                 apiKey: key,
                 allKeys: apiKeys,
@@ -4825,6 +5203,7 @@ Restaurante (Tú):
             data = candidateData;
             replyText = candidateReply;
             this.recordGeminiAttempt({
+              siteId,
               operation: 'CHATBOT',
               apiKey: key,
               allKeys: apiKeys,
@@ -4835,6 +5214,7 @@ Restaurante (Tú):
             break;
           } catch (e: any) {
             this.recordGeminiAttempt({
+              siteId,
               operation: 'CHATBOT',
               apiKey: key,
               allKeys: apiKeys,
@@ -4981,7 +5361,7 @@ Restaurante (Tú):
         await this.requestAdvisorHandoff(session, cleanReply, 'respuesta_gemini');
         return { dispatched: true };
       } else if (cleanReply) {
-        await this.sendMessage(session.phone, cleanReply, undefined, undefined, session.id);
+        await this.sendMessage(session.phone, cleanReply, undefined, undefined, session.id, undefined, siteId);
         return { dispatched: true };
       }
 
@@ -5001,13 +5381,14 @@ Restaurante (Tú):
   ) {
     try {
       const sessionId = String(session?.id || '');
+      const siteId = String(session?.siteId || DEFAULT_SITE_ID);
       const canReply = async () => (
         await this.isLatestChatbotTrigger(sessionId, triggerMessageId)
         && await this.isSessionAvailableForChatbot(sessionId)
       );
       if (!(await canReply())) return;
       // Verificar si el chatbot está habilitado en los ajustes
-      const chatbotEnabled = await this.getSetting('chatbot_enabled');
+      const chatbotEnabled = await this.getSetting('chatbot_enabled', siteId);
       if (chatbotEnabled !== 'true') {
         this.logger.log(`Chatbot desactivado o sin configurar, ignorando mensaje de ${session.phone}`);
         return;
@@ -5062,6 +5443,7 @@ Restaurante (Tú):
       let activeOrder = sessionId
         ? await this.prisma.order.findFirst({
             where: {
+              siteId,
               chatSessionId: sessionId,
               status: { in: ['PENDING', 'READY', 'IN_ROUTE'] },
             },
@@ -5079,6 +5461,7 @@ Restaurante (Tú):
         ]));
         activeOrder = await this.prisma.order.findFirst({
           where: {
+            siteId,
             chatSessionId: null,
             customerPhone: { in: phoneVariants },
             status: { in: ['PENDING', 'READY', 'IN_ROUTE'] },
@@ -5199,7 +5582,7 @@ Restaurante (Tú):
           `Despachamos pedidos directamente a tu dirección en toda la ciudad. 🛵🔥\n\n` +
           `Compártenos tu barrio y dirección para cotizar tu envío y tomar tu pedido. Con gusto te atendemos.`;
         if (!(await canReply())) return;
-        await this.sendMessage(session.phone, locationText);
+        await this.sendMessage(session.phone, locationText, undefined, undefined, sessionId || undefined, undefined, siteId);
         return;
       }
 
@@ -5213,7 +5596,7 @@ Restaurante (Tú):
 
       if (isSimpleGreeting || isSessionExpired || normalized === 'inicio' || normalized === 'volver' || normalized === '0') {
         this.logger.log(`Enviando bienvenida a ${session.phone} (greeting=${isGreeting}, expired=${isSessionExpired})`);
-        const configuredMenuUrl = await this.getSetting('digital_menu_url');
+        const configuredMenuUrl = await this.getSetting('digital_menu_url', siteId);
         const digitalMenuUrl = this.getShareableDigitalMenuUrl(configuredMenuUrl);
         let menuLinkText = '';
         if (digitalMenuUrl) {
@@ -5225,15 +5608,15 @@ Restaurante (Tú):
           `¡Hola! Te damos la bienvenida a *The Villa Dog* 🌭🔥\n\n` +
           `Con gusto te atendemos. Cuéntanos qué te gustaría pedir o en qué podemos ayudarte.${menuLinkText}`;
         if (!(await canReply())) return;
-        await this.sendMessage(session.phone, welcomeText);
+        await this.sendMessage(session.phone, welcomeText, undefined, undefined, sessionId || undefined, undefined, siteId);
         return;
       }
 
       if (normalized === '1' || isAskingForMenu) {
         // Generar lista de categorías activas
-        const activeCategories = await this.getMessagingMenuCategories();
+        const activeCategories = await this.getMessagingMenuCategories(siteId);
         
-        const configuredMenuUrl = await this.getSetting('digital_menu_url');
+        const configuredMenuUrl = await this.getSetting('digital_menu_url', siteId);
         const digitalMenuUrl = this.getShareableDigitalMenuUrl(configuredMenuUrl);
         const fullMenuUrl = buildCustomerMenuUrl(digitalMenuUrl);
         const displayUrl = fullMenuUrl ? fullMenuUrl.replace(/^https?:\/\//i, '') : '';
@@ -5256,14 +5639,14 @@ Restaurante (Tú):
             `¿Deseas pedir alguna de estas opciones? Escríbenos directamente lo que deseas ordenar.${digitalMenuLine}\n\n` +
             `Escríbenos lo que deseas pedir y con gusto tomamos tu pedido. 😊`;
         } else {
-          const liveMenuText = await this.buildMessagingMenuText();
+          const liveMenuText = await this.buildMessagingMenuText(siteId);
           menuText = 
             `${liveMenuText}${digitalMenuLine}\n\n` +
             `Escríbenos lo que deseas pedir y con gusto tomamos tu pedido. 😊`;
         }
           
         if (!(await canReply())) return;
-        await this.sendMessage(session.phone, menuText);
+        await this.sendMessage(session.phone, menuText, undefined, undefined, sessionId || undefined, undefined, siteId);
         return;
       }
 
@@ -5288,13 +5671,13 @@ Restaurante (Tú):
           `• Lunes: Cerrado por descanso de nuestro equipo.\n\n` +
           `Escríbenos lo que deseas pedir y con gusto tomamos tu pedido. 😊`;
         if (!(await canReply())) return;
-        await this.sendMessage(session.phone, scheduleText);
+        await this.sendMessage(session.phone, scheduleText, undefined, undefined, sessionId || undefined, undefined, siteId);
         return;
       }
 
       if (normalized === '4') {
         const dbZones = await this.prisma.deliveryZone.findMany({
-          where: { active: true },
+          where: { siteId, active: true },
           orderBy: { name: 'asc' }
         });
         const zonesList = dbZones.map(z => `- ${z.name}: $${z.rate.toLocaleString('de-DE')}`).join('\n');
@@ -5305,7 +5688,7 @@ Restaurante (Tú):
           `*Nota:* Si tu barrio es nuevo o no aparece en la lista, no te preocupes, un asesor definirá el costo al momento de procesar tu pedido. \n\n` +
           `Escríbenos lo que deseas pedir y con gusto tomamos tu pedido. 😊`;
         if (!(await canReply())) return;
-        await this.sendMessage(session.phone, coverageText);
+        await this.sendMessage(session.phone, coverageText, undefined, undefined, sessionId || undefined, undefined, siteId);
         return;
       }
 
@@ -5395,12 +5778,18 @@ Restaurante (Tú):
     }
   }
 
-  private async sendImageByUrl(phone: string, imageUrl: string, caption?: string) {
-    const phoneId = await this.getSetting('whatsapp_phone_id');
-    const token = await this.getSetting('whatsapp_token');
-    if (!phoneId || !token) return;
+  private async sendImageByUrl(
+    phone: string,
+    imageUrl: string,
+    caption?: string,
+    requestedSiteId = DEFAULT_SITE_ID,
+  ) {
+    const targetSession = await this.resolveSessionForDispatch(phone, requestedSiteId);
+    const siteId = targetSession?.siteId || requestedSiteId;
+    const metaConfig = await this.resolveOutboundMetaConfig(siteId);
+    if (!metaConfig) return;
+    const { phoneId, token } = metaConfig;
 
-    const targetSession = await this.resolveSessionForDispatch(phone);
     const resolvedRecipient = this.getBestRecipientPhone(targetSession, phone);
     const formattedPhone = this.formatRecipient(resolvedRecipient);
 
@@ -5589,9 +5978,9 @@ Restaurante (Tú):
     return model;
   }
 
-  private async getGeminiModels(override?: string): Promise<string[]> {
+  private async getGeminiModels(override?: string, siteId = DEFAULT_SITE_ID): Promise<string[]> {
     const requested = override === undefined ? '' : this.normalizeGeminiModel(override);
-    const configured = String(await this.getSetting('gemini_model') || '').trim().replace(/^models\//i, '');
+    const configured = String(await this.getSetting('gemini_model', siteId) || '').trim().replace(/^models\//i, '');
     return Array.from(new Set([
       requested,
       this.isValidGeminiModel(configured) ? configured : '',
@@ -5635,9 +6024,9 @@ Restaurante (Tú):
    * model context/output token limits here, but it does not expose the
    * remaining requests for an AI Studio/Cloud project through this endpoint.
    */
-  async getGeminiModelInfo(key?: string, model?: string) {
-    const existingSetting = await this.prisma.appSetting.findUnique({ where: { key: 'gemini_api_key' } });
-    const existingKeys = (existingSetting?.value || '').split(',').map(k => k.trim()).filter(Boolean);
+  async getGeminiModelInfo(key?: string, model?: string, siteId = DEFAULT_SITE_ID) {
+    const existingValue = await this.getSetting('gemini_api_key', siteId);
+    const existingKeys = (existingValue || '').split(',').map(k => k.trim()).filter(Boolean);
     const providedTokens = key ? key.split(',').map(k => k.trim()).filter(Boolean) : [];
     const keys = providedTokens.length > 0
       ? this.resolveGeminiKeys(providedTokens, existingKeys)
@@ -5701,7 +6090,7 @@ Restaurante (Tú):
       .reduce((unique: any[], entry: any) => unique.some(item => item.name === entry.name) ? unique : [...unique, entry], [])
       .sort((a: any, b: any) => a.name.localeCompare(b.name));
 
-    const configuredModel = this.normalizeGeminiModel(model || String(await this.getSetting('gemini_model') || ''));
+    const configuredModel = this.normalizeGeminiModel(model || String(await this.getSetting('gemini_model', siteId) || ''));
     const productionCandidates = availableModels.filter((entry: any) => {
       const name = String(entry.name || '').toLowerCase();
       return !/(embedding|image|imagen|tts|audio|live|robotics|computer|deep-research|veo|lyria)/i.test(name)
@@ -5720,7 +6109,7 @@ Restaurante (Tú):
     // "Seleccionado" significa exactamente el modelo que el administrador
     // guardó. La consulta nunca cambia esa elección silenciosamente.
     const selected = availableModels.find((entry: any) => entry.name === configuredModel) || null;
-    const requestsToday = await this.getGeminiUsageToday();
+    const requestsToday = await this.getGeminiUsageToday(siteId);
 
     return {
       provider: 'Google Gemini',
@@ -5738,9 +6127,23 @@ Restaurante (Tú):
     };
   }
 
-  async testMetaConnection(tokenOverride?: string, phoneIdOverride?: string) {
-    const rawToken = tokenOverride?.trim() || await this.getSetting('whatsapp_token');
-    const rawPhoneId = phoneIdOverride?.trim() || await this.getSetting('whatsapp_phone_id');
+  async testMetaConnection(tokenOverride?: string, phoneIdOverride?: string, siteId = DEFAULT_SITE_ID) {
+    // Las sedes secundarias prueban exactamente la cuenta y las variables de
+    // entorno guardadas. No se aceptan overrides porque podrían dar un falso
+    // positivo con credenciales distintas a las que se activarán.
+    const usePreparedSecondaryConfig = siteId !== DEFAULT_SITE_ID && Boolean(this.siteResolver);
+    const preparedConfig = usePreparedSecondaryConfig
+      ? await this.siteResolver!.getPreparedSiteMetaConfig(siteId)
+      : null;
+    const outboundConfig = !usePreparedSecondaryConfig && !(tokenOverride?.trim() && phoneIdOverride?.trim())
+      ? await this.resolveOutboundMetaConfig(siteId)
+      : null;
+    const rawToken = usePreparedSecondaryConfig
+      ? preparedConfig?.accessToken || null
+      : tokenOverride?.trim() || outboundConfig?.token || null;
+    const rawPhoneId = usePreparedSecondaryConfig
+      ? preparedConfig?.phoneNumberId || null
+      : phoneIdOverride?.trim() || outboundConfig?.phoneId || null;
 
     const phoneId = rawPhoneId ? String(rawPhoneId).replace(/\s+/g, '') : '';
     const token = rawToken ? String(rawToken).replace(/^["']|["']$/g, '').split(/\s+/)[0] : '';
@@ -5776,6 +6179,14 @@ Restaurante (Tú):
         };
       }
 
+      if (siteId !== DEFAULT_SITE_ID) {
+        await this.writeSiteSetting(
+          siteId,
+          WHATSAPP_META_PREFLIGHT_VERIFIED_AT_KEY,
+          new Date().toISOString(),
+        );
+      }
+
       return {
         success: true,
         displayPhoneNumber: data.display_phone_number,
@@ -5792,9 +6203,9 @@ Restaurante (Tú):
     }
   }
 
-  async testGeminiConnection(key?: string, prompt?: string, model?: string) {
-    const existingSetting = await this.prisma.appSetting.findUnique({ where: { key: 'gemini_api_key' } });
-    const existingKeys = (existingSetting?.value || '').split(',').map(k => k.trim()).filter(Boolean);
+  async testGeminiConnection(key?: string, prompt?: string, model?: string, siteId = DEFAULT_SITE_ID) {
+    const existingValue = await this.getSetting('gemini_api_key', siteId);
+    const existingKeys = (existingValue || '').split(',').map(k => k.trim()).filter(Boolean);
 
     let keysToTest: string[] = [];
     if (key && key.trim()) {
@@ -5824,7 +6235,7 @@ Restaurante (Tú):
     if (!testPrompt) throw new BadRequestException('Escribe un mensaje de prueba');
     if (testPrompt.length > 500) throw new BadRequestException('El mensaje de prueba no puede superar 500 caracteres');
 
-    const modelsToTry = await this.getGeminiModels(model);
+    const modelsToTry = await this.getGeminiModels(model, siteId);
     const results: Array<{
       key: string;
       ok: boolean;
@@ -5861,7 +6272,7 @@ Restaurante (Tú):
               lastError = 'Gemini no devolvió texto para esta prueba';
               continue;
             }
-            await this.incrementGeminiUsage();
+            await this.incrementGeminiUsage(siteId);
             result = {
               key: `••••${apiKey.slice(-4)}`,
               ok: true,
@@ -5873,6 +6284,7 @@ Restaurante (Tú):
           }
 
           this.recordGeminiAttempt({
+            siteId,
             operation: 'CONNECTION_TEST',
             apiKey,
             allKeys: keysToTest,
@@ -5903,7 +6315,7 @@ Restaurante (Tú):
 
     const successful = results.filter(result => result.ok);
     const firstSuccessful = successful[0];
-    const requestsToday = await this.getGeminiUsageToday();
+    const requestsToday = await this.getGeminiUsageToday(siteId);
     const allPassed = successful.length === keysToTest.length && keysToTest.length > 0;
 
     return {
@@ -5924,15 +6336,15 @@ Restaurante (Tú):
     };
   }
 
-  async unassignSessionById(sessionId: string) {
+  async unassignSessionById(sessionId: string, siteId = DEFAULT_SITE_ID) {
     if (!sessionId) return;
     try {
-      const session = await this.prisma.whatsAppSession.findUnique({
-        where: { id: sessionId },
+      const session = await this.prisma.whatsAppSession.findFirst({
+        where: { id: sessionId, siteId },
         include: { assignedTo: { select: { id: true, name: true } } },
       });
       if (!session?.assignedToId) return;
-      await this.assignSession(session.id, null);
+      await this.assignSession(session.id, null, undefined, siteId);
       this.logger.log(`[unassignSessionById] Chat ${session.id} (${session.phone}) liberado automáticamente tras despacho`);
     } catch (err) {
       this.logger.error(`[unassignSessionById] Error liberando sesión ${sessionId}:`, err);
@@ -5951,6 +6363,7 @@ Restaurante (Tú):
     instructionsOverride?: string,
     useCandidates = false,
     candidateExamples?: unknown,
+    siteId = DEFAULT_SITE_ID,
   ) {
     if (!Array.isArray(rawMessages)) {
       throw new BadRequestException('Envía al menos un mensaje para la prueba');
@@ -5994,8 +6407,8 @@ Restaurante (Tú):
       throw new BadRequestException('La conversación de prueba es demasiado larga');
     }
 
-    const existingSetting = await this.prisma.appSetting.findUnique({ where: { key: 'gemini_api_key' } });
-    const existingKeys = (existingSetting?.value || '').split(',').map(k => k.trim()).filter(Boolean);
+    const existingValue = await this.getSetting('gemini_api_key', siteId);
+    const existingKeys = (existingValue || '').split(',').map(k => k.trim()).filter(Boolean);
     const suppliedKeys = typeof key === 'string' ? key.split(',').map(k => k.trim()).filter(Boolean) : [];
     const apiKeys = suppliedKeys.length > 0
       ? this.resolveGeminiKeys(suppliedKeys, existingKeys)
@@ -6013,19 +6426,19 @@ Restaurante (Tú):
 
     const [dbItems, dbZones, configuredMenuUrl, restaurantHours, configuredInstructions, paymentQrMode, paymentAccountText] = await Promise.all([
       this.prisma.menuItem.findMany({
-        where: { active: true, availableForDelivery: { not: false }, code: { not: null } },
+        where: { siteId, active: true, availableForDelivery: { not: false }, code: { not: null } },
         include: { category: { select: { name: true } } },
         orderBy: [{ category: { name: 'asc' } }, { price: 'asc' }],
       }),
       this.prisma.deliveryZone.findMany({
-        where: { active: true },
+        where: { siteId, active: true },
         orderBy: { name: 'asc' },
       }),
-      this.getSetting('digital_menu_url'),
-      this.getSetting('restaurant_hours'),
-      this.getSetting('chatbot_ai_instructions'),
-      this.getSetting('chatbot_payment_qr_mode'),
-      this.getSetting('chatbot_payment_account_text'),
+      this.getSetting('digital_menu_url', siteId),
+      this.getSetting('restaurant_hours', siteId),
+      this.getSetting('chatbot_ai_instructions', siteId),
+      this.getSetting('chatbot_payment_qr_mode', siteId),
+      this.getSetting('chatbot_payment_account_text', siteId),
     ]);
 
     const itemsByCategory: Record<string, string[]> = {};
@@ -6076,9 +6489,9 @@ Restaurante (Tú):
     ).join('\n');
     const examplesSetting = useCandidates
       ? JSON.stringify(candidateExamples === undefined
-        ? this.parseStoredTrainingExamples(await this.getSetting('chatbot_learning_candidates_v1'))
+        ? this.parseStoredTrainingExamples(await this.getSetting('chatbot_learning_candidates_v1', siteId))
         : this.validateTrainingExamples(candidateExamples, 1, 8))
-      : await this.getSetting('chatbot_learning_approved_examples_v1');
+      : await this.getSetting('chatbot_learning_approved_examples_v1', siteId);
     const trainingExamplesBlock = this.formatTrainingExamplesBlock(
       examplesSetting,
       useCandidates ? 'candidates' : 'approved',
@@ -6091,7 +6504,7 @@ Restaurante (Tú):
       dynamicCategoriesString, menuCategoryRule, menuFollowupRule,
       session: { customerName: '' }, paymentInstruction, conversationPrompt,
     });
-    const modelsToTry = await this.getGeminiModels(model);
+    const modelsToTry = await this.getGeminiModels(model, siteId);
     let lastError = 'El proveedor no devolvió una respuesta válida';
     const keyCandidates = this.getGeminiKeyCandidates(apiKeys);
     if (keyCandidates.length === 0) {
@@ -6139,7 +6552,7 @@ Restaurante (Tú):
             continue;
           }
 
-          await this.incrementGeminiUsage();
+          await this.incrementGeminiUsage(siteId);
           return {
             success: true,
             message: 'Respuesta generada en el entorno de prueba. No se envió nada por WhatsApp.',
@@ -6147,7 +6560,7 @@ Restaurante (Tú):
             model: candidateModel,
             key: `••••${apiKey.slice(-4)}`,
             latencyMs: Date.now() - startedAt,
-            requestsToday: await this.getGeminiUsageToday(),
+            requestsToday: await this.getGeminiUsageToday(siteId),
             trainingSource: useCandidates ? 'candidates' : (examplesSetting ? 'approved' : 'none'),
           };
         } catch (error) {
@@ -6354,21 +6767,82 @@ Restaurante (Tú):
     }
   }
 
-  private async writeTrainingSetting(key: string, value: string): Promise<void> {
-    await this.prisma.appSetting.upsert({
-      where: { key },
-      create: { key, value },
+  private async writeTrainingSetting(
+    key: string,
+    value: string,
+    siteId = DEFAULT_SITE_ID,
+  ): Promise<void> {
+    if (siteId === DEFAULT_SITE_ID) {
+      await this.prisma.appSetting.upsert({
+        where: { key },
+        create: { key, value },
+        update: { value },
+      });
+    } else {
+      const siteSetting = (this.prisma as any).siteSetting;
+      if (!siteSetting?.upsert) {
+        throw new BadRequestException('La configuración de aprendizaje por sede no está disponible.');
+      }
+      await siteSetting.upsert({
+        where: { siteId_key: { siteId, key } },
+        create: { siteId, key, value },
+        update: { value },
+      });
+    }
+    this.settingCache.delete(this.settingCacheKey(siteId, key));
+  }
+
+  private async deleteTrainingSetting(key: string, siteId = DEFAULT_SITE_ID): Promise<void> {
+    if (siteId === DEFAULT_SITE_ID) {
+      await this.prisma.appSetting.deleteMany({ where: { key } });
+    } else {
+      const siteSetting = (this.prisma as any).siteSetting;
+      if (!siteSetting?.deleteMany) {
+        throw new BadRequestException('La configuración de aprendizaje por sede no está disponible.');
+      }
+      await siteSetting.deleteMany({ where: { siteId, key } });
+    }
+    this.settingCache.delete(this.settingCacheKey(siteId, key));
+  }
+
+  private async upsertTrainingSettingInTransaction(
+    transaction: any,
+    siteId: string,
+    key: string,
+    value: string,
+  ): Promise<void> {
+    if (siteId === DEFAULT_SITE_ID) {
+      await transaction.appSetting.upsert({
+        where: { key },
+        create: { key, value },
+        update: { value },
+      });
+      return;
+    }
+    await transaction.siteSetting.upsert({
+      where: { siteId_key: { siteId, key } },
+      create: { siteId, key, value },
       update: { value },
     });
-    this.settingCache.delete(key);
   }
 
-  private async deleteTrainingSetting(key: string): Promise<void> {
-    await this.prisma.appSetting.deleteMany({ where: { key } });
-    this.settingCache.delete(key);
+  private async deleteTrainingSettingInTransaction(
+    transaction: any,
+    siteId: string,
+    key: string,
+    expectedValue?: string,
+  ): Promise<{ count: number }> {
+    if (siteId === DEFAULT_SITE_ID) {
+      return transaction.appSetting.deleteMany({
+        where: { key, ...(expectedValue === undefined ? {} : { value: expectedValue }) },
+      });
+    }
+    return transaction.siteSetting.deleteMany({
+      where: { siteId, key, ...(expectedValue === undefined ? {} : { value: expectedValue }) },
+    });
   }
 
-  async polishAiInstruction(rawText: string, modelOverride?: string): Promise<{ success: boolean; polishedRule: string }> {
+  async polishAiInstruction(rawText: string, modelOverride?: string, siteId = DEFAULT_SITE_ID): Promise<{ success: boolean; polishedRule: string }> {
     const text = String(rawText || '').trim();
     if (!text) {
       throw new BadRequestException('Texto de la regla no provisto');
@@ -6380,7 +6854,7 @@ Restaurante (Tú):
     if (!sanitizedText) {
       throw new BadRequestException('Quita nombres, direcciones u otros datos personales antes de pulir la regla.');
     }
-    const rawApiKeys = await this.getSetting('gemini_api_key');
+    const rawApiKeys = await this.getSetting('gemini_api_key', siteId);
     const apiKeys = (rawApiKeys || '').split(',').map((k: string) => k.trim()).filter(Boolean);
     if (apiKeys.length === 0) {
       throw new BadRequestException('Configura al menos una llave de Gemini para pulir instrucciones');
@@ -6398,7 +6872,7 @@ REGLAS ESTRICTAS:
 4. Si menciona una corrección sobre qué responder o preguntar, exprésala de forma imperativa y clara (ej: "- Si el cliente pide X, hacer Y").
 5. NO incluyas introducciones como "Aquí está la regla:", ni explicaciones ni comillas. Solo la regla.`;
 
-    const modelsToTry = (await this.getGeminiModels(modelOverride)).slice(0, 2);
+    const modelsToTry = (await this.getGeminiModels(modelOverride, siteId)).slice(0, 2);
     const keyCandidates = this.getGeminiKeyCandidates(apiKeys).slice(0, 3);
     let lastError = 'No se pudo conectar con Gemini';
     let attempts = 0;
@@ -6426,6 +6900,7 @@ REGLAS ESTRICTAS:
 
           if (!response.ok) {
             this.recordGeminiAttempt({
+              siteId,
               operation: 'RULE_POLISH', apiKey, allKeys: apiKeys,
               model: candidateModel, statusCode: response.status, success: false,
             });
@@ -6449,18 +6924,21 @@ REGLAS ESTRICTAS:
               reply = `- ${reply}`;
             }
             this.recordGeminiAttempt({
+              siteId,
               operation: 'RULE_POLISH', apiKey, allKeys: apiKeys,
               model: candidateModel, statusCode: 200, success: true,
             });
-            await this.incrementGeminiUsage();
+            await this.incrementGeminiUsage(siteId);
             return { success: true, polishedRule: reply };
           }
           this.recordGeminiAttempt({
+            siteId,
             operation: 'RULE_POLISH', apiKey, allKeys: apiKeys,
             model: candidateModel, statusCode: 200, success: false,
           });
         } catch (err) {
           this.recordGeminiAttempt({
+            siteId,
             operation: 'RULE_POLISH', apiKey, allKeys: apiKeys,
             model: candidateModel, success: false,
           });
@@ -6473,7 +6951,7 @@ REGLAS ESTRICTAS:
     throw new BadRequestException(lastError || 'No se pudo pulir la regla con Gemini.');
   }
 
-  async getAutoTrainingConfig() {
+  async getAutoTrainingConfig(siteId = DEFAULT_SITE_ID) {
     const [
       enabledSetting,
       examplesEnabledSetting,
@@ -6486,16 +6964,16 @@ REGLAS ESTRICTAS:
       activeVersionIdSetting,
       candidateSetIdSetting,
     ] = await Promise.all([
-      this.getSetting('chatbot_learning_schedule_enabled_v2'),
-      this.getSetting('chatbot_learning_examples_enabled_v1'),
-      this.getSetting('chatbot_learning_approved_examples_v1'),
-      this.getSetting('chatbot_learning_candidates_v1'),
-      this.getSetting('chatbot_auto_training_last_run'),
-      this.getSetting('chatbot_auto_training_stats'),
-      this.getSetting('chatbot_learning_versions_v1'),
-      this.getSetting('chatbot_learning_approved_version_id_v1'),
-      this.getSetting('chatbot_learning_active_version_id_v1'),
-      this.getSetting('chatbot_learning_candidate_set_id_v1'),
+      this.getSetting('chatbot_learning_schedule_enabled_v2', siteId),
+      this.getSetting('chatbot_learning_examples_enabled_v1', siteId),
+      this.getSetting('chatbot_learning_approved_examples_v1', siteId),
+      this.getSetting('chatbot_learning_candidates_v1', siteId),
+      this.getSetting('chatbot_auto_training_last_run', siteId),
+      this.getSetting('chatbot_auto_training_stats', siteId),
+      this.getSetting('chatbot_learning_versions_v1', siteId),
+      this.getSetting('chatbot_learning_approved_version_id_v1', siteId),
+      this.getSetting('chatbot_learning_active_version_id_v1', siteId),
+      this.getSetting('chatbot_learning_candidate_set_id_v1', siteId),
     ]);
 
     let stats: any = null;
@@ -6522,21 +7000,29 @@ REGLAS ESTRICTAS:
     };
   }
 
-  async toggleAutoTraining(enabled: boolean) {
-    await this.writeTrainingSetting('chatbot_learning_schedule_enabled_v2', enabled === true ? 'true' : 'false');
-    return this.getAutoTrainingConfig();
+  async toggleAutoTraining(enabled: boolean, siteId = DEFAULT_SITE_ID) {
+    await this.writeTrainingSetting(
+      'chatbot_learning_schedule_enabled_v2',
+      enabled === true ? 'true' : 'false',
+      siteId,
+    );
+    return this.getAutoTrainingConfig(siteId);
   }
 
-  async toggleAutoTrainingExamples(enabled: boolean, expectedApprovedVersionId?: string) {
+  async toggleAutoTrainingExamples(
+    enabled: boolean,
+    expectedApprovedVersionId?: string,
+    siteId = DEFAULT_SITE_ID,
+  ) {
     if (enabled !== true) {
-      await this.writeTrainingSetting('chatbot_learning_examples_enabled_v1', 'false');
-      return this.getAutoTrainingConfig();
+      await this.writeTrainingSetting('chatbot_learning_examples_enabled_v1', 'false', siteId);
+      return this.getAutoTrainingConfig(siteId);
     }
 
     const approvedExamples = this.parseStoredTrainingExamples(
-      await this.getSetting('chatbot_learning_approved_examples_v1'),
+      await this.getSetting('chatbot_learning_approved_examples_v1', siteId),
     );
-    const approvedVersionId = await this.getSetting('chatbot_learning_approved_version_id_v1');
+    const approvedVersionId = await this.getSetting('chatbot_learning_approved_version_id_v1', siteId);
     if (approvedExamples.length === 0 || !approvedVersionId) {
       throw new BadRequestException('Aprueba una versión válida antes de publicarla.');
     }
@@ -6544,38 +7030,38 @@ REGLAS ESTRICTAS:
       throw new ConflictException('La versión aprobada cambió en otra sesión. Actualiza el panel antes de publicarla.');
     }
 
-    await this.prisma.$transaction([
-      this.prisma.appSetting.upsert({
-        where: { key: 'chatbot_learning_active_examples_v1' },
-        create: { key: 'chatbot_learning_active_examples_v1', value: JSON.stringify(approvedExamples) },
-        update: { value: JSON.stringify(approvedExamples) },
-      }),
-      this.prisma.appSetting.upsert({
-        where: { key: 'chatbot_learning_active_version_id_v1' },
-        create: { key: 'chatbot_learning_active_version_id_v1', value: approvedVersionId },
-        update: { value: approvedVersionId },
-      }),
-      this.prisma.appSetting.upsert({
-        where: { key: 'chatbot_learning_examples_enabled_v1' },
-        create: { key: 'chatbot_learning_examples_enabled_v1', value: 'true' },
-        update: { value: 'true' },
-      }),
-    ]);
+    await this.prisma.$transaction(async transaction => {
+      await this.upsertTrainingSettingInTransaction(
+        transaction, siteId, 'chatbot_learning_active_examples_v1', JSON.stringify(approvedExamples),
+      );
+      await this.upsertTrainingSettingInTransaction(
+        transaction, siteId, 'chatbot_learning_active_version_id_v1', approvedVersionId,
+      );
+      await this.upsertTrainingSettingInTransaction(
+        transaction, siteId, 'chatbot_learning_examples_enabled_v1', 'true',
+      );
+    });
     [
       'chatbot_learning_active_examples_v1',
       'chatbot_learning_active_version_id_v1',
       'chatbot_learning_examples_enabled_v1',
-    ].forEach(key => this.settingCache.delete(key));
-    return this.getAutoTrainingConfig();
+    ].forEach(key => this.settingCache.delete(this.settingCacheKey(siteId, key)));
+    return this.getAutoTrainingConfig(siteId);
   }
 
-  async approveAutoTrainingExamples(rawExamples: unknown, candidateSetId?: string) {
+  async approveAutoTrainingExamples(
+    rawExamples: unknown,
+    candidateSetId?: string,
+    siteId = DEFAULT_SITE_ID,
+  ) {
     const examples = this.validateTrainingExamples(rawExamples, 1, 8);
     const expectedCandidateSetId = String(candidateSetId || '').trim();
     if (!expectedCandidateSetId || expectedCandidateSetId.length > 100) {
       throw new ConflictException('La revisión cambió. Actualiza el panel antes de aprobar.');
     }
-    const versions = this.parseTrainingVersions(await this.getSetting('chatbot_learning_versions_v1'));
+    const versions = this.parseTrainingVersions(
+      await this.getSetting('chatbot_learning_versions_v1', siteId),
+    );
     const now = new Date().toISOString();
     const version: TrainingVersion = {
       id: randomUUID(),
@@ -6587,28 +7073,27 @@ REGLAS ESTRICTAS:
     const nextVersions = [version, ...versions].slice(0, 10);
 
     await this.prisma.$transaction(async transaction => {
-      const claimed = await transaction.appSetting.deleteMany({
-        where: { key: 'chatbot_learning_candidate_set_id_v1', value: expectedCandidateSetId },
-      });
+      const claimed = await this.deleteTrainingSettingInTransaction(
+        transaction,
+        siteId,
+        'chatbot_learning_candidate_set_id_v1',
+        expectedCandidateSetId,
+      );
       if (claimed.count !== 1) {
         throw new ConflictException('Los candidatos cambiaron en otra sesión. Actualiza el panel y revísalos nuevamente.');
       }
-      await transaction.appSetting.upsert({
-        where: { key: 'chatbot_learning_approved_examples_v1' },
-        create: { key: 'chatbot_learning_approved_examples_v1', value: JSON.stringify(examples) },
-        update: { value: JSON.stringify(examples) },
-      });
-      await transaction.appSetting.upsert({
-        where: { key: 'chatbot_learning_versions_v1' },
-        create: { key: 'chatbot_learning_versions_v1', value: JSON.stringify(nextVersions) },
-        update: { value: JSON.stringify(nextVersions) },
-      });
-      await transaction.appSetting.upsert({
-        where: { key: 'chatbot_learning_approved_version_id_v1' },
-        create: { key: 'chatbot_learning_approved_version_id_v1', value: version.id },
-        update: { value: version.id },
-      });
-      await transaction.appSetting.deleteMany({ where: { key: 'chatbot_learning_candidates_v1' } });
+      await this.upsertTrainingSettingInTransaction(
+        transaction, siteId, 'chatbot_learning_approved_examples_v1', JSON.stringify(examples),
+      );
+      await this.upsertTrainingSettingInTransaction(
+        transaction, siteId, 'chatbot_learning_versions_v1', JSON.stringify(nextVersions),
+      );
+      await this.upsertTrainingSettingInTransaction(
+        transaction, siteId, 'chatbot_learning_approved_version_id_v1', version.id,
+      );
+      await this.deleteTrainingSettingInTransaction(
+        transaction, siteId, 'chatbot_learning_candidates_v1',
+      );
     });
     [
       'chatbot_learning_approved_examples_v1',
@@ -6616,36 +7101,43 @@ REGLAS ESTRICTAS:
       'chatbot_learning_approved_version_id_v1',
       'chatbot_learning_candidates_v1',
       'chatbot_learning_candidate_set_id_v1',
-    ].forEach(key => this.settingCache.delete(key));
-    return this.getAutoTrainingConfig();
+    ].forEach(key => this.settingCache.delete(this.settingCacheKey(siteId, key)));
+    return this.getAutoTrainingConfig(siteId);
   }
 
-  async rejectAutoTrainingCandidates(candidateSetId?: string) {
+  async rejectAutoTrainingCandidates(candidateSetId?: string, siteId = DEFAULT_SITE_ID) {
     const expectedCandidateSetId = String(candidateSetId || '').trim();
     if (!expectedCandidateSetId || expectedCandidateSetId.length > 100) {
       throw new ConflictException('La revisión cambió. Actualiza el panel antes de descartarla.');
     }
     await this.prisma.$transaction(async transaction => {
-      const claimed = await transaction.appSetting.deleteMany({
-        where: { key: 'chatbot_learning_candidate_set_id_v1', value: expectedCandidateSetId },
-      });
+      const claimed = await this.deleteTrainingSettingInTransaction(
+        transaction,
+        siteId,
+        'chatbot_learning_candidate_set_id_v1',
+        expectedCandidateSetId,
+      );
       if (claimed.count !== 1) {
         throw new ConflictException('Los candidatos cambiaron en otra sesión. Actualiza el panel antes de descartarlos.');
       }
-      await transaction.appSetting.deleteMany({ where: { key: 'chatbot_learning_candidates_v1' } });
+      await this.deleteTrainingSettingInTransaction(
+        transaction, siteId, 'chatbot_learning_candidates_v1',
+      );
     });
-    this.settingCache.delete('chatbot_learning_candidate_set_id_v1');
-    this.settingCache.delete('chatbot_learning_candidates_v1');
-    return this.getAutoTrainingConfig();
+    this.settingCache.delete(this.settingCacheKey(siteId, 'chatbot_learning_candidate_set_id_v1'));
+    this.settingCache.delete(this.settingCacheKey(siteId, 'chatbot_learning_candidates_v1'));
+    return this.getAutoTrainingConfig(siteId);
   }
 
-  async rollbackAutoTrainingVersion(versionId?: string) {
+  async rollbackAutoTrainingVersion(versionId?: string, siteId = DEFAULT_SITE_ID) {
     const safeVersionId = String(versionId || '').trim();
     if (!safeVersionId || safeVersionId.length > 100) {
       throw new BadRequestException('Selecciona una versión válida para restaurar.');
     }
 
-    const versions = this.parseTrainingVersions(await this.getSetting('chatbot_learning_versions_v1'));
+    const versions = this.parseTrainingVersions(
+      await this.getSetting('chatbot_learning_versions_v1', siteId),
+    );
     const selected = versions.find(version => version.id === safeVersionId);
     if (!selected) {
       throw new NotFoundException('La versión seleccionada ya no está disponible.');
@@ -6659,54 +7151,55 @@ REGLAS ESTRICTAS:
       examples,
     };
     const nextVersions = [restoredVersion, ...versions].slice(0, 10);
-    await this.prisma.$transaction([
-      this.prisma.appSetting.upsert({
-        where: { key: 'chatbot_learning_approved_examples_v1' },
-        create: { key: 'chatbot_learning_approved_examples_v1', value: JSON.stringify(examples) },
-        update: { value: JSON.stringify(examples) },
-      }),
-      this.prisma.appSetting.upsert({
-        where: { key: 'chatbot_learning_versions_v1' },
-        create: { key: 'chatbot_learning_versions_v1', value: JSON.stringify(nextVersions) },
-        update: { value: JSON.stringify(nextVersions) },
-      }),
-      this.prisma.appSetting.upsert({
-        where: { key: 'chatbot_learning_approved_version_id_v1' },
-        create: { key: 'chatbot_learning_approved_version_id_v1', value: restoredVersion.id },
-        update: { value: restoredVersion.id },
-      }),
-    ]);
-    this.settingCache.delete('chatbot_learning_approved_examples_v1');
-    this.settingCache.delete('chatbot_learning_versions_v1');
-    this.settingCache.delete('chatbot_learning_approved_version_id_v1');
-    return this.getAutoTrainingConfig();
+    await this.prisma.$transaction(async transaction => {
+      await this.upsertTrainingSettingInTransaction(
+        transaction, siteId, 'chatbot_learning_approved_examples_v1', JSON.stringify(examples),
+      );
+      await this.upsertTrainingSettingInTransaction(
+        transaction, siteId, 'chatbot_learning_versions_v1', JSON.stringify(nextVersions),
+      );
+      await this.upsertTrainingSettingInTransaction(
+        transaction, siteId, 'chatbot_learning_approved_version_id_v1', restoredVersion.id,
+      );
+    });
+    this.settingCache.delete(this.settingCacheKey(siteId, 'chatbot_learning_approved_examples_v1'));
+    this.settingCache.delete(this.settingCacheKey(siteId, 'chatbot_learning_versions_v1'));
+    this.settingCache.delete(this.settingCacheKey(siteId, 'chatbot_learning_approved_version_id_v1'));
+    return this.getAutoTrainingConfig(siteId);
   }
 
-  async runAutoTrainingNow(source: 'manual' | 'nightly' = 'manual') {
-    if (this.autoTrainingRunInProgress) {
+  async runAutoTrainingNow(
+    source: 'manual' | 'nightly' = 'manual',
+    siteId = DEFAULT_SITE_ID,
+  ) {
+    if (this.autoTrainingSitesInProgress.has(siteId)) {
       throw new ConflictException('Ya hay una generación de candidatos en curso. Espera a que termine.');
     }
-    this.autoTrainingRunInProgress = true;
+    this.autoTrainingSitesInProgress.add(siteId);
     let distributedLockValue: string | null = null;
     try {
-      distributedLockValue = await this.acquireAutoTrainingRunLock();
+      distributedLockValue = await this.acquireAutoTrainingRunLock(siteId);
       if (!distributedLockValue) {
         throw new ConflictException('Ya hay una generación de candidatos en curso. Espera a que termine.');
       }
-      return await this.generateAutoTrainingCandidates(source);
+      return await this.generateAutoTrainingCandidates(source, siteId);
     } finally {
       if (distributedLockValue) {
-        await this.releaseAutoTrainingRunLock(distributedLockValue).catch(() => undefined);
+        await this.releaseAutoTrainingRunLock(distributedLockValue, siteId).catch(() => undefined);
       }
-      this.autoTrainingRunInProgress = false;
+      this.autoTrainingSitesInProgress.delete(siteId);
     }
   }
 
-  private async acquireAutoTrainingRunLock(): Promise<string | null> {
+  private async acquireAutoTrainingRunLock(siteId = DEFAULT_SITE_ID): Promise<string | null> {
     const key = 'chatbot_learning_run_lock_v1';
     const createLock = async () => {
       const value = randomUUID() + '|' + new Date().toISOString();
-      await this.prisma.appSetting.create({ data: { key, value } });
+      if (siteId === DEFAULT_SITE_ID) {
+        await this.prisma.appSetting.create({ data: { key, value } });
+      } else {
+        await (this.prisma as any).siteSetting.create({ data: { siteId, key, value } });
+      }
       return value;
     };
 
@@ -6716,13 +7209,22 @@ REGLAS ESTRICTAS:
       if (error?.code !== 'P2002') throw error;
     }
 
-    const current = await this.prisma.appSetting.findUnique({ where: { key }, select: { value: true } });
+    const current = siteId === DEFAULT_SITE_ID
+      ? await this.prisma.appSetting.findUnique({ where: { key }, select: { value: true } })
+      : await (this.prisma as any).siteSetting.findUnique({
+        where: { siteId_key: { siteId, key } },
+        select: { value: true },
+      });
     const lockParts = String(current?.value || '').split('|');
     const acquiredAt = Date.parse(lockParts[lockParts.length - 1] || '');
     if (Number.isFinite(acquiredAt) && acquiredAt > Date.now() - 5 * 60 * 1000) return null;
 
     if (current?.value) {
-      await this.prisma.appSetting.deleteMany({ where: { key, value: current.value } });
+      if (siteId === DEFAULT_SITE_ID) {
+        await this.prisma.appSetting.deleteMany({ where: { key, value: current.value } });
+      } else {
+        await (this.prisma as any).siteSetting.deleteMany({ where: { siteId, key, value: current.value } });
+      }
     }
     try {
       return await createLock();
@@ -6732,21 +7234,27 @@ REGLAS ESTRICTAS:
     }
   }
 
-  private async releaseAutoTrainingRunLock(value: string): Promise<void> {
-    await this.prisma.appSetting.deleteMany({
-      where: { key: 'chatbot_learning_run_lock_v1', value },
-    });
+  private async releaseAutoTrainingRunLock(value: string, siteId = DEFAULT_SITE_ID): Promise<void> {
+    await this.deleteTrainingSettingInTransaction(
+      this.prisma,
+      siteId,
+      'chatbot_learning_run_lock_v1',
+      value,
+    );
   }
 
-  private async generateAutoTrainingCandidates(source: 'manual' | 'nightly') {
-    const rawApiKeys = await this.getSetting('gemini_api_key');
+  private async generateAutoTrainingCandidates(
+    source: 'manual' | 'nightly',
+    siteId = DEFAULT_SITE_ID,
+  ) {
+    const rawApiKeys = await this.getSetting('gemini_api_key', siteId);
     const apiKeys = (rawApiKeys || '').split(',').map((key: string) => key.trim()).filter(Boolean);
     if (apiKeys.length === 0) {
       throw new BadRequestException('Configura al menos una llave de Gemini para generar candidatos.');
     }
 
     const deliveredOrders = await this.prisma.order.findMany({
-      where: { status: 'DELIVERED', chatSessionId: { not: null } },
+      where: { siteId, status: 'DELIVERED', chatSessionId: { not: null } },
       take: 10,
       orderBy: { createdAt: 'desc' },
       select: {
@@ -6768,7 +7276,7 @@ REGLAS ESTRICTAS:
     const [resolvedSessions, dbItems, dbZones, restaurantHours, configuredInstructions] = await Promise.all([
       sessionIds.length > 0
         ? this.prisma.whatsAppSession.findMany({
-          where: { id: { in: sessionIds } },
+          where: { siteId, id: { in: sessionIds } },
           take: 6,
           orderBy: { lastMessageAt: 'desc' },
           select: {
@@ -6787,19 +7295,19 @@ REGLAS ESTRICTAS:
         })
         : Promise.resolve([]),
       this.prisma.menuItem.findMany({
-        where: { active: true, availableForDelivery: { not: false } },
+        where: { siteId, active: true, availableForDelivery: { not: false } },
         take: 40,
         orderBy: { name: 'asc' },
         select: { name: true, price: true, description: true },
       }),
       this.prisma.deliveryZone.findMany({
-        where: { active: true },
+        where: { siteId, active: true },
         take: 30,
         orderBy: { name: 'asc' },
         select: { name: true, rate: true },
       }),
-      this.getSetting('restaurant_hours'),
-      this.getSetting('chatbot_ai_instructions'),
+      this.getSetting('restaurant_hours', siteId),
+      this.getSetting('chatbot_ai_instructions', siteId),
     ]);
 
     let discardedLines = 0;
@@ -6885,7 +7393,7 @@ REGLAS ESTRICTAS:
       '[{"context":"Escenario breve","clientPrompt":"Mensaje anónimo del cliente","advisorResponse":"Respuesta ideal, clara y sin datos personales"}]',
     ].join('\n');
 
-    const modelsToTry = (await this.getGeminiModels()).slice(0, 2);
+    const modelsToTry = (await this.getGeminiModels(undefined, siteId)).slice(0, 2);
     const keyCandidates = this.getGeminiKeyCandidates(apiKeys).slice(0, 3);
     let lastError = 'No se pudo conectar con Gemini';
     let generatedCandidates: TrainingExample[] = [];
@@ -6917,6 +7425,7 @@ REGLAS ESTRICTAS:
 
           if (!response.ok) {
             this.recordGeminiAttempt({
+              siteId,
               operation: 'LEARNING', apiKey, allKeys: apiKeys,
               model: candidateModel, statusCode: response.status, success: false,
             });
@@ -6942,13 +7451,15 @@ REGLAS ESTRICTAS:
             generatedCandidates = this.validateTrainingExamples(JSON.parse(jsonText), 3, 8);
             successfulModel = candidateModel;
             this.recordGeminiAttempt({
+              siteId,
               operation: 'LEARNING', apiKey, allKeys: apiKeys,
               model: candidateModel, statusCode: 200, success: true,
             });
-            await this.incrementGeminiUsage();
+            await this.incrementGeminiUsage(siteId);
             break outer;
           } catch (validationError) {
             this.recordGeminiAttempt({
+              siteId,
               operation: 'LEARNING', apiKey, allKeys: apiKeys,
               model: candidateModel, statusCode: 200, success: false,
             });
@@ -6958,6 +7469,7 @@ REGLAS ESTRICTAS:
           }
         } catch (error) {
           this.recordGeminiAttempt({
+            siteId,
             operation: 'LEARNING', apiKey, allKeys: apiKeys,
             model: candidateModel, success: false,
           });
@@ -6983,40 +7495,32 @@ REGLAS ESTRICTAS:
       updatedAt: nowIso,
     };
 
-    await this.prisma.$transaction([
-      this.prisma.appSetting.upsert({
-        where: { key: 'chatbot_learning_candidates_v1' },
-        create: { key: 'chatbot_learning_candidates_v1', value: JSON.stringify(generatedCandidates) },
-        update: { value: JSON.stringify(generatedCandidates) },
-      }),
-      this.prisma.appSetting.upsert({
-        where: { key: 'chatbot_auto_training_last_run' },
-        create: { key: 'chatbot_auto_training_last_run', value: nowIso },
-        update: { value: nowIso },
-      }),
-      this.prisma.appSetting.upsert({
-        where: { key: 'chatbot_auto_training_stats' },
-        create: { key: 'chatbot_auto_training_stats', value: JSON.stringify(stats) },
-        update: { value: JSON.stringify(stats) },
-      }),
-      this.prisma.appSetting.upsert({
-        where: { key: 'chatbot_learning_candidate_set_id_v1' },
-        create: { key: 'chatbot_learning_candidate_set_id_v1', value: candidateSetId },
-        update: { value: candidateSetId },
-      }),
-    ]);
+    await this.prisma.$transaction(async transaction => {
+      await this.upsertTrainingSettingInTransaction(
+        transaction, siteId, 'chatbot_learning_candidates_v1', JSON.stringify(generatedCandidates),
+      );
+      await this.upsertTrainingSettingInTransaction(
+        transaction, siteId, 'chatbot_auto_training_last_run', nowIso,
+      );
+      await this.upsertTrainingSettingInTransaction(
+        transaction, siteId, 'chatbot_auto_training_stats', JSON.stringify(stats),
+      );
+      await this.upsertTrainingSettingInTransaction(
+        transaction, siteId, 'chatbot_learning_candidate_set_id_v1', candidateSetId,
+      );
+    });
     [
       'chatbot_learning_candidates_v1',
       'chatbot_auto_training_last_run',
       'chatbot_auto_training_stats',
       'chatbot_learning_candidate_set_id_v1',
-    ].forEach(key => this.settingCache.delete(key));
+    ].forEach(key => this.settingCache.delete(this.settingCacheKey(siteId, key)));
 
     this.logger.log(
       '[AutoTraining] ' + generatedCandidates.length
-      + ' candidatos seguros generados; esperan revisión humana.',
+      + ' candidatos seguros generados para la sede ' + siteId + '; esperan revisión humana.',
     );
-    const config = await this.getAutoTrainingConfig();
+    const config = await this.getAutoTrainingConfig(siteId);
     return {
       success: true,
       ...config,
@@ -7062,16 +7566,32 @@ REGLAS ESTRICTAS:
     this.autoTrainingTimer.unref?.();
   }
 
-  private async claimNightlyAutoTraining(dateKey: string): Promise<boolean> {
+  private async claimNightlyAutoTraining(
+    dateKey: string,
+    siteId = DEFAULT_SITE_ID,
+  ): Promise<boolean> {
     const key = 'chatbot_learning_daily_claim_v1:' + dateKey;
     try {
-      await this.prisma.appSetting.create({ data: { key, value: new Date().toISOString() } });
-      await this.prisma.appSetting.deleteMany({
-        where: {
-          key: { startsWith: 'chatbot_learning_daily_claim_v1:', not: key },
-          updatedAt: { lt: new Date(Date.now() - 14 * 24 * 60 * 60 * 1000) },
-        },
-      }).catch(() => ({ count: 0 }));
+      const staleBefore = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
+      if (siteId === DEFAULT_SITE_ID) {
+        await this.prisma.appSetting.create({ data: { key, value: new Date().toISOString() } });
+        await this.prisma.appSetting.deleteMany({
+          where: {
+            key: { startsWith: 'chatbot_learning_daily_claim_v1:', not: key },
+            updatedAt: { lt: staleBefore },
+          },
+        }).catch(() => ({ count: 0 }));
+      } else {
+        const siteSetting = (this.prisma as any).siteSetting;
+        await siteSetting.create({ data: { siteId, key, value: new Date().toISOString() } });
+        await siteSetting.deleteMany({
+          where: {
+            siteId,
+            key: { startsWith: 'chatbot_learning_daily_claim_v1:', not: key },
+            updatedAt: { lt: staleBefore },
+          },
+        }).catch(() => ({ count: 0 }));
+      }
       return true;
     } catch (error: any) {
       if (error?.code === 'P2002') return false;
@@ -7080,36 +7600,58 @@ REGLAS ESTRICTAS:
   }
 
   private async checkNightlyAutoTraining() {
-    const enabled = await this.getSetting('chatbot_learning_schedule_enabled_v2');
-    if (enabled !== 'true') return;
+    const siteModel = (this.prisma as any).site;
+    const activeSites = siteModel?.findMany
+      ? await siteModel.findMany({ where: { active: true }, select: { id: true } })
+      : [{ id: DEFAULT_SITE_ID }];
+    const siteIds = Array.from(new Set<string>(
+      (activeSites || []).map((site: any) => String(site?.id || '')).filter(Boolean),
+    ));
 
-    const pendingCandidates = this.parseStoredTrainingExamples(
-      await this.getSetting('chatbot_learning_candidates_v1'),
-    );
-    if (pendingCandidates.length > 0) {
-      this.logger.log('[AutoTraining] Se conserva la revisión pendiente; no se reemplazaron candidatos.');
-      return;
+    for (const siteId of siteIds) {
+      try {
+        const enabled = await this.getSetting('chatbot_learning_schedule_enabled_v2', siteId);
+        if (enabled !== 'true') continue;
+
+        const pendingCandidates = this.parseStoredTrainingExamples(
+          await this.getSetting('chatbot_learning_candidates_v1', siteId),
+        );
+        if (pendingCandidates.length > 0) {
+          this.logger.log(
+            '[AutoTraining] La sede ' + siteId
+            + ' conserva su revisión pendiente; no se reemplazaron candidatos.',
+          );
+          continue;
+        }
+
+        const dateKey = this.bogotaDayKey();
+        if (!(await this.claimNightlyAutoTraining(dateKey, siteId))) continue;
+
+        this.logger.log(
+          '[AutoTraining] Generando candidatos nocturnos para la sede ' + siteId + '.',
+        );
+        await this.runAutoTrainingNow('nightly', siteId);
+      } catch (error) {
+        this.logger.warn(
+          '[AutoTraining] Falló la ejecución aislada para la sede ' + siteId,
+          error,
+        );
+      }
     }
-
-    const dateKey = this.bogotaDayKey();
-    if (!(await this.claimNightlyAutoTraining(dateKey))) return;
-
-    this.logger.log('[AutoTraining] Generando candidatos nocturnos para revisión humana.');
-    await this.runAutoTrainingNow('nightly');
   }
 
-  async getOrderReaderStatus() {
+  async getOrderReaderStatus(siteId = DEFAULT_SITE_ID) {
     return {
-      enabled: (await this.getSetting('order_reader_enabled')) === 'true',
+      enabled: (await this.getSetting('order_reader_enabled', siteId)) === 'true',
     };
   }
 
-  async parseOrderWithGemini(text: string) {
-    const readerEnabled = await this.getSetting('order_reader_enabled');
+  async parseOrderWithGemini(text: string, siteId = DEFAULT_SITE_ID) {
+    const readerEnabled = await this.getSetting('order_reader_enabled', siteId);
     if (readerEnabled !== 'true') {
       throw new BadRequestException('La lectura automática de pedidos está pausada. Toma el pedido manualmente o actívala en Configuración técnica.');
     }
-    const rawApiKey = await this.getSetting('gemini_api_key');
+    const rawApiKey = await this.getSetting('gemini_api_key', siteId);
     if (!rawApiKey) {
       throw new BadRequestException('La clave API de Gemini no está configurada.');
     }
@@ -7118,7 +7660,7 @@ REGLAS ESTRICTAS:
     try {
       const [dbItems, dbZones] = await Promise.all([
         this.prisma.menuItem.findMany({
-          where: { active: true, availableForDelivery: { not: false } },
+          where: { siteId, active: true, availableForDelivery: { not: false } },
           include: {
             category: {
               select: { name: true }
@@ -7126,7 +7668,7 @@ REGLAS ESTRICTAS:
           }
         }),
         this.prisma.deliveryZone.findMany({
-          where: { active: true },
+          where: { siteId, active: true },
           select: { id: true, name: true, rate: true }
         })
       ]);
@@ -7264,7 +7806,7 @@ Responde solo con JSON válido.`;
       // El modelo principal es el que el administrador guardó en Configuración
       // técnica. El navegador mantiene su reconocimiento local inmediato y los
       // otros modelos se usan únicamente como contingencia si el elegido falla.
-      const modelsToTry = await this.getGeminiModels();
+      const modelsToTry = await this.getGeminiModels(undefined, siteId);
 
       for (const key of this.getGeminiKeyCandidates(apiKeys)) {
         if (this.isGeminiKeyOnCooldown(key)) continue;
@@ -7297,6 +7839,7 @@ Responde solo con JSON válido.`;
 
             if (!response.ok) {
               this.recordGeminiAttempt({
+                siteId,
                 operation: 'ORDER_READER',
                 apiKey: key,
                 allKeys: apiKeys,
@@ -7314,7 +7857,7 @@ Responde solo con JSON válido.`;
             }
 
             const candidateData: any = await response.json();
-            await this.incrementGeminiUsage();
+            await this.incrementGeminiUsage(siteId);
             const candidateText = this.getCompleteGeminiReply(candidateData);
             if (candidateText) {
               let candidateJson = candidateText.trim();
@@ -7331,6 +7874,7 @@ Responde solo con JSON válido.`;
               resultText = candidateJson;
               modelUsed = model;
               this.recordGeminiAttempt({
+                siteId,
                 operation: 'ORDER_READER',
                 apiKey: key,
                 allKeys: apiKeys,
@@ -7341,6 +7885,7 @@ Responde solo con JSON válido.`;
               break;
             }
             this.recordGeminiAttempt({
+              siteId,
               operation: 'ORDER_READER',
               apiKey: key,
               allKeys: apiKeys,
@@ -7351,6 +7896,7 @@ Responde solo con JSON válido.`;
             lastError = new Error('Gemini devolvió una respuesta incompleta para interpretar el pedido');
           } catch (e: any) {
             this.recordGeminiAttempt({
+              siteId,
               operation: 'ORDER_READER',
               apiKey: key,
               allKeys: apiKeys,
@@ -7706,17 +8252,18 @@ Responde solo con JSON válido.`;
     mediaId: string;
     content: string;
   }): Promise<string | null> {
+    const siteId = String(params.session?.siteId || DEFAULT_SITE_ID);
     const [readerEnabled, chatbotEnabled] = await Promise.all([
-      this.getSetting('order_reader_enabled'),
-      this.getSetting('chatbot_enabled'),
+      this.getSetting('order_reader_enabled', siteId),
+      this.getSetting('chatbot_enabled', siteId),
     ]);
     if (readerEnabled !== 'true' && chatbotEnabled !== 'true') return null;
 
-    const rawApiKeys = await this.getSetting('gemini_api_key');
+    const rawApiKeys = await this.getSetting('gemini_api_key', siteId);
     const apiKeys = String(rawApiKeys || '').split(',').map(key => key.trim()).filter(Boolean);
     if (apiKeys.length === 0) return null;
 
-    const media = await this.getMediaBuffer(params.mediaId);
+    const media = await this.getMediaBuffer(params.mediaId, params.session?.siteId || DEFAULT_SITE_ID);
     if (!media?.buffer?.length) {
       this.logger.warn(`No fue posible descargar la nota de voz ${params.mediaId} para transcribirla.`);
       return null;
@@ -7737,7 +8284,7 @@ Devuelve únicamente la transcripción, sin saludo, sin resumen, sin markdown y 
     let transcript = '';
     let modelUsed = '';
     let completedContentAttempts = 0;
-    const modelsToTry = await this.getGeminiModels();
+    const modelsToTry = await this.getGeminiModels(undefined, siteId);
 
     transcriptionSearch:
     for (const key of this.getGeminiKeyCandidates(apiKeys)) {
@@ -7765,6 +8312,7 @@ Devuelve únicamente la transcripción, sin saludo, sin resumen, sin markdown y 
 
           if (!response.ok) {
             this.recordGeminiAttempt({
+              siteId,
               operation: 'AUDIO_TRANSCRIPTION',
               apiKey: key,
               allKeys: apiKeys,
@@ -7782,10 +8330,11 @@ Devuelve únicamente la transcripción, sin saludo, sin resumen, sin markdown y 
 
           const data: any = await response.json();
           completedContentAttempts += 1;
-          await this.incrementGeminiUsage();
+          await this.incrementGeminiUsage(siteId);
           const completeTranscript = this.getCompleteGeminiReply(data);
           if (!completeTranscript) {
             this.recordGeminiAttempt({
+              siteId,
               operation: 'AUDIO_TRANSCRIPTION',
               apiKey: key,
               allKeys: apiKeys,
@@ -7803,6 +8352,7 @@ Devuelve únicamente la transcripción, sin saludo, sin resumen, sin markdown y 
           if (transcript) {
             modelUsed = model;
             this.recordGeminiAttempt({
+              siteId,
               operation: 'AUDIO_TRANSCRIPTION',
               apiKey: key,
               allKeys: apiKeys,
@@ -7834,6 +8384,7 @@ ${transcriptLabel}`
     });
 
     this.socketGateway.emitWhatsApp('whatsappAudioTranscribed', {
+      siteId,
       messageId: updated.id,
       waMessageId: updated.waMessageId,
       sessionId: params.session.id,
@@ -7843,7 +8394,7 @@ ${transcriptLabel}`
       transcript,
       modelUsed,
       createdAt: updated.createdAt,
-    });
+    }, siteId);
     return transcript;
   }
 
@@ -7856,19 +8407,20 @@ ${transcriptLabel}`
   ) {
     try {
       const sessionId = String(session?.id || '');
+      const siteId = String(session?.siteId || DEFAULT_SITE_ID);
       if (!(await this.isLatestIncomingMessage(sessionId, triggerMessageId))) return;
       if (session.assignedToId || session.waitingForAdvisor) return;
       if (!(await this.isSessionAvailableForChatbot(sessionId))) return;
 
-      const closedReply = await this.getClosedBusinessReply();
+      const closedReply = await this.getClosedBusinessReply(siteId);
       if (closedReply) {
         if (!(await this.isLatestIncomingMessage(sessionId, triggerMessageId))) return;
         if (!(await this.isSessionAvailableForChatbot(sessionId))) return;
-        await this.sendMessage(session.phone, closedReply, undefined, undefined, sessionId || undefined);
+        await this.sendMessage(session.phone, closedReply, undefined, undefined, sessionId || undefined, undefined, siteId);
         return;
       }
 
-      const chatbotEnabled = await this.getSetting('chatbot_enabled');
+      const chatbotEnabled = await this.getSetting('chatbot_enabled', siteId);
       if (chatbotEnabled !== 'true') return;
 
       if (type === 'audio') {
@@ -7895,7 +8447,21 @@ ${transcriptLabel}`
   }
 
 
+  private geminiMetricsMemoryKey(siteId: string, date: string): string {
+    return `${siteId}|${date}`;
+  }
+
+  private parseGeminiMetricsMemoryKey(value: string): { siteId: string; date: string } | null {
+    const separator = value.lastIndexOf('|');
+    if (separator <= 0) return null;
+    const siteId = value.slice(0, separator);
+    const date = value.slice(separator + 1);
+    if (!siteId || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return null;
+    return { siteId, date };
+  }
+
   recordGeminiAttempt(params: {
+    siteId?: string;
     operation: GeminiOperation;
     apiKey: string;
     allKeys: string[];
@@ -7903,11 +8469,13 @@ ${transcriptLabel}`
     statusCode?: number;
     success: boolean;
   }) {
+    const siteId = String(params.siteId || DEFAULT_SITE_ID);
     const today = new Date().toISOString().slice(0, 10);
-    let day = this.geminiDailyMetrics.get(today);
+    const memoryKey = this.geminiMetricsMemoryKey(siteId, today);
+    let day = this.geminiDailyMetrics.get(memoryKey);
     if (!day) {
       day = { date: today, attempts: 0, successes: 0, failures: 0, entries: [] };
-      this.geminiDailyMetrics.set(today, day);
+      this.geminiDailyMetrics.set(memoryKey, day);
     }
     day.attempts++;
     if (params.success) day.successes++;
@@ -7942,29 +8510,43 @@ ${transcriptLabel}`
       else if (params.statusCode === 429) entry.http429++;
       else entry.otherErrors++;
     }
-    this.geminiMetricsDirty.add(today);
+    this.geminiMetricsDirty.add(memoryKey);
   }
 
   private async flushGeminiMetrics() {
-    for (const date of Array.from(this.geminiMetricsDirty)) {
-      const day = this.geminiDailyMetrics.get(date);
-      if (!day) {
-        this.geminiMetricsDirty.delete(date);
+    for (const memoryKey of Array.from(this.geminiMetricsDirty)) {
+      const parsedMemoryKey = this.parseGeminiMetricsMemoryKey(memoryKey);
+      const day = this.geminiDailyMetrics.get(memoryKey);
+      if (!parsedMemoryKey || !day) {
+        this.geminiMetricsDirty.delete(memoryKey);
         continue;
       }
+      const { siteId, date } = parsedMemoryKey;
       const snapshot = JSON.stringify(day);
       const key = `gemini_metrics_v1:${this.geminiMetricsInstanceId}:${date}`;
       try {
-        await this.prisma.appSetting.upsert({
-          where: { key },
-          create: { key, value: snapshot },
-          update: { value: snapshot },
-        });
+        if (siteId === DEFAULT_SITE_ID) {
+          await this.prisma.appSetting.upsert({
+            where: { key },
+            create: { key, value: snapshot },
+            update: { value: snapshot },
+          });
+        } else {
+          const siteSetting = (this.prisma as any).siteSetting;
+          await siteSetting.upsert({
+            where: { siteId_key: { siteId, key } },
+            create: { siteId, key, value: snapshot },
+            update: { value: snapshot },
+          });
+        }
         if (JSON.stringify(day) === snapshot) {
-          this.geminiMetricsDirty.delete(date);
+          this.geminiMetricsDirty.delete(memoryKey);
         }
       } catch (err) {
-        this.logger.warn(`No se pudo guardar la medición de Gemini para ${date}`, err);
+        this.logger.warn(
+          `No se pudo guardar la medición de Gemini para ${siteId} en ${date}`,
+          err,
+        );
       }
     }
     await this.pruneOldGeminiMetrics();
@@ -7972,14 +8554,16 @@ ${transcriptLabel}`
 
   private async pruneOldGeminiMetrics() {
     const today = new Date().toISOString().slice(0, 10);
+    if (this.geminiMetricsLastPruneDay === today) return;
     const cutoff = new Date(`${today}T00:00:00.000Z`);
     cutoff.setUTCDate(cutoff.getUTCDate() - 13);
     const oldest = cutoff.toISOString().slice(0, 10);
 
-    for (const date of this.geminiDailyMetrics.keys()) {
-      if (date < oldest) {
-        this.geminiDailyMetrics.delete(date);
-        this.geminiMetricsDirty.delete(date);
+    for (const memoryKey of this.geminiDailyMetrics.keys()) {
+      const parsed = this.parseGeminiMetricsMemoryKey(memoryKey);
+      if (!parsed || parsed.date < oldest) {
+        this.geminiDailyMetrics.delete(memoryKey);
+        this.geminiMetricsDirty.delete(memoryKey);
       }
     }
     try {
@@ -7998,18 +8582,52 @@ ${transcriptLabel}`
         await this.prisma.appSetting.deleteMany({ where: { key: { in: expired } } });
       }
     } catch {}
+
+    try {
+      const siteSetting = (this.prisma as any).siteSetting;
+      if (!siteSetting?.findMany || !siteSetting?.deleteMany) {
+        this.geminiMetricsLastPruneDay = today;
+        return;
+      }
+      const rows = await siteSetting.findMany({
+        where: { key: { startsWith: 'gemini_metrics_v1:' } },
+        select: { id: true, key: true },
+      });
+      const expiredIds = rows
+        .filter((row: any) => {
+          const parts = String(row.key || '').split(':');
+          const date = parts[parts.length - 1];
+          return /^\d{4}-\d{2}-\d{2}$/.test(date) && date < oldest;
+        })
+        .map((row: any) => row.id)
+        .filter(Boolean);
+      if (expiredIds.length > 0) {
+        await siteSetting.deleteMany({ where: { id: { in: expiredIds } } });
+      }
+    } catch {}
+    this.geminiMetricsLastPruneDay = today;
   }
 
-  async getGeminiMetrics(daysCount = 14): Promise<GeminiDayTotals[]> {
+  async getGeminiMetrics(
+    daysCount = 14,
+    siteId = DEFAULT_SITE_ID,
+  ): Promise<GeminiDayTotals[]> {
     const today = new Date().toISOString().slice(0, 10);
     const cutoff = new Date(`${today}T00:00:00.000Z`);
     cutoff.setUTCDate(cutoff.getUTCDate() - (daysCount - 1));
     const oldest = cutoff.toISOString().slice(0, 10);
 
-    const rows = await this.prisma.appSetting.findMany({
-      where: { key: { startsWith: 'gemini_metrics_v1:' } },
-      select: { key: true, value: true },
-    });
+    const rows = siteId === DEFAULT_SITE_ID
+      ? await this.prisma.appSetting.findMany({
+        where: { key: { startsWith: 'gemini_metrics_v1:' } },
+        select: { key: true, value: true },
+      })
+      : ((this.prisma as any).siteSetting?.findMany
+        ? await (this.prisma as any).siteSetting.findMany({
+          where: { siteId, key: { startsWith: 'gemini_metrics_v1:' } },
+          select: { key: true, value: true },
+        })
+        : []);
 
     const byDay = new Map<string, GeminiDayTotals>();
 
@@ -8018,15 +8636,17 @@ ${transcriptLabel}`
       const date = parts[parts.length - 1];
       const instance = parts[1];
       if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || date < oldest || date > today) continue;
-      if (instance === this.geminiMetricsInstanceId && this.geminiDailyMetrics.has(date)) continue;
+      const memoryKey = this.geminiMetricsMemoryKey(siteId, date);
+      if (instance === this.geminiMetricsInstanceId && this.geminiDailyMetrics.has(memoryKey)) continue;
       try {
         const parsed = JSON.parse(row.value) as GeminiDayTotals;
         this.mergeGeminiDay(byDay, parsed);
       } catch {}
     }
 
-    for (const [date, day] of this.geminiDailyMetrics) {
-      if (date >= oldest && date <= today) {
+    for (const [memoryKey, day] of this.geminiDailyMetrics) {
+      const parsed = this.parseGeminiMetricsMemoryKey(memoryKey);
+      if (parsed?.siteId === siteId && parsed.date >= oldest && parsed.date <= today) {
         this.mergeGeminiDay(byDay, day);
       }
     }
@@ -8058,41 +8678,66 @@ ${transcriptLabel}`
     }
   }
 
-  async incrementGeminiUsage() {
+  async incrementGeminiUsage(siteId = DEFAULT_SITE_ID) {
     const today = new Date().toISOString().split('T')[0];
     const key = `gemini_usage_${today}`;
     try {
       // Un único UPSERT evita perder incrementos cuando varias respuestas llegan a la vez.
       // La clave de cada día permanece en la tabla para consultar el historial.
-      await this.prisma.$executeRaw`
-        INSERT INTO "app_settings" ("id", "key", "value", "updatedAt")
-        VALUES (${randomUUID()}, ${key}, '1', NOW())
-        ON CONFLICT ("key") DO UPDATE SET
-          "value" = ("app_settings"."value"::bigint + 1)::text,
-          "updatedAt" = NOW()
-      `;
+      if (siteId === DEFAULT_SITE_ID) {
+        await this.prisma.$executeRaw`
+          INSERT INTO "app_settings" ("id", "key", "value", "updatedAt")
+          VALUES (${randomUUID()}, ${key}, '1', NOW())
+          ON CONFLICT ("key") DO UPDATE SET
+            "value" = ("app_settings"."value"::bigint + 1)::text,
+            "updatedAt" = NOW()
+        `;
+      } else {
+        await this.prisma.$executeRaw`
+          INSERT INTO "site_settings" ("id", "siteId", "key", "value", "updatedAt")
+          VALUES (${randomUUID()}, ${siteId}, ${key}, '1', NOW())
+          ON CONFLICT ("siteId", "key") DO UPDATE SET
+            "value" = ("site_settings"."value"::bigint + 1)::text,
+            "updatedAt" = NOW()
+        `;
+        this.settingCache.delete(this.settingCacheKey(siteId, key));
+      }
     } catch (err) {
       this.logger.error('Error incrementando uso de Gemini:', err);
     }
   }
 
-  async getGeminiUsageDaily(days = 30): Promise<Array<{ date: string; success: number }>> {
+  async getGeminiUsageDaily(days = 30, siteId = DEFAULT_SITE_ID): Promise<Array<{ date: string; success: number }>> {
     const today = new Date();
     const todayDate = today.toISOString().slice(0, 10);
     const firstDay = new Date(Date.UTC(
       today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate() - days + 1,
     )).toISOString().slice(0, 10);
     try {
-      const settings = await this.prisma.appSetting.findMany({
-        where: {
-          key: {
-            gte: `gemini_usage_${firstDay}`,
-            lte: `gemini_usage_${todayDate}`,
+      let settings: Array<{ key: string; value: string }>;
+      if (!(this.prisma as any).siteSetting?.findMany && siteId === DEFAULT_SITE_ID) {
+        settings = await this.prisma.appSetting.findMany({
+          where: {
+            key: {
+              gte: `gemini_usage_${firstDay}`,
+              lte: `gemini_usage_${todayDate}`,
+            },
           },
-        },
-        select: { key: true, value: true },
-        orderBy: { key: 'desc' },
-      });
+          select: { key: true, value: true },
+          orderBy: { key: 'desc' },
+        });
+      } else {
+        const keys = Array.from({ length: Math.max(1, days) }, (_, index) => {
+          const date = new Date(Date.UTC(
+            today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate() - index,
+          )).toISOString().slice(0, 10);
+          return `gemini_usage_${date}`;
+        });
+        const values = await this.readSiteSettings(siteId, keys);
+        settings = [...values.entries()]
+          .map(([key, value]) => ({ key, value }))
+          .sort((left, right) => right.key.localeCompare(left.key));
+      }
       const daily = settings.flatMap(({ key, value }) => {
         if (!/^gemini_usage_\d{4}-\d{2}-\d{2}$/.test(key)) return [];
         const success = Number(value);
@@ -8107,24 +8752,36 @@ ${transcriptLabel}`
     }
   }
 
-  async getGeminiUsageToday(): Promise<number> {
+  async getGeminiUsageToday(siteId = DEFAULT_SITE_ID): Promise<number> {
     const today = new Date().toISOString().split('T')[0];
     const key = `gemini_usage_${today}`;
     try {
-      const setting = await this.prisma.appSetting.findUnique({ where: { key } });
-      return setting ? Number(setting.value) : 0;
+      const value = await this.getSetting(key, siteId);
+      return value !== null ? Number(value) : 0;
     } catch {
       return 0;
     }
   }
 
-  private async getSetting(key: string): Promise<string | null> {
-    const cached = this.settingCache.get(key);
+  private async getSetting(key: string, siteId = DEFAULT_SITE_ID): Promise<string | null> {
+    const cacheKey = this.settingCacheKey(siteId, key);
+    const cached = this.settingCache.get(cacheKey);
     if (cached && cached.expiresAt > Date.now()) return cached.value;
-    const s = await this.prisma.appSetting.findUnique({ where: { key } });
-    const rawValue = s?.value || this.config.get(key.toUpperCase()) || null;
-    const value = key === 'digital_menu_url' ? this.resolveDigitalMenuUrl(rawValue) : rawValue;
-    this.settingCache.set(key, { value, expiresAt: Date.now() + 60_000 });
+    let rawValue: string | null = null;
+    const siteSetting = (this.prisma as any).siteSetting;
+    const scoped = siteSetting?.findUnique
+      ? await siteSetting.findUnique({ where: { siteId_key: { siteId, key } } })
+      : null;
+    if (scoped) {
+      rawValue = scoped.value;
+    } else if (siteId === DEFAULT_SITE_ID) {
+      const legacy = await this.prisma.appSetting.findUnique({ where: { key } });
+      rawValue = legacy?.value ?? this.config.get(key.toUpperCase()) ?? null;
+    }
+    const value = key === 'digital_menu_url'
+      ? await this.resolveDigitalMenuUrlForSite(rawValue, siteId)
+      : rawValue;
+    this.settingCache.set(cacheKey, { value, expiresAt: Date.now() + 60_000 });
     return value;
   }
 
@@ -8165,11 +8822,18 @@ ${transcriptLabel}`
     }
   }
 
-  async getOrderChat(orderId: string, before?: string, requestedLimit?: number, beforeId?: string) {
+  async getOrderChat(
+    orderId: string,
+    before?: string,
+    requestedLimit?: number,
+    beforeId?: string,
+    siteId = DEFAULT_SITE_ID,
+  ) {
     const order = await this.prisma.order.findUnique({
       where: { id: orderId },
       select: {
         id: true,
+        siteId: true,
         orderNumber: true,
         customerName: true,
         customerPhone: true,
@@ -8189,7 +8853,7 @@ ${transcriptLabel}`
       },
     });
 
-    if (!order) {
+    if (!order || ((order as any).siteId || DEFAULT_SITE_ID) !== siteId) {
       throw new BadRequestException('Pedido no encontrado');
     }
 
@@ -8199,13 +8863,14 @@ ${transcriptLabel}`
       session = await this.prisma.whatsAppSession.findUnique({
         where: { id: order.chatSessionId },
       });
+      if (session && (session.siteId || DEFAULT_SITE_ID) !== siteId) session = null;
     }
 
     if (!session && order.customerPhone) {
       const senderPhones = this.senderPhoneVariants(order.customerPhone);
       if (senderPhones.length > 0) {
         const candidates = await this.prisma.whatsAppSession.findMany({
-          where: { phone: { in: senderPhones } },
+          where: { siteId, phone: { in: senderPhones } },
           orderBy: { lastMessageAt: 'desc' },
           take: 2,
         });
@@ -8216,7 +8881,7 @@ ${transcriptLabel}`
 
         if (session && !order.chatSessionId) {
           const linked = await this.prisma.order.updateMany({
-            where: { id: order.id, chatSessionId: null },
+            where: { id: order.id, siteId, chatSessionId: null },
             data: { chatSessionId: session.id },
           }).catch(() => ({ count: 0 }));
           if (linked.count === 0) {
@@ -8229,6 +8894,7 @@ ${transcriptLabel}`
             session = current?.chatSessionId
               ? await this.prisma.whatsAppSession.findUnique({ where: { id: current.chatSessionId } })
               : null;
+            if (session && (session.siteId || DEFAULT_SITE_ID) !== siteId) session = null;
           }
         }
       }
@@ -8240,10 +8906,10 @@ ${transcriptLabel}`
     let messages: any[] = [];
     let hasPreviousMessages = false;
     if (session) {
-      await this.ensureLegacyOrderMessageLinks(order.id);
+      await this.ensureLegacyOrderMessageLinks(order.id, siteId);
       // Pedimos una fila adicional para saber si hay historial anterior, sin
       // cargar las 100 burbujas y archivos asociados al abrir el modal.
-      const messagePage = await this.getSessionMessages(session.id, before, pageSize + 1, beforeId, order.id);
+      const messagePage = await this.getSessionMessages(session.id, before, pageSize + 1, beforeId, order.id, siteId);
       hasPreviousMessages = messagePage.length > pageSize;
       messages = hasPreviousMessages ? messagePage.slice(1) : messagePage;
     }
@@ -8288,7 +8954,13 @@ ${transcriptLabel}`
     };
   }
 
-  async getOrderChatProof(orderId: string, proofId: string) {
+  async getOrderChatProof(orderId: string, proofId: string, siteId = DEFAULT_SITE_ID) {
+    if (typeof (this.prisma as any).order?.findUnique === 'function') {
+      const order = await this.prisma.order.findUnique({ where: { id: orderId }, select: { id: true, siteId: true } });
+      if (!order || (order.siteId || DEFAULT_SITE_ID) !== siteId) {
+        throw new NotFoundException('Pedido no encontrado');
+      }
+    }
     const proof = await this.prisma.transferProof.findFirst({
       where: { id: proofId, orderId },
       select: {
@@ -8305,22 +8977,22 @@ ${transcriptLabel}`
     return proof;
   }
 
-  async sendOrderChatMessage(orderId: string, text: string) {
+  async sendOrderChatMessage(orderId: string, text: string, siteId = DEFAULT_SITE_ID) {
     const order = await this.prisma.order.findUnique({
       where: { id: orderId },
     });
-    if (!order) {
+    if (!order || (order.siteId || DEFAULT_SITE_ID) !== siteId) {
       throw new BadRequestException('Pedido no encontrado');
     }
 
     let sessionId = order.chatSessionId;
     if (!sessionId && order.customerPhone) {
-      const chatInfo = await this.getOrderChat(orderId);
+      const chatInfo = await this.getOrderChat(orderId, undefined, undefined, undefined, siteId);
       sessionId = chatInfo.session?.id || null;
     }
 
     if (sessionId) {
-      return this.sendDirectToSession(sessionId, text, order.id);
+      return this.sendDirectToSession(sessionId, text, order.id, siteId);
     }
 
     throw new BadRequestException('El pedido no tiene una conversación de WhatsApp única asociada. Ábrelo desde el chat correcto antes de enviar el mensaje.');

@@ -13,24 +13,24 @@ export class NotificationsController {
   @Get()
   @ApiOperation({ summary: 'Listar notificaciones del usuario' })
   findAll(@Request() req: any) {
-    return this.notificationsService.findAll(req.user.id);
+    return this.notificationsService.findAll(req.user.id, req.user.siteId);
   }
 
   @Get('unread-count')
   @ApiOperation({ summary: 'Contar notificaciones no leídas' })
   getUnreadCount(@Request() req: any) {
-    return this.notificationsService.getUnreadCount(req.user.id);
+    return this.notificationsService.getUnreadCount(req.user.id, req.user.siteId);
   }
 
   @Put(':id/read')
   @ApiOperation({ summary: 'Marcar notificación como leída' })
-  markAsRead(@Param('id') id: string) {
-    return this.notificationsService.markAsRead(id);
+  markAsRead(@Param('id') id: string, @Request() req: any) {
+    return this.notificationsService.markAsRead(id, req.user.id, req.user.siteId);
   }
 
   @Put('read-all')
   @ApiOperation({ summary: 'Marcar todas como leídas' })
   markAllAsRead(@Request() req: any) {
-    return this.notificationsService.markAllAsRead(req.user.id);
+    return this.notificationsService.markAllAsRead(req.user.id, req.user.siteId);
   }
 }

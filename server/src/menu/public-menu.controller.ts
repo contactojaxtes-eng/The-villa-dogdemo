@@ -1,7 +1,9 @@
-import { Controller, Get } from '@nestjs/common';
+import { Controller, Get, Query, Req } from '@nestjs/common';
 import { ApiTags, ApiOperation } from '@nestjs/swagger';
 import { MenuService } from './menu.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { resolvePublicSite } from '../common/public-site';
+import { DEFAULT_SITE_ID } from '../common/multisite.constants';
 
 /**
  * Controlador PÚBLICO del menú (sin autenticación).
@@ -17,19 +19,37 @@ export class PublicMenuController {
 
   @Get('categories')
   @ApiOperation({ summary: 'Listar categorías públicas con items activos para domicilios' })
-  findAllCategories() {
-    return this.menuService.findAllCategories(false, true);
+  async findAllCategories(@Query('site') siteCode?: string, @Req() req?: any) {
+    const site = await resolvePublicSite(this.prisma, siteCode);
+    if (req) req.trafficSiteId = site.id;
+    return this.menuService.findAllCategories(false, true, site.id);
   }
 
   @Get('info')
   @ApiOperation({ summary: 'Obtener información pública del restaurante' })
-  async getPublicInfo() {
-    const setting = await this.prisma.appSetting.findUnique({
-      where: { key: 'whatsapp_business_phone' }
-    });
-    const phone = setting?.value ? setting.value.replace(/\D/g, '') : '573003229261';
+  async getPublicInfo(@Query('site') siteCode?: string, @Req() req?: any) {
+    const site = await resolvePublicSite(this.prisma, siteCode);
+    if (req) req.trafficSiteId = site.id;
+    let phone = String(
+      site.whatsappAccount?.active
+        ? site.whatsappAccount.displayPhoneNumber || site.phone || ''
+        : site.phone || '',
+    ).replace(/\D/g, '');
+
+    if (!phone && site.id === DEFAULT_SITE_ID) {
+      const setting = await this.prisma.appSetting.findUnique({
+        where: { key: 'whatsapp_business_phone' },
+      });
+      phone = String(setting?.value || '573003229261').replace(/\D/g, '');
+    }
     return {
-      whatsappPhone: phone
+      site: {
+        id: site.id,
+        code: site.code,
+        name: site.name,
+        address: site.address,
+      },
+      whatsappPhone: phone,
     };
   }
 }

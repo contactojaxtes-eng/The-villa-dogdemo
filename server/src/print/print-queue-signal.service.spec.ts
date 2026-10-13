@@ -1,6 +1,7 @@
 import { PrintQueueSignalService } from './print-queue-signal.service';
 
 describe('PrintQueueSignalService', () => {
+  const otherSiteId = '00000000-0000-4000-8000-000000000202';
   let service: PrintQueueSignalService;
 
   beforeEach(() => {
@@ -44,5 +45,24 @@ describe('PrintQueueSignalService', () => {
     service.notifyJobCreated();
 
     await expect(service.waitForChange(previousRevision, 25_000)).resolves.toBe(true);
+  });
+
+  it('no despierta el puente de otra sede', async () => {
+    const waiting = service.waitForChange(
+      service.currentRevision(otherSiteId),
+      25_000,
+      undefined,
+      otherSiteId,
+    );
+
+    service.notifyJobCreated();
+    jest.advanceTimersByTime(24_999);
+    let resolved = false;
+    void waiting.then(() => { resolved = true; });
+    await Promise.resolve();
+    expect(resolved).toBe(false);
+
+    service.notifyJobCreated(otherSiteId);
+    await expect(waiting).resolves.toBe(true);
   });
 });

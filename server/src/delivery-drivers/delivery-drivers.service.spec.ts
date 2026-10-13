@@ -1,5 +1,13 @@
 import { DeliveryDriversService } from './delivery-drivers.service';
 import { validateReceipt } from '../tables/receipt';
+import { DEFAULT_SITE_ID } from '../common/multisite.constants';
+
+const SECOND_SITE_ID = '00000000-0000-4000-8000-000000000202';
+
+const makeSocketGateway = () => ({
+  emitToSite: jest.fn(),
+  emitOrderStatusChange: jest.fn(),
+});
 
 describe('DeliveryDriversService', () => {
   it('lists drivers without running the duplicate merge maintenance task', async () => {
@@ -8,19 +16,25 @@ describe('DeliveryDriversService', () => {
         findMany: jest.fn().mockResolvedValue([]),
       },
     };
-    const service = new DeliveryDriversService(prisma, { server: { emit: jest.fn() } } as any);
+    const service = new DeliveryDriversService(prisma, makeSocketGateway() as any);
     const mergeSpy = jest.spyOn(service, 'autoMergeDuplicates').mockResolvedValue();
 
-    await expect(service.findAll(false, 'ALL')).resolves.toEqual([]);
+    await expect(service.findAll(false, 'ALL', undefined, undefined, false, SECOND_SITE_ID)).resolves.toEqual([]);
 
     expect(mergeSpy).not.toHaveBeenCalled();
     expect(prisma.deliveryDriver.findMany).toHaveBeenCalledTimes(1);
+    expect(prisma.deliveryDriver.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { siteId: SECOND_SITE_ID },
+      include: expect.objectContaining({
+        orders: expect.objectContaining({ where: { siteId: SECOND_SITE_ID } }),
+      }),
+    }));
   });
 
   it('returns one lightweight portal snapshot and never exposes an order owned by another driver', async () => {
     const prisma: any = {
       deliveryDriver: {
-        findUnique: jest.fn().mockResolvedValue({ id: 'driver-1', active: true }),
+        findFirst: jest.fn().mockResolvedValue({ id: 'driver-1', active: true }),
       },
       cashClosing: {
         findFirst: jest.fn().mockResolvedValue({ id: 'shift-1' }),
@@ -53,6 +67,7 @@ describe('DeliveryDriversService', () => {
     expect(prisma.order.findFirst).toHaveBeenNthCalledWith(2, expect.objectContaining({
       where: {
         id: 'foreign-order',
+        siteId: DEFAULT_SITE_ID,
         deliveryDriverId: 'driver-1',
         orderType: 'DELIVERY',
       },
@@ -63,7 +78,7 @@ describe('DeliveryDriversService', () => {
   it('returns only messages linked to the driver own order and hides Meta media IDs', async () => {
     const prisma: any = {
       deliveryDriver: {
-        findUnique: jest.fn().mockResolvedValue({ id: 'driver-1', active: true }),
+        findFirst: jest.fn().mockResolvedValue({ id: 'driver-1', active: true }),
       },
       order: {
         findFirst: jest.fn().mockResolvedValue({
@@ -120,7 +135,7 @@ describe('DeliveryDriversService', () => {
   it('never reveals whether an order assigned to another driver exists', async () => {
     const prisma: any = {
       deliveryDriver: {
-        findUnique: jest.fn().mockResolvedValue({ id: 'driver-1', active: true }),
+        findFirst: jest.fn().mockResolvedValue({ id: 'driver-1', active: true }),
       },
       order: { findFirst: jest.fn().mockResolvedValue(null) },
       whatsAppMessage: { findMany: jest.fn() },
@@ -136,7 +151,7 @@ describe('DeliveryDriversService', () => {
     const media = { buffer: Buffer.from([0xff, 0xd8, 0xff, 0xd9]), contentType: 'image/jpeg' };
     const prisma: any = {
       deliveryDriver: {
-        findUnique: jest.fn().mockResolvedValue({ id: 'driver-1', active: true }),
+        findFirst: jest.fn().mockResolvedValue({ id: 'driver-1', active: true }),
       },
       order: {
         findFirst: jest.fn().mockResolvedValue({ id: 'order-1', chatSessionId: 'session-1' }),
@@ -158,11 +173,43 @@ describe('DeliveryDriversService', () => {
       where: { id: 'message-1', orderId: 'order-1', sessionId: 'session-1' },
       select: { id: true, messageType: true, content: true },
     });
-    expect(whatsapp.getMediaBuffer).toHaveBeenCalledWith('media-1');
+    expect(whatsapp.getMediaBuffer).toHaveBeenCalledWith('media-1', DEFAULT_SITE_ID);
+  });
+
+  it('uses the active site when loading Meta media for a secondary-site driver chat', async () => {
+    const prisma: any = {
+      deliveryDriver: {
+        findFirst: jest.fn().mockResolvedValue({ id: 'driver-2', active: true }),
+      },
+      order: {
+        findFirst: jest.fn().mockResolvedValue({ id: 'order-2', chatSessionId: 'session-2' }),
+      },
+      whatsAppMessage: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: 'message-2',
+          messageType: 'image',
+          content: '/api/whatsapp/media/media-2|Comprobante',
+        }),
+      },
+    };
+    const whatsapp: any = {
+      getMediaBuffer: jest.fn().mockResolvedValue({ buffer: Buffer.from('image'), contentType: 'image/jpeg' }),
+    };
+    const service = new DeliveryDriversService(prisma, {} as any, undefined, whatsapp);
+
+    await service.getMyOrderChatMedia('driver-user-2', 'order-2', 'message-2', SECOND_SITE_ID);
+
+    expect(prisma.order.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ siteId: SECOND_SITE_ID }),
+    }));
+    expect(whatsapp.getMediaBuffer).toHaveBeenCalledWith('media-2', SECOND_SITE_ID);
   });
 
   it('settles delivered cash orders in the active delivery shift', async () => {
     const tx: any = {
+      deliveryDriver: {
+        findFirst: jest.fn().mockResolvedValue({ id: 'driver-1', active: true }),
+      },
       cashClosing: {
         findFirst: jest.fn().mockResolvedValue({ id: 'delivery-shift' }),
       },
@@ -184,7 +231,7 @@ describe('DeliveryDriversService', () => {
     const prisma: any = {
       $transaction: jest.fn((callback: (transaction: any) => unknown) => callback(tx)),
     };
-    const socket: any = { server: { emit: jest.fn() } };
+    const socket: any = makeSocketGateway();
     const service = new DeliveryDriversService(prisma, socket);
 
     const result = await service.settleCash(
@@ -196,6 +243,7 @@ describe('DeliveryDriversService', () => {
     expect(tx.driverSettlement.create).toHaveBeenCalledWith({
       data: {
         driverId: 'driver-1',
+        siteId: DEFAULT_SITE_ID,
         cashClosingId: 'delivery-shift',
         receivedById: 'cashier-1',
         expectedCash: 35_000,
@@ -205,11 +253,11 @@ describe('DeliveryDriversService', () => {
       },
     });
     expect(tx.order.updateMany).toHaveBeenNthCalledWith(1, {
-      where: { id: { in: ['cash-order', 'mixed-order'] }, driverSettlementId: null },
+      where: { siteId: DEFAULT_SITE_ID, id: { in: ['cash-order', 'mixed-order'] }, driverSettlementId: null },
       data: { driverSettlementId: 'settlement-1' },
     });
     expect(tx.order.updateMany).toHaveBeenNthCalledWith(2, {
-      where: { id: { in: ['cash-order'] }, driverSettlementId: 'settlement-1' },
+      where: { siteId: DEFAULT_SITE_ID, id: { in: ['cash-order'] }, driverSettlementId: 'settlement-1' },
       data: { paymentStatus: 'CONFIRMED' },
     });
     expect(tx.payment.updateMany).toHaveBeenCalledWith({
@@ -220,9 +268,9 @@ describe('DeliveryDriversService', () => {
         confirmedBy: 'cashier-1',
       },
     });
-    expect(socket.server.emit).toHaveBeenCalledWith('driverSettlementCreated', result);
-    expect(socket.server.emit).toHaveBeenCalledWith('driversChanged');
-    expect(socket.server.emit).toHaveBeenCalledWith('cashRegistersChanged');
+    expect(socket.emitToSite).toHaveBeenCalledWith(DEFAULT_SITE_ID, 'driverSettlementCreated', result);
+    expect(socket.emitToSite).toHaveBeenCalledWith(DEFAULT_SITE_ID, 'driversChanged');
+    expect(socket.emitToSite).toHaveBeenCalledWith(DEFAULT_SITE_ID, 'cashRegistersChanged');
   });
 
   it('keeps a mixed order pending for cash even after its transfer was confirmed', async () => {
@@ -247,7 +295,7 @@ describe('DeliveryDriversService', () => {
         }]),
       },
     };
-    const service = new DeliveryDriversService(prisma, { server: { emit: jest.fn() } } as any);
+    const service = new DeliveryDriversService(prisma, makeSocketGateway() as any);
 
     const result = await service.getPendingSettlements();
 
@@ -262,7 +310,7 @@ describe('DeliveryDriversService', () => {
     const tx: any = {
       $queryRaw: jest.fn().mockResolvedValue([{ locked: 1 }]),
       deliveryDriver: {
-        findUnique: jest.fn().mockResolvedValue({ id: 'driver-1', active: true }),
+        findFirst: jest.fn().mockResolvedValue({ id: 'driver-1', active: true }),
       },
       order: {
         findFirst: jest.fn().mockResolvedValue({
@@ -290,16 +338,15 @@ describe('DeliveryDriversService', () => {
       $transaction: jest.fn((callback: (transaction: any) => unknown) => callback(tx)),
     };
     const socket: any = {
-      server: { emit: jest.fn() },
       emitOrderStatusChange: jest.fn(),
-      emitPaymentSubmitted: jest.fn(),
+      emitToSite: jest.fn(),
     };
     const service = new DeliveryDriversService(prisma, socket);
 
     await service.completeMyOrder('driver-user', 'order-1', { method: 'TRANSFER' }, []);
 
     expect(tx.order.findFirst).toHaveBeenCalledWith(expect.objectContaining({
-      where: { id: 'order-1', deliveryDriverId: 'driver-1', orderType: 'DELIVERY' },
+      where: { id: 'order-1', siteId: DEFAULT_SITE_ID, deliveryDriverId: 'driver-1', orderType: 'DELIVERY' },
     }));
     expect(tx.payment.upsert).toHaveBeenCalledWith(expect.objectContaining({
       create: expect.objectContaining({
@@ -318,14 +365,14 @@ describe('DeliveryDriversService', () => {
       }),
     }));
     expect(tx.transferProof.create).not.toHaveBeenCalled();
-    expect(socket.emitPaymentSubmitted).not.toHaveBeenCalled();
+    expect(socket.emitToSite).toHaveBeenCalledWith(DEFAULT_SITE_ID, 'paymentUpdated', expect.anything());
   });
 
   it('records the exact cash and transfer portions of a mixed driver payment', async () => {
     const tx: any = {
       $queryRaw: jest.fn().mockResolvedValue([{ locked: 1 }]),
       deliveryDriver: {
-        findUnique: jest.fn().mockResolvedValue({ id: 'driver-1', active: true }),
+        findFirst: jest.fn().mockResolvedValue({ id: 'driver-1', active: true }),
       },
       order: {
         findFirst: jest.fn().mockResolvedValue({
@@ -355,9 +402,8 @@ describe('DeliveryDriversService', () => {
       $transaction: jest.fn((callback: (transaction: any) => unknown) => callback(tx)),
     };
     const socket: any = {
-      server: { emit: jest.fn() },
       emitOrderStatusChange: jest.fn(),
-      emitPaymentSubmitted: jest.fn(),
+      emitToSite: jest.fn(),
     };
     const service = new DeliveryDriversService(prisma, socket);
 
@@ -384,7 +430,7 @@ describe('DeliveryDriversService', () => {
       }),
     }));
     expect(tx.transferProof.create).not.toHaveBeenCalled();
-    expect(socket.emitPaymentSubmitted).not.toHaveBeenCalled();
+    expect(socket.emitToSite).toHaveBeenCalledWith(DEFAULT_SITE_ID, 'paymentUpdated', expect.anything());
   });
 
   it('never offers an operational account when configuring a driver portal', async () => {
@@ -392,19 +438,82 @@ describe('DeliveryDriversService', () => {
       deliveryDriver: { findMany: jest.fn().mockResolvedValue([]) },
       user: { findMany: jest.fn().mockResolvedValue([]) },
     };
-    const service = new DeliveryDriversService(prisma, { server: { emit: jest.fn() } } as any);
+    const service = new DeliveryDriversService(prisma, makeSocketGateway() as any);
 
     await service.getAccessCandidates();
 
+    expect(prisma.deliveryDriver.findMany).toHaveBeenCalledWith({
+      where: { siteId: DEFAULT_SITE_ID, userId: { not: null } },
+      select: { userId: true },
+    });
     expect(prisma.user.findMany).toHaveBeenCalledWith(expect.objectContaining({
-      where: expect.objectContaining({ role: 'DELIVERY_DRIVER', active: true }),
+      where: expect.objectContaining({
+        active: true,
+        siteMemberships: { some: { siteId: DEFAULT_SITE_ID, active: true, role: 'DELIVERY_DRIVER' } },
+      }),
     }));
+  });
+
+  it('can link the same driver account to a separate profile in another site', async () => {
+    const driverProfile = {
+      id: 'driver-second-site',
+      name: 'Juan Repartidor',
+      phone: '3001234567',
+      active: true,
+      userId: null,
+      user: null,
+    };
+    const prisma: any = {
+      deliveryDriver: {
+        findFirst: jest
+          .fn()
+          .mockResolvedValueOnce(driverProfile)
+          .mockResolvedValueOnce(null)
+          .mockResolvedValueOnce({ ...driverProfile, userId: 'shared-driver-account', user: { id: 'shared-driver-account' } }),
+        update: jest.fn().mockResolvedValue({ ...driverProfile, userId: 'shared-driver-account' }),
+      },
+      user: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: 'shared-driver-account',
+          name: 'Juan Repartidor',
+          email: 'juan.repartidor@thevilladog.local',
+          role: 'DELIVERY_DRIVER',
+          active: true,
+          siteMemberships: [{ role: 'DELIVERY_DRIVER' }],
+        }),
+        findMany: jest.fn().mockResolvedValue([{
+          id: 'shared-driver-account',
+          name: 'Juan Repartidor',
+          email: 'juan.repartidor@thevilladog.local',
+          role: 'DELIVERY_DRIVER',
+          siteMemberships: [{ role: 'DELIVERY_DRIVER' }],
+        }]),
+        update: jest.fn().mockResolvedValue({ id: 'shared-driver-account' }),
+      },
+      $transaction: jest.fn(async (operations: unknown[]) => Promise.all(operations)),
+    };
+    const service = new DeliveryDriversService(prisma, makeSocketGateway() as any);
+
+    await expect(service.configureAccess('driver-second-site', {
+      mode: 'LINK',
+      userId: 'shared-driver-account',
+    }, SECOND_SITE_ID)).resolves.toEqual(expect.objectContaining({
+      driver: expect.objectContaining({ id: 'driver-second-site' }),
+    }));
+
+    expect(prisma.deliveryDriver.findFirst).toHaveBeenNthCalledWith(2, {
+      where: { siteId: SECOND_SITE_ID, userId: 'shared-driver-account' },
+    });
+    expect(prisma.deliveryDriver.update).toHaveBeenCalledWith({
+      where: { id: 'driver-second-site' },
+      data: { userId: 'shared-driver-account', active: true },
+    });
   });
 
   it('rejects a driver login that matches another user after normalization', async () => {
     const prisma: any = {
       deliveryDriver: {
-        findUnique: jest.fn().mockResolvedValue({
+        findFirst: jest.fn().mockResolvedValue({
           id: 'driver-1',
           name: 'Juan Padilla',
           phone: '3001234567',
@@ -415,12 +524,18 @@ describe('DeliveryDriversService', () => {
       },
       user: {
         findMany: jest.fn().mockResolvedValue([
-          { id: 'cook-1', name: 'Cocinero Principal', email: 'juan-p@otraempresa.com', role: 'KITCHEN' },
+          {
+            id: 'cook-1',
+            name: 'Cocinero Principal',
+            email: 'juan-p@otraempresa.com',
+            role: 'KITCHEN',
+            siteMemberships: [{ role: 'KITCHEN' }],
+          },
         ]),
         create: jest.fn(),
       },
     };
-    const service = new DeliveryDriversService(prisma, { server: { emit: jest.fn() } } as any);
+    const service = new DeliveryDriversService(prisma, makeSocketGateway() as any);
 
     await expect(service.configureAccess('driver-1', {
       mode: 'CREATE',
@@ -434,7 +549,7 @@ describe('DeliveryDriversService', () => {
   it('rejects a new driver access when the normalized display name belongs to another user', async () => {
     const prisma: any = {
       deliveryDriver: {
-        findUnique: jest.fn().mockResolvedValue({
+        findFirst: jest.fn().mockResolvedValue({
           id: 'driver-1',
           name: 'Juán Padilla',
           phone: '3001234567',
@@ -445,12 +560,18 @@ describe('DeliveryDriversService', () => {
       },
       user: {
         findMany: jest.fn().mockResolvedValue([
-          { id: 'admin-1', name: 'Juan-Padilla', email: 'administracion@thevilladog.local', role: 'ADMIN' },
+          {
+            id: 'admin-1',
+            name: 'Juan-Padilla',
+            email: 'administracion@thevilladog.local',
+            role: 'ADMIN',
+            siteMemberships: [{ role: 'ADMIN' }],
+          },
         ]),
         create: jest.fn(),
       },
     };
-    const service = new DeliveryDriversService(prisma, { server: { emit: jest.fn() } } as any);
+    const service = new DeliveryDriversService(prisma, makeSocketGateway() as any);
 
     await expect(service.configureAccess('driver-1', {
       mode: 'CREATE',
@@ -464,7 +585,7 @@ describe('DeliveryDriversService', () => {
   it('never converts an account from another operational role when resetting driver access', async () => {
     const prisma: any = {
       deliveryDriver: {
-        findUnique: jest.fn().mockResolvedValue({
+        findFirst: jest.fn().mockResolvedValue({
           id: 'driver-1',
           name: 'Juan Padilla',
           phone: '3001234567',
@@ -475,11 +596,15 @@ describe('DeliveryDriversService', () => {
       },
       user: {
         findMany: jest.fn().mockResolvedValue([]),
-        findUnique: jest.fn().mockResolvedValue({ id: 'operational-user', role: 'KITCHEN' }),
+        findUnique: jest.fn().mockResolvedValue({
+          id: 'operational-user',
+          role: 'KITCHEN',
+          siteMemberships: [{ role: 'KITCHEN' }],
+        }),
         update: jest.fn(),
       },
     };
-    const service = new DeliveryDriversService(prisma, { server: { emit: jest.fn() } } as any);
+    const service = new DeliveryDriversService(prisma, makeSocketGateway() as any);
 
     await expect(service.configureAccess('driver-1', {
       mode: 'CREATE',
@@ -493,34 +618,49 @@ describe('DeliveryDriversService', () => {
   it('rejects linking a driver account when the driver name would duplicate another user', async () => {
     const prisma: any = {
       deliveryDriver: {
-        findUnique: jest.fn().mockResolvedValue({
-          id: 'driver-1',
-          name: 'Juan Padilla',
-          phone: '3001234567',
-          active: true,
-          userId: null,
-          user: null,
-        }),
-        findFirst: jest.fn(),
+        findFirst: jest
+          .fn()
+          .mockResolvedValueOnce({
+            id: 'driver-1',
+            name: 'Juan Padilla',
+            phone: '3001234567',
+            active: true,
+            userId: null,
+            user: null,
+          })
+          .mockResolvedValueOnce(null),
         update: jest.fn(),
       },
       user: {
-        findUnique: jest.fn().mockResolvedValue({
+        findFirst: jest.fn().mockResolvedValue({
           id: 'driver-account',
           name: 'Repartidor 21',
           email: 'repartidor.21@thevilladog.local',
           role: 'DELIVERY_DRIVER',
           active: true,
+          siteMemberships: [{ role: 'DELIVERY_DRIVER' }],
         }),
         findMany: jest.fn().mockResolvedValue([
-          { id: 'driver-account', name: 'Repartidor 21', email: 'repartidor.21@thevilladog.local', role: 'DELIVERY_DRIVER' },
-          { id: 'cook-1', name: 'Juán-Padilla', email: 'cocina.1@thevilladog.local', role: 'KITCHEN' },
+          {
+            id: 'driver-account',
+            name: 'Repartidor 21',
+            email: 'repartidor.21@thevilladog.local',
+            role: 'DELIVERY_DRIVER',
+            siteMemberships: [{ role: 'DELIVERY_DRIVER' }],
+          },
+          {
+            id: 'cook-1',
+            name: 'Juán-Padilla',
+            email: 'cocina.1@thevilladog.local',
+            role: 'KITCHEN',
+            siteMemberships: [{ role: 'KITCHEN' }],
+          },
         ]),
         update: jest.fn(),
       },
       $transaction: jest.fn(),
     };
-    const service = new DeliveryDriversService(prisma, { server: { emit: jest.fn() } } as any);
+    const service = new DeliveryDriversService(prisma, makeSocketGateway() as any);
 
     await expect(service.configureAccess('driver-1', {
       mode: 'LINK',
@@ -534,7 +674,7 @@ describe('DeliveryDriversService', () => {
   it('does not move a delivered order from a prior cash shift when a driver adds a proof', async () => {
     const tx: any = {
       $queryRaw: jest.fn().mockResolvedValue([{ locked: 1 }]),
-      deliveryDriver: { findUnique: jest.fn().mockResolvedValue({ id: 'driver-1', active: true }) },
+      deliveryDriver: { findFirst: jest.fn().mockResolvedValue({ id: 'driver-1', active: true }) },
       order: {
         findFirst: jest.fn().mockResolvedValue({
           id: 'old-order',
@@ -550,7 +690,7 @@ describe('DeliveryDriversService', () => {
       payment: { upsert: jest.fn() },
     };
     const prisma: any = { $transaction: jest.fn((callback: (transaction: any) => unknown) => callback(tx)) };
-    const service = new DeliveryDriversService(prisma, { server: { emit: jest.fn() } } as any);
+    const service = new DeliveryDriversService(prisma, makeSocketGateway() as any);
 
     await expect(service.uploadMyProof('driver-user', 'old-order', { method: 'TRANSFER' }, [{
       fieldname: 'proof',
@@ -563,7 +703,7 @@ describe('DeliveryDriversService', () => {
   it('does not let a replacement proof change mixed amounts after cash was settled', async () => {
     const tx: any = {
       $queryRaw: jest.fn().mockResolvedValue([{ locked: 1 }]),
-      deliveryDriver: { findUnique: jest.fn().mockResolvedValue({ id: 'driver-1', active: true }) },
+      deliveryDriver: { findFirst: jest.fn().mockResolvedValue({ id: 'driver-1', active: true }) },
       order: {
         findFirst: jest.fn().mockResolvedValue({
           id: 'mixed-order',
@@ -582,7 +722,7 @@ describe('DeliveryDriversService', () => {
       payment: { upsert: jest.fn() },
     };
     const prisma: any = { $transaction: jest.fn((callback: (transaction: any) => unknown) => callback(tx)) };
-    const service = new DeliveryDriversService(prisma, { server: { emit: jest.fn() } } as any);
+    const service = new DeliveryDriversService(prisma, makeSocketGateway() as any);
 
     await expect(service.uploadMyProof('driver-user', 'mixed-order', {
       method: 'MIXED',
@@ -599,7 +739,7 @@ describe('DeliveryDriversService', () => {
   it('lets the driver correct an unliquidated payment and preserves the original method', async () => {
     const tx: any = {
       $queryRaw: jest.fn().mockResolvedValue([{ locked: 1 }]),
-      deliveryDriver: { findUnique: jest.fn().mockResolvedValue({ id: 'driver-1', active: true }) },
+      deliveryDriver: { findFirst: jest.fn().mockResolvedValue({ id: 'driver-1', active: true }) },
       order: {
         findFirst: jest.fn().mockResolvedValue({
           id: 'order-1',
@@ -631,7 +771,7 @@ describe('DeliveryDriversService', () => {
     const prisma: any = {
       $transaction: jest.fn((callback: (transaction: any) => unknown) => callback(tx)),
     };
-    const socket: any = { server: { emit: jest.fn() } };
+    const socket: any = makeSocketGateway();
     const service = new DeliveryDriversService(prisma, socket);
 
     await service.updateMyPayment('driver-user', 'order-1', { method: 'CASH' });
@@ -649,7 +789,11 @@ describe('DeliveryDriversService', () => {
     expect(tx.transferProof.updateMany).toHaveBeenCalledWith(expect.objectContaining({
       data: expect.objectContaining({ status: 'SUPERSEDED', fileBase64: null }),
     }));
-    expect(socket.server.emit).toHaveBeenCalledWith('orderUpdated', expect.objectContaining({ id: 'order-1' }));
+    expect(socket.emitToSite).toHaveBeenCalledWith(
+      DEFAULT_SITE_ID,
+      'orderUpdated',
+      expect.objectContaining({ id: 'order-1' }),
+    );
   });
 
   it('rejects a file that only claims to be an image', async () => {
@@ -662,7 +806,7 @@ describe('DeliveryDriversService', () => {
   it('never returns fileBase64 in uploadMyProof response', async () => {
     const tx: any = {
       $queryRaw: jest.fn().mockResolvedValue([{ locked: 1 }]),
-      deliveryDriver: { findUnique: jest.fn().mockResolvedValue({ id: 'driver-1', active: true }) },
+      deliveryDriver: { findFirst: jest.fn().mockResolvedValue({ id: 'driver-1', active: true }) },
       order: {
         findFirst: jest.fn().mockResolvedValue({
           id: 'order-1',
@@ -691,7 +835,7 @@ describe('DeliveryDriversService', () => {
       orderChangeLog: { create: jest.fn().mockResolvedValue({}) },
     };
     const prisma: any = { $transaction: jest.fn((callback: (transaction: any) => unknown) => callback(tx)) };
-    const socket: any = { server: { emit: jest.fn() } };
+    const socket: any = makeSocketGateway();
     const service = new DeliveryDriversService(prisma, socket);
 
     const result = await service.uploadMyProof('driver-user', 'order-1', { method: 'TRANSFER' }, [{

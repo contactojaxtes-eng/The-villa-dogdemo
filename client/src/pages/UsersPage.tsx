@@ -105,6 +105,7 @@ const moduleIcons: Record<string, any> = {
 export default function UsersPage() {
   const { user: currentUser, startImpersonation } = useAuth()
   const isSuperAdmin = currentUser?.role === 'SUPERADMIN'
+  const preparationMode = currentUser?.activeSite?.preparationMode === true
   const [impersonatingId, setImpersonatingId] = useState<string | null>(null)
 
   const handleImpersonate = async (u: UserData) => {
@@ -187,7 +188,12 @@ export default function UsersPage() {
 
   const loadUsers = () => {
     api.get<UserData[]>('/users')
-      .then(usrs => setUsers(usrs.sort((a, b) => {
+      .then(usrs => setUsers(usrs
+        // El SUPERADMIN entra temporalmente al borrador para configurarlo,
+        // pero no es un miembro operativo de esa sede ni debe mostrarse como
+        // "Preparado para esta sede".
+        .filter(user => !preparationMode || user.role !== 'SUPERADMIN')
+        .sort((a, b) => {
         if (a.active !== b.active) return a.active ? -1 : 1
         const order = ['SUPERADMIN', 'ADMIN', 'CASHIER', 'WAITER', 'KITCHEN', 'DELIVERY_MANAGER', 'DISPATCHER']
         const ai = order.indexOf(a.role)
@@ -199,6 +205,10 @@ export default function UsersPage() {
   }
 
   const loadRoles = () => {
+    if (preparationMode) {
+      setRolesList([])
+      return
+    }
     api.get<RoleData[]>('/roles')
       .then(data => setRolesList((data || []).filter(r => r.code !== 'SUPERADMIN')))
       .catch(console.error)
@@ -207,9 +217,10 @@ export default function UsersPage() {
   useEffect(() => {
     loadUsers()
     loadRoles()
-  }, [])
+  }, [preparationMode])
 
   useEffect(() => {
+    if (preparationMode) return
     const socketUrl = import.meta.env.VITE_API_URL || window.location.origin
     const socket = io(`${socketUrl}/the-villa-dog`, {
       transports: ['websocket', 'polling'],
@@ -226,7 +237,7 @@ export default function UsersPage() {
     return () => {
       socket.disconnect()
     }
-  }, [])
+  }, [preparationMode])
 
   const availableRoles = useMemo(() => {
     if (rolesList.length > 0) {
@@ -240,7 +251,7 @@ export default function UsersPage() {
         }))
     }
     return [
-      ...(isSuperAdmin ? [{ value: 'SUPERADMIN', label: 'Super Administrador (Control Total)', color: '#F59E0B' }] : []),
+      ...(isSuperAdmin && !preparationMode ? [{ value: 'SUPERADMIN', label: 'Super Administrador (Control Total)', color: '#F59E0B' }] : []),
       { value: 'ADMIN', label: 'Administrador (Gestión Completa)', color: '#3B82F6' },
       { value: 'CASHIER', label: 'Cajero / Facturación (Caja, Pedidos, Cobros)', color: '#10B981' },
       { value: 'WAITER', label: 'Mesero (Mesas, Salón y Comandas)', color: '#F97316' },
@@ -248,7 +259,7 @@ export default function UsersPage() {
       { value: 'DELIVERY_MANAGER', label: 'Gestora de Domicilios (WhatsApp y toma de pedidos)', color: '#8B5CF6' },
       { value: 'DISPATCHER', label: 'Despachador de Domicilios (Despachos y rutas)', color: '#0EA5E9' },
     ]
-  }, [rolesList, isSuperAdmin])
+  }, [rolesList, isSuperAdmin, preparationMode])
 
   const passwordCriteria = useMemo(() => {
     return {
@@ -628,7 +639,7 @@ export default function UsersPage() {
 
         <div className="flex w-full sm:w-auto flex-wrap items-center gap-2">
           {/* Botón Gestor de Roles Dinámicos */}
-          {(isSuperAdmin || currentUser?.role === 'ADMIN') && (
+          {!preparationMode && (isSuperAdmin || currentUser?.role === 'ADMIN') && (
             <Button
               variant="outline"
               onClick={() => setOpenRolesModal(true)}
@@ -998,6 +1009,24 @@ export default function UsersPage() {
         </div>
       </motion.div>
 
+      {preparationMode && (
+        <motion.div variants={fadeUp}>
+          <Card className="border-blue-500/25 bg-blue-500/[0.06] p-4">
+            <div className="flex items-start gap-3">
+              <ShieldCheck className="mt-0.5 h-5 w-5 shrink-0 text-blue-600" />
+              <div>
+                <p className="text-sm font-bold text-[var(--text-primary)]">Personal de la sede en preparación</p>
+                <p className="mt-1 text-xs leading-relaxed text-[var(--text-secondary)]">
+                  Puedes crear las cuentas que trabajarán en esta sede. Para proteger usuarios compartidos,
+                  las ediciones, cambios de contraseña, desactivaciones y eliminaciones estarán disponibles
+                  cuando la sede sea activada. Los usuarios existentes se asignan desde Sedes.
+                </p>
+              </div>
+            </div>
+          </Card>
+        </motion.div>
+      )}
+
       {/* Barra de búsqueda y estado */}
       <motion.div variants={fadeUp}>
         <Card className="flex flex-col gap-3 p-3 sm:flex-row sm:items-center sm:justify-between sm:p-4">
@@ -1154,9 +1183,17 @@ export default function UsersPage() {
 
                 <div className="flex items-center">
                   <button
-                    onClick={() => { openEdit(u); setModalTab('permissions'); }}
-                    className="flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-[11px] font-bold text-[var(--accent)] hover:bg-[var(--accent)]/10"
-                    title="Editar permisos"
+                    onClick={() => {
+                      if (!preparationMode) {
+                        openEdit(u)
+                        setModalTab('permissions')
+                      }
+                    }}
+                    disabled={preparationMode}
+                    className={`flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-[11px] font-bold text-[var(--accent)] ${
+                      preparationMode ? 'cursor-default opacity-70' : 'hover:bg-[var(--accent)]/10'
+                    }`}
+                    title={preparationMode ? 'Disponible después de activar la sede' : 'Editar permisos'}
                   >
                     <ShieldCheck className="h-3.5 w-3.5" />
                     <span>{userPerms.length} permisos</span>
@@ -1169,48 +1206,56 @@ export default function UsersPage() {
                 </div>
 
                 <div className="flex flex-wrap items-center gap-1.5 lg:justify-end">
-                  <button
-                    onClick={() => openEdit(u)}
-                    className="flex h-8 items-center gap-1.5 rounded-lg border border-[var(--border-subtle)] px-2.5 text-[11px] font-bold text-[var(--text-primary)] hover:bg-[var(--bg-elevated)]"
-                    title="Editar usuario"
-                  >
-                    <Edit className="h-3.5 w-3.5 text-emerald-600" /> Editar
-                  </button>
-                  <button
-                    onClick={() => openPasswordDialog(u)}
-                    className="flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--border-subtle)] text-purple-600 hover:bg-purple-500/10"
-                    title="Cambiar contraseña"
-                  >
-                    <KeyRound className="h-3.5 w-3.5" />
-                  </button>
-                  {isSuperAdmin && u.id !== currentUser?.id && u.role !== 'SUPERADMIN' && (
-                    <button
-                      onClick={() => handleImpersonate(u)}
-                      className="flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--border-subtle)] text-amber-600 hover:bg-amber-500/10"
-                      title="Iniciar sesión de soporte"
-                    >
-                      {impersonatingId === u.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <LogIn className="h-3.5 w-3.5" />}
-                    </button>
-                  )}
-                  {u.role !== 'SUPERADMIN' && (
-                    <button
-                      onClick={() => toggleActive(u.id, u.active)}
-                      className={`flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--border-subtle)] ${
-                        u.active ? 'text-amber-600 hover:bg-amber-500/10' : 'text-emerald-600 hover:bg-emerald-500/10'
-                      }`}
-                      title={u.active ? 'Desactivar usuario' : 'Reactivar usuario'}
-                    >
-                      {u.active ? <XCircle className="h-3.5 w-3.5" /> : <UserCheck className="h-3.5 w-3.5" />}
-                    </button>
-                  )}
-                  {u.role !== 'SUPERADMIN' && u.id !== currentUser?.id && (
-                    <button
-                      onClick={() => handleDeleteUserClick(u)}
-                      className="flex h-8 w-8 items-center justify-center rounded-lg border border-rose-500/20 text-rose-600 hover:bg-rose-500/10"
-                      title="Eliminar usuario"
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </button>
+                  {preparationMode ? (
+                    <span className="rounded-lg border border-blue-500/20 bg-blue-500/[0.06] px-2.5 py-1.5 text-[10px] font-bold text-blue-600">
+                      Preparado para esta sede
+                    </span>
+                  ) : (
+                    <>
+                      <button
+                        onClick={() => openEdit(u)}
+                        className="flex h-8 items-center gap-1.5 rounded-lg border border-[var(--border-subtle)] px-2.5 text-[11px] font-bold text-[var(--text-primary)] hover:bg-[var(--bg-elevated)]"
+                        title="Editar usuario"
+                      >
+                        <Edit className="h-3.5 w-3.5 text-emerald-600" /> Editar
+                      </button>
+                      <button
+                        onClick={() => openPasswordDialog(u)}
+                        className="flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--border-subtle)] text-purple-600 hover:bg-purple-500/10"
+                        title="Cambiar contraseña"
+                      >
+                        <KeyRound className="h-3.5 w-3.5" />
+                      </button>
+                      {isSuperAdmin && u.id !== currentUser?.id && u.role !== 'SUPERADMIN' && (
+                        <button
+                          onClick={() => handleImpersonate(u)}
+                          className="flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--border-subtle)] text-amber-600 hover:bg-amber-500/10"
+                          title="Iniciar sesión de soporte"
+                        >
+                          {impersonatingId === u.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <LogIn className="h-3.5 w-3.5" />}
+                        </button>
+                      )}
+                      {u.role !== 'SUPERADMIN' && (
+                        <button
+                          onClick={() => toggleActive(u.id, u.active)}
+                          className={`flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--border-subtle)] ${
+                            u.active ? 'text-amber-600 hover:bg-amber-500/10' : 'text-emerald-600 hover:bg-emerald-500/10'
+                          }`}
+                          title={u.active ? 'Desactivar usuario' : 'Reactivar usuario'}
+                        >
+                          {u.active ? <XCircle className="h-3.5 w-3.5" /> : <UserCheck className="h-3.5 w-3.5" />}
+                        </button>
+                      )}
+                      {u.role !== 'SUPERADMIN' && u.id !== currentUser?.id && (
+                        <button
+                          onClick={() => handleDeleteUserClick(u)}
+                          className="flex h-8 w-8 items-center justify-center rounded-lg border border-rose-500/20 text-rose-600 hover:bg-rose-500/10"
+                          title="Eliminar usuario"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      )}
+                    </>
                   )}
                 </div>
               </div>

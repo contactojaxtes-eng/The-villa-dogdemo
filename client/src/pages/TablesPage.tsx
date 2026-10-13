@@ -10,6 +10,7 @@ import { formatCurrency, cn } from '@/lib/utils'
 import { useAuth } from '@/hooks/useAuth'
 import type { DiningTableSummary } from '@/lib/tableTypes'
 import { syncOfflineOrders } from '@/lib/offlineTableOrders'
+import { DEFAULT_SITE_ID } from '@/lib/multisite'
 
 const hasOwn = (value: object, key: PropertyKey) => Object.prototype.hasOwnProperty.call(value, key)
 type TableEventOverride = { table: DiningTableSummary; sequence: number }
@@ -59,7 +60,8 @@ function isCompleteTableSnapshot(table: any): table is DiningTableSummary {
 }
 
 export default function TablesPage() {
-  const { user } = useAuth()
+  const { user, activeSite } = useAuth()
+  const siteId = activeSite?.id || DEFAULT_SITE_ID
   const isWaiter = user?.role === 'WAITER'
   const [openTables, setOpenTables] = useState<DiningTableSummary[]>([])
   const [myHistoryTables, setMyHistoryTables] = useState<DiningTableSummary[]>([])
@@ -70,6 +72,7 @@ export default function TablesPage() {
   const connectedOnceRef = useRef(false)
   const reconcileTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const loadRequestRef = useRef(0)
+  const historyLoadedRef = useRef(false)
   const eventSequenceRef = useRef(0)
   const eventOverridesRef = useRef<Map<string, TableEventOverride>>(new Map())
   const latestVersionRef = useRef<Map<string, number>>(new Map())
@@ -79,12 +82,14 @@ export default function TablesPage() {
     return () => clearInterval(timer)
   }, [])
 
-  const load = useCallback((silent = false) => {
+  const load = useCallback((silent = false, includeHistory = historyLoadedRef.current) => {
     const requestId = ++loadRequestRef.current
     const sequenceAtStart = eventSequenceRef.current
     if (!silent) setLoading(true)
     const pOpen = api.get<DiningTableSummary[]>('/tables?summary=true', { force: true })
-    const pHistory = user?.id ? api.get<DiningTableSummary[]>(`/tables?status=ALL&waiterId=${user.id}&currentShift=true&summary=true`, { force: true }) : Promise.resolve([])
+    const pHistory = includeHistory && user?.id
+      ? api.get<DiningTableSummary[]>(`/tables?status=ALL&waiterId=${user.id}&currentShift=true&summary=true`, { force: true })
+      : Promise.resolve<DiningTableSummary[] | null>(null)
 
     Promise.all([pOpen, pHistory])
       .then(([openList, historyList]) => {
@@ -115,7 +120,7 @@ export default function TablesPage() {
           Array.isArray(openList) ? openList : [],
           table => table.status === 'OPEN' && (table.orders?.length || 0) > 0,
         )
-        const historyWithOverrides = overlay(
+        const historyWithOverrides = historyList === null ? null : overlay(
           Array.isArray(historyList) ? historyList : [],
           (table, existedInResponse) => {
             const belongsToUser = table.openedBy?.id === user?.id || (table.orders || []).some(order => order.waiter?.id === user?.id)
@@ -126,13 +131,16 @@ export default function TablesPage() {
 
         setOpenTables(nextOpen)
         // Mesas que la mesera ya cobró o cerró (para que NUNCA se le desaparezcan tras validar en caja)
-        const hist = historyWithOverrides.filter((t: any) =>
+        const hist = historyWithOverrides === null ? null : historyWithOverrides.filter((t: any) =>
           t.status === 'CLOSED' ||
           t.balance === 0 ||
           t.orders?.some((o: any) => o.paymentStatus === 'PENDING_REVIEW' || o.paymentStatus === 'CONFIRMED')
         )
-        setMyHistoryTables(hist)
-        for (const table of [...nextOpen, ...hist]) {
+        if (hist !== null) {
+          historyLoadedRef.current = true
+          setMyHistoryTables(hist)
+        }
+        for (const table of [...nextOpen, ...(hist || [])]) {
           latestVersionRef.current.set(table.id, snapshotVersion(table))
         }
         const appliedSequence = eventSequenceRef.current
@@ -188,10 +196,10 @@ export default function TablesPage() {
     // La consulta de historial usa currentShift=true. Una mesa abierta siempre
     // pertenece al turno actual; para una cerrada el corte depende de caja, así
     // que actualizamos una fila ya conocida y reconciliamos la membresía.
-    const inLocalHistory = myHistoryTables.some(item => item.id === table.id)
-    const requiresShiftMembershipCheck = table.status !== 'OPEN' && !inLocalHistory
-    if (requiresShiftMembershipCheck) scheduleReconcile()
-    setMyHistoryTables(previous => {
+    if (historyLoadedRef.current) setMyHistoryTables(previous => {
+      const inLocalHistory = previous.some(item => item.id === table.id)
+      const requiresShiftMembershipCheck = table.status !== 'OPEN' && !inLocalHistory
+      if (requiresShiftMembershipCheck) scheduleReconcile()
       const belongsToUser = table.openedBy?.id === user?.id || (table.orders || []).some((order: any) => order.waiter?.id === user?.id)
       const belongsInHistory = belongsToUser && (
         table.status === 'CLOSED' ||
@@ -241,11 +249,17 @@ export default function TablesPage() {
   }
 
   useEffect(() => {
+    historyLoadedRef.current = false
+    setMyHistoryTables([])
+    setFilterMode(isWaiter ? 'OPEN_MINE' : 'OPEN_ALL')
+  }, [isWaiter, siteId, user?.id])
+
+  useEffect(() => {
     void Promise.resolve().then(() => load())
 
     // Sincronizar automáticamente pedidos tomados fuera de la señal
     const triggerSync = () => {
-      syncOfflineOrders().then(res => {
+      syncOfflineOrders(siteId).then(res => {
         if (res.synced > 0) load(true)
       }).catch(console.error)
     }
@@ -253,7 +267,13 @@ export default function TablesPage() {
     triggerSync()
     window.addEventListener('online', triggerSync)
     return () => window.removeEventListener('online', triggerSync)
-  }, [load])
+  }, [load, siteId])
+
+  useEffect(() => {
+    if (filterMode === 'HISTORY_MINE' && !historyLoadedRef.current) {
+      load(true, true)
+    }
+  }, [filterMode, load])
 
   useEffect(() => {
     connectedOnceRef.current = false

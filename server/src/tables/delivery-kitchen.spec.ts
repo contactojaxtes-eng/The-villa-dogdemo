@@ -1,4 +1,5 @@
 import { TablesService } from './tables.service';
+import { DEFAULT_SITE_ID } from '../common/multisite.constants';
 
 describe('TablesService delivery kitchen assignment', () => {
   const station = {
@@ -12,7 +13,10 @@ describe('TablesService delivery kitchen assignment', () => {
   const makeService = (deliveryStatuses: Record<string, any>, channel = 'DELIVERY') => {
     const prisma: any = {
       kitchenStation: {
-        findUnique: jest.fn().mockResolvedValue(station),
+        findFirst: jest.fn().mockResolvedValue(station),
+      },
+      siteSetting: {
+        findUnique: jest.fn().mockResolvedValue(null),
       },
       appSetting: {
         findUnique: jest.fn(({ where }: any) => {
@@ -39,12 +43,17 @@ describe('TablesService delivery kitchen assignment', () => {
 
   it('routes a delivery ticket to the remaining cook without pausing the tablet', async () => {
     const future = Date.now() + 15 * 60 * 1000;
-    const { service } = makeService({
+    const { service, prisma } = makeService({
       'cook-a': { active: true, onBreak: true, breakUntil: future },
       'cook-b': { active: true, onBreak: false },
     });
 
     await expect((service as any).pickCook(station.id)).resolves.toBe('cook-b');
+
+    expect(prisma.kitchenStation.findFirst).toHaveBeenCalledWith({
+      where: { id: station.id, siteId: DEFAULT_SITE_ID },
+      include: { users: true },
+    });
   });
 
   it('leaves a delivery ticket unassigned when every cook is unavailable', async () => {
@@ -62,9 +71,13 @@ describe('TablesService delivery kitchen assignment', () => {
     const { service, prisma } = makeService({
       'cook-a': { active: true, onBreak: true, breakUntil: Date.now() + 15 * 60 * 1000 },
     }, 'DINING');
-    prisma.kitchenStation.findUnique.mockResolvedValue(diningStation);
+    prisma.kitchenStation.findFirst.mockResolvedValue(diningStation);
 
     await expect((service as any).pickCook(station.id)).resolves.toBe('cook-a');
+    expect(prisma.kitchenStation.findFirst).toHaveBeenCalledWith({
+      where: { id: station.id, siteId: DEFAULT_SITE_ID },
+      include: { users: true },
+    });
   });
 
   it('calculates every cook load with two grouped queries instead of an N+1', async () => {
@@ -86,6 +99,9 @@ describe('TablesService delivery kitchen assignment', () => {
     await expect((service as any).pickCook(station.id)).resolves.toBe('cook-a');
 
     expect(prisma.kitchenTicket.groupBy).toHaveBeenCalledTimes(2);
+    expect(prisma.kitchenTicket.groupBy).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      where: expect.objectContaining({ siteId: DEFAULT_SITE_ID, stationId: station.id }),
+    }));
     expect(prisma.kitchenTicket.findMany).not.toHaveBeenCalled();
   });
 });
@@ -104,6 +120,7 @@ describe('TablesService operational timers', () => {
   const makeTimerService = () => {
     const delayedTicket = {
       id: 'ticket-1',
+      siteId: DEFAULT_SITE_ID,
       tableId: 'table-1',
       status: 'NEW',
       createdAt: new Date(Date.now() - 15 * 60 * 1000),
@@ -113,15 +130,29 @@ describe('TablesService operational timers', () => {
       order: { orderType: 'LOCAL', tableId: 'table-1', waiterId: 'waiter-1' },
     };
     const prisma: any = {
+      site: {
+        findMany: jest.fn().mockResolvedValue([{ id: DEFAULT_SITE_ID }]),
+      },
+      siteSetting: {
+        findUnique: jest.fn().mockResolvedValue(null),
+      },
       kitchenTicket: {
         deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
         findMany: jest.fn().mockResolvedValue([]),
         findFirst: jest.fn().mockResolvedValue(delayedTicket),
       },
+      user: {
+        findUnique: jest.fn().mockResolvedValue({ name: 'Cocinero A' }),
+        findMany: jest.fn().mockResolvedValue([{ id: 'admin-1' }]),
+      },
+      notification: {
+        create: jest.fn().mockResolvedValue({ id: 'notification-1' }),
+      },
       appSetting: { findUnique: jest.fn().mockResolvedValue(null) },
     };
     const socketGateway: any = {
       emitDiningKitchenTicketDelayed: jest.fn(),
+      emitToSite: jest.fn(),
       server: { emit: jest.fn(), to: jest.fn(() => ({ emit: jest.fn() })) },
     };
     return { service: new TablesService(prisma, socketGateway, {} as any), prisma, socketGateway, delayedTicket };
@@ -173,6 +204,39 @@ describe('TablesService operational timers', () => {
     service.onModuleDestroy();
   });
 
+  it('stores an expired cook-break notification only in the selected site', async () => {
+    const { service, prisma } = makeTimerService();
+    const secondarySiteId = 'site-secondary';
+    prisma.siteSetting.findUnique.mockResolvedValue({
+      value: JSON.stringify({
+        'cook-a': {
+          active: true,
+          onBreak: true,
+          breakUntil: Date.now() - 1_000,
+          breakReason: 'Cena',
+          breakMinutes: 15,
+        },
+      }),
+    });
+    prisma.siteSetting.upsert = jest.fn().mockResolvedValue({ value: '{}' });
+
+    await service.checkExpiredCookBreaks(secondarySiteId);
+
+    expect(prisma.user.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        siteMemberships: { some: { siteId: secondarySiteId, active: true } },
+      }),
+    }));
+    expect(prisma.notification.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        siteId: secondarySiteId,
+        userId: 'admin-1',
+        type: 'KITCHEN_BREAK',
+      }),
+    });
+    service.onModuleDestroy();
+  });
+
   it('restores timers at startup with a compact ticket projection and no interval polling', async () => {
     const { service, prisma } = makeTimerService();
     const intervalSpy = jest.spyOn(global, 'setInterval');
@@ -183,7 +247,12 @@ describe('TablesService operational timers', () => {
     await service.onModuleInit();
 
     const restoreQuery = prisma.kitchenTicket.findMany.mock.calls[0][0];
-    expect(restoreQuery.select).toEqual({ id: true, createdAt: true });
+    expect(prisma.site.findMany).toHaveBeenCalledWith({
+      where: { active: true },
+      select: { id: true },
+    });
+    expect(restoreQuery.where.siteId).toBe(DEFAULT_SITE_ID);
+    expect(restoreQuery.select).toEqual({ id: true, siteId: true, createdAt: true });
     expect(restoreQuery.include).toBeUndefined();
     expect(intervalSpy).not.toHaveBeenCalled();
     service.onModuleDestroy();
@@ -200,6 +269,10 @@ describe('TablesService operational summaries', () => {
     await service.listTables({ summary: true });
 
     const query = prisma.diningTable.findMany.mock.calls[0][0];
+    expect(query.where).toEqual(expect.objectContaining({
+      siteId: DEFAULT_SITE_ID,
+      orders: { some: { siteId: DEFAULT_SITE_ID } },
+    }));
     expect(query.select.orders.select.items).toBeUndefined();
     expect(query.select.orders.select.kitchenTickets.select.assignedTo).toBeDefined();
     expect(query.include).toBeUndefined();
@@ -215,6 +288,10 @@ describe('TablesService operational summaries', () => {
     await service.listPaymentValidation();
 
     const query = prisma.payment.findMany.mock.calls[0][0];
+    expect(prisma.cashClosing.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { siteId: DEFAULT_SITE_ID, isOpen: true },
+    }));
+    expect(query.where.order).toEqual(expect.objectContaining({ siteId: DEFAULT_SITE_ID }));
     expect(query.select.proofImage).toBeUndefined();
     expect(query.select.transferProofs.select.fileBase64).toBeUndefined();
     expect(query.select.order.select.orderNumber).toBe(true);

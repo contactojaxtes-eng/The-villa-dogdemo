@@ -24,7 +24,7 @@ export default function DashboardPage() {
   const [updated, setUpdated] = useState<Date | null>(null)
   const [range, setRange] = useState<'today' | 'yesterday' | 'week'>('today')
   const refresh = useRef<() => void>(() => {})
-  const hidden = getHiddenModules()
+  const hidden = getHiddenModules(user?.activeSite?.id)
   const canOpen = (href: string) => {
     const item = allNavItems.find(nav => nav.href === href)
     return !!item && hasNavItemAccess(user, item) && !hidden.includes(item.module)

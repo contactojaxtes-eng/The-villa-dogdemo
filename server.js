@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const { execFileSync } = require('child_process');
 
 const candidates = [
   path.join(__dirname, 'dist', 'main.js'),
@@ -31,20 +32,59 @@ console.log(`[Startup] Directorio de ejecucion: ${targetCwd}`);
 // Sincronizar esquema de base de datos automáticamente si DATABASE_URL está presente
 if (process.env.DATABASE_URL) {
   try {
-    const { execSync } = require('child_process');
+    const prismaCli = path.join(
+      targetCwd,
+      'node_modules',
+      'prisma',
+      'build',
+      'index.js',
+    );
+    const prismaSchema = path.join(targetCwd, 'prisma', 'schema.prisma');
+    const preflightSql = path.join(targetCwd, 'prisma', 'pre-db-push.sql');
+
+    if (!fs.existsSync(prismaCli)) {
+      throw new Error(`No se encontró Prisma CLI en ${prismaCli}`);
+    }
+    if (!fs.existsSync(prismaSchema) || !fs.existsSync(preflightSql)) {
+      throw new Error('Falta schema.prisma o el preflight de base de datos');
+    }
+
+    console.log('[Startup] Verificando organización y sede principal...');
+    execFileSync(
+      process.execPath,
+      [
+        prismaCli,
+        'db',
+        'execute',
+        '--file',
+        preflightSql,
+        '--schema',
+        prismaSchema,
+      ],
+      {
+        cwd: targetCwd,
+        stdio: 'inherit',
+        env: process.env,
+      },
+    );
+
     console.log('[Startup] Sincronizando esquema de base de datos con Prisma...');
-    execSync('npx prisma db push --skip-generate', {
-      cwd: targetCwd,
-      stdio: 'inherit',
-      env: process.env,
-    });
+    execFileSync(
+      process.execPath,
+      [prismaCli, 'db', 'push', '--skip-generate', '--schema', prismaSchema],
+      {
+        cwd: targetCwd,
+        stdio: 'inherit',
+        env: process.env,
+      },
+    );
     console.log('[Startup] Esquema de base de datos sincronizado con éxito.');
 
     if (process.env.BOOTSTRAP_CURRENT_USERS === 'true') {
       const seedScript = path.join(targetCwd, 'dist', 'seed.js');
       if (fs.existsSync(seedScript)) {
         console.log('[Startup] Inicializando usuarios y menú inicial...');
-        execSync(`node "${seedScript}"`, {
+        execFileSync(process.execPath, [seedScript], {
           cwd: targetCwd,
           stdio: 'inherit',
           env: process.env,
@@ -53,7 +93,8 @@ if (process.env.DATABASE_URL) {
       }
     }
   } catch (dbErr) {
-    console.warn('[Startup] Nota al sincronizar BD:', dbErr.message);
+    console.error('[Startup Error] No se pudo preparar la base de datos:', dbErr.message);
+    process.exit(1);
   }
 }
 

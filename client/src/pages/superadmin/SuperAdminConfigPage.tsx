@@ -29,6 +29,8 @@ import { Card } from '@/components/ui/card'
 import { api } from '@/lib/api'
 import { alerts } from '@/lib/alerts'
 import { cn } from '@/lib/utils'
+import { useAuth } from '@/hooks/useAuth'
+import { DEFAULT_SITE_ID } from '@/lib/multisite'
 
 interface SmtpConfig {
   host: string
@@ -284,6 +286,9 @@ function SectionTitle({ icon: Icon, title, description }: { icon: LucideIcon; ti
 }
 
 export default function SuperAdminConfigPage() {
+  const { activeSite } = useAuth()
+  const isPrincipalSite = activeSite?.id === DEFAULT_SITE_ID
+  const isDraftSite = activeSite?.preparationMode === true
   const [activeTab, setActiveTab] = useState<ConfigTab>('AI')
   const [loading, setLoading] = useState(true)
   const [smtp, setSmtp] = useState<SmtpConfig>({ host: '', port: 587, user: '', from: '', passConfigured: false })
@@ -357,7 +362,9 @@ export default function SuperAdminConfigPage() {
   useEffect(() => {
     let active = true
     Promise.all([
-      api.get<SmtpConfig>('/superadmin/config/smtp'),
+      isDraftSite
+        ? Promise.resolve<SmtpConfig>({ host: '', port: 587, user: '', from: '', passConfigured: false })
+        : api.get<SmtpConfig>('/superadmin/config/smtp'),
       api.get<WhatsappCoreConfig>('/whatsapp/settings'),
       api.get<AutoTrainingConfig>('/whatsapp/auto-training').catch(error => {
         if (active) setAutoTrainingError(getErrorMessage(error, 'No se pudo cargar el aprendizaje supervisado.'))
@@ -376,7 +383,7 @@ export default function SuperAdminConfigPage() {
       .catch(error => alerts.error('No se pudo cargar la configuración', getErrorMessage(error, 'Inténtalo nuevamente.')))
       .finally(() => active && setLoading(false))
     return () => { active = false }
-  }, [])
+  }, [activeSite?.id, isDraftSite])
 
   const localKeyCount = useMemo(
     () => geminiKeys.filter(key => key.trim().length >= 10 || key.includes('•')).length,
@@ -973,7 +980,7 @@ export default function SuperAdminConfigPage() {
   const tabs: Array<{ id: ConfigTab; label: string; description: string; icon: LucideIcon }> = [
     { id: 'AI', label: 'Inteligencia artificial', description: 'Bot, modelo y prueba', icon: Sparkles },
     { id: 'META', label: 'WhatsApp Meta', description: 'Número, token y webhook', icon: MessageCircle },
-    { id: 'EMAIL', label: 'Correo', description: 'Servidor y prueba SMTP', icon: Mail },
+    ...(!isDraftSite ? [{ id: 'EMAIL' as const, label: 'Correo', description: 'Servidor global y prueba SMTP', icon: Mail }] : []),
   ]
 
   if (loading) {
@@ -997,10 +1004,13 @@ export default function SuperAdminConfigPage() {
           </span>
           <div>
             <h1 className="text-xl font-black text-[var(--text-primary)] sm:text-2xl">Configuración técnica</h1>
-            <p className="text-xs text-[var(--text-muted)]">Conexiones externas y comportamiento de la atención automática.</p>
+            <p className="text-xs text-[var(--text-muted)]">IA y WhatsApp corresponden a la sede seleccionada. El correo SMTP es compartido por todo el sistema.</p>
           </div>
         </div>
         <div className="flex flex-wrap gap-2">
+          <span className="inline-flex h-9 items-center gap-2 rounded-xl bg-blue-500/10 px-3 text-xs font-black text-blue-700 dark:text-blue-300">
+            <Server className="h-4 w-4" /> {activeSite?.name || 'Sede sin identificar'}
+          </span>
           <span className={cn('inline-flex h-9 items-center gap-2 rounded-xl px-3 text-xs font-bold', wa.configured ? 'bg-emerald-500/10 text-emerald-600' : 'bg-amber-500/10 text-amber-600')}>
             <MessageCircle className="h-4 w-4" /> {wa.configured ? 'WhatsApp conectado' : 'WhatsApp pendiente'}
           </span>
@@ -1504,16 +1514,21 @@ export default function SuperAdminConfigPage() {
               <SectionTitle icon={MessageCircle} title="Conexión con WhatsApp Cloud API" description="Datos técnicos entregados por Meta para enviar y recibir mensajes." />
               <span className={cn('inline-flex h-9 items-center gap-2 rounded-xl px-3 text-xs font-black', wa.configured ? 'bg-emerald-500/10 text-emerald-600' : 'bg-amber-500/10 text-amber-600')}>{wa.configured ? <CheckCircle2 className="h-4 w-4" /> : <Clock3 className="h-4 w-4" />}{wa.configured ? 'Conectado' : 'Pendiente'}</span>
             </div>
+            {!isPrincipalSite && (
+              <div className="mt-5 rounded-xl border border-blue-500/25 bg-blue-500/5 p-3 text-xs leading-5 text-[var(--text-secondary)]">
+                <strong className="text-[var(--text-primary)]">Cuenta aislada de {activeSite?.name}:</strong> los identificadores se gestionan desde <Link to="/superadmin/sites" className="font-black text-[var(--accent)]">Sedes</Link> y los secretos permanecen en variables privadas de Railway. Aquí puedes comprobar la conexión sin copiar ni mostrar los tokens.
+              </div>
+            )}
             <div className="mt-5 grid gap-4 md:grid-cols-2">
-              <label className="block"><span className="mb-1.5 block text-xs font-bold text-[var(--text-secondary)]">Phone Number ID</span><input value={wa.phoneId} onChange={event => setWa(current => ({ ...current, phoneId: event.target.value }))} className={fieldClass} /></label>
-              <label className="block"><span className="mb-1.5 block text-xs font-bold text-[var(--text-secondary)]">Teléfono comercial</span><input value={wa.businessPhone} onChange={event => setWa(current => ({ ...current, businessPhone: event.target.value }))} className={fieldClass} placeholder="+57…" /></label>
-              <label className="block"><span className="mb-1.5 block text-xs font-bold text-[var(--text-secondary)]">Token de acceso de Meta</span><input type="password" value={waToken} onChange={event => setWaToken(event.target.value)} className={fieldClass} placeholder={wa.configured ? 'Guardado · escribe solo para cambiarlo' : 'Pega el token permanente'} /></label>
-              <label className="block"><span className="mb-1.5 block text-xs font-bold text-[var(--text-secondary)]">Token de verificación del webhook</span><input type="password" value={waVerifyToken} onChange={event => setWaVerifyToken(event.target.value)} className={fieldClass} placeholder={wa.verifyTokenConfigured ? 'Guardado · escribe solo para cambiarlo' : 'Define el token del webhook'} /></label>
+              <label className="block"><span className="mb-1.5 block text-xs font-bold text-[var(--text-secondary)]">Phone Number ID</span><input value={wa.phoneId} disabled={!isPrincipalSite} onChange={event => setWa(current => ({ ...current, phoneId: event.target.value }))} className={fieldClass} /></label>
+              <label className="block"><span className="mb-1.5 block text-xs font-bold text-[var(--text-secondary)]">Teléfono comercial</span><input value={wa.businessPhone} disabled={!isPrincipalSite} onChange={event => setWa(current => ({ ...current, businessPhone: event.target.value }))} className={fieldClass} placeholder="+57…" /></label>
+              <label className="block"><span className="mb-1.5 block text-xs font-bold text-[var(--text-secondary)]">Token de acceso de Meta</span><input type="password" value={waToken} disabled={!isPrincipalSite} onChange={event => setWaToken(event.target.value)} className={fieldClass} placeholder={isPrincipalSite ? (wa.configured ? 'Guardado · escribe solo para cambiarlo' : 'Pega el token permanente') : 'Protegido en Railway'} /></label>
+              <label className="block"><span className="mb-1.5 block text-xs font-bold text-[var(--text-secondary)]">Token de verificación del webhook</span><input type="password" value={waVerifyToken} disabled={!isPrincipalSite} onChange={event => setWaVerifyToken(event.target.value)} className={fieldClass} placeholder={isPrincipalSite ? (wa.verifyTokenConfigured ? 'Guardado · escribe solo para cambiarlo' : 'Define el token del webhook') : 'Protegido en Railway'} /></label>
             </div>
             <div className="mt-5 flex flex-col gap-2 sm:flex-row">
-              <Button type="button" onClick={saveMeta} disabled={savingMeta} className="h-11 flex-1 rounded-xl bg-[var(--accent)] font-black text-[var(--accent-fg)]">
+              {isPrincipalSite && <Button type="button" onClick={saveMeta} disabled={savingMeta} className="h-11 flex-1 rounded-xl bg-[var(--accent)] font-black text-[var(--accent-fg)]">
                 {savingMeta ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />} Guardar conexión
-              </Button>
+              </Button>}
               <Button type="button" variant="outline" onClick={testMeta} disabled={testingMeta || !wa.phoneId} className="h-11 rounded-xl font-black">
                 {testingMeta ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />} Probar token y conexión
               </Button>

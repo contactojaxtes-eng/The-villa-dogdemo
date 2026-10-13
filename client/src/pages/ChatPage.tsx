@@ -842,9 +842,6 @@ function ChatPage() {
   useEffect(() => {
     if (activeSession) {
       setGlobalActiveSessionIdCache(activeSession.id)
-      try {
-        localStorage.setItem('niche_last_active_whatsapp_session_id', activeSession.id)
-      } catch (e) {}
     }
   }, [activeSession])
   const lastLoadTimeRef = useRef<number>(0)
@@ -3030,9 +3027,6 @@ function ChatPage() {
                       setSearchFocused(false)
                       navigate(`/chat?session=${encodeURIComponent(session.id)}`, { replace: true })
                       setGlobalActiveSessionIdCache(session.id)
-                      try {
-                        localStorage.setItem('niche_last_active_whatsapp_session_id', session.id)
-                      } catch (e) {}
                       setReplyingTo(null)
                       setMessage('')
                       setActiveOrder(session.activeOrder || null)
@@ -3152,9 +3146,6 @@ function ChatPage() {
                       onClick={async () => {
                         navigate(`/chat?session=${encodeURIComponent(s.id)}`, { replace: true })
                         setGlobalActiveSessionIdCache(s.id)
-                        try {
-                          localStorage.setItem('niche_last_active_whatsapp_session_id', s.id)
-                        } catch (e) {}
                         setReplyingTo(null)
                         setMessage('')
                         if (s.activeOrder) {
@@ -3331,7 +3322,6 @@ function ChatPage() {
                       className="md:hidden h-8 w-8 text-[var(--text-secondary)] shrink-0" 
                       onClick={() => {
                         setGlobalActiveSessionIdCache(null)
-                        try { localStorage.removeItem('niche_last_active_whatsapp_session_id') } catch (e) {}
                         setActiveSession(null)
                         navigate('/chat', { replace: true })
                       }}
@@ -3526,7 +3516,6 @@ function ChatPage() {
                       className="h-8 w-8 text-[var(--text-muted)] hover:text-red-400 hover:bg-red-500/10 rounded-lg shrink-0 cursor-pointer"
                       onClick={() => {
                         setGlobalActiveSessionIdCache(null)
-                        try { localStorage.removeItem('niche_last_active_whatsapp_session_id') } catch (e) {}
                         setActiveSession(null)
                         navigate('/chat', { replace: true })
                       }}

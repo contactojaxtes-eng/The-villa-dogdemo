@@ -1,3 +1,5 @@
+import { accessTokenMatchesSite } from './multisite'
+
 const rawApiUrl = import.meta.env.VITE_API_URL || ''
 const API_URL = (rawApiUrl.endsWith('/') ? rawApiUrl.slice(0, -1) : rawApiUrl) + '/api'
 
@@ -84,16 +86,20 @@ class ApiClient {
       return false
     }
 
+    const refreshTokenUsed = this.refreshToken
     this.refreshPromise = (async () => {
       try {
         const refreshRes = await fetch(`${API_URL}/auth/refresh`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ refreshToken: this.refreshToken }),
+          body: JSON.stringify({ refreshToken: refreshTokenUsed }),
         })
 
         if (refreshRes.ok) {
           const refreshData = await refreshRes.json()
+          // Si el usuario cambió de sede mientras este refresh estaba en vuelo,
+          // no permitir que la respuesta anterior reemplace la sesión nueva.
+          if (this.refreshToken !== refreshTokenUsed) return false
           this.setTokens(refreshData.accessToken, refreshData.refreshToken)
           return true
         }
@@ -108,7 +114,19 @@ class ApiClient {
     return this.refreshPromise
   }
 
-  private async request<T>(endpoint: string, options: RequestInit = {}, responseType: 'json' | 'blob' = 'json'): Promise<T> {
+  private async request<T>(
+    endpoint: string,
+    options: RequestInit = {},
+    responseType: 'json' | 'blob' = 'json',
+    expectedSiteId?: string,
+  ): Promise<T> {
+    if (expectedSiteId && !accessTokenMatchesSite(this.token, expectedSiteId)) {
+      throw new ApiError('La sede activa cambió antes de enviar la solicitud.', 409, { code: 'SITE_CONTEXT_CHANGED' })
+    }
+    // Keep the token used to send this request.  A site switch replaces the
+    // access token while an older request may still be in flight; its response
+    // must never be allowed to hydrate the new site's state.
+    let requestToken = this.token
     const headers: Record<string, string> = {}
     if (!(options.body instanceof FormData)) {
       headers['Content-Type'] = 'application/json'
@@ -132,8 +150,25 @@ class ApiClient {
     }
 
     if (response.status === 401 && endpoint !== '/auth/login' && endpoint !== '/auth/refresh') {
+      if (this.token !== requestToken) {
+        throw new ApiError('La sesión activa cambió durante la solicitud.', 409, { code: 'SITE_CONTEXT_CHANGED' })
+      }
+      if (expectedSiteId && !accessTokenMatchesSite(this.token, expectedSiteId)) {
+        throw new ApiError('La sede activa cambió durante la solicitud.', 409, { code: 'SITE_CONTEXT_CHANGED' })
+      }
       const refreshed = await this.performRefreshToken()
-      if (refreshed && this.token) {
+      // A site switch can happen while the old request is waiting for its
+      // refresh. In that case performRefreshToken intentionally refuses to
+      // replace the new credentials; the old request must also avoid logging
+      // out the newly selected site.
+      if (!refreshed && this.token !== requestToken) {
+        throw new ApiError('La sesión activa cambió durante la renovación de la sesión.', 409, { code: 'SITE_CONTEXT_CHANGED' })
+      }
+      if (expectedSiteId && !accessTokenMatchesSite(this.token, expectedSiteId)) {
+        throw new ApiError('La sede activa cambió durante la renovación de la sesión.', 409, { code: 'SITE_CONTEXT_CHANGED' })
+      }
+      if (refreshed && this.token && (!expectedSiteId || accessTokenMatchesSite(this.token, expectedSiteId))) {
+        requestToken = this.token
         headers['Authorization'] = `Bearer ${this.token}`
         try {
           response = await fetch(`${API_URL}${endpoint}`, {
@@ -158,6 +193,16 @@ class ApiClient {
       throw new ApiError(message, response.status, error, false)
     }
 
+    // Check again after the response arrives.  The previous guard only
+    // covered 401s, so a perfectly valid 200 from the old site could otherwise
+    // repopulate a cache after the user switched sites.
+    if (requestToken && this.token !== requestToken) {
+      throw new ApiError('La sesión activa cambió durante la solicitud.', 409, { code: 'SITE_CONTEXT_CHANGED' })
+    }
+    if (expectedSiteId && !accessTokenMatchesSite(this.token, expectedSiteId)) {
+      throw new ApiError('La sede activa cambió durante la solicitud.', 409, { code: 'SITE_CONTEXT_CHANGED' })
+    }
+
     if (responseType === 'blob') return response.blob() as Promise<T>
     if (response.status === 204) return undefined as T
     return response.json()
@@ -166,7 +211,7 @@ class ApiClient {
   private getTtl(endpoint: string) {
     const path = endpoint.split('?')[0]
     if (path.startsWith('/kitchen/tickets') || path.startsWith('/cash-registers')) return 0
-    if (/^\/(menu\/categories|zones|users|roles|kitchen\/stations|kitchen\/settings)(\/|$)/.test(path)) return 2 * 60_000
+    if (/^\/(menu\/categories|zones|users|roles|kitchen\/stations|kitchen\/settings|site-settings)(\/|$)/.test(path)) return 2 * 60_000
     if (path === '/auth/profile') return 60_000
     if (/(history|audit|dashboard-stats|closing)/.test(path)) return 15_000
     if (path.startsWith('/whatsapp/')) return 1_500
@@ -300,9 +345,21 @@ class ApiClient {
       .then(result => { this.invalidateAfterMutation(endpoint); return result })
   }
 
+  postForSite<T>(endpoint: string, siteId: string, data?: any, options: RequestInit = {}) {
+    const body = data instanceof FormData ? data : (data !== undefined ? JSON.stringify(data) : undefined)
+    return this.request<T>(endpoint, { ...options, method: 'POST', body }, 'json', siteId)
+      .then(result => { this.invalidateAfterMutation(endpoint); return result })
+  }
+
   put<T>(endpoint: string, data?: any, options: RequestInit = {}) {
     const body = data instanceof FormData ? data : (data !== undefined ? JSON.stringify(data) : undefined)
     return this.request<T>(endpoint, { ...options, method: 'PUT', body })
+      .then(result => { this.invalidateAfterMutation(endpoint); return result })
+  }
+
+  putForSite<T>(endpoint: string, siteId: string, data?: any, options: RequestInit = {}) {
+    const body = data instanceof FormData ? data : (data !== undefined ? JSON.stringify(data) : undefined)
+    return this.request<T>(endpoint, { ...options, method: 'PUT', body }, 'json', siteId)
       .then(result => { this.invalidateAfterMutation(endpoint); return result })
   }
 

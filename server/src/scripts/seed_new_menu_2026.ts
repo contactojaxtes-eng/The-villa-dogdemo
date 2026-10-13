@@ -2,21 +2,37 @@ import { PrismaClient } from '@prisma/client';
 
 const prisma = new PrismaClient();
 
+const targetSiteId = String(process.env.TARGET_SITE_ID || '').trim();
+
 async function main() {
-  console.log('🚀 Iniciando actualización completa del menú The Villa Dog (Julio 2026)...');
+  if (!targetSiteId) {
+    throw new Error(
+      'Define TARGET_SITE_ID. La actualización de menú nunca puede ejecutarse globalmente.',
+    );
+  }
+  const site = await prisma.site.findUnique({
+    where: { id: targetSiteId },
+    select: { id: true, name: true },
+  });
+  if (!site) throw new Error(`La sede ${targetSiteId} no existe.`);
+
+  console.log(`🚀 Iniciando actualización del menú de ${site.name} (Julio 2026)...`);
 
   await prisma.$transaction(async (tx) => {
     // Marcar como inactivas todas las categorías y productos actuales para reemplazar de forma limpia
-    await tx.menuItem.updateMany({ data: { active: false } });
-    await tx.menuCategory.updateMany({ data: { active: false } });
+    await tx.menuItem.updateMany({ where: { siteId: targetSiteId }, data: { active: false } });
+    await tx.menuCategory.updateMany({ where: { siteId: targetSiteId }, data: { active: false } });
 
     let catOrder = 1;
 
     async function getOrCreateCategory(name: string) {
-      let cat = await tx.menuCategory.findFirst({ where: { name: { equals: name, mode: 'insensitive' } } });
+      let cat = await tx.menuCategory.findFirst({
+        where: { siteId: targetSiteId, name: { equals: name, mode: 'insensitive' } },
+      });
       if (!cat) {
         cat = await tx.menuCategory.create({
           data: {
+            siteId: targetSiteId,
             name,
             sortOrder: catOrder++,
             active: true
@@ -34,6 +50,7 @@ async function main() {
     async function addOrUpdateItem(catId: string, name: string, price: number, description?: string, code?: string) {
       let item = await tx.menuItem.findFirst({
         where: {
+          siteId: targetSiteId,
           categoryId: catId,
           name: { equals: name, mode: 'insensitive' }
         }
@@ -42,6 +59,7 @@ async function main() {
       if (!item) {
         item = await tx.menuItem.create({
           data: {
+            siteId: targetSiteId,
             name,
             price,
             description,

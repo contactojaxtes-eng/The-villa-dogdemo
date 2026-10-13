@@ -23,7 +23,8 @@ import { api } from '@/lib/api'
 import { alerts } from '@/lib/alerts'
 import { formatCurrency } from '@/lib/utils'
 import { useAuth } from '@/hooks/useAuth'
-import { deleteOfflineOrder, listOfflineOrders, saveOfflineOrder, type OfflineTableOrder } from '@/lib/offlineTableOrders'
+import { listOfflineOrders, saveOfflineOrder, syncOfflineOrders, type OfflineTableOrder } from '@/lib/offlineTableOrders'
+import { DEFAULT_SITE_ID, scopedStorageKey } from '@/lib/multisite'
 import { getErrorMessage, type DiningOrderSummary, type OfflineTableOrderPayload } from '@/lib/tableTypes'
 
 type MenuItem = { id: string; name: string; price: number; category?: { name: string } }
@@ -81,13 +82,15 @@ function isFoodWithAdditions(item: { name: string; category?: { name: string } }
 
 export default function TableOrderPage() {
   const navigate = useNavigate()
-  const { user } = useAuth()
+  const { user, activeSite } = useAuth()
+  const siteId = activeSite?.id || DEFAULT_SITE_ID
   const [params] = useSearchParams()
   const existingTableId = params.get('tableId') || ''
   const editOrderId = params.get('editOrderId') || ''
   const [categories, setCategories] = useState<Category[]>(() => {
     try {
-      const cached = localStorage.getItem('the_villa_dog_cached_menu')
+      const cached = localStorage.getItem(scopedStorageKey('the_villa_dog_cached_menu', siteId))
+        || (siteId === DEFAULT_SITE_ID ? localStorage.getItem('the_villa_dog_cached_menu') : null)
       return cached ? JSON.parse(cached) : []
     } catch {
       return []
@@ -106,13 +109,20 @@ export default function TableOrderPage() {
   const submission = useRef({ signature: '', id: '' })
   const [showMobileCart, setShowMobileCart] = useState(false)
 
-  const loadPending = useCallback(() => listOfflineOrders().then(setPending).catch(() => setPending([])), [])
+  const loadPending = useCallback(() => listOfflineOrders(siteId).then(setPending).catch(() => setPending([])), [siteId])
 
   useEffect(() => {
+    try {
+      const cached = localStorage.getItem(scopedStorageKey('the_villa_dog_cached_menu', siteId))
+        || (siteId === DEFAULT_SITE_ID ? localStorage.getItem('the_villa_dog_cached_menu') : null)
+      setCategories(cached ? JSON.parse(cached) : [])
+    } catch {
+      setCategories([])
+    }
     api.get<Category[]>('/menu/categories').then(data => {
       setCategories(data)
       try {
-        localStorage.setItem('the_villa_dog_cached_menu', JSON.stringify(data))
+        localStorage.setItem(scopedStorageKey('the_villa_dog_cached_menu', siteId), JSON.stringify(data))
       } catch (e) {
         console.warn('No se pudo guardar menú en caché local', e)
       }
@@ -149,7 +159,7 @@ export default function TableOrderPage() {
         }))
       }).catch(console.error)
     }
-  }, [editOrderId, existingTableId, loadPending])
+  }, [editOrderId, existingTableId, loadPending, siteId])
 
   useEffect(() => {
     const updateOnline = () => setOnline(navigator.onLine)
@@ -162,22 +172,9 @@ export default function TableOrderPage() {
   }, [])
 
   const syncPending = useCallback(async () => {
-    const rows = await listOfflineOrders()
-    for (const row of rows) {
-      try {
-        if (row.payload.editOrderId) {
-          await api.put(`/tables/orders/${row.payload.editOrderId}`, { ...row.payload, offline: true })
-        } else {
-          await api.post('/tables/orders', { ...row.payload, offline: true })
-        }
-        await deleteOfflineOrder(row.clientMutationId)
-      } catch (err: unknown) {
-        await saveOfflineOrder({ ...row, status: 'FAILED', error: getErrorMessage(err, 'No se pudo sincronizar') })
-        break
-      }
-    }
+    await syncOfflineOrders(siteId)
     await loadPending()
-  }, [loadPending])
+  }, [loadPending, siteId])
 
   useEffect(() => {
     if (online) syncPending().catch(() => undefined)
@@ -916,7 +913,7 @@ export default function TableOrderPage() {
       // Si el servidor respondió (ej: 400 "Abre una caja antes de enviar pedidos"), se muestra el error real al usuario.
       const isActualNetworkError = !navigator.onLine || (err?.isNetworkError === true && (!err?.status || err?.status === 0))
       if (isActualNetworkError) {
-        await saveOfflineOrder({ clientMutationId, createdAt: new Date().toISOString(), payload, status: 'PENDING' })
+        await saveOfflineOrder({ siteId, clientMutationId, createdAt: new Date().toISOString(), payload, status: 'PENDING' })
         await loadPending()
         alerts.warning(
           'Guardado sin internet (Modo Offline)',

@@ -2,6 +2,7 @@ import { PrismaClient } from '@prisma/client';
 import { randomUUID } from 'crypto';
 import { TablesService } from './tables.service';
 import { OrdersService } from '../orders/orders.service';
+import { DEFAULT_SITE_ID } from '../common/multisite.constants';
 
 const integration = process.env.RUN_RELEASE_DB_TESTS === 'true' ? describe : describe.skip;
 integration('PostgreSQL: named accounts, kitchen and payments', () => {
@@ -51,7 +52,7 @@ integration('PostgreSQL: named accounts, kitchen and payments', () => {
     await expect(create({ clientMutationId: mutation })).rejects.toThrow('Kitchen unavailable');
     spy.mockRestore();
     expect(await db.diningTable.count()).toBe(before);
-    expect(await db.order.findUnique({ where: { clientMutationId: mutation } })).toBeNull();
+    expect(await db.order.findFirst({ where: { siteId: DEFAULT_SITE_ID, clientMutationId: mutation } })).toBeNull();
   });
 
   it('updates an order and its existing kitchen card together, then blocks edits during payment review', async () => {

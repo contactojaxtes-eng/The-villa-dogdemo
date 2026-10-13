@@ -12,7 +12,7 @@ describe('ZonesService exact delivery tariffs', () => {
       },
     };
     const cache: any = { invalidateByPrefix: jest.fn() };
-    const socketGateway: any = { server: { emit: jest.fn() } };
+    const socketGateway: any = { emitToSite: jest.fn() };
     return {
       service: new ZonesService(prisma, cache, socketGateway),
       prisma,
@@ -31,7 +31,11 @@ describe('ZonesService exact delivery tariffs', () => {
       rate: 0,
     }));
     expect(prisma.deliveryZone.create).toHaveBeenCalledWith({
-      data: expect.objectContaining({ name: 'Universidad de Córdoba', rate: 0 }),
+      data: expect.objectContaining({
+        siteId: '00000000-0000-4000-8000-000000000101',
+        name: 'Universidad de Córdoba',
+        rate: 0,
+      }),
     });
   });
 

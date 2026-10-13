@@ -1,4 +1,5 @@
 import { ConflictException } from '@nestjs/common';
+import { DEFAULT_SITE_ID } from '../common/multisite.constants';
 import { WhatsappService } from './whatsapp.service';
 
 describe('WhatsApp webhook burst handling', () => {
@@ -168,10 +169,12 @@ describe('WhatsApp voice-note transcription for order intake', () => {
     expect(socketGateway.emitWhatsApp).toHaveBeenCalledWith(
       'whatsappAudioTranscribed',
       expect.objectContaining({
+        siteId: DEFAULT_SITE_ID,
         sessionId: 'session-audio',
         messageId: 'message-audio',
         transcript: 'Dos perros sencillos, uno sin cebolla.',
       }),
+      DEFAULT_SITE_ID,
     );
     expect(sendSpy).not.toHaveBeenCalled();
   });
@@ -281,6 +284,67 @@ describe('WhatsApp voice-note transcription for order intake', () => {
 
 });
 
+describe('WhatsApp media site isolation', () => {
+  const secondSiteId = '00000000-0000-4000-8000-000000000202';
+
+  const createResponse = () => {
+    const response: any = {
+      setHeader: jest.fn(),
+      send: jest.fn(),
+      end: jest.fn(),
+      status: jest.fn(),
+    };
+    response.status.mockReturnValue(response);
+    return response;
+  };
+
+  it('does not download a media id that is absent from the active site', async () => {
+    const prisma: any = {
+      whatsAppMessage: { findFirst: jest.fn().mockResolvedValue(null) },
+    };
+    const service = new WhatsappService(
+      prisma,
+      { get: jest.fn() } as any,
+      { emitWhatsApp: jest.fn() } as any,
+    );
+    const download = jest.spyOn(service, 'getMediaBuffer');
+    const response = createResponse();
+
+    await service.streamMedia('media-other-site', response, secondSiteId);
+
+    expect(prisma.whatsAppMessage.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ session: { siteId: secondSiteId } }),
+      }),
+    );
+    expect(download).not.toHaveBeenCalled();
+    expect(response.status).toHaveBeenCalledWith(404);
+  });
+
+  it('streams a referenced media id with the active site credentials', async () => {
+    const prisma: any = {
+      whatsAppMessage: { findFirst: jest.fn().mockResolvedValue({ id: 'message-2' }) },
+    };
+    const service = new WhatsappService(
+      prisma,
+      { get: jest.fn() } as any,
+      { emitWhatsApp: jest.fn() } as any,
+    );
+    jest.spyOn(service, 'getMediaBuffer').mockResolvedValue({
+      buffer: Buffer.from('site-media'),
+      contentType: 'image/jpeg',
+    });
+    const response = createResponse();
+
+    await service.streamMedia('media-site-2', response, secondSiteId);
+
+    expect(service.getMediaBuffer).toHaveBeenCalledWith('media-site-2', secondSiteId);
+    expect(response.setHeader).toHaveBeenCalledWith('Content-Type', 'image/jpeg');
+    expect(response.setHeader).toHaveBeenCalledWith('Vary', 'Authorization');
+    expect(response.end).toHaveBeenCalledWith(Buffer.from('site-media'));
+  });
+});
+
 describe('WhatsApp scheduled closing', () => {
   it('sends the configured closing notice even when the conversational bot is paused', async () => {
     const service = new WhatsappService(
@@ -301,7 +365,15 @@ describe('WhatsApp scheduled closing', () => {
 
     await (service as any).handleChatbot({ phone: '573001234567', assignedToId: null }, 'Hola');
 
-    expect(send).toHaveBeenCalledWith('573001234567', 'Estamos cerrados. Volvemos desde las 12:00.');
+    expect(send).toHaveBeenCalledWith(
+      '573001234567',
+      'Estamos cerrados. Volvemos desde las 12:00.',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      DEFAULT_SITE_ID,
+    );
   });
 
   it.each([
@@ -327,8 +399,10 @@ describe('WhatsApp scheduled closing', () => {
 });
 
 describe('WhatsApp advisor handoff safety', () => {
+  const secondSiteId = '00000000-0000-4000-8000-000000000102';
   const session = {
     id: 'chat-1',
+    siteId: secondSiteId,
     phone: '3001234567',
     customerName: 'Cliente',
     assignedToId: null,
@@ -373,6 +447,8 @@ describe('WhatsApp advisor handoff safety', () => {
       undefined,
       undefined,
       session.id,
+      undefined,
+      secondSiteId,
     );
     expect(prisma.whatsAppSession.updateMany).toHaveBeenCalledWith({
       where: { id: session.id, assignedToId: null, waitingForAdvisor: false },
@@ -380,11 +456,13 @@ describe('WhatsApp advisor handoff safety', () => {
     });
     expect(socketGateway.emitWhatsApp).toHaveBeenCalledWith(
       'whatsappAgentRequest',
-      expect.objectContaining({ sessionId: session.id, waitingForAdvisor: true }),
+      expect.objectContaining({ siteId: secondSiteId, sessionId: session.id, waitingForAdvisor: true }),
+      secondSiteId,
     );
     expect(socketGateway.emitWhatsApp).toHaveBeenCalledWith(
       'whatsappSessionUpdated',
-      expect.objectContaining({ sessionId: session.id, waitingForAdvisor: true }),
+      expect.objectContaining({ siteId: secondSiteId, sessionId: session.id, waitingForAdvisor: true }),
+      secondSiteId,
     );
   });
 
@@ -405,20 +483,24 @@ describe('WhatsApp advisor handoff safety', () => {
     expect(socketGateway.emitWhatsApp).toHaveBeenCalledWith(
       'whatsappAgentRequest',
       expect.objectContaining({
+        siteId: secondSiteId,
         sessionId: session.id,
         waitingForAdvisor: true,
         noticePending: true,
       }),
+      secondSiteId,
     );
     expect(socketGateway.emitWhatsApp).toHaveBeenCalledWith(
       'whatsappSessionUpdated',
       expect.objectContaining({
+        siteId: secondSiteId,
         sessionId: session.id,
         waitingForAdvisor: true,
         noticePending: false,
         noticeSent: false,
         noticeFailureReason: 'api_error',
       }),
+      secondSiteId,
     );
   });
 
@@ -438,10 +520,12 @@ describe('WhatsApp advisor handoff safety', () => {
     expect(socketGateway.emitWhatsApp).toHaveBeenCalledWith(
       'whatsappAgentRequest',
       expect.objectContaining({
+        siteId: secondSiteId,
         sessionId: session.id,
         waitingForAdvisor: true,
         noticePending: true,
       }),
+      secondSiteId,
     );
 
     finishSend({ sent: true });
@@ -482,6 +566,37 @@ describe('WhatsApp advisor handoff safety', () => {
     expect(prisma.whatsAppSession.updateMany).not.toHaveBeenCalled();
     expect(gemini).not.toHaveBeenCalled();
     expect(send).not.toHaveBeenCalled();
+  });
+
+  it('reactivates the bot only inside the session site room', async () => {
+    const { service, socketGateway } = createService();
+
+    await expect((service as any).resumeChatbotForSession({
+      ...session,
+      waitingForAdvisor: true,
+    })).resolves.toEqual(expect.objectContaining({
+      siteId: secondSiteId,
+      waitingForAdvisor: false,
+    }));
+
+    expect(socketGateway.emitWhatsApp).toHaveBeenCalledWith(
+      'chatSessionAssigned',
+      expect.objectContaining({
+        siteId: secondSiteId,
+        sessionId: session.id,
+        waitingForAdvisor: false,
+      }),
+      secondSiteId,
+    );
+    expect(socketGateway.emitWhatsApp).toHaveBeenCalledWith(
+      'whatsappSessionUpdated',
+      expect.objectContaining({
+        siteId: secondSiteId,
+        sessionId: session.id,
+        waitingForAdvisor: false,
+      }),
+      secondSiteId,
+    );
   });
 
   it('removes every internal transfer marker before sending it to the customer', () => {
@@ -550,11 +665,17 @@ describe('WhatsApp advisor concurrency', () => {
 
     expect(prisma.whatsAppSession.updateMany.mock.calls[0][0].where).toEqual({
       id: 'chat-1',
+      siteId: '00000000-0000-4000-8000-000000000101',
       OR: [{ assignedToId: null }, { assignedToId: 'advisor-1' }],
     });
     expect(socketGateway.emitWhatsApp).toHaveBeenCalledWith(
       'chatSessionAssigned',
-      expect.objectContaining({ sessionId: 'chat-1', assignedToId: 'advisor-1' }),
+      expect.objectContaining({
+        siteId: '00000000-0000-4000-8000-000000000101',
+        sessionId: 'chat-1',
+        assignedToId: 'advisor-1',
+      }),
+      '00000000-0000-4000-8000-000000000101',
     );
   });
 
@@ -733,6 +854,11 @@ describe('WhatsApp live menu sharing', () => {
     expect(send).toHaveBeenCalledWith(
       '573001234567',
       expect.stringContaining('Carta actualizada:\n\n📋 *MENÚ Y PRECIOS VILLA DOG*'),
+      undefined,
+      undefined,
+      'chat-1',
+      undefined,
+      DEFAULT_SITE_ID,
     );
     const sentMessage = send.mock.calls[0][1] as string;
     expect(sentMessage).toContain('- Perro Sencillo: $3.500');
@@ -884,7 +1010,9 @@ describe('WhatsApp Gemini settings', () => {
       { get: jest.fn() } as any,
       { emitWhatsApp: jest.fn() } as any,
     );
-    jest.spyOn(service as any, 'getSetting').mockResolvedValue(null);
+    jest.spyOn(service as any, 'getSetting').mockImplementation(async (settingKey: string) => (
+      settingKey === 'gemini_api_key' ? keys.join(',') : null
+    ));
     jest.spyOn(service as any, 'getGeminiModels').mockResolvedValue(['gemini-test-model']);
     jest.spyOn(service as any, 'incrementGeminiUsage').mockResolvedValue(undefined);
     jest.spyOn(service as any, 'getGeminiUsageToday').mockResolvedValue(2);
@@ -1061,6 +1189,8 @@ describe('WhatsApp Gemini settings', () => {
       undefined,
       undefined,
       'chat-1',
+      undefined,
+      DEFAULT_SITE_ID,
     );
     expect(prisma.whatsAppSession.updateMany).toHaveBeenCalledWith({
       where: { id: 'chat-1', assignedToId: null, waitingForAdvisor: false },
@@ -1068,7 +1198,8 @@ describe('WhatsApp Gemini settings', () => {
     });
     expect(socketGateway.emitWhatsApp).toHaveBeenCalledWith(
       'whatsappAgentRequest',
-      expect.objectContaining({ sessionId: 'chat-1', waitingForAdvisor: true }),
+      expect.objectContaining({ siteId: DEFAULT_SITE_ID, sessionId: 'chat-1', waitingForAdvisor: true }),
+      DEFAULT_SITE_ID,
     );
     fetchSpy.mockRestore();
   });
@@ -1177,7 +1308,11 @@ describe('WhatsApp Gemini settings', () => {
       deliveryZone: { findMany: jest.fn().mockResolvedValue([]) },
     };
     const service = new WhatsappService(prisma, { get: jest.fn() } as any, { emitWhatsApp: jest.fn() } as any);
-    jest.spyOn(service as any, 'getSetting').mockResolvedValue(null);
+    jest.spyOn(service as any, 'getSetting').mockImplementation(async (settingKey: string) => {
+      if (settingKey === 'gemini_api_key') return apiKey;
+      if (settingKey === 'gemini_model') return 'gemini-2.5-flash-lite';
+      return null;
+    });
     jest.spyOn(service as any, 'getGeminiModels').mockResolvedValue(['gemini-2.5-flash-lite']);
     jest.spyOn(service as any, 'incrementGeminiUsage').mockResolvedValue(undefined);
     jest.spyOn(service as any, 'getGeminiUsageToday').mockResolvedValue(1);
@@ -1280,6 +1415,8 @@ describe('WhatsApp Gemini settings', () => {
       undefined,
       undefined,
       'chat-protected',
+      undefined,
+      DEFAULT_SITE_ID,
     );
     expect(prisma.whatsAppSession.updateMany).not.toHaveBeenCalled();
     expect(providerPrompt).toContain('Cliente: hola');
@@ -1475,6 +1612,8 @@ describe('WhatsApp Gemini settings', () => {
       undefined,
       undefined,
       'chat-protected',
+      undefined,
+      DEFAULT_SITE_ID,
     );
   });
 
@@ -1918,7 +2057,14 @@ describe('WhatsApp order chat isolation', () => {
     const prisma: any = {
       order: { findMany: jest.fn() },
       whatsAppMessage: {
-        findFirst: jest.fn().mockResolvedValue({ orderId: 'order-7' }),
+        findFirst: jest.fn().mockResolvedValue({
+          orderId: 'order-7',
+          order: {
+            id: 'order-7',
+            siteId: DEFAULT_SITE_ID,
+            chatSessionId: 'session-7',
+          },
+        }),
       },
     };
     const service = new WhatsappService(prisma, { get: jest.fn() } as any, { emitWhatsApp: jest.fn() } as any);
@@ -1929,7 +2075,10 @@ describe('WhatsApp order chat isolation', () => {
 
     expect(prisma.whatsAppMessage.findFirst).toHaveBeenCalledWith({
       where: { waMessageId: 'wamid.reply', sessionId: 'session-7' },
-      select: { orderId: true },
+      select: {
+        orderId: true,
+        order: { select: { id: true, siteId: true, chatSessionId: true } },
+      },
     });
     expect(prisma.order.findMany).not.toHaveBeenCalled();
   });
@@ -1940,12 +2089,13 @@ describe('WhatsApp order chat isolation', () => {
     const nextOrderCreatedAt = new Date('2026-09-20T21:30:00.000Z');
     const prisma: any = {
       order: {
-        findUnique: jest.fn().mockResolvedValue({
-          id: 'order-1',
-          chatSessionId: 'session-1',
-          createdAt: orderCreatedAt,
-        }),
         findFirst: jest.fn()
+          .mockResolvedValueOnce({
+            id: 'order-1',
+            siteId: DEFAULT_SITE_ID,
+            chatSessionId: 'session-1',
+            createdAt: orderCreatedAt,
+          })
           .mockResolvedValueOnce({ createdAt: prevOrderCreatedAt })
           .mockResolvedValueOnce({ createdAt: nextOrderCreatedAt }),
       },
@@ -1960,6 +2110,7 @@ describe('WhatsApp order chat isolation', () => {
     expect(prisma.whatsAppMessage.updateMany).toHaveBeenCalledWith({
       where: {
         sessionId: 'session-1',
+        session: { siteId: DEFAULT_SITE_ID },
         orderId: null,
         createdAt: {
           gte: prevOrderCreatedAt,
@@ -1975,13 +2126,15 @@ describe('WhatsApp order chat isolation', () => {
     const shiftStart = new Date('2026-09-20T19:30:00.000Z');
     const prisma: any = {
       order: {
-        findUnique: jest.fn().mockResolvedValue({
-          id: 'order-1',
-          chatSessionId: 'session-1',
-          createdAt: orderCreatedAt,
-          cashClosing: { shiftStart },
-        }),
-        findFirst: jest.fn().mockResolvedValue(null),
+        findFirst: jest.fn()
+          .mockResolvedValueOnce({
+            id: 'order-1',
+            siteId: DEFAULT_SITE_ID,
+            chatSessionId: 'session-1',
+            createdAt: orderCreatedAt,
+            cashClosing: { shiftStart },
+          })
+          .mockResolvedValue(null),
       },
       whatsAppMessage: {
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
