@@ -4669,10 +4669,7 @@ The Villa Dog • Montería`;
   private isCallableCustomerPhone(value: unknown): boolean {
     const digits = String(value || '').replace(/\D/g, '');
     return (digits.length === 10 && digits.startsWith('3'))
-      || (digits.length === 12 && digits.startsWith('573'))
-      || (digits.length === 13 && digits.startsWith('5793'))
-      || (digits.length === 11 && digits.startsWith('1'))
-      || (digits.length >= 10 && digits.length <= 15 && !digits.startsWith('000000'));
+      || (digits.length === 12 && digits.startsWith('573'));
   }
 
   private getConversationFacts(session: any, messages: any[]): {
@@ -4773,12 +4770,21 @@ The Villa Dog • Montería`;
     const requestsPayment = (
       (asks && /\b(?:metodo\s+de\s+pago|forma\s+de\s+pago|pago|pagar)\b/.test(normalized))
       || /\bcomo\s+(?:vas|deseas|quieres)\s+a\s+pagar\b/.test(normalized)
+      || /\b(?:como|con\s+que)\s+(?:vas\s+a\s+)?(?:pagar|pagas)\b/.test(normalized)
+      || /\bpagas\s+(?:en|por|con)\b/.test(normalized)
     );
     const requestsAddress = asks
       && /\b(?:direccion|barrio|ubicacion|donde\s+entregar)\b/.test(normalized);
     const requestsOrderType = (
       (asks && /\b(?:domicilio|recoger|retirar|tipo\s+de\s+entrega)\b/.test(normalized))
       || /\b(?:es|seria)\s+para\s+(?:domicilio|recoger)\s+o\s+(?:domicilio|recoger)\b/.test(normalized)
+    );
+    const cashChangeContext = /\b(?:efectivo|billete|pagar|pagas|pago|devuelta|vuelto|vueltos?)\b/.test(normalized);
+    const requestsCashChange = (
+      /\b(?:necesitas|necesita|requieres|requiere|vas\s+a\s+necesitar|te\s+hace\s+falta)\s+(?:cambio|devuelta|vueltos?)\b/.test(normalized)
+      || (cashChangeContext && /\b(?:cambio|devuelta|vueltos?)\b[^.!?\n]{0,30}\b(?:de\s+)?cuanto\b/.test(normalized))
+      || /\bcon\s+cuanto\s+(?:vas\s+a\s+)?(?:pagar|pagas)\b/.test(normalized)
+      || /\bbillete\s+de\s+cuanto\b/.test(normalized)
     );
 
     if (facts.hasAddress && facts.orderType !== 'recoger') {
@@ -4791,40 +4797,23 @@ The Villa Dog • Montería`;
     const asksAddress = (isPickup || facts.hasAddress) && requestsAddress;
     const asksOrderType = Boolean(facts.orderType) && requestsOrderType;
 
-    if (!asksPhone && !asksPayment && !asksAddress && !asksOrderType) return original;
-
     const needsPhone = !isPickup && requestsPhone && !facts.hasKnownPhone;
     const needsPayment = requestsPayment && !facts.paymentMethod;
     const needsOrderType = requestsOrderType && !facts.orderType;
     const needsAddress = !isPickup && requestsAddress && !facts.hasAddress;
 
-    if (needsPayment && !needsAddress && !needsOrderType && !needsPhone) {
-      return '¡Listo! ¿Me confirmas si vas a pagar en efectivo o por transferencia?';
-    }
-    if (needsAddress && !needsPayment && !needsOrderType && !needsPhone) {
-      return '¡Listo! Por favor compárteme tu dirección exacta y barrio para la entrega.';
-    }
-    if (needsPayment && needsAddress && !needsOrderType && !needsPhone) {
-      return '¡Listo! Por favor compárteme tu dirección exacta y si pagas en efectivo o por transferencia.';
-    }
-    if (needsOrderType && !needsAddress && !needsPayment && !needsPhone) {
-      return '¡Listo! ¿Tu pedido sería para entrega a domicilio o para recoger en el local?';
-    }
-    if (needsPayment && needsOrderType && !needsAddress && !needsPhone) {
-      return '¡Listo! ¿Sería para entrega a domicilio o para recoger, y cómo deseas pagar (efectivo o transferencia)?';
-    }
-    if (needsPhone && !needsPayment && !needsAddress && !needsOrderType) {
-      return '¡Listo! Por favor compárteme un número de celular de contacto para la entrega.';
-    }
+    const requestedMissing: Array<'orderType' | 'address' | 'payment' | 'phone'> = [];
+    if (needsOrderType) requestedMissing.push('orderType');
+    if (needsAddress) requestedMissing.push('address');
+    if (needsPayment) requestedMissing.push('payment');
+    if (needsPhone) requestedMissing.push('phone');
 
-    const missingRequested: string[] = [];
-    if (needsAddress) missingRequested.push('la dirección exacta');
-    if (needsPayment) missingRequested.push('el método de pago (efectivo o transferencia)');
-    if (needsOrderType) missingRequested.push('si es para domicilio o para recoger');
-    if (needsPhone) missingRequested.push('tu número de teléfono');
+    const repeatsKnownData = asksPhone || asksPayment || asksAddress || asksOrderType;
+    const shouldNormalizeBundle = requestedMissing.length >= 2;
+    if (!repeatsKnownData && !requestsCashChange && !shouldNormalizeBundle) return original;
 
-    if (missingRequested.length > 0) {
-      return `¡Listo! Solo falta confirmar ${missingRequested.join(' y ')}.`;
+    if (requestedMissing.length > 0) {
+      return this.formatMissingOrderDataQuestion(requestedMissing);
     }
 
     // Si Gemini solo preguntó por datos ya conocidos y no pidió nada nuevo,
@@ -4834,36 +4823,52 @@ The Villa Dog • Montería`;
     const missingOrderType = !facts.orderType && !facts.hasAddress;
     const missingPhone = !isPickup && !facts.hasKnownPhone;
 
-    if (missingPayment && !missingAddress && !missingOrderType && !missingPhone) {
-      return '¡Listo! ¿Me confirmas si vas a pagar en efectivo o por transferencia?';
-    }
-    if (missingAddress && !missingPayment && !missingOrderType && !missingPhone) {
-      return '¡Listo! Por favor compárteme tu dirección exacta y barrio para la entrega.';
-    }
-    if (missingPayment && missingAddress && !missingOrderType && !missingPhone) {
-      return '¡Listo! Por favor compárteme tu dirección exacta y si pagas en efectivo o por transferencia.';
-    }
-    if (missingOrderType && !missingAddress && !missingPayment && !missingPhone) {
-      return '¡Listo! ¿Tu pedido sería para entrega a domicilio o para recoger en el local?';
-    }
-    if (missingPayment && missingOrderType && !missingAddress && !missingPhone) {
-      return '¡Listo! ¿Sería para entrega a domicilio o para recoger, y cómo deseas pagar (efectivo o transferencia)?';
-    }
-    if (missingPhone && !missingPayment && !missingAddress && !missingOrderType) {
-      return '¡Listo! Por favor compárteme un número de celular de contacto para la entrega.';
-    }
-
-    const actuallyMissing: string[] = [];
-    if (missingAddress) actuallyMissing.push('la dirección exacta');
-    if (missingPayment) actuallyMissing.push('el método de pago (efectivo o transferencia)');
-    if (missingOrderType) actuallyMissing.push('si es para domicilio o para recoger');
-    if (missingPhone) actuallyMissing.push('tu número de teléfono');
+    const actuallyMissing: Array<'orderType' | 'address' | 'payment' | 'phone'> = [];
+    if (missingOrderType) actuallyMissing.push('orderType');
+    if (missingAddress) actuallyMissing.push('address');
+    if (missingPayment) actuallyMissing.push('payment');
+    if (missingPhone) actuallyMissing.push('phone');
 
     if (actuallyMissing.length > 0) {
-      return `¡Listo! Solo falta confirmar ${actuallyMissing.join(' y ')}.`;
+      return this.formatMissingOrderDataQuestion(actuallyMissing);
     }
 
-    return '¡Listo! Ya tenemos todos los datos de tu pedido. Un asesor lo revisará de inmediato y continuará contigo por este chat.';
+    return 'Ya tenemos los datos necesarios. Un asesor revisará tu pedido y continuará contigo por este chat.';
+  }
+
+  private formatMissingOrderDataQuestion(
+    fields: Array<'orderType' | 'address' | 'payment' | 'phone'>,
+  ): string {
+    const orderedFields: Array<'orderType' | 'address' | 'payment' | 'phone'> = [
+      'orderType',
+      'address',
+      'payment',
+      'phone',
+    ];
+    const uniqueFields = orderedFields
+      .filter(field => fields.includes(field))
+      .slice(0, 3);
+
+    if (uniqueFields.length === 1) {
+      if (uniqueFields[0] === 'orderType') return '¿Tu pedido es para domicilio o para recoger en el local?';
+      if (uniqueFields[0] === 'address') {
+        return 'Por favor envíame tu dirección exacta y, si lo conoces, el barrio.';
+      }
+      if (uniqueFields[0] === 'payment') return '¿Pagas en efectivo o por transferencia?';
+      return 'Por favor envíame un celular colombiano de 10 dígitos para la entrega.';
+    }
+
+    const includesOrderType = uniqueFields.includes('orderType');
+    const labels: Record<'orderType' | 'address' | 'payment' | 'phone', string> = {
+      orderType: 'Si es para domicilio o para recoger en el local.',
+      address: includesOrderType
+        ? 'Si es domicilio, la dirección exacta y, si lo conoces, el barrio.'
+        : 'La dirección exacta y, si lo conoces, el barrio.',
+      payment: 'Si pagas en efectivo o por transferencia.',
+      phone: 'Un celular colombiano de 10 dígitos para la entrega.',
+    };
+    const questions = uniqueFields.map((field, index) => `${index + 1}. ${labels[field]}`);
+    return `Para continuar con tu pedido, respóndeme por favor en un solo mensaje:\n${questions.join('\n')}`;
   }
 
   private customerRequestsPreviousOrder(value: string): boolean {
@@ -4938,7 +4943,7 @@ ${customInstructionsBlock}
 PAUTAS DE ESTILO OBLIGATORIAS:
 - TEXTO CORTO Y DIRECTO: Mantén tus respuestas en un máximo de 1 o 2 párrafos muy breves. Al cliente no le gusta leer bloques de texto largos. (EXCEPCIÓN: Cuando el cliente pida los precios de una categoría de comida, SÍ puedes y DEBES enviar la lista completa de todos los productos y precios de esa categoría en el chat).
 - CERO EMOJIS: NUNCA USES EMOJIS. Responde únicamente con texto plano y puntuación estándar. Absolutamente PROHIBIDO enviar emojis. No uses caritas ni símbolos, solo texto normal.
-- NATURALIDAD: Responde con frases frescas y sencillas (ej: "Hola, ¿cómo estás?", "¡Hola! Claro que sí, con gusto", "¡Excelente elección!").
+- NATURALIDAD SIN ECO: Responde de forma cercana y sencilla, pero no repitas lo que el cliente acaba de decir ni envíes relleno como "Anotado", "Perfecto" o "Excelente elección". Ve directamente a resolver su pregunta o a solicitar el siguiente dato necesario.
 - ATENCIÓN A PEDIDOS PREVIOS O CANCELADOS: Si el cliente pregunta qué tenía su pedido anterior o pide repetir un pedido cancelado o anterior, REVISA el Historial de Pedidos Recientes de este cliente detallado abajo y respóndele exactamente con la lista de productos y cantidades de ese pedido.
 
 Historial de Pedidos Recientes de este Cliente:
@@ -5009,12 +5014,13 @@ ${knownFactsBlock}
        - Nunca solicites otra vez un dato marcado como DISPONIBLE o CONFIRMADO. El teléfono de WhatsApp no forma parte de los datos que debes pedir cuando ya está disponible.
        - TELÉFONO DE CONTACTO PARA DOMICILIOS: ${effectivePhoneInstruction}
        - CUENTAS DE TRANSFERENCIA: ${paymentInstruction}
-       - PREGUNTA ÚNICA: No pidas los datos uno por uno. Después de conocer productos y tipo de entrega, solicita EN UN SOLO MENSAJE todos los datos que falten.
+       - BLOQUE ÚNICO Y CORTO: No pidas los datos uno por uno. Cuando los productos estén claros, solicita EN UN SOLO MENSAJE hasta TRES datos faltantes de la etapa actual y pide expresamente al cliente que responda todo en un solo mensaje. Si faltan más de tres, prioriza en este orden: tipo de entrega, dirección, método de pago y teléfono; deja el cuarto dato para el turno siguiente solo si realmente aplica.
+       - EFECTIVO SIN PREGUNTA DE CAMBIO: Si el cliente elige efectivo, NO preguntes si necesita cambio, de cuánto necesita cambio ni con cuánto va a pagar. El asesor resolverá ese detalle si fuera necesario.
        - PEDIDO A DOMICILIO Y DIRECCIÓN: Si el cliente ya dio su dirección (o el sistema la tiene como DISPONIBLE), ES OBLIGATORIAMENTE UN DOMICILIO. Está TOTALMENTE PROHIBIDO preguntar si es para domicilio o para recoger. Si ya se conoce la dirección y solo falta el método de pago, pregunta de inmediato y con total naturalidad únicamente por el método de pago: "¿Pagas en efectivo o transferencia?".
        - CERO ENUMERACIÓN ROBÓTICA: NUNCA enumeres como un robot los datos ya registrados (ej: "ya tengo registrados tu número de WhatsApp y tu dirección"). Habla de forma natural, cercana y directa con lo que falta sin confundir al cliente.
        - PEDIDO PARA PASAR A RECOGER (PICKUP): Nunca preguntes barrio ni dirección ni teléfono. Pide únicamente el método de pago si todavía falta.
-       - PEDIDO A DOMICILIO: La dirección exacta y el método de pago son necesarios. El barrio es opcional: úsalo si el cliente lo informa, pero NUNCA bloquees ni retrases el pedido por no tenerlo. Ejemplo: "Listo. Envíame en un solo mensaje tu dirección exacta y si pagas en efectivo o transferencia; si conoces el barrio también puedes indicarlo."
-       - Si el cliente ya entregó uno o dos datos, pregunta solamente por todos los que falten, juntos y en una respuesta corta.
+       - PEDIDO A DOMICILIO: La dirección exacta y el método de pago son necesarios. El barrio es opcional: úsalo si el cliente lo informa, pero NUNCA bloquees ni retrases el pedido por no tenerlo. Ejemplo: "Para continuar con tu pedido, respóndeme por favor en un solo mensaje: 1. Tu dirección exacta y, si lo conoces, el barrio. 2. Si pagas en efectivo o por transferencia."
+       - Si el cliente ya entregó uno o dos datos, pregunta solamente por los que falten, juntos y en una respuesta corta, sin superar tres datos.
        - REGLA CRÍTICA DE COBERTURA (TOTALMENTE OBLIGATORIA):
          ¡ESTÁ TERMINANTEMENTE PROHIBIDO DECIR QUE "NO TENEMOS COBERTURA", QUE "NO LLEGAMOS HASTA ALLÁ", QUE ESTÁ "FUERA DE COBERTURA" O RECHAZAR CUALQUIER ZONA, BARRIO O LUGAR (por ejemplo: Garzones, Aeropuerto, veredas, etc.)!
          The Villa Dog SÍ despacha a toda la ciudad y zonas especiales.
@@ -5719,13 +5725,11 @@ Restaurante (Tú):
 
       if (normalized === '2') {
         const orderTemplateText = 
-          `¡Excelente elección! 🌭🔥\n\n` +
-          `Para tomar tu pedido, por favor cuéntanos:\n` +
-          `• *Productos y adiciones* que deseas\n` +
-          `• *¿Para domicilio o para recoger?*\n` +
-          `• *Dirección exacta* de entrega (el barrio es opcional)\n` +
-          `• *Método de pago* (Efectivo / Transferencia)\n\n` +
-          `Uno de nuestros asesores tomará tu pedido de inmediato. ¡Muchas gracias! 😊`;
+          `Para tomar tu pedido, respóndenos por favor en un solo mensaje:\n` +
+          `1. Los productos y adiciones que deseas.\n` +
+          `2. Si es para domicilio o recoger; si es domicilio, incluye la dirección exacta y, si lo conoces, el barrio.\n` +
+          `3. Si pagas en efectivo o por transferencia.\n\n` +
+          `Un asesor revisará tu pedido y continuará contigo por este chat.`;
         if (!(await canReply())) return;
         await this.requestAdvisorHandoff(session, orderTemplateText, 'inicio_pedido_contingencia');
         return;
@@ -5812,20 +5816,13 @@ Restaurante (Tú):
             `Uno de nuestros asesores tomará tu chat de inmediato para confirmar el valor total y enviártelo. ¡Gracias! `;
           handoffReply = confirmText;
         } else {
-          // El cliente escribió lo que quiere pero sin plantilla, enviarle la plantilla pre-llenada
-          const hasPhoneAsName = session.customerName && /^\d+$/.test(session.customerName.replace(/\D/g, ''));
-          const hasValidName = session.customerName && !hasPhoneAsName;
-          const nameLine = hasValidName ? '' : `*Nombre:* \n`;
+          // El cliente ya indicó los productos: pedir solo los datos logísticos faltantes.
           const templateText = 
-            `¡Excelente elección! \n\n` +
-            `Para registrar tu pedido y dirección de envío, por favor copia, pega y completa la siguiente plantilla con tus datos:\n\n` +
-            nameLine +
-            `*Dirección:* (Escribir "Recoger" si pasas por él)\n` +
-            `*Barrio:* \n` +
-            `*¿Es para Domicilio o Recoger?:* \n` +
-            `*Método de Pago:* (Efectivo / Nequi / Tarjeta)\n` +
-            `*Pedido:* ${userText}\n\n` +
-            `¡Uno de nuestros asesores tomará tu chat de inmediato para confirmar el valor total y enviártelo! `;
+            `Para continuar con tu pedido, respóndenos por favor en un solo mensaje:\n` +
+            `1. Si es para domicilio o recoger en el local.\n` +
+            `2. Si es domicilio, la dirección exacta y, si lo conoces, el barrio.\n` +
+            `3. Si pagas en efectivo o por transferencia.\n\n` +
+            `Un asesor revisará lo que pediste y continuará contigo por este chat.`;
           handoffReply = templateText;
         }
         if (!(await canReply())) return;

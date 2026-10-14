@@ -1562,7 +1562,7 @@ describe('WhatsApp Gemini settings', () => {
       false,
     );
 
-    expect(reply).toBe('¡Listo! ¿Me confirmas si vas a pagar en efectivo o por transferencia?');
+    expect(reply).toBe('¿Pagas en efectivo o por transferencia?');
     expect(reply).not.toContain('ya tengo registrados tu número de WhatsApp');
   });
 
@@ -1583,7 +1583,7 @@ describe('WhatsApp Gemini settings', () => {
       false,
     );
 
-    expect(reply).toBe('¡Listo! ¿Me confirmas si vas a pagar en efectivo o por transferencia?');
+    expect(reply).toBe('¿Pagas en efectivo o por transferencia?');
     expect(reply).not.toContain('ya tengo registrados');
     expect(reply).not.toContain('si es para domicilio o para recoger');
   });
@@ -1603,10 +1603,121 @@ describe('WhatsApp Gemini settings', () => {
       false,
     );
 
-    expect(reply).toBe('¡Listo! ¿Me confirmas si vas a pagar en efectivo o por transferencia?');
+    expect(reply).toBe('¿Pagas en efectivo o por transferencia?');
     expect(reply).not.toContain('teléfono');
     expect(reply).not.toContain('dirección');
     expect(reply).not.toContain('entrega');
+  });
+
+  it('limits a missing-data bundle to three relevant fields and removes cash-change questions', () => {
+    const { service } = createProtectedGeminiService({ history: [] });
+    const reply = (service as any).removeRepeatedKnownDataQuestions(
+      '¿Es para domicilio o recoger? ¿Cuál es tu dirección y barrio? ¿Cómo pagas? ¿Cuál es tu teléfono? Si es efectivo, ¿necesitas cambio y de cuánto?',
+      { hasKnownPhone: false, paymentMethod: null, orderType: null, hasAddress: false },
+      false,
+    );
+
+    expect(reply).toBe(
+      'Para continuar con tu pedido, respóndeme por favor en un solo mensaje:\n'
+      + '1. Si es para domicilio o para recoger en el local.\n'
+      + '2. Si es domicilio, la dirección exacta y, si lo conoces, el barrio.\n'
+      + '3. Si pagas en efectivo o por transferencia.',
+    );
+    expect(reply).not.toMatch(/cambio|con cu[aá]nto|tel[eé]fono/i);
+  });
+
+  it('formats two missing logistics fields as one compact customer reply block', () => {
+    const { service } = createProtectedGeminiService({ history: [] });
+    const reply = (service as any).removeRepeatedKnownDataQuestions(
+      'Envíame tu dirección y dime cómo pagas.',
+      { hasKnownPhone: true, paymentMethod: null, orderType: 'domicilio', hasAddress: false },
+      false,
+    );
+
+    expect(reply).toBe(
+      'Para continuar con tu pedido, respóndeme por favor en un solo mensaje:\n'
+      + '1. La dirección exacta y, si lo conoces, el barrio.\n'
+      + '2. Si pagas en efectivo o por transferencia.',
+    );
+  });
+
+  it('asks the three delivery fields together when the contact is not a Colombian phone', () => {
+    const { service, session } = createProtectedGeminiService({
+      history: [],
+      customerPhone: '+1 305 555 0199',
+    });
+    const facts = (service as any).getConversationFacts(session, [
+      { direction: 'IN', messageType: 'text', content: 'Es a domicilio', createdAt: new Date() },
+    ]);
+    const reply = (service as any).removeRepeatedKnownDataQuestions(
+      '¿Me das tu dirección, forma de pago y teléfono? Si pagas en efectivo, ¿necesitas cambio?',
+      facts,
+      false,
+    );
+
+    expect(facts.hasKnownPhone).toBe(false);
+    expect(reply).toBe(
+      'Para continuar con tu pedido, respóndeme por favor en un solo mensaje:\n'
+      + '1. La dirección exacta y, si lo conoces, el barrio.\n'
+      + '2. Si pagas en efectivo o por transferencia.\n'
+      + '3. Un celular colombiano de 10 dígitos para la entrega.',
+    );
+    expect(reply).not.toMatch(/cambio|con cu[aá]nto/i);
+  });
+
+  it('removes a cash-change question after all required delivery data is known', () => {
+    const { service } = createProtectedGeminiService({ history: [] });
+    const reply = (service as any).removeRepeatedKnownDataQuestions(
+      'Si pagas en efectivo, ¿necesitas cambio y de cuánto?',
+      { hasKnownPhone: true, paymentMethod: 'efectivo', orderType: 'domicilio', hasAddress: true },
+      false,
+    );
+
+    expect(reply).toBe('Ya tenemos los datos necesarios. Un asesor revisará tu pedido y continuará contigo por este chat.');
+    expect(reply).not.toMatch(/cambio|con cu[aá]nto/i);
+  });
+
+  it('removes a cash-change request even when Gemini omits the question mark', () => {
+    const { service } = createProtectedGeminiService({ history: [] });
+    const reply = (service as any).removeRepeatedKnownDataQuestions(
+      'Si pagas en efectivo, si necesitas cambio y de cuánto.',
+      { hasKnownPhone: true, paymentMethod: 'efectivo', orderType: 'domicilio', hasAddress: true },
+      false,
+    );
+
+    expect(reply).not.toMatch(/cambio|con cu[aá]nto/i);
+    expect(reply).toContain('Un asesor revisará tu pedido');
+  });
+
+  it('keeps a legitimate product-change clarification untouched', () => {
+    const { service } = createProtectedGeminiService({ history: [] });
+    const reply = (service as any).removeRepeatedKnownDataQuestions(
+      '¿Quieres cambiar la gaseosa por otra presentación?',
+      { hasKnownPhone: true, paymentMethod: null, orderType: null, hasAddress: false },
+      false,
+    );
+
+    expect(reply).toBe('¿Quieres cambiar la gaseosa por otra presentación?');
+  });
+
+  it('keeps a product-variant clarification untouched', () => {
+    const { service } = createProtectedGeminiService({ history: [] });
+    const reply = (service as any).removeRepeatedKnownDataQuestions(
+      '¿Los quieres sencillos, gratinados o con alguna modificación?',
+      { hasKnownPhone: true, paymentMethod: null, orderType: null, hasAddress: false },
+      false,
+    );
+
+    expect(reply).toBe('¿Los quieres sencillos, gratinados o con alguna modificación?');
+  });
+
+  it('only treats Colombian mobile numbers as known delivery phones', () => {
+    const { service } = createProtectedGeminiService({ history: [] });
+
+    expect((service as any).isCallableCustomerPhone('3001234567')).toBe(true);
+    expect((service as any).isCallableCustomerPhone('+57 300 123 4567')).toBe(true);
+    expect((service as any).isCallableCustomerPhone('+1 305 555 0199')).toBe(false);
+    expect((service as any).isCallableCustomerPhone('123456789012345')).toBe(false);
   });
 
   it('detects order delay complaints and escalates directly', () => {
@@ -1870,6 +1981,33 @@ describe('WhatsApp Gemini settings', () => {
       (service as any).enqueueChatbotResponse(session, 'Y una gaseosa', null, 'message-2');
       await jest.advanceTimersByTimeAsync(7100);
 
+      expect(handle).toHaveBeenCalledTimes(1);
+      expect(handle).toHaveBeenCalledWith(session, 'Quiero dos perros\nY una gaseosa', null, 'message-2');
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('restarts the seven-second response window when a new customer bubble arrives', async () => {
+    jest.useFakeTimers();
+    const prisma: any = {
+      whatsAppMessage: {
+        findFirst: jest.fn().mockResolvedValue({ id: 'message-2' }),
+      },
+    };
+    const service = new WhatsappService(prisma, { get: jest.fn() } as any, { emitWhatsApp: jest.fn() } as any);
+    const handle = jest.spyOn(service as any, 'handleChatbot').mockResolvedValue(undefined);
+    const session = { id: 'chat-burst-reset', phone: '3001234567' };
+
+    try {
+      (service as any).enqueueChatbotResponse(session, 'Quiero dos perros', null, 'message-1');
+      await jest.advanceTimersByTimeAsync(6000);
+      (service as any).enqueueChatbotResponse(session, 'Y una gaseosa', null, 'message-2');
+      await jest.advanceTimersByTimeAsync(6999);
+
+      expect(handle).not.toHaveBeenCalled();
+
+      await jest.advanceTimersByTimeAsync(1);
       expect(handle).toHaveBeenCalledTimes(1);
       expect(handle).toHaveBeenCalledWith(session, 'Quiero dos perros\nY una gaseosa', null, 'message-2');
     } finally {
