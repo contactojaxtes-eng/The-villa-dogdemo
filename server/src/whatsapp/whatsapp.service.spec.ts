@@ -1508,7 +1508,7 @@ describe('WhatsApp Gemini settings', () => {
     }
 
     expect(send).toHaveBeenCalledTimes(1);
-    expect(send.mock.calls[0][1]).toContain('Continuemos con tu pedido');
+    expect(send.mock.calls[0][1]).toContain('domicilio o para recoger');
     expect(send.mock.calls[0][1]).not.toMatch(/cu[aá]l.*tel[eé]fono/i);
     expect(send.mock.calls[0][1]).not.toMatch(/cu[aá]l.*m[eé]todo.*pago/i);
     expect(send.mock.calls[0][1]).not.toContain('ya tengo registrados tu número de WhatsApp');
@@ -1586,6 +1586,57 @@ describe('WhatsApp Gemini settings', () => {
     expect(reply).toBe('¡Listo! ¿Me confirmas si vas a pagar en efectivo o por transferencia?');
     expect(reply).not.toContain('ya tengo registrados');
     expect(reply).not.toContain('si es para domicilio o para recoger');
+  });
+
+  it('never asks for phone or address for pickup orders even if Gemini mentions them', () => {
+    const { service } = createProtectedGeminiService({ history: [] });
+    const facts = {
+      hasKnownPhone: true,
+      paymentMethod: null,
+      orderType: 'recoger' as const,
+      hasAddress: false,
+    };
+
+    const reply = (service as any).removeRepeatedKnownDataQuestions(
+      '¿Me confirmas tu dirección, número de teléfono y método de pago?',
+      facts,
+      false,
+    );
+
+    expect(reply).toBe('¡Listo! ¿Me confirmas si vas a pagar en efectivo o por transferencia?');
+    expect(reply).not.toContain('teléfono');
+    expect(reply).not.toContain('dirección');
+    expect(reply).not.toContain('entrega');
+  });
+
+  it('detects order delay complaints and escalates directly', () => {
+    const { service } = createProtectedGeminiService({ history: [] });
+    expect((service as any).isOrderDelayOrComplaint('No tomaron el pedido?')).toBe(true);
+    expect((service as any).isOrderDelayOrComplaint('ero si ya perdí? Hace casi una hora')).toBe(true);
+    expect((service as any).isOrderDelayOrComplaint('pero si ya pedí')).toBe(true);
+    expect((service as any).isOrderDelayOrComplaint('por qué se demora tanto mi pedido')).toBe(true);
+    expect((service as any).isOrderDelayOrComplaint('Hola buenas noches quiero 2 perros')).toBe(false);
+  });
+
+  it('escalates on puzzled question marks without sending bot greeting', async () => {
+    const { service, send, session } = createProtectedGeminiService({ history: [] });
+    const handoffSpy = jest.spyOn(service as any, 'requestAdvisorHandoff').mockResolvedValue(true);
+    const fetchSpy = jest.spyOn(global, 'fetch').mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ candidates: [{ finishReason: 'STOP', content: { parts: [{ text: '¡Hola! ¿Qué se te antoja probar?' }] } }] }),
+    } as any);
+
+    try {
+      await (service as any).handleGeminiChatbot(session, '??????', ['test-key']);
+    } finally {
+      fetchSpy.mockRestore();
+    }
+
+    expect(handoffSpy).toHaveBeenCalledTimes(1);
+    expect(handoffSpy.mock.calls[0][1]).toContain('Discúlpame la confusión');
+    expect(handoffSpy.mock.calls[0][1]).toContain('Un asesor revisará el chat');
+    handoffSpy.mockRestore();
   });
 
   it('validates a delivery tariff written with a colon before sending it', async () => {

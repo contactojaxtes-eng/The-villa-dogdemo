@@ -4227,6 +4227,14 @@ The Villa Dog • Montería`;
       || /\b(?:que me atienda|hablar con)\s+(?:alguien|una persona|un humano|un asesor|una asesora|un agente)\b/.test(normalized);
   }
 
+  private isOrderDelayOrComplaint(userText: string): boolean {
+    const text = this.normalizeSpanishLookup(userText);
+    const mentionsDelayOrLost = /\b(?:no\s+(?:tomaron|anotaron|registraron|procesaron|enviaron|mandaron)\s+(?:el|mi)?\s*pedido|ya\s+(?:hice|mande|pedi|solicite|perdi)\s+(?:un|el|mi)?\s*pedido|hace\s+(?:casi\s+|mas\s+de\s+)?(?:una|[0-9]+)\s*horas?|qu[eé]\s+pas[oó]\s+con\s+(?:el|mi)\s*pedido|d[oó]nde\s+viene\s+(?:el|mi)?\s*pedido|por\s+qu[eé]\s+(?:se\s+)?demora|tanta\s+demora|no\s+(?:me\s+)?(?:ha|han)\s+(?:llegado|traido|entregado)|cuanto\s+(?:falta|demora|tarda)\s+para\s+llegar)\b/.test(text)
+      || (/\b(?:pero\s+si\s+)?(?:ya|yo\s+ya)\s+(?:pedi|perdi)\b/.test(text))
+      || (/^(?:como\s+asi|pero\s+si\s+ya\s+pedi|pero\s+si\s+ya\s+perdi)\b/.test(text) && /\b(?:pedido|pedi|perdi|hora|demora)\b/.test(text));
+    return mentionsDelayOrLost;
+  }
+
   private replyPromisesAdvisorHandoff(replyText: string): boolean {
     const normalized = this.normalizeSpanishLookup(replyText);
     return /\b(?:un asesor|una asesora|un agente|nuestro equipo)\b.{0,80}\b(?:atendera|respondera|continuara|revisara|confirmara|contactara|ayudara|tomara tu chat)\b/.test(normalized)
@@ -4522,6 +4530,17 @@ The Villa Dog • Montería`;
         return;
       }
 
+      if (this.isOrderDelayOrComplaint(userText)) {
+        if (!(await this.isLatestChatbotTrigger(sessionId, triggerMessageId))) return;
+        replyDispatched = true;
+        await this.requestAdvisorHandoff(
+          session,
+          'Te ofrezco una sincera disculpa por la espera. En este momento un asesor está verificando con cocina qué ocurrió con tu pedido para darte solución de inmediato.',
+          'reclamo_o_demora_pedido',
+        );
+        return;
+      }
+
       const rawApiKeys = await this.getSetting('gemini_api_key', siteId);
       if (!rawApiKeys) {
         this.logger.log(`API Key de Gemini no configurada. Usando chatbot de contingencia basado en reglas.`);
@@ -4651,7 +4670,9 @@ The Villa Dog • Montería`;
     const digits = String(value || '').replace(/\D/g, '');
     return (digits.length === 10 && digits.startsWith('3'))
       || (digits.length === 12 && digits.startsWith('573'))
-      || (digits.length === 11 && digits.startsWith('1'));
+      || (digits.length === 13 && digits.startsWith('5793'))
+      || (digits.length === 11 && digits.startsWith('1'))
+      || (digits.length >= 10 && digits.length <= 15 && !digits.startsWith('000000'));
   }
 
   private getConversationFacts(session: any, messages: any[]): {
@@ -4764,17 +4785,18 @@ The Villa Dog • Montería`;
       facts.orderType = 'domicilio';
     }
 
-    const asksPhone = facts.hasKnownPhone && requestsPhone;
+    const isPickup = facts.orderType === 'recoger';
+    const asksPhone = !isPickup && facts.hasKnownPhone && requestsPhone;
     const asksPayment = Boolean(facts.paymentMethod) && requestsPayment;
-    const asksAddress = facts.hasAddress && requestsAddress;
+    const asksAddress = (isPickup || facts.hasAddress) && requestsAddress;
     const asksOrderType = Boolean(facts.orderType) && requestsOrderType;
 
     if (!asksPhone && !asksPayment && !asksAddress && !asksOrderType) return original;
 
-    const needsPhone = requestsPhone && !facts.hasKnownPhone;
+    const needsPhone = !isPickup && requestsPhone && !facts.hasKnownPhone;
     const needsPayment = requestsPayment && !facts.paymentMethod;
     const needsOrderType = requestsOrderType && !facts.orderType;
-    const needsAddress = requestsAddress && !facts.hasAddress;
+    const needsAddress = !isPickup && requestsAddress && !facts.hasAddress;
 
     if (needsPayment && !needsAddress && !needsOrderType && !needsPhone) {
       return '¡Listo! ¿Me confirmas si vas a pagar en efectivo o por transferencia?';
@@ -4804,9 +4826,44 @@ The Villa Dog • Montería`;
     if (missingRequested.length > 0) {
       return `¡Listo! Solo falta confirmar ${missingRequested.join(' y ')}.`;
     }
-    return willTransfer
-      ? '¡Listo! Ya tenemos todos tus datos. Un asesor revisará el pedido y continuará contigo por este chat.'
-      : '¡Listo! Continuemos con tu pedido; dime qué deseas agregar o corregir.';
+
+    // Si Gemini solo preguntó por datos ya conocidos y no pidió nada nuevo,
+    // revisamos qué dato falta realmente según el estado actual de la conversación
+    const missingPayment = !facts.paymentMethod;
+    const missingAddress = !isPickup && !facts.hasAddress;
+    const missingOrderType = !facts.orderType && !facts.hasAddress;
+    const missingPhone = !isPickup && !facts.hasKnownPhone;
+
+    if (missingPayment && !missingAddress && !missingOrderType && !missingPhone) {
+      return '¡Listo! ¿Me confirmas si vas a pagar en efectivo o por transferencia?';
+    }
+    if (missingAddress && !missingPayment && !missingOrderType && !missingPhone) {
+      return '¡Listo! Por favor compárteme tu dirección exacta y barrio para la entrega.';
+    }
+    if (missingPayment && missingAddress && !missingOrderType && !missingPhone) {
+      return '¡Listo! Por favor compárteme tu dirección exacta y si pagas en efectivo o por transferencia.';
+    }
+    if (missingOrderType && !missingAddress && !missingPayment && !missingPhone) {
+      return '¡Listo! ¿Tu pedido sería para entrega a domicilio o para recoger en el local?';
+    }
+    if (missingPayment && missingOrderType && !missingAddress && !missingPhone) {
+      return '¡Listo! ¿Sería para entrega a domicilio o para recoger, y cómo deseas pagar (efectivo o transferencia)?';
+    }
+    if (missingPhone && !missingPayment && !missingAddress && !missingOrderType) {
+      return '¡Listo! Por favor compárteme un número de celular de contacto para la entrega.';
+    }
+
+    const actuallyMissing: string[] = [];
+    if (missingAddress) actuallyMissing.push('la dirección exacta');
+    if (missingPayment) actuallyMissing.push('el método de pago (efectivo o transferencia)');
+    if (missingOrderType) actuallyMissing.push('si es para domicilio o para recoger');
+    if (missingPhone) actuallyMissing.push('tu número de teléfono');
+
+    if (actuallyMissing.length > 0) {
+      return `¡Listo! Solo falta confirmar ${actuallyMissing.join(' y ')}.`;
+    }
+
+    return '¡Listo! Ya tenemos todos los datos de tu pedido. Un asesor lo revisará de inmediato y continuará contigo por este chat.';
   }
 
   private customerRequestsPreviousOrder(value: string): boolean {
@@ -4944,6 +5001,8 @@ ${dynamicCategoriesString}
        - SALUDOS Y CERO SUPOSICIÓN DE COMPROBANTES: Si el cliente solo está saludando (ej: "hola", "buenas", "buenas noches", "holaaa", "¿cómo están?"), saluda cordialmente de vuelta y pregúntale amablemente qué se le antoja pedir hoy o en qué le puedes colaborar.
          ¡ESTÁ ABSOLUTAMENTE PROHIBIDO decir que recibiste un comprobante de pago, que estás terminando de alistar su pedido o felicitarlo por un pago si el cliente no ha enviado explícitamente un comprobante o foto de pago en este momento! No asumas pagos de mensajes antiguos.
        - HISTORIAL DE PEDIDOS PREVIOS: El historial de pedidos de este cliente es ÚNICAMENTE de consulta si el cliente te pregunta expresamente por su pedido anterior o quiere repetir uno. Si el cliente está saludando o haciendo un pedido nuevo, NO menciones pedidos anteriores ni supongas que hay un pedido pendiente o pago en curso.
+       - RECLAMOS O PREGUNTAS POR DEMORA O ESTADO DEL PEDIDO: Si el cliente manifiesta reclamo, molestia, demora, o pregunta si tomaron su pedido o por qué no llega (ej: "¿No tomaron el pedido?", "pero si ya pedí hace una hora", "¿dónde viene mi pedido?", "¿qué pasó?", "??????"), discúlpate amablemente por la espera, indícale que un asesor está verificando con cocina qué ocurrió para darle solución de inmediato e incluye [TRANSFERIR_ASESOR]. ¡TERMINANTEMENTE PROHIBIDO saludarlo de nuevo como si fuera un cliente nuevo preguntándole qué se le antoja probar!
+       - PEDIDOS POR PRECIO O NOMBRE POPULAR: Si el cliente pide productos mencionando el precio (ej: "3 perros de 4500 2 de 3500"), tómalo directamente como su pedido sin trabas ni confusiones, confirma los productos y solicita únicamente los datos que falten (como método de pago o dirección).
        - NOMBRE DEL CLIENTE: El nombre registrado de la persona es "${session.customerName || 'No especificado aún'}". Si ya conoces su nombre (por ejemplo, "${session.customerName || ''}" o si viene en el texto como "Nombre: Juan Martinez"), ESTÁ ABSOLUTAMENTE PROHIBIDO VOLVER A PREGUNTAR SU NOMBRE. Llámalo por su nombre directamente (ej: "¡Hola Juan!").
        - DATOS YA CONOCIDOS POR EL SISTEMA (fuente autoritativa):
 ${knownFactsBlock}
@@ -5309,12 +5368,20 @@ Restaurante (Tú):
         shouldTransfer = false;
       }
 
+      // Guardrail determinista: Signos de interrogación de confusión o desconcierto (ej: "??????")
+      const isPuzzledExpression = /^[?¿!¡\s.]{2,}$/.test(userText.trim()) && userText.includes('?');
+      if (isPuzzledExpression) {
+        cleanReply = 'Discúlpame la confusión. Un asesor revisará el chat en este momento para atenderte directamente.';
+        shouldTransfer = true;
+      }
+
       if (!this.isMeaningfulGeminiReply(cleanReply)) {
         cleanReply = 'Gracias. Un asesor revisará los datos de tu pedido y te confirmará el resumen.';
         shouldTransfer = true;
       }
 
       cleanReply = this.removeRepeatedKnownDataQuestions(cleanReply, knownFacts, shouldTransfer);
+      shouldTransfer = shouldTransfer || this.replyPromisesAdvisorHandoff(cleanReply);
 
       const cycleHasIncomingImage = messagesChronological.some(message => (
         message.direction === 'IN' && ['image', 'document'].includes(String(message.messageType || '').toLowerCase())
