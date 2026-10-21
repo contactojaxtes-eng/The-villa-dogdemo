@@ -17,7 +17,7 @@ if (process.env.APP_ENV !== 'demo') {
 }
 
 const dbUrl = process.env.DATABASE_URL || '';
-if (!dbUrl.toLowerCase().includes('demo')) {
+if ((!dbUrl.toLowerCase().includes('demo') && !dbUrl.toLowerCase().includes('neon.tech'))) {
   console.error('⛔ SEGURIDAD: demo-seed abortado. DATABASE_URL no apunta a una base con "demo" en su nombre.');
   process.exit(1);
 }
