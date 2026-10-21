@@ -129,6 +129,13 @@ export function AppLayout() {
       )}
 
       <div className="flex min-w-0 flex-1 flex-col">
+        {/* Banner Entorno Demo */}
+        <div className="flex shrink-0 items-center justify-center gap-2 bg-gradient-to-r from-amber-600 via-orange-600 to-amber-600 px-4 py-1.5 text-[11px] font-black uppercase tracking-wider text-white shadow-sm z-40 select-none">
+          <span className="inline-block h-2 w-2 rounded-full bg-white animate-pulse" />
+          <span>ENTORNO DEMO · DATOS FICTICIOS</span>
+          <span className="hidden sm:inline opacity-90 font-medium normal-case tracking-normal">| Sistema aislado para demostración</span>
+        </div>
+
         {/* Impersonation Banner */}
         {isImpersonating && (
           <div className="flex shrink-0 items-center justify-center gap-3 bg-amber-500 px-4 py-2 text-xs font-bold text-black">

@@ -10,6 +10,7 @@ import { existsSync, readFileSync } from 'fs';
 import { detectReceiptMime } from '../tables/receipt';
 import { AllowDraftSiteSetup } from '../auth/decorators/allow-draft-site-setup.decorator';
 import { sendPrivateFileResponse } from '../common/private-file-response';
+import { isDemoMode } from '../common/demo-mode';
 
 @ApiTags('WhatsApp')
 @Controller('whatsapp')
@@ -66,6 +67,9 @@ export class WhatsappController {
     @Query('hub.challenge') challenge: string,
     @Res() res: express.Response,
   ) {
+    if (isDemoMode()) {
+      return res.status(200).send('DEMO_MODE_WEBHOOKS_INACTIVE');
+    }
     const result = await this.whatsappService.verifyWebhook(mode, token, challenge);
     if (result) {
       return res.status(200).send(result);
@@ -76,6 +80,9 @@ export class WhatsappController {
   @Post('webhook')
   @ApiOperation({ summary: 'Recibir mensajes WhatsApp' })
   handleWebhook(@Body() body: any) {
+    if (isDemoMode()) {
+      return { status: 'DEMO_MODE_IGNORED' };
+    }
     return this.whatsappService.handleWebhook(body);
   }
 

@@ -1,5 +1,6 @@
 import { Injectable, Logger, Inject, forwardRef } from '@nestjs/common';
 import * as net from 'net';
+import { isDemoMode } from '../common/demo-mode';
 import { PrismaService } from '../prisma/prisma.service';
 import { SocketGateway } from '../socket/socket.gateway';
 import { OrdersService } from '../orders/orders.service';
@@ -1018,6 +1019,21 @@ export class PrintService {
     siteId = DEFAULT_SITE_ID,
   ) {
     if (!text || !text.trim()) return { ok: false, error: 'Texto de impresión vacío' };
+
+    if (isDemoMode()) {
+      this.logger.log(`[MODO DEMO] Impresión simulada para ${target} (sin hardware físico).`);
+      if (this.socketGateway) {
+        this.socketGateway.emitToSite(siteId, 'printJob', {
+          target,
+          text,
+          mode: 'demo_simulated',
+          ip: '127.0.0.1',
+          port: 9100,
+          paper: printerConfig?.paper || '80',
+        });
+      }
+      return { ok: true, mode: 'demo_simulated', message: `Impresión simulada exitosa (${target})` };
+    }
 
     const targetIp = (printerConfig?.ip || '').trim();
     if (['local_bridge', 'network'].includes(printerConfig?.mode) && !this.isLocalPrinterAddress(targetIp)) {

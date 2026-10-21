@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import { isAllowedOrigin, validateProductionEnvironment } from './common/environment';
+import { isDemoMode } from './common/demo-mode';
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe, RequestMethod } from '@nestjs/common';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
@@ -120,6 +121,14 @@ async function bootstrap() {
   const port = Number(process.env.PORT) || 3000;
   await app.listen(port, '0.0.0.0');
   console.log(`THE VILLA DOG API running on http://0.0.0.0:${port}`);
+  if (isDemoMode()) {
+    console.log('================================================================');
+    console.log('  🛡️  THE VILLA DOG — MODO DEMO ACTIVO (ENTORNO AISLADO) 🛡️');
+    console.log('  - APP_ENV: demo');
+    console.log('  - Base de Datos: DEMO AISLADA');
+    console.log('  - Efectos externos (WhatsApp, Gemini, SMTP, Print): BLOQUEADOS');
+    console.log('================================================================');
+  }
   console.log(`Swagger docs: http://0.0.0.0:${port}/docs`);
 }
 bootstrap();

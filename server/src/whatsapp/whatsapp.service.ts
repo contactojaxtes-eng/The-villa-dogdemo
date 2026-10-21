@@ -14,6 +14,7 @@ import {
   WHATSAPP_META_PREFLIGHT_VERIFIED_AT_KEY,
 } from '../common/multisite.constants';
 import { sendPrivateFileResponse } from '../common/private-file-response';
+import { isDemoMode } from '../common/demo-mode';
 
 export type GeminiOperation = 'ORDER_READER' | 'AUDIO_TRANSCRIPTION' | 'CHATBOT' | 'CONNECTION_TEST' | 'LEARNING' | 'RULE_POLISH';
 
@@ -171,6 +172,11 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async resolveOutboundMetaConfig(siteId = DEFAULT_SITE_ID) {
+    if (isDemoMode()) {
+      this.logger.warn(`[MODO DEMO] Meta API bloqueada por configuración de seguridad (sede: ${siteId}).`);
+      return null;
+    }
+
     if (this.siteResolver) {
       const config = await this.siteResolver.getSiteMetaConfig(siteId);
       if (!config?.phoneNumberId || !config.accessToken) return null;
@@ -187,6 +193,11 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
   }
 
   async onModuleInit() {
+    if (isDemoMode()) {
+      this.logger.warn('🛡️ [MODO DEMO ACTIVO] Servicios externos WhatsApp, Meta y Gemini desactivados.');
+      return;
+    }
+
     this.autoTrainingStopped = false;
     try {
       await this.purgeLegacyMenuFile();
@@ -5921,6 +5932,9 @@ Restaurante (Tú):
    * traffic evenly instead of exhausting the first key before using the next.
    */
   private getGeminiKeyCandidates(rawKeys: string[], now = Date.now()): string[] {
+    if (isDemoMode()) {
+      return [];
+    }
     const keys = Array.from(new Set(rawKeys.map(key => String(key || '').trim()).filter(Boolean)));
     if (keys.length === 0) return [];
 

@@ -261,9 +261,11 @@ export default function LoginPage() {
         {/* Right Side: Login Card and Forms */}
         <motion.div className="flex items-center w-full" variants={slideInRight}>
           <Card className="w-full border-[var(--border-subtle)] bg-[var(--bg-panel)] shadow-[0_20px_70px_-30px_var(--shadow-color)] relative overflow-hidden rounded-3xl sm:p-4">
-            
+            <div className="bg-gradient-to-r from-amber-600 via-orange-600 to-amber-600 px-4 py-1.5 text-center text-xs font-black uppercase tracking-wider text-white shadow-xs">
+              🛡️ ENTORNO DEMO · DATOS FICTICIOS
+            </div>
 
-            <CardHeader className="pb-4 pt-6 text-center lg:text-left">
+            <CardHeader className="pb-3 pt-4 text-center lg:text-left">
               <motion.div variants={itemVariants}>
                 <CardTitle className="text-2xl font-bold tracking-tight text-[var(--text-primary)] font-comfortaa">
                   Bienvenido de nuevo
@@ -273,6 +275,45 @@ export default function LoginPage() {
                 </p>
               </motion.div>
             </CardHeader>
+
+            {/* Acceso Rápido Demo */}
+            <div className="px-6 pb-2">
+              <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-2.5">
+                <span className="block text-[11px] font-bold text-amber-500 uppercase tracking-wider mb-2 text-center">
+                  ⚡ Seleccionar Perfil Demo:
+                </span>
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                  <button
+                    type="button"
+                    onClick={() => { setEmail('admin@demo.local'); setPassword('demo1234'); }}
+                    className="flex flex-col items-center justify-center rounded-lg bg-[var(--bg-elevated)] p-2 text-xs font-bold text-[var(--text-primary)] hover:border-amber-500 border border-[var(--border-subtle)] transition cursor-pointer"
+                  >
+                    <span>👑 Admin</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { setEmail('cajero@demo.local'); setPassword('demo1234'); }}
+                    className="flex flex-col items-center justify-center rounded-lg bg-[var(--bg-elevated)] p-2 text-xs font-bold text-[var(--text-primary)] hover:border-amber-500 border border-[var(--border-subtle)] transition cursor-pointer"
+                  >
+                    <span>💵 Cajero</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { setEmail('mesero@demo.local'); setPassword('demo1234'); }}
+                    className="flex flex-col items-center justify-center rounded-lg bg-[var(--bg-elevated)] p-2 text-xs font-bold text-[var(--text-primary)] hover:border-amber-500 border border-[var(--border-subtle)] transition cursor-pointer"
+                  >
+                    <span>🍽️ Mesero</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { setEmail('cocina@demo.local'); setPassword('demo1234'); }}
+                    className="flex flex-col items-center justify-center rounded-lg bg-[var(--bg-elevated)] p-2 text-xs font-bold text-[var(--text-primary)] hover:border-amber-500 border border-[var(--border-subtle)] transition cursor-pointer"
+                  >
+                    <span>👨‍🍳 Cocina</span>
+                  </button>
+                </div>
+              </div>
+            </div>
 
             <CardContent className="pb-6">
               <motion.form onSubmit={handleSubmit} className="space-y-4" variants={containerVariants} initial="hidden" animate="visible">

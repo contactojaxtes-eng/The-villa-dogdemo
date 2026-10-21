@@ -23,6 +23,8 @@
     "prisma:studio": "npx prisma studio",
     "seed": "npx ts-node src/seed.ts",
     "clean": "npx ts-node src/clean.ts",
+    "demo:seed": "npx ts-node src/demo-seed.ts",
+    "demo:reset": "npx ts-node src/demo-reset.ts",
     "reset:catalog": "npx ts-node src/scripts/reset_catalog_to_zero.ts",
     "reset:zero": "npx ts-node src/scripts/reset_system_to_zero.ts",
     "test:rush": "node scripts/simulate-rush.js",

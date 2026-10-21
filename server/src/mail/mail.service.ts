@@ -2,6 +2,7 @@ import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
 import * as nodemailer from 'nodemailer';
+import { isDemoMode } from '../common/demo-mode';
 import * as dns from 'dns';
 
 try {
@@ -118,6 +119,12 @@ export class MailService implements OnModuleInit {
   }
 
   private async performSendEmail(to: string | string[], subject: string, text: string, html: string) {
+    if (isDemoMode()) {
+      const recipient = Array.isArray(to) ? to.join(', ') : to;
+      this.logger.log(`[MODO DEMO] Correo no emitido hacia el exterior: "${subject}" destinado a: ${recipient}`);
+      return true;
+    }
+
     if (this.apiConfig) {
       const toArray = Array.isArray(to) ? to : to.split(',').map(e => e.trim());
 
