@@ -1,3 +1,5 @@
+process.on('uncaughtException', (err) => { console.error('[FATAL UNCAUGHT EXCEPTION]', err); process.exit(1); });
+process.on('unhandledRejection', (reason) => { console.error('[FATAL UNHANDLED REJECTION]', reason); });
 const fs = require('fs');
 const path = require('path');
 const { execFileSync } = require('child_process');

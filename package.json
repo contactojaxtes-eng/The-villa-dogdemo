@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "description": "Sistema de gestion de domicilios - The Villa Dog",
   "scripts": {
-    "start": "node --max-old-space-size=256 server.js",
+    "start": "node server.js",
     "start:demo": "concurrently -k \"npm --prefix server run start:prod\" \"npm --prefix client run dev\"",
     "dev": "concurrently \"npm run dev:server\" \"npm run dev:client\"",
     "dev:server": "npm --prefix server run start:dev",
