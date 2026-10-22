@@ -19,7 +19,7 @@ import {
   Mic, MicOff, Check, CheckCheck, CheckCircle2, Pencil, Search, Lock,
   ChevronDown, Copy, ChevronLeft, ChevronRight, MapPin, ExternalLink, Download, Forward, QrCode, Reply, X,
   MessageSquareText, Bell, BellOff, Bot, BotOff,
-  Eye, Shield, RotateCw, ZoomIn, ZoomOut
+  Eye, Shield, ShieldCheck, RotateCw, ZoomIn, ZoomOut
 } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Mp3Recorder } from '@/lib/mp3Recorder'

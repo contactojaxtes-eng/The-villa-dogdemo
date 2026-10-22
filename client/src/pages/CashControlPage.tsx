@@ -685,7 +685,7 @@ export default function CashControlPage() {
               <p className="text-[10px] font-bold uppercase tracking-wide text-[var(--text-muted)]">Selecciona un cierre para ver el reporte</p>
             </div>
             <div className="overflow-x-auto">
-              <table className="w-full text-sm">
+              <table className="w-full text-sm min-w-[650px]">
                 <thead>
                   <tr className="border-b border-[var(--border-subtle)] text-left text-xs font-extrabold uppercase tracking-wider text-[var(--text-muted)] bg-[var(--bg-elevated)]/50">
                     <th className="px-6 py-4">Fecha Cierre</th>

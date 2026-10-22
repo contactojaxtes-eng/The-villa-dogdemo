@@ -2445,9 +2445,14 @@ export default function ActiveDeliveriesPage() {
               <p className="text-xs text-[var(--text-secondary)]">{orders.length === 0 ? 'No hay pedidos activos en este momento.' : (visibleOrders.length === 0 ? 'Prueba con otro cliente, teléfono, producto o número de pedido.' : 'Cambia el filtro para ver los demás pedidos activos.')}</p>
             </CardContent>
           ) : (
-            <div className={cn('overflow-x-auto', !isDeliveryStaff && 'custom-scrollbar pb-1')}>
-              <table className={cn(
-                'w-full text-xs',
+            <>
+              <div className="md:hidden flex items-center justify-between px-3 py-1.5 bg-[var(--bg-elevated)]/80 text-[10px] text-[var(--accent)] font-bold border-b border-[var(--border-subtle)]">
+                <span>👈 Desliza para ver acciones, repartidor y cobrar 👉</span>
+                <span className="text-xs">📱</span>
+              </div>
+              <div className={cn('overflow-x-auto', !isDeliveryStaff && 'custom-scrollbar pb-1')}>
+                <table className={cn(
+                  'w-full text-xs min-w-[980px]',
                 !isDeliveryStaff && 'table-fixed [&_th]:px-1.5 [&_th]:py-3 sm:[&_th]:px-2 [&_td]:px-1.5 [&_td]:py-3 sm:[&_td]:px-2 [&_td]:align-middle'
               )}>
                 {!isDeliveryStaff && (
@@ -2922,6 +2927,7 @@ export default function ActiveDeliveriesPage() {
                 </tbody>
               </table>
             </div>
+            </>
           )}
         </Card>
       </motion.div>
