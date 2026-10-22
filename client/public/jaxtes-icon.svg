@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title">
+  <title id="title">JAXTES</title>
+  <defs>
+    <linearGradient id="blue" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#2B6CFF"/>
+      <stop offset="1" stop-color="#145AEC"/>
+    </linearGradient>
+    <linearGradient id="cyan" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#40DDF3"/>
+      <stop offset="1" stop-color="#10C9E7"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="#070D1B"/>
+  <path d="M89 105h91v215c0 70-43 107-111 107-25 0-47-5-65-15l28-72c11 6 21 9 31 9 18 0 26-12 26-36V105Z" fill="#F8FAFC"/>
+  <path d="m201 105 61 0 51 76 51-76h105L367 253l111 164H369l-59-90-61 90H143l112-164Z" fill="url(#blue)"/>
+  <path d="M184 200c37 10 68 34 91 69l-49 72c-24-42-53-69-87-80Z" fill="url(#cyan)"/>
+</svg>

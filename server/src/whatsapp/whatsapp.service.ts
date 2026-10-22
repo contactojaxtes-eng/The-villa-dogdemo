@@ -3617,6 +3617,137 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
       return { sent: false, reason: 'session_not_found_in_site' };
     }
     const siteId = targetSession?.siteId || requestedSiteId || DEFAULT_SITE_ID;
+
+    // [MODO DEMO SANDBOX] Envio simulado y persistente de WhatsApp
+    if (isDemoMode()) {
+      const session = targetSession || await this.findOrCreateSession(phone, undefined, undefined, siteId);
+      await this.prisma.whatsAppSession.update({
+        where: { id: session.id },
+        data: { lastMessageAt: new Date(), active: true },
+      });
+
+      let replyToDirection: string | null = null;
+      if (replyToWaMessageId) {
+        const repliedMsg = await this.prisma.whatsAppMessage.findFirst({
+          where: { waMessageId: replyToWaMessageId, sessionId: session.id },
+          select: { direction: true },
+        });
+        replyToDirection = repliedMsg?.direction || null;
+      }
+
+      const linkedOrderId = await this.resolveMessageOrderId(session.id, {
+        explicitOrderId: orderId,
+        replyToWaMessageId,
+      }, siteId);
+
+      const demoWaId = `demo-out-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+      const newMsg = await this.prisma.whatsAppMessage.create({
+        data: {
+          waMessageId: demoWaId,
+          sessionId: session.id,
+          direction: 'OUT',
+          content: text,
+          messageType: 'text',
+          status: 'sent',
+          ...(replyToContent ? { replyToContent } : {}),
+          ...(replyToDirection ? { replyToDirection } : {}),
+          orderId: linkedOrderId,
+        },
+      });
+
+      const persistedMessage = {
+        id: newMsg.id,
+        siteId,
+        waMessageId: newMsg.waMessageId,
+        sessionId: session.id,
+        phone: session.phone,
+        customerPhone: session.customerPhone,
+        customerName: session.customerName || session.phone,
+        content: text,
+        messageType: 'text',
+        direction: 'OUT',
+        status: 'sent',
+        assignedTo: session.assignedToId,
+        createdAt: newMsg.createdAt,
+        replyToContent: replyToContent || null,
+        replyToDirection: replyToDirection || null,
+      };
+
+      this.socketGateway.emitWhatsApp('whatsappMessage', persistedMessage, siteId);
+      await this.markSessionMessagesAsRead(session.id, true);
+      await this.emitDriverOrderChatMessage(newMsg);
+
+      // Simular progreso de estados: enviado -> entregado (700ms) -> leido (1600ms)
+      setTimeout(async () => {
+        try {
+          await this.prisma.whatsAppMessage.update({
+            where: { id: newMsg.id },
+            data: { status: 'delivered' },
+          });
+          this.socketGateway.emitWhatsApp('whatsappMessageStatus', {
+            messageId: newMsg.id,
+            waMessageId: demoWaId,
+            sessionId: session.id,
+            status: 'delivered',
+          }, siteId);
+        } catch {}
+      }, 700);
+
+      setTimeout(async () => {
+        try {
+          await this.prisma.whatsAppMessage.update({
+            where: { id: newMsg.id },
+            data: { status: 'read' },
+          });
+          this.socketGateway.emitWhatsApp('whatsappMessageStatus', {
+            messageId: newMsg.id,
+            waMessageId: demoWaId,
+            sessionId: session.id,
+            status: 'read',
+          }, siteId);
+        } catch {}
+      }, 1600);
+
+      // Respuesta automatica ficticia para dinamizar la demo si es Carlos Mendez
+      if (session.customerName === 'Carlos Méndez' || session.phone === '573001112233') {
+        setTimeout(async () => {
+          try {
+            const inWaId = `demo-in-${Date.now()}`;
+            const replyMsg = await this.prisma.whatsAppMessage.create({
+              data: {
+                waMessageId: inWaId,
+                sessionId: session.id,
+                direction: 'IN',
+                content: '¡Excelente! Me gustaría pedir un Perro Especial con gaseosa por favor.',
+                messageType: 'text',
+                status: 'received',
+              },
+            });
+            await this.prisma.whatsAppSession.update({
+              where: { id: session.id },
+              data: { lastMessageAt: new Date() },
+            });
+            this.socketGateway.emitWhatsApp('whatsappMessage', {
+              id: replyMsg.id,
+              siteId,
+              waMessageId: inWaId,
+              sessionId: session.id,
+              phone: session.phone,
+              customerPhone: session.customerPhone,
+              customerName: session.customerName,
+              content: replyMsg.content,
+              messageType: 'text',
+              direction: 'IN',
+              status: 'received',
+              createdAt: replyMsg.createdAt,
+            }, siteId);
+          } catch {}
+        }, 3200);
+      }
+
+      return { sent: true, data: { messages: [{ id: demoWaId }] }, message: persistedMessage };
+    }
+
     const metaConfig = await this.resolveOutboundMetaConfig(siteId);
     if (!metaConfig) {
       this.logger.warn(`WhatsApp API no configurada para la sede ${siteId}`);

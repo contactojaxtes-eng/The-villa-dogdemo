@@ -106,7 +106,7 @@ export default function ForgotPasswordPage() {
                 <Button
                   type="submit"
                   disabled={loading}
-                  className="w-full h-11.5 rounded-xl bg-gradient-to-r from-[#E30613] to-[#C40510] font-bold text-white uppercase text-xs tracking-wide"
+                  className="w-full h-11.5 rounded-xl bg-gradient-to-r from-[#145AEC] to-[#0E4FD4] font-bold text-white uppercase text-xs tracking-wide"
                 >
                   {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Enviar enlace de recuperación'}
                 </Button>

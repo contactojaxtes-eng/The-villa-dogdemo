@@ -4,7 +4,7 @@ export const WHATSAPP_META_PREFLIGHT_VERIFIED_AT_KEY = 'whatsapp_meta_preflight_
 
 export const DEFAULT_ORGANIZATION = {
   id: DEFAULT_ORGANIZATION_ID,
-  name: 'The Villa Dog',
+  name: 'Demo JAXTES',
   slug: 'the-villa-dog',
 } as const;
 

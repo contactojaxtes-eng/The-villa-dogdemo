@@ -211,7 +211,7 @@ export default function LoginPage() {
 
   return (
     <div className="login-shell relative flex min-h-screen items-center justify-center bg-[var(--bg-base)] px-5 py-16 sm:px-10">
-      <div className="pointer-events-none absolute top-0 left-0 h-1 w-full bg-[#E30613]" />
+      <div className="pointer-events-none absolute top-0 left-0 h-1 w-full bg-gradient-to-r from-[#145AEC] via-[#10C9E7] to-[#145AEC]" />
 
       {/* Theme Toggle Button */}
       <motion.div
@@ -238,34 +238,41 @@ export default function LoginPage() {
         initial="hidden"
         animate="visible"
       >
-        <motion.section className="flex flex-col justify-center lg:pr-12" variants={slideInLeft}>
-          <div className="mb-8 flex items-center gap-4">
-            <BrandLogo imageClassName="w-28 sm:w-36" />
-            <span className="border-l border-[var(--border-default)] pl-4 text-xs font-semibold tracking-[0.16em] text-[var(--text-secondary)]">COMIDAS<br />RÁPIDAS</span>
+        <motion.section className="relative hidden flex-col justify-center overflow-hidden rounded-[2rem] bg-[#070D1B] p-8 text-white shadow-[0_28px_80px_-36px_rgba(7,13,27,0.85)] sm:p-10 lg:flex lg:min-h-[650px] lg:p-12" variants={slideInLeft}>
+          <div className="pointer-events-none absolute -left-28 top-1/4 h-72 w-72 rounded-full bg-[#10C9E7]/10 blur-[80px]" />
+          <div className="pointer-events-none absolute -bottom-28 right-0 h-80 w-80 rounded-full bg-[#145AEC]/20 blur-[90px]" />
+          <div className="relative">
+            <div className="mb-10 flex flex-wrap items-center gap-4">
+              <BrandLogo imageClassName="w-32 sm:w-40" />
+              <span className="border-l border-white/15 pl-4 text-[10px] font-bold tracking-[0.18em] text-white/45">PLATAFORMA PARA<br />RESTAURANTES</span>
+            </div>
+            <p className="mb-4 text-xs font-extrabold uppercase tracking-[0.22em] text-[#10C9E7]">Toda la operación conectada</p>
+            <h1 className="max-w-lg text-4xl font-bold leading-[1.05] tracking-[-0.035em] text-white sm:text-6xl">Tu restaurante.<br /><span className="text-[#10C9E7]">Todo en orden.</span></h1>
+            <p className="mt-6 max-w-md text-base leading-relaxed text-white/60">Del primer pedido al cierre de caja. Mesas, cocina, domicilios y ventas trabajando en un solo lugar.</p>
+            <div className="mt-9 hidden gap-3 sm:grid sm:grid-cols-3">
+              {[{ icon: UtensilsCrossed, label: 'Mesas', text: 'Toma el pedido' }, { icon: ChefHat, label: 'Cocina', text: 'Prepara y entrega' }, { icon: ReceiptText, label: 'Caja', text: 'Cobra y cierra' }].map(({ icon: Icon, label, text }) => (
+                <div key={label} className="rounded-2xl border border-white/10 bg-white/[0.045] p-4">
+                  <Icon className="mb-4 h-5 w-5 text-[#10C9E7]" />
+                  <p className="text-sm font-semibold text-white">{label}</p>
+                  <p className="mt-1 text-xs text-white/45">{text}</p>
+                </div>
+              ))}
+            </div>
+            <p className="mt-9 hidden text-xs font-semibold text-white/30 lg:block">JAXTES · Operación inteligente para restaurantes</p>
           </div>
-          <p className="mb-4 text-xs font-bold uppercase tracking-[0.22em] text-[var(--accent)]">Tu operación, en un solo lugar</p>
-          <h1 className="max-w-lg text-4xl font-bold leading-[1.08] tracking-tight text-[var(--text-primary)] sm:text-6xl">Buen sabor.<br /><span className="text-[var(--accent)]">Todo en orden.</span></h1>
-          <p className="mt-6 max-w-md text-base leading-relaxed text-[var(--text-secondary)]">Del primer pedido al cierre de caja. Menos vueltas para tu equipo, una mejor experiencia para tus clientes.</p>
-          <div className="mt-9 hidden gap-3 sm:grid sm:grid-cols-3">
-            {[{ icon: UtensilsCrossed, label: 'Mesas', text: 'Toma el pedido' }, { icon: ChefHat, label: 'Cocina', text: 'Prepara y entrega' }, { icon: ReceiptText, label: 'Caja', text: 'Cobra y cierra' }].map(({ icon: Icon, label, text }) => (
-              <div key={label} className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-4">
-                <Icon className="mb-4 h-5 w-5 text-[var(--accent)]" />
-                <p className="text-sm font-semibold">{label}</p>
-                <p className="mt-1 text-xs text-[var(--text-muted)]">{text}</p>
-              </div>
-            ))}
-          </div>
-          <p className="mt-8 hidden text-xs text-[var(--text-muted)] lg:block">THE VILLA DOG · Montería, Colombia</p>
         </motion.section>
 
         {/* Right Side: Login Card and Forms */}
         <motion.div className="flex items-center w-full" variants={slideInRight}>
           <Card className="w-full border-[var(--border-subtle)] bg-[var(--bg-panel)] shadow-[0_20px_70px_-30px_var(--shadow-color)] relative overflow-hidden rounded-3xl sm:p-4">
-            <div className="bg-gradient-to-r from-amber-600 via-orange-600 to-amber-600 px-4 py-1.5 text-center text-xs font-black uppercase tracking-wider text-white shadow-xs">
-              🛡️ ENTORNO DEMO · DATOS FICTICIOS
+            <div className="bg-gradient-to-r from-[#145AEC] via-[#0E4FD4] to-[#145AEC] px-4 py-1.5 text-center text-xs font-black uppercase tracking-wider text-white shadow-xs">
+              DEMO JAXTES · DATOS FICTICIOS
             </div>
 
             <CardHeader className="pb-3 pt-4 text-center lg:text-left">
+              <div className="mb-5 flex justify-center lg:hidden">
+                <BrandLogo imageClassName="w-36" />
+              </div>
               <motion.div variants={itemVariants}>
                 <CardTitle className="text-2xl font-bold tracking-tight text-[var(--text-primary)] font-comfortaa">
                   Bienvenido de nuevo
@@ -278,38 +285,45 @@ export default function LoginPage() {
 
             {/* Acceso Rápido Demo */}
             <div className="px-6 pb-2">
-              <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-2.5">
-                <span className="block text-[11px] font-bold text-amber-500 uppercase tracking-wider mb-2 text-center">
-                  ⚡ Seleccionar Perfil Demo:
+              <div className="rounded-xl border border-[#145AEC]/20 bg-[#145AEC]/8 p-2.5">
+                <span className="mb-2 block text-center text-[11px] font-bold uppercase tracking-wider text-[var(--accent)]">
+                  Seleccionar perfil demo
                 </span>
-                <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
                   <button
                     type="button"
                     onClick={() => { setEmail('admin@demo.local'); setPassword('demo1234'); }}
-                    className="flex flex-col items-center justify-center rounded-lg bg-[var(--bg-elevated)] p-2 text-xs font-bold text-[var(--text-primary)] hover:border-amber-500 border border-[var(--border-subtle)] transition cursor-pointer"
+                    className="flex flex-col items-center justify-center rounded-lg bg-[var(--bg-elevated)] p-2 text-xs font-bold text-[var(--text-primary)] hover:border-[var(--accent)] border border-[var(--border-subtle)] transition cursor-pointer"
                   >
                     <span>👑 Admin</span>
                   </button>
                   <button
                     type="button"
                     onClick={() => { setEmail('cajero@demo.local'); setPassword('demo1234'); }}
-                    className="flex flex-col items-center justify-center rounded-lg bg-[var(--bg-elevated)] p-2 text-xs font-bold text-[var(--text-primary)] hover:border-amber-500 border border-[var(--border-subtle)] transition cursor-pointer"
+                    className="flex flex-col items-center justify-center rounded-lg bg-[var(--bg-elevated)] p-2 text-xs font-bold text-[var(--text-primary)] hover:border-[var(--accent)] border border-[var(--border-subtle)] transition cursor-pointer"
                   >
                     <span>💵 Cajero</span>
                   </button>
                   <button
                     type="button"
                     onClick={() => { setEmail('mesero@demo.local'); setPassword('demo1234'); }}
-                    className="flex flex-col items-center justify-center rounded-lg bg-[var(--bg-elevated)] p-2 text-xs font-bold text-[var(--text-primary)] hover:border-amber-500 border border-[var(--border-subtle)] transition cursor-pointer"
+                    className="flex flex-col items-center justify-center rounded-lg bg-[var(--bg-elevated)] p-2 text-xs font-bold text-[var(--text-primary)] hover:border-[var(--accent)] border border-[var(--border-subtle)] transition cursor-pointer"
                   >
                     <span>🍽️ Mesero</span>
                   </button>
                   <button
                     type="button"
                     onClick={() => { setEmail('cocina@demo.local'); setPassword('demo1234'); }}
-                    className="flex flex-col items-center justify-center rounded-lg bg-[var(--bg-elevated)] p-2 text-xs font-bold text-[var(--text-primary)] hover:border-amber-500 border border-[var(--border-subtle)] transition cursor-pointer"
+                    className="flex flex-col items-center justify-center rounded-lg bg-[var(--bg-elevated)] p-2 text-xs font-bold text-[var(--text-primary)] hover:border-[var(--accent)] border border-[var(--border-subtle)] transition cursor-pointer"
                   >
                     <span>👨‍🍳 Cocina</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { setEmail('domicilios@demo.local'); setPassword('demo1234'); }}
+                    className="col-span-2 flex flex-col items-center justify-center rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-2 text-xs font-bold text-[var(--text-primary)] transition hover:border-[var(--accent)] sm:col-span-1 cursor-pointer"
+                  >
+                    <span>💬 WhatsApp</span>
                   </button>
                 </div>
               </div>
@@ -403,7 +417,7 @@ export default function LoginPage() {
                 <motion.div variants={itemVariants} className="pt-2">
                   <motion.button
                     type="submit"
-                    className="w-full h-11.5 relative overflow-hidden rounded-xl bg-gradient-to-r from-[#E30613] to-[#C40510] font-bold text-white transition-all duration-300 shadow-[0_4px_20px_-4px_rgba(227,6,19,0.4)] hover:shadow-[0_8px_24px_-2px_rgba(227,6,19,0.6)] disabled:opacity-50 disabled:cursor-not-allowed group cursor-pointer"
+                    className="w-full h-11.5 relative overflow-hidden rounded-xl bg-gradient-to-r from-[#145AEC] to-[#0E4FD4] font-bold text-white transition-all duration-300 shadow-[0_4px_20px_-4px_rgba(20,90,236,0.4)] hover:shadow-[0_8px_24px_-2px_rgba(20,90,236,0.5)] disabled:opacity-50 disabled:cursor-not-allowed group cursor-pointer"
                     disabled={loading}
                     whileHover={{ scale: loading ? 1 : 1.015 }}
                     whileTap={{ scale: loading ? 1 : 0.98 }}
@@ -420,18 +434,18 @@ export default function LoginPage() {
                           animate={{ opacity: 1 }} 
                           exit={{ opacity: 0 }}
                         >
-                          <Loader2 className="h-4 w-4 animate-spin text-[#0D0D0D]" /> Ingresando...
+                          <Loader2 className="h-4 w-4 animate-spin text-white" /> Ingresando...
                         </motion.span>
                       ) : (
                         <motion.span 
                           key="enter" 
-                          className="flex items-center justify-center gap-1.5 text-xs tracking-wide uppercase font-bold text-[#0D0D0D]"
+                          className="flex items-center justify-center gap-1.5 text-xs tracking-wide uppercase font-bold text-white"
                           initial={{ opacity: 0 }} 
                           animate={{ opacity: 1 }} 
                           exit={{ opacity: 0 }}
                         >
                           Entrar a mi turno
-                          <ArrowRight className="h-4 w-4 text-[#0D0D0D]" />
+                          <ArrowRight className="h-4 w-4 text-white" />
                         </motion.span>
                       )}
                     </AnimatePresence>
@@ -643,7 +657,7 @@ export default function LoginPage() {
                     <Button
                       type="submit"
                       disabled={otpLoading || otpCode.length < 6 || !newOtpPassword}
-                      className="flex-1 h-11 bg-gradient-to-r from-[#E30613] to-[#C40510] hover:opacity-95 text-white font-bold text-xs rounded-xl shadow-lg shadow-[#E30613]/20 disabled:opacity-50 cursor-pointer"
+                      className="flex-1 h-11 bg-gradient-to-r from-[#145AEC] to-[#0E4FD4] hover:opacity-95 text-white font-bold text-xs rounded-xl shadow-lg shadow-[#145AEC]/20 disabled:opacity-50 cursor-pointer"
                     >
                       {otpLoading ? (
                         <span className="flex items-center gap-2">
@@ -700,7 +714,7 @@ export default function LoginPage() {
                     <Button
                       type="submit"
                       disabled={forgotLoading || !forgotEmail.trim()}
-                      className="flex-1 h-11 bg-gradient-to-r from-[#E30613] to-[#C40510] hover:opacity-95 text-white font-bold text-xs rounded-xl shadow-lg shadow-[#E30613]/20 disabled:opacity-50 cursor-pointer"
+                      className="flex-1 h-11 bg-gradient-to-r from-[#145AEC] to-[#0E4FD4] hover:opacity-95 text-white font-bold text-xs rounded-xl shadow-lg shadow-[#145AEC]/20 disabled:opacity-50 cursor-pointer"
                     >
                       {forgotLoading ? (
                         <span className="flex items-center gap-2">

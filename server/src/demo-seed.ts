@@ -138,7 +138,10 @@ export async function runDemoSeed() {
       ...DEFAULT_ORGANIZATION,
       active: true,
     },
-    update: { active: true },
+    update: {
+      name: DEFAULT_ORGANIZATION.name,
+      active: true,
+    },
   });
 
   await prisma.site.upsert({
@@ -238,6 +241,14 @@ export async function runDemoSeed() {
     createdUsers[user.role] = created;
   }
   console.log('✅ Usuarios Demo creados con contraseñas seguras.');
+
+  // 3.5 Limpieza de órdenes y tickets dependientes para idempotencia
+  await prisma.transferProof.deleteMany().catch(() => {});
+  await prisma.kitchenTicketItem.deleteMany().catch(() => {});
+  await prisma.kitchenTicket.deleteMany().catch(() => {});
+  await prisma.payment.deleteMany().catch(() => {});
+  await prisma.orderItem.deleteMany().catch(() => {});
+  await prisma.order.deleteMany().catch(() => {});
 
   // 4. Zonas de Entrega
   await prisma.deliveryZone.deleteMany({ where: { siteId: DEFAULT_SITE_ID } });
@@ -676,6 +687,302 @@ export async function runDemoSeed() {
     },
   });
   console.log('✅ Pedido #203 Domicilio ficticio registrado.');
+
+  // 14. Módulo WhatsApp: Sandbox de Demostración (5-6 Chats Ficticios Seguros)
+  console.log('🌱 Sembrando conversaciones de demostración de WhatsApp...');
+
+  await prisma.whatsAppAccount.upsert({
+    where: { siteId: DEFAULT_SITE_ID },
+    create: {
+      siteId: DEFAULT_SITE_ID,
+      phoneNumberId: 'demo-phone-id-001',
+      businessAccountId: 'demo-waba-001',
+      displayPhoneNumber: '+57 300 000 0000',
+      active: true,
+    },
+    update: {
+      active: true,
+      displayPhoneNumber: '+57 300 000 0000',
+    },
+  });
+
+  const deliveryManagerUser = await prisma.user.findUnique({
+    where: { email: 'domicilios@demo.local' },
+  });
+
+  await prisma.whatsAppMessage.deleteMany();
+  await prisma.whatsAppSession.deleteMany();
+
+  // Chat 1: Nuevo / Sin leer
+  const session1Time = new Date(now.getTime() - 6 * 60 * 1000);
+  const session1 = await prisma.whatsAppSession.create({
+    data: {
+      siteId: DEFAULT_SITE_ID,
+      phone: '573001112233',
+      customerPhone: '3001112233',
+      customerName: 'Carlos Méndez',
+      waitingForAdvisor: false,
+      active: true,
+      lastMessageAt: session1Time,
+      createdAt: session1Time,
+    },
+  });
+  await prisma.whatsAppMessage.create({
+    data: {
+      sessionId: session1.id,
+      waMessageId: `demo-in-1-${Date.now()}`,
+      direction: 'IN',
+      content: '¡Hola! Buenas noches, ¿aún están atendiendo para domicilios?',
+      messageType: 'text',
+      status: 'received',
+      createdAt: session1Time,
+    },
+  });
+
+  // Chat 2: Esperando Asesor
+  const session2Time = new Date(now.getTime() - 10 * 60 * 1000);
+  const session2 = await prisma.whatsAppSession.create({
+    data: {
+      siteId: DEFAULT_SITE_ID,
+      phone: '573002223344',
+      customerPhone: '3002223344',
+      customerName: 'Valentina Gómez',
+      waitingForAdvisor: true,
+      active: true,
+      lastMessageAt: session2Time,
+      createdAt: new Date(now.getTime() - 14 * 60 * 1000),
+    },
+  });
+  await prisma.whatsAppMessage.createMany({
+    data: [
+      {
+        sessionId: session2.id,
+        waMessageId: `demo-in-2a-${Date.now()}`,
+        direction: 'IN',
+        content: 'Hola, me gustaría saber si la Hamburguesa Especial trae cebolla caramelizada o si se puede cambiar por tocineta extra.',
+        messageType: 'text',
+        status: 'read',
+        createdAt: new Date(now.getTime() - 14 * 60 * 1000),
+      },
+      {
+        sessionId: session2.id,
+        waMessageId: `demo-out-2b-${Date.now()}`,
+        direction: 'OUT',
+        content: '¡Hola Valentina! Un asesor de The Villa Dog te atenderá en un momento para resolver tus dudas.',
+        messageType: 'text',
+        status: 'read',
+        createdAt: new Date(now.getTime() - 13 * 60 * 1000),
+      },
+      {
+        sessionId: session2.id,
+        waMessageId: `demo-in-2c-${Date.now()}`,
+        direction: 'IN',
+        content: 'Vale, muchas gracias. Quedo atenta por favor.',
+        messageType: 'text',
+        status: 'received',
+        createdAt: session2Time,
+      },
+    ],
+  });
+
+  // Chat 3: Asignado a Gestor de Domicilios
+  const session3Time = new Date(now.getTime() - 8 * 60 * 1000);
+  const session3 = await prisma.whatsAppSession.create({
+    data: {
+      siteId: DEFAULT_SITE_ID,
+      phone: '573003334455',
+      customerPhone: '3003334455',
+      customerName: 'Andrés Felipe Castro',
+      waitingForAdvisor: false,
+      assignedToId: deliveryManagerUser?.id || null,
+      active: true,
+      lastMessageAt: session3Time,
+      createdAt: new Date(now.getTime() - 25 * 60 * 1000),
+    },
+  });
+  await prisma.whatsAppMessage.createMany({
+    data: [
+      {
+        sessionId: session3.id,
+        waMessageId: `demo-in-3a-${Date.now()}`,
+        direction: 'IN',
+        content: 'Buenas tardes, quiero armar un combo para 3 personas',
+        messageType: 'text',
+        status: 'read',
+        createdAt: new Date(now.getTime() - 25 * 60 * 1000),
+      },
+      {
+        sessionId: session3.id,
+        waMessageId: `demo-out-3b-${Date.now()}`,
+        direction: 'OUT',
+        content: '¡Hola Andrés! Claro que sí, con mucho gusto. Tenemos combos de 3 Perros Especiales con papas y gaseosa por $45.000.',
+        messageType: 'text',
+        status: 'read',
+        createdAt: new Date(now.getTime() - 22 * 60 * 1000),
+      },
+      {
+        sessionId: session3.id,
+        waMessageId: `demo-in-3c-${Date.now()}`,
+        direction: 'IN',
+        content: 'Excelente, ¿qué gaseosas tienen disponibles?',
+        messageType: 'text',
+        status: 'read',
+        createdAt: new Date(now.getTime() - 15 * 60 * 1000),
+      },
+      {
+        sessionId: session3.id,
+        waMessageId: `demo-out-3d-${Date.now()}`,
+        direction: 'OUT',
+        content: 'Tenemos Coca-Cola, Manzana Postobón y Colombiana fría en lata.',
+        messageType: 'text',
+        status: 'read',
+        createdAt: session3Time,
+      },
+    ],
+  });
+
+  // Chat 4: Ligado al Pedido #203 (Confirmado / En Preparación)
+  const session4Time = new Date(now.getTime() - 11 * 60 * 1000);
+  const session4 = await prisma.whatsAppSession.create({
+    data: {
+      siteId: DEFAULT_SITE_ID,
+      phone: '573004445566',
+      customerPhone: createdCustomers[0]?.phone || '3004445566',
+      customerName: createdCustomers[0]?.name || 'Camila Restrepo',
+      waitingForAdvisor: false,
+      assignedToId: deliveryManagerUser?.id || null,
+      active: true,
+      lastMessageAt: session4Time,
+      createdAt: new Date(now.getTime() - 18 * 60 * 1000),
+    },
+  });
+  await prisma.whatsAppMessage.createMany({
+    data: [
+      {
+        sessionId: session4.id,
+        waMessageId: `demo-in-4a-${Date.now()}`,
+        direction: 'IN',
+        content: 'Hola, quiero pedir un Perro Especial para la Calle 10 # 20-30',
+        messageType: 'text',
+        status: 'read',
+        createdAt: new Date(now.getTime() - 18 * 60 * 1000),
+      },
+      {
+        sessionId: session4.id,
+        waMessageId: `demo-out-4b-${Date.now()}`,
+        direction: 'OUT',
+        content: 'Con gusto Camila. Ya registramos tu pedido #203. Tu total es de $23.000 con domicilio. ¿Pagas por transferencia o efectivo?',
+        messageType: 'text',
+        status: 'read',
+        createdAt: new Date(now.getTime() - 16 * 60 * 1000),
+      },
+      {
+        sessionId: session4.id,
+        waMessageId: `demo-in-4c-${Date.now()}`,
+        direction: 'IN',
+        content: 'Ya les transferí por Bancolombia, aquí va el comprobante. Por favor me confirman.',
+        messageType: 'text',
+        status: 'read',
+        orderId: orderDelivery.id,
+        createdAt: new Date(now.getTime() - 14 * 60 * 1000),
+      },
+      {
+        sessionId: session4.id,
+        waMessageId: `demo-out-4d-${Date.now()}`,
+        direction: 'OUT',
+        content: '¡Transferencia verificada con éxito! Tu pedido #203 ya está en preparación en cocina. 🌭🛵',
+        messageType: 'text',
+        status: 'read',
+        orderId: orderDelivery.id,
+        createdAt: session4Time,
+      },
+    ],
+  });
+
+  // Chat 5: Resuelto / Inactivo
+  const session5Time = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+  const session5 = await prisma.whatsAppSession.create({
+    data: {
+      siteId: DEFAULT_SITE_ID,
+      phone: '573005556677',
+      customerPhone: '3005556677',
+      customerName: 'Juan Sebastián Herrera',
+      waitingForAdvisor: false,
+      active: false,
+      lastMessageAt: session5Time,
+      createdAt: session5Time,
+    },
+  });
+  await prisma.whatsAppMessage.createMany({
+    data: [
+      {
+        sessionId: session5.id,
+        waMessageId: `demo-in-5a-${Date.now()}`,
+        direction: 'IN',
+        content: 'Hola, ¿a qué hora abren los domingos?',
+        messageType: 'text',
+        status: 'read',
+        createdAt: new Date(session5Time.getTime() - 10 * 60 * 1000),
+      },
+      {
+        sessionId: session5.id,
+        waMessageId: `demo-out-5b-${Date.now()}`,
+        direction: 'OUT',
+        content: 'Hola Juan, los domingos abrimos a partir de las 5:00 PM.',
+        messageType: 'text',
+        status: 'read',
+        createdAt: new Date(session5Time.getTime() - 8 * 60 * 1000),
+      },
+      {
+        sessionId: session5.id,
+        waMessageId: `demo-in-5c-${Date.now()}`,
+        direction: 'IN',
+        content: '¡Listo, muchas gracias por la información!',
+        messageType: 'text',
+        status: 'read',
+        createdAt: session5Time,
+      },
+    ],
+  });
+
+  // Chat 6: Consulta de Menú
+  const session6Time = new Date(now.getTime() - 32 * 60 * 1000);
+  const session6 = await prisma.whatsAppSession.create({
+    data: {
+      siteId: DEFAULT_SITE_ID,
+      phone: '573006667788',
+      customerPhone: '3006667788',
+      customerName: 'Mariana Torres',
+      waitingForAdvisor: false,
+      active: true,
+      lastMessageAt: session6Time,
+      createdAt: session6Time,
+    },
+  });
+  await prisma.whatsAppMessage.createMany({
+    data: [
+      {
+        sessionId: session6.id,
+        waMessageId: `demo-in-6a-${Date.now()}`,
+        direction: 'IN',
+        content: 'Hola, ¿me pueden compartir la carta por favor?',
+        messageType: 'text',
+        status: 'read',
+        createdAt: new Date(session6Time.getTime() - 2 * 60 * 1000),
+      },
+      {
+        sessionId: session6.id,
+        waMessageId: `demo-out-6b-${Date.now()}`,
+        direction: 'OUT',
+        content: '¡Hola Mariana! 🌭 Te compartimos nuestro menú digital. Contamos con perros calientes, hamburguesas y salchipapas artesanales.\n\nTambién puedes verla y armar tu pedido directamente aquí:\n👉 https://the-villa-dog-demo.onrender.com',
+        messageType: 'text',
+        status: 'read',
+        createdAt: session6Time,
+      },
+    ],
+  });
+
+  console.log('✅ 6 Chats de WhatsApp de prueba sembrados con éxito.');
 
   console.log('\n========================================================');
   console.log('🎉 ¡SIEMBRA DE DATOS SINTÉTICOS COMPLETADA CON ÉXITO!');

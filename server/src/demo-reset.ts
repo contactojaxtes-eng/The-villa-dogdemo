@@ -22,6 +22,9 @@ async function main() {
   console.log('🔄 [DEMO RESET] Reiniciando entorno de demostración con datos sintéticos limpios...');
 
   // Limpieza ordenada de tablas en la base demo
+  await prisma.whatsAppMessage.deleteMany();
+  await prisma.whatsAppSession.deleteMany();
+  await prisma.whatsAppAccount.deleteMany();
   await prisma.kitchenTicketItem.deleteMany();
   await prisma.kitchenTicket.deleteMany();
   await prisma.payment.deleteMany();

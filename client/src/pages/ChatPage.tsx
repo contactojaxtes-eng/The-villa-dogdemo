@@ -2876,12 +2876,8 @@ function ChatPage() {
                 {realtimeStatus === 'connected' ? 'EN VIVO' : realtimeStatus === 'connecting' ? 'CONECTANDO' : 'SIN CONEXIÓN'}
               </Badge>
             </div>
-            <p className="text-[10px] font-medium text-[var(--text-muted)]">
-              {realtimeStatus === 'connected'
-                ? 'Atención en tiempo real'
-                : realtimeStatus === 'connecting'
-                  ? 'Conectando actualizaciones'
-                  : 'Las actualizaciones pueden demorarse'}
+            <p className="text-[10px] font-semibold text-amber-500/90 flex items-center gap-1">
+              <span>Canal simulado · no envía mensajes reales</span>
             </p>
           </div>
         </div>
@@ -3309,6 +3305,10 @@ function ChatPage() {
           {activeSession ? (
             <>
               {/* CHAT HEADER */}
+              <div className="bg-amber-500/10 border-b border-amber-500/20 px-3 py-1 flex items-center justify-between text-[11px] font-semibold text-amber-500 shrink-0">
+                <span className="flex items-center gap-1.5"><ShieldCheck className="h-3.5 w-3.5 text-amber-500 shrink-0" /> Canal simulado · no envía mensajes reales</span>
+                <span className="text-[9px] uppercase tracking-wider font-extrabold bg-amber-500/20 px-1.5 py-0.5 rounded text-amber-400">Sandbox Demo</span>
+              </div>
               <div className={cn(
                 "border-b border-[var(--border-subtle)]/40 shrink-0 bg-[var(--bg-elevated)]/30",
                 embeddedOrder ? "p-2 sm:p-2.5 space-y-1.5" : "p-2.5 sm:p-3 space-y-2"

@@ -192,7 +192,7 @@ export function Sidebar({ onClose, isCollapsed = false, onToggleCollapse }: Side
 
       <div className={cn("border-b border-[var(--border-subtle)] shrink-0 flex items-center justify-center", isCollapsed ? "px-3 py-3.5" : "px-3 py-3")}>
         <Link to={preparationMode ? '/superadmin/sites' : (getFirstAllowedPath(user, activeSiteId) || '/profile')} className={cn("flex justify-center rounded-2xl bg-white border border-slate-200/80 transition-all duration-200 hover:scale-[1.02] active:scale-[0.98]", isCollapsed ? "h-11 w-11 items-center p-1 shadow-xs" : "py-2 px-3 w-full shadow-2xs")} onClick={onClose}>
-          {isCollapsed ? <span className="text-sm font-black text-[#E30613]">V</span> : <BrandLogo compact imageClassName="w-24" />}
+          {isCollapsed ? <span className="text-xs font-black tracking-[-0.08em] text-[#145AEC]">JX</span> : <BrandLogo compact imageClassName="w-24" />}
         </Link>
       </div>
 

@@ -1,23 +1,17 @@
 {
-  "short_name": "The Villa Dog Chat",
-  "name": "The Villa Dog - WhatsApp Chat",
+  "short_name": "JAXTES Demo",
+  "name": "Demo JAXTES - Operación para restaurantes",
   "icons": [
     {
-      "src": "/the-villa-dog-icon-192.png",
-      "sizes": "192x192",
-      "type": "image/png",
-      "purpose": "any maskable"
-    },
-    {
-      "src": "/the-villa-dog-icon-512.png",
-      "sizes": "512x512",
-      "type": "image/png",
+      "src": "/jaxtes-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
       "purpose": "any maskable"
     }
   ],
   "start_url": "/chat",
   "display": "standalone",
-  "theme_color": "#F97316",
-  "background_color": "#17100D",
+  "theme_color": "#145AEC",
+  "background_color": "#070D1B",
   "orientation": "any"
 }

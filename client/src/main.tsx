@@ -8,7 +8,7 @@ import { NotificationToaster } from './components/layout/NotificationToaster'
 import './index.css'
 import Swal from 'sweetalert2'
 
-// Custom THE VILLA DOG styling helper for alerts
+// JAXTES styling helper for alerts
 const getSwalAlertConfig = (title: string, text: string, icon: 'success' | 'error' | 'warning' | 'info') => {
   const isDark = document.documentElement.classList.contains('dark') || document.body.classList.contains('dark')
   
@@ -21,7 +21,7 @@ const getSwalAlertConfig = (title: string, text: string, icon: 'success' | 'erro
     returnFocus: false,
     background: isDark ? '#1b1b1f' : '#ffffff',
     color: isDark ? '#ffffff' : '#1c1c1e',
-    confirmButtonColor: '#E30613', // THE VILLA DOG brand red
+    confirmButtonColor: '#145AEC',
     confirmButtonText: 'Aceptar',
     buttonsStyling: true,
     customClass: {

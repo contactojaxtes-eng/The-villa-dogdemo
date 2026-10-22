@@ -301,7 +301,7 @@ export default function ProfilePage() {
                 )}
 
                 <div className="pt-2">
-                  <Button type="submit" disabled={savingProfile} className="w-full h-11 bg-gradient-to-r from-[#E30613] to-[#C40510] hover:opacity-95 text-white font-bold rounded-xl text-xs uppercase tracking-wider cursor-pointer shadow-lg shadow-[#E30613]/20">
+                  <Button type="submit" disabled={savingProfile} className="w-full h-11 bg-gradient-to-r from-[#145AEC] to-[#0E4FD4] hover:opacity-95 text-white font-bold rounded-xl text-xs uppercase tracking-wider cursor-pointer shadow-lg shadow-[#145AEC]/20">
                     {savingProfile ? (
                       <span className="flex items-center gap-2"><Loader2 className="h-4 w-4 animate-spin" /> Guardando...</span>
                     ) : profileSaved ? (
@@ -413,7 +413,7 @@ export default function ProfilePage() {
                 )}
 
                 <div className="pt-2">
-                  <Button type="submit" disabled={changingPassword || !currentPassword || !newPassword} className="w-full h-11 bg-gradient-to-r from-[#E30613] to-[#C40510] hover:opacity-95 text-white font-bold rounded-xl text-xs uppercase tracking-wider cursor-pointer shadow-lg shadow-[#E30613]/20 disabled:opacity-50">
+                  <Button type="submit" disabled={changingPassword || !currentPassword || !newPassword} className="w-full h-11 bg-gradient-to-r from-[#145AEC] to-[#0E4FD4] hover:opacity-95 text-white font-bold rounded-xl text-xs uppercase tracking-wider cursor-pointer shadow-lg shadow-[#145AEC]/20 disabled:opacity-50">
                     {changingPassword ? (
                       <span className="flex items-center gap-2"><Loader2 className="h-4 w-4 animate-spin" /> Actualizando...</span>
                     ) : passwordSaved ? (
@@ -527,7 +527,7 @@ export default function ProfilePage() {
                   <Button
                     type="submit"
                     disabled={emailOtpLoading || emailOtpCode.length < 6}
-                    className="flex-1 h-11 bg-gradient-to-r from-[#E30613] to-[#C40510] hover:opacity-95 text-white font-bold rounded-xl text-xs uppercase tracking-wider cursor-pointer shadow-lg shadow-[#E30613]/20 disabled:opacity-50"
+                    className="flex-1 h-11 bg-gradient-to-r from-[#145AEC] to-[#0E4FD4] hover:opacity-95 text-white font-bold rounded-xl text-xs uppercase tracking-wider cursor-pointer shadow-lg shadow-[#145AEC]/20 disabled:opacity-50"
                   >
                     {emailOtpLoading ? (
                       <span className="flex items-center gap-2">

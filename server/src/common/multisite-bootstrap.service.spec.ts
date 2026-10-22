@@ -56,7 +56,7 @@ describe('MultisiteBootstrapService', () => {
     expect(tx.organization.upsert).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { id: DEFAULT_ORGANIZATION_ID },
-        update: { active: true },
+        update: { name: 'Demo JAXTES', active: true },
       }),
     );
     expect(tx.site.upsert).toHaveBeenCalledWith(

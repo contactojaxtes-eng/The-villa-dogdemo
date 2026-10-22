@@ -31,7 +31,10 @@ export class MultisiteBootstrapService implements OnApplicationBootstrap {
           ...DEFAULT_ORGANIZATION,
           active: true,
         },
-        update: { active: true },
+        update: {
+          name: DEFAULT_ORGANIZATION.name,
+          active: true,
+        },
       });
 
       await tx.site.upsert({
