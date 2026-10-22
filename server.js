@@ -30,7 +30,7 @@ if (!targetFile) {
 console.log(`[Startup] Directorio de ejecucion: ${targetCwd}`);
 
 // Sincronizar esquema de base de datos automáticamente si DATABASE_URL está presente
-if (process.env.DATABASE_URL) {
+if (process.env.DATABASE_URL && process.env.DEMO_MODE !== 'true') {
   try {
     const prismaCli = path.join(
       targetCwd,
